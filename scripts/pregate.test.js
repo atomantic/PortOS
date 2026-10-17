@@ -533,18 +533,13 @@ describe('describeBrowserSelection', () => {
   const selected = BROWSER_SUITES.slice(0, 10);
   const fidelity = BROWSER_FIDELITY_FILES[0];
 
-  it('distinguishes no selection from a selection that needs a receipt', () => {
-    const none = describeBrowserSelection([]).join('\n');
-    expect(none).toContain('none selected');
-    expect(none).toContain('no native browser-fidelity receipt required');
+  it('distinguishes no selection from a selection with fidelity cases', () => {
+    expect(describeBrowserSelection([]).join('\n')).toContain('none selected');
     const some = describeBrowserSelection([fidelity, ...selected]).join('\n');
     expect(some).toContain('selected');
-    expect(some).toContain('receipt: required');
-  });
-
-  it('reports absent and valid receipt state', () => {
-    expect(describeBrowserSelection([fidelity], 'absent').join('\n')).toContain('ABSENT');
-    expect(describeBrowserSelection([fidelity], 'valid').join('\n')).toContain('present and valid');
+    expect(some).toContain('nightly and on the release PR');
+    expect(describeBrowserSelection(selected.filter((file) => !BROWSER_FIDELITY_FILES.includes(file))).join('\n'))
+      .not.toContain('Fidelity cases');
   });
 
   it('shows the selection in --plan-only output', () => {

@@ -59,21 +59,15 @@ export const UNCOVERED_SUITES = Object.freeze({
 
 /**
  * Plan lines for the cross-workspace browser selection CI consumes
- * (`browser_files`). `receipt` is the native fidelity receipt state when known
- * ('valid' | 'absent'); the receipt is a PR-head commit status, so a local plan
- * normally cannot see it and says CI verifies it.
+ * (`browser_files`). PRs run the smoke profile; the `[fidelity]` cases run in
+ * hosted CI on nightly, release and dispatched runs, and locally on request.
  */
-export function describeBrowserSelection(files, receipt = null) {
-  if (files.length === 0) return ['ℹ️ Browser suites: none selected — no native browser-fidelity receipt required.'];
+export function describeBrowserSelection(files) {
+  if (files.length === 0) return ['ℹ️ Browser suites: none selected.'];
   const lines = [`ℹ️ Browser suites: ${files.length} selected (${files.join(', ')}).`];
-  if (!needsBrowserFidelity(files)) {
-    lines.push('ℹ️ Native browser-fidelity receipt: not required for this selection.');
-  } else if (receipt === 'valid') {
-    lines.push('ℹ️ Native browser-fidelity receipt: required — present and valid.');
-  } else if (receipt === 'absent') {
-    lines.push('⚠️ Native browser-fidelity receipt: required — ABSENT; CI will fail until the trusted receipt for the PR head is posted.');
-  } else {
-    lines.push('⚠️ Native browser-fidelity receipt: required — not checkable locally; CI verifies a trusted receipt for the exact PR head.');
+  if (needsBrowserFidelity(files)) {
+    lines.push('ℹ️ Fidelity cases are selected: CI runs them nightly and on the release PR,'
+      + ' not on this PR. To check them now, run `node scripts/browser-fidelity.js --pr NUMBER`.');
   }
   return lines;
 }

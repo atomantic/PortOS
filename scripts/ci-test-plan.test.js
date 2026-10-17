@@ -15,6 +15,7 @@ import {
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
+  MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
   shardIndexes,
   SLASHDO_GITLINK_PATH,
@@ -170,6 +171,38 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
     expect(unicodePlan.changed_files).toEqual([unicodeSource, source]);
     expect(JSON.parse(unicodePlan.server_sources)).toContain(unicodeSource);
     expect(JSON.parse(unicodePlan.server_files)).toContain(contract);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('narrows a shared basename to tests that can mean the changed copy, and keeps a unique one by name (#11870)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-basenames-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const alpha = 'server/alpha/index.js';
+  const mirror = 'client/src/lib/mirrorOnly.js';
+  const tests = {
+    inDirectory: ['server/alpha/local.test.js', "readFileSync(new URL('./index.js', import.meta.url));\n"],
+    inSubtree: ['server/alpha/nested/deep.test.js', "readFileSync(new URL('../index.js', import.meta.url));\n"],
+    namesAlpha: ['server/other/namesAlpha.test.js', "readFileSync(join(root, 'alpha', 'index.js'));\n"],
+    namesBeta: ['server/other/namesBeta.test.js', "readFileSync(join(root, 'beta', 'index.js'));\n"],
+    mirror: ['server/other/mirror.test.js', "readFileSync(join(clientLib, 'mirrorOnly.js'));\n"],
+  };
+  try {
+    git('init', '-q');
+    for (const source of [alpha, 'server/beta/index.js', mirror]) write(source, 'export const value = 1;\n');
+    for (const [path, body] of Object.values(tests)) write(path, body);
+    git('add', '--all');
+
+    const { pathContractTests } = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [alpha, mirror], cwd: root });
+    expect(pathContractTests[alpha].sort()).toEqual(
+      [tests.inDirectory[0], tests.inSubtree[0], tests.namesAlpha[0]].sort());
+    // A unique basename keeps the #6363 lookup: the mirror test names no directory.
+    expect(pathContractTests[mirror]).toEqual([tests.mirror[0]]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -990,7 +1023,7 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('shards full plans and Windows related graphs while keeping exact-file plans on one runner', () => {
+  it('shards full plans and related graphs while keeping small exact-file plans on one runner', () => {
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -1010,12 +1043,86 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
       windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1], client: [1], windows: [1, 2, 3] } });
+      shards: { server: [1, 2], client: [1], windows: [1, 2, 3] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
+  });
+
+  describe('scoped fan-out instead of a full plan (#11871)', () => {
+    const SERVER_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.server);
+    const CLIENT_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.client);
+    const featureTests = (prefix, count, ext = 'js') => Array.from({ length: count },
+      (_, i) => `${prefix}/case${String(i).padStart(3, '0')}.test.${ext}`);
+
+    it('keeps an over-cap server selection scoped, runs every selected test, and fans only the server out', () => {
+      const source = 'server/services/bigfeature/core.js';
+      const tests = featureTests('server/services/bigfeature', MAX_TARGETED_TEST_FILES + 5);
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, ...tests] });
+
+      expect(plan).toMatchObject({ full: false, reason: 'targeted features: bigfeature',
+        server: { mode: 'related', sources: [source] }, client: { mode: 'skip' },
+        lint: { mode: 'files', files: [source] }, build: false, smoke: true, windows: false });
+      // Sharding partitions the selection; it never drops a selector.
+      expect(plan.server.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards).toEqual({ server: SERVER_FANOUT, client: [1], windows: [1] });
+      expect(plan.suiteReasons.server).toMatch(/exceed the 125-file cap, sharded 2 ways/);
+      // A broad shared dependency can still reach the slashdo contracts.
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('fans the client out only when its own selection is over the cap', () => {
+      const source = 'client/src/components/bigfeature/Panel.jsx';
+      const tests = featureTests('client/src/components/bigfeature', MAX_TARGETED_TEST_FILES + 5, 'jsx');
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
+
+      expect(plan).toMatchObject({ full: false, client: { mode: 'related', sources: [source] }, build: true });
+      expect(plan.client.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards.client).toEqual(CLIENT_FANOUT);
+      expect(plan.shards.server).toEqual([1]);
+
+      const underCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, 20)] });
+      expect(underCap.shards.client).toEqual([1]);
+    });
+
+    it('shards a server related graph, but not an exact-file plan under the cap', () => {
+      const source = 'server/services/flat.js';
+      const tests = featureTests('server/services/flatfeature', 3);
+      const trackedFiles = [...TRACKED, source, ...tests];
+      const related = buildCiTestPlan([source, ...tests.slice(0, 2)], { trackedFiles });
+      expect(related.server.mode).toBe('related');
+      expect(related.shards.server).toEqual(SERVER_FANOUT);
+      expect(related.suiteReasons.server).toMatch(/related import graph sharded 2 ways/);
+
+      const exact = buildCiTestPlan(tests, { trackedFiles });
+      expect(exact.server.mode).toBe('files');
+      expect(exact.shards.server).toEqual([1]);
+
+      // A barrel-only edit keeps exact-file selection; over the cap it fans out.
+      const barrel = 'server/lib/index.js';
+      const named = featureTests('server/consumers', MAX_TARGETED_TEST_FILES + 1);
+      const barrelPlan = buildCiTestPlan([barrel], { trackedFiles: [...TRACKED, ...named],
+        pathContractTests: { [barrel]: named } });
+      expect(barrelPlan.server.mode).toBe('files');
+      expect(barrelPlan.server.files).toEqual(expect.arrayContaining(named));
+      expect(barrelPlan.shards.server).toEqual(SERVER_FANOUT);
+    });
+
+    it("stays on one runner when Vitest's shard guard could see fewer files than shards", () => {
+      // Vitest throws when the shard count exceeds the files it resolves. The
+      // Linux job never runs DB or browser suites, so they cannot meet the floor.
+      const source = 'server/services/flat.js';
+      const unit = 'server/services/flat.test.js';
+      const floor = (extra) => buildCiTestPlan([source, unit, ...extra],
+        { trackedFiles: [source, unit, ...extra] }).shards.server;
+
+      expect(floor([])).toEqual([1]);
+      expect(floor(['server/services/appQuality.db.test.js'])).toEqual([1]);
+      expect(floor(['server/lib/filmLook.browser.test.js'])).toEqual([1]);
+      expect(floor(['server/services/flat.contract.test.js'])).toEqual(SERVER_FANOUT);
+    });
   });
 
   it('falls back to full CI for unknown artifacts and wide changes', () => {

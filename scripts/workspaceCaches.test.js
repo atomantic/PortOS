@@ -11,7 +11,7 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
     const workflow = readFileSync(join(REPO, '.github/workflows/ci.yml'), 'utf8');
     const caches = workflow.split('- name: Cache Vitest transform artifacts').slice(1)
       .map(block => block.split('\n      - name:')[0]);
-    expect(caches).toHaveLength(4);
+    expect(caches).toHaveLength(5);
     for (const cache of caches) {
       expect(cache).not.toContain('node_modules/.vite');
       if (cache.includes('key: vitest-server-')) {

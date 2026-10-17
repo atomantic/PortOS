@@ -45,19 +45,4 @@ export async function browserFidelityTarget(repository, pr, request, expected = 
   return { repository, pr, head, base, merge: SHA.test(merge) ? merge : null, tree, profile: browserFidelityProfileDigest() };
 }
 
-export function assertFidelityStatus(identity, statuses) {
-  if (!Array.isArray(statuses)) throw Error('Browser fidelity statuses unavailable.');
-  const context = browserFidelityContext(identity);
-  // GitHub returns newest first; numeric IDs also disambiguate same-second posts.
-  const matching = statuses.filter(status => status?.context === context);
-  if (matching.some(status => !Number.isSafeInteger(status.id))) throw Error('Invalid browser fidelity status identity.');
-  matching.sort((a, b) => b.id - a.id);
-  const latest = matching[0];
-  if (!latest || latest.state !== 'success' || latest.creator?.login?.toLowerCase() !== browserFidelityActor(identity.repository)
-    || !/^receipt sha256=[a-f0-9]{64}$/.test(latest.description ?? '')) {
-    throw Error('Current trusted browser fidelity receipt is missing, pending, or failed.');
-  }
-  return { context, receiptDigest: latest.description.slice('receipt sha256='.length) };
-}
-
 export const browserReceiptDigest = receipt => digest(JSON.stringify(receipt));

@@ -62,6 +62,7 @@ jobs:
       client_shards: ${{ steps.plan.outputs.client_shards }}
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
+      node_minimum: ${{ steps.node-minimum.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,6 +98,22 @@ jobs:
           # the single gate a release ships behind, so it never runs scoped.
           CI_BASE_REF: ${{ github.base_ref }}
         run: node scripts/ci-test-plan.js
+
+      # The Node-minimum job proves the lockfiles install and the runtime gate
+      # loads on the oldest supported Node. Only these files can change that
+      # answer, so a PR that touches none of them skips it; non-PR runs always
+      # run it.
+      - name: Decide whether the Node minimum check applies
+        id: node-minimum
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          pattern='^((server/|client/|autofixer/)?(package(-lock)?\.json|\.npmrc)|\.nvmrc|scripts/checkNodeVersion(\.test)?\.js|scripts/lib/directInvocation\.js|scripts/node-version-drift\.test\.js|\.github/workflows/ci\.yml)$'
+          if [ "$CI_EVENT" != pull_request ] || git diff --name-only "$CI_BASE_SHA"...HEAD | grep -qE "$pattern"; then
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish plan summary
         env:
@@ -142,11 +159,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.server_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -322,16 +341,6 @@ jobs:
         if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
         run: npm run smoke
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
     # Lint is deliberately NOT here — it has its own job.
@@ -341,11 +350,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.client_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -428,16 +439,6 @@ jobs:
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
     # NOT as a flake fix. Steps within one job run sequentially, so the ~31s of
@@ -461,7 +462,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: write
     steps:
       # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
       # test jobs: the linter's file list arrives from the impact plan, so this
@@ -509,28 +509,17 @@ jobs:
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
         run: node scripts/run-ci-lint.js
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   database:
-    # Owns the registered browser suites; the Linux unit job excludes that
-    # exact registry. PRs run smoke here and require exact-head fidelity evidence
-    # at the gate. Scheduled/release runs retain the complete browser profile.
+    # The serial Postgres suite. The browser suites used to run after it on
+    # this job; they are now the `browser` job beside it, because together they
+    # set the run's length more often than any other job.
     name: DB tests
     needs: impact
-    if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'
+    if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-      actions: write
     services:
       postgres:
         image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
@@ -645,8 +634,140 @@ jobs:
             vitest-server-${{ runner.os }}-
 
       - name: Provision test database (portos_test)
-        if: needs.impact.outputs.db == 'true'
         run: npm run setup:db:test --prefix server
+
+      # Backup restore coverage takes a real pg_dump. The runner's default
+      # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
+      #
+      # The pull is ~95 ffmpeg dependency packages from the runner's mirror, and
+      # a slow mirror has eaten this job's budget before any test ran (#10369,
+      # #10562): apt's retries and timeouts cannot bound a connection that
+      # trickles bytes. The script bounds the download, falls back from the
+      # runner mirror to the official Ubuntu archive with signing intact, and
+      # fails with an installation-failure annotation once its budget is spent.
+      # The step timeout stays as a backstop above the script's own budget.
+      - name: Install PostgreSQL client and audio verification tools
+        timeout-minutes: 9
+        env:
+          PG_MAJOR: '17'
+        run: bash scripts/ci-install-db-tools.sh
+
+      - name: Run DB-backed tests (portos_test)
+        run: |
+          set +e
+          start=$(date +%s)
+          npm run test:db:ci --prefix server
+          status=$?
+          elapsed=$(( $(date +%s) - start ))
+          echo "⏱ server db suite: ${elapsed}s" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+        env:
+          PGDATABASE: portos_test
+
+  browser:
+    # Owns the registered browser suites; the Linux unit job excludes that
+    # exact registry. PRs run the smoke profile; scheduled, release and
+    # dispatched runs run the complete profile. No Postgres: the suites run on
+    # the file backend under NODE_ENV=test.
+    name: Browser suites
+    needs: impact
+    if: needs.impact.outputs.browser_files != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # Same entry and same contract as the server job — see it for the key, and
+      # for why the install and rebuild below are gated on the mark rather than
+      # on the cache hit.
+      - name: Cache server node_modules
+        id: server-modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: server/node_modules
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      # A restored tree is only reusable if it was rebuilt before it was saved,
+      # and that is not answerable by looking at the tree — with today's
+      # versions the rebuild is nearly a no-op, so every allowlisted package
+      # imports fine on a never-rebuilt one. The rebuild step below leaves an
+      # explicit mark; this reads it back.
+      #
+      # `continue-on-error` on purpose: a bad entry must not wedge every PR
+      # until a human clears the cache by hand. It fails, the two steps below
+      # see a non-success outcome, and the job builds the tree it needs. It does
+      # not *replace* the bad entry — cache keys are immutable and actions/cache
+      # skips the save on an exact hit — so that entry keeps costing each run a
+      # reinstall until the key moves or it ages out. That is precisely the
+      # pre-cache cost: the worst case degrades to the old behaviour, never to a
+      # red repo.
+      #
+      # `outcome != 'success'` covers all three cases in one expression: on a
+      # cache miss this step is skipped (outcome `skipped`), on a hit it is
+      # `success` or `failure`.
+      - name: Check the restored node_modules was rebuilt
+        id: server-modules-usable
+        if: steps.server-modules.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: node scripts/trusted-rebuild-stamp.js check server
+
+      - name: Install server dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        run: npm ci --prefix server
+
+      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
+      # this explicit rebuild. Same condition as the install: whenever this job
+      # builds the tree it will cache, it must build a rebuilt one — and the
+      # mark is written in the same block, so a failed rebuild cannot leave one
+      # behind for a later job to trust.
+      #
+      # `shell: bash` is load-bearing, not style. windows-server would default
+      # to pwsh, where a *native* command's non-zero exit neither throws nor
+      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
+      # and only the last command's code becomes the step result — so a failed
+      # rebuild would run the mark anyway, reset the exit code to 0, and publish
+      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
+      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
+      # never saves it.
+      - name: Rebuild trusted native dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        shell: bash
+        env:
+          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
+          # downloads it on linux-x64 whenever the .so is absent — several
+          # hundred MB, on two jobs, every run — and no hosted runner has an
+          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
+          # inference still works; this is the single largest cost in the job.
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        run: |
+          node scripts/trusted-rebuilds.js server
+          node scripts/trusted-rebuild-stamp.js write server
+
+      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+      # node_modules (which may be shared by worktrees). Unlike the installed
+      # dependency tree above, these artifacts can safely use a near-miss
+      # restore and stay warm across a lockfile bump.
+      - name: Cache Vitest transform artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            server/.cache/vitest
+            server/.cache/vitest-db
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}-browser
+          restore-keys: |
+            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+            vitest-server-${{ runner.os }}-
 
       # Backup restore coverage takes a real pg_dump. The runner's default
       # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
@@ -675,38 +796,23 @@ jobs:
       - name: Warm the Chrome install
         run: bash scripts/ci-warm-test-chrome.sh
 
-      - name: Run DB-backed tests (portos_test)
-        if: needs.impact.outputs.db == 'true'
-        run: |
-          set +e
-          start=$(date +%s)
-          npm run test:db:ci --prefix server
-          status=$?
-          elapsed=$(( $(date +%s) - start ))
-          echo "⏱ server db suite: ${elapsed}s" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit $status
-        env:
-          PGDATABASE: portos_test
-
       # Same client cache entry as the `client` job (see it for the key and why
       # an exact hit needs no rebuild).
       - name: Cache client node_modules
         id: client-modules
-        if: needs.impact.outputs.browser_files != '[]'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
           key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
-        if: needs.impact.outputs.browser_files != '[]' && steps.client-modules.outputs.cache-hit != 'true'
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
-        if: needs.impact.outputs.browser_files != '[]'
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
@@ -720,22 +826,12 @@ jobs:
         run: node scripts/watch-ci-tests.js server
 
       - name: Preserve browser test failure diagnostics
-        if: failure() && needs.impact.outputs.browser_files != '[]'
+        if: failure()
         continue-on-error: true
         timeout-minutes: 1
         env:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
-
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
 
   windows-server:
     # Sharded like the server job.
@@ -745,11 +841,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.windows_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -879,18 +977,10 @@ jobs:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   node-minimum:
     name: Node minimum compatibility
+    needs: impact
+    if: needs.impact.outputs.node_minimum == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -932,7 +1022,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -953,26 +1042,17 @@ jobs:
           PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
         run: npm test --prefix server -- --run lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, windows-server, node-minimum, linux-containment]
+    needs: [impact, server, client, lint, database, browser, windows-server, node-minimum, linux-containment]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # READ, not write: the reporter only lists this run's jobs, to name the one
-    # whose STEP failed when the fail-fast cancel beat GitHub to writing the job
-    # conclusion. Cancelling the run stays a leaf-job privilege.
+    # READ only: the reporter lists this run's jobs to name the one whose STEP
+    # failed when a mid-step cancel hid the job's `failure` conclusion.
     permissions:
       contents: read
       actions: read
-      statuses: read
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
       # imports Node builtins only — no dependency install, no setup-node.
@@ -1001,19 +1081,11 @@ jobs:
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
+          CI_GATE_RESULT_BROWSER: ${{ needs.browser.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
         run: node scripts/ci-gate-report.js
-
-      - name: Require current browser fidelity evidence
-        if: github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI_BROWSER_FILES: ${{ needs.impact.outputs.browser_files }}
-          CI_PULL_REQUEST: ${{ github.event.pull_request.number }}
-          CI_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/verify-browser-fidelity.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete

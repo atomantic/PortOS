@@ -24,11 +24,11 @@ import { killProcessTree } from '../server/lib/bufferedSpawn.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
-// Synthetic crash/retry cases must not export a fabricated crash filename to
-// the Actions job's real GITHUB_ENV. Duration/summary tests retain real I/O.
+// Synthetic crash/retry cases must not print a fabricated crash as a real
+// Actions annotation. Duration/summary tests retain real I/O.
 vi.mock('./lib/githubOutput.js', async (importOriginal) => ({
   ...await importOriginal(),
-  writeStepEnv: vi.fn(),
+  formatErrorAnnotation: vi.fn((title, message) => `${title}: ${message}`),
 }));
 
 // Keep nested Vitest's own scratch under its separately owned pvt-* root,
@@ -55,7 +55,7 @@ describe('shardArgs', () => {
   });
 });
 
-it('forwards the related matrix slice and all selectors through the real launcher', () => {
+it('forwards the scoped matrix slice and all selectors through the real launcher', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
   try {
     const npmScript = join(fixture, 'npm.js');
@@ -63,19 +63,26 @@ it('forwards the related matrix slice and all selectors through the real launche
     writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n`
       + 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o755 });
     writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-      encoding: 'utf8', timeout: 30000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-        CI_TEST_MODE: 'related', CI_SHARD: '2/3',
-        CI_TEST_SOURCES: JSON.stringify(['server/lib/example.js']),
-        CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
-        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
-    expect(args.slice(0, 9)).toEqual(['run', 'test:ci:related', '--prefix', 'server', '--',
-      './lib/example.js', './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3']);
+    // The planner fans both scoped modes out (ci-test-plan.js fansOut), so
+    // each must hand Vitest its slice rather than run the whole selection twice.
+    for (const [mode, script, sources, expected] of [
+      ['related', 'test:ci:related', ['server/lib/example.js'], ['./lib/example.js']],
+      ['files', 'test:ci', [], []],
+    ]) {
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: mode, CI_SHARD: '2/3',
+          CI_TEST_SOURCES: JSON.stringify(sources),
+          CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
+          GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
+      const selectors = [...expected, './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3'];
+      expect(args.slice(0, 5 + selectors.length), mode).toEqual(['run', script, '--prefix', 'server', '--', ...selectors]);
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -101,11 +108,11 @@ describe('ci.yml shard wiring', () => {
   const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
-    expect(runners.map(([id]) => id).sort()).toEqual(['client', 'database', 'server', 'windows-server']);
-    // `database` runs run-ci-tests.js only in `files` mode, for the
-    // cross-workspace browser suites the planner selected (#10312): an exact
-    // file list has nothing to shard, so it is the one runner without a matrix.
-    for (const [id, body] of runners.filter(([id]) => id !== 'database')) {
+    expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'server', 'windows-server']);
+    // `browser` runs the planner's cross-workspace browser suites in `files`
+    // mode (#10312): an exact file list has nothing to shard, so it is the one
+    // runner without a matrix.
+    for (const [id, body] of runners.filter(([id]) => id !== 'browser')) {
       // The fan-out is decided by the impact job, never hardcoded here: a
       // scoped plan must collapse to one runner, and a job-level `if` cannot
       // read `matrix` to skip the extra shards itself.
@@ -117,9 +124,9 @@ describe('ci.yml shard wiring', () => {
     }
   });
 
-  it('runs the planner-selected browser suites on the database job with prerequisites required (#10312)', () => {
-    const body = workflowJobs(WORKFLOW).database;
-    expect(body).toContain("if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'");
+  it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
+    const body = workflowJobs(WORKFLOW).browser;
+    expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -131,16 +138,13 @@ describe('ci.yml shard wiring', () => {
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
   });
 
-  it('deduplicates only Linux browser ownership and admits PR fidelity separately', () => {
+  it('deduplicates only Linux browser ownership and runs PR browser suites as smoke', () => {
     const jobs = workflowJobs(WORKFLOW);
     expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');
     expect(jobs['windows-server']).not.toContain('PORTOS_CI_BROWSER_OWNER');
-    expect(jobs.database).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
-    expect(jobs.gate.indexOf('node scripts/ci-gate-report.js')).toBeLessThan(
-      jobs.gate.indexOf('node scripts/verify-browser-fidelity.js'));
-    for (const name of ['CI_BROWSER_FILES', 'CI_EXPECTED_HEAD']) {
-      expect(jobs.gate).toContain(`${name}:`);
-    }
+    expect(jobs.browser).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
+    expect(jobs.database).not.toContain('Run cross-workspace browser suites');
+    expect(jobs.gate).toContain('CI_GATE_RESULT_BROWSER: ${{ needs.browser.result }}');
     expect(jobs['full-gate']).toContain("(github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)");
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT:');
     expect(jobs.gate).toContain('CI_GATE_RESULT_WINDOWS_SERVER:');
@@ -168,11 +172,9 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.lint).toBeTruthy();
     expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
     expect(jobs.lint).not.toContain('strategy:');
-    // Exactly one `matrix.shard`: the shared fail-fast step's CI_FAILED_SHARD,
-    // which renders empty on an unsharded job. A second occurrence — a cache
-    // key, a step name, above all a shard-pinned `if:` — is the regression.
-    expect(jobs.lint.match(/matrix\.shard/g)).toHaveLength(1);
-    expect(jobs.lint).toContain('CI_FAILED_SHARD: ${{ matrix.shard }}');
+    // No `matrix.shard` at all: lint is not a matrix, so a cache key, a step
+    // name, above all a shard-pinned `if:` naming it is the regression.
+    expect(jobs.lint).not.toMatch(/matrix\.shard/);
     // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
     // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
     expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");

@@ -286,8 +286,8 @@ nothing for this workspace, so a restored tree is usable as-is.
 
 ### Reusing the server install
 
-Three jobs install the server workspace — `server`, `database`, and
-`windows-server`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
+Four jobs install the server workspace — `server`, `database`, `browser`,
+and `windows-server`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
 tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
 `node_modules` on each of them. Two changes cut that.
 
@@ -295,7 +295,7 @@ tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
 in the npm tarball, but its postinstall *downloads* the CUDA EP — several
 hundred MB — on linux-x64 whenever `libonnxruntime_providers_cuda.so` is
 absent. `server/.npmrc` pins `ignore-scripts=true`, so that runs inside
-`scripts/trusted-rebuilds.js`, on the `server` and `database` jobs, every run.
+`scripts/trusted-rebuilds.js`, on the Linux server-installing jobs, every run.
 No hosted runner has an NVIDIA GPU to use it with. Setting
 `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` on the rebuild step removes the download
 outright, and inference is unaffected. This is the largest single saving here,
@@ -379,7 +379,7 @@ a cache written by a pull request is visible only to that branch — so the 09:1
 UTC schedule is what seeds the entries on the default branch, the one scope every
 PR branch can read. A PR that changes the lockfile misses by design.
 
-Two entries exist per key state (Linux, shared by `server` and `database`, plus
+Two entries exist per key state (Linux, shared by `server`, `database` and `browser`, plus
 Windows) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
 Eviction is LRU, so the constantly-read `main` entries outlive the PR-scoped ones
 — but a burst of lockfile-churning PRs can still push out the transform caches
@@ -448,7 +448,7 @@ The selected work is split across parallel jobs:
   `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
-- **Cross-workspace browser suites** (same `database` job) — the exact
+- **Browser suites** (their own `browser` job, beside DB tests) — the exact
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
   Linux server shards exclude that registry with `PORTOS_CI_BROWSER_OWNER=unit`;
   other browser files, including `overlayTextService`, keep their existing owner.
@@ -461,8 +461,9 @@ The selected work is split across parallel jobs:
   hosted CI selects `full`. Hosted profiles retain generated Three render/export
   and owned cleanup coverage. Profiles do not change pixels,
   render settings, tolerances, or cleanup assertions.
-  A PR selecting a fidelity-owning file also requires the exact-head receipt
-  described below; a smoke pass alone cannot admit it.
+  They ran after the DB suite on one job until that job set the run's length
+  more often than any other; split, each finishes in about the time of its own
+  steps.
 - **Windows server tests** — the same server selection, but only on full CI
   (the `main` → `release` PR, nightly, release, workflow dispatch) or when a
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
@@ -470,6 +471,11 @@ The selected work is split across parallel jobs:
   Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
   Linux. A full plan does not automatically mean a full *Windows* run — see
   "What a full plan costs the Windows job" below.
+- **Node minimum compatibility** — installs every workspace and runs the
+  runtime gate on the oldest supported Node. On a pull request it runs only
+  when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
+  always run it.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
@@ -478,40 +484,25 @@ The selected work is split across parallel jobs:
   automatic retry" below.
 - **Full CI Gate** — published only when the plan chose the complete suite and
   full Windows coverage, with the full browser profile executed in hosted CI.
-  Ordinary PR smoke runs cannot publish it, even with a local fidelity receipt.
+  Ordinary PR smoke runs cannot publish it.
   It mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
 
-### Browser fidelity evidence
+### Browser fidelity cases
 
-After publishing a relevant PR, run `node scripts/browser-fidelity.js --pr NUMBER`
-from its clean checkout using existing `gh` authentication. This command runs the
-four registered fidelity cases automatically, retains a local receipt, and publishes
-an exact-commit status only after complete passing assertions and unchanged-source
-verification. It binds the PR head and that commit's source tree. It does not
-provision a runner, install credentials, or start PortOS.
+Pull requests run the browser suites' smoke profile, which skips the
+`[fidelity]` grading cases. Those cases run in hosted CI on the nightly
+schedule, on the `main` -> `release` pull request and on dispatched full runs,
+so a fidelity regression shows up there rather than blocking the PR that
+caused it. The `[local-performance]` playback case runs only locally.
 
-The required CI gate checks the current head and its source tree, profile digest,
-trusted repository-owner publisher and latest status. Missing, stale, skipped, failed or incomplete
-results block admission. Local receipt JSON is an audit record; the trusted
-publisher's status attests execution, not a cryptographic proof of test behavior.
-Keep credentials outside the test subprocess.
-
-If evidence finishes after CI Gate failed only for missing fidelity evidence,
-rerun that gate job on the unchanged run once its other required jobs have passed.
-A receipt cannot turn a cancelled or failed browser, Windows, or containment job
-green. A changed PR head requires new evidence; base-only movement does not. Hosted smoke tests the merge checkout; local fidelity proves the PR head only,
-not native integration of subsequent base changes. Scheduled/release full coverage
-remains the integration check for the ordinary fidelity cases; hardware-sensitive
-`[local-performance]` acceptance stays local. Default
-pregate is not a substitute for this command or required CI.
-
-The local playback case preserves full-resolution transport, frame freshness,
-preview/export parity and lens-coordinate regressions. Creative quality receives
-human review; hosted acceptance does not impose this playback performance budget.
-Software WebGL results do not certify physical-GPU performance, and
-Mac-local results cannot replace Windows compatibility or Linux containment.
-The profile split does not explain or repair previously unidentified hosted stalls.
+To check the fidelity cases on a PR before merging, run
+`node scripts/browser-fidelity.js --pr NUMBER` from its clean checkout with
+existing `gh` authentication. It runs the registered fidelity cases, keeps a
+local receipt, and publishes an exact-commit status for the PR head. That
+status is informational: no required check reads it. Software WebGL results do
+not certify physical-GPU performance, and Mac-local results cannot replace
+Windows compatibility or Linux containment.
 
 ### Full-suite sharding
 
@@ -536,9 +527,19 @@ extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
 Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete selected suite. Windows
 related plans retain the same source graph and explicit contracts on every
-shard; only execution is partitioned. Exact-file plans stay on one runner
-(their handful of files can trip Vitest's shard-count guard), and scoped Linux
-plans also retain one runner. Once-only steps — smoke boot, the client build, the
+shard; only execution is partitioned. Scoped Linux plans fan out the same way
+(`fansOut()` in the planner): a server `related` plan always does, because its
+import-graph reach is unbounded by the explicit selector count (scoped server
+runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
+its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap used to
+force a full plan for the whole repository; it now keeps the scoped selection
+and only partitions it, so a server-only overflow no longer starts three client
+shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
+under the cap and client `related` plans stay on one runner. Vitest refuses a
+shard count above the number of files it resolved, so a runner fans out only
+when at least that many explicit selectors are files the Linux job actually
+runs (DB and browser suites have their own jobs); each shard repeats Vitest's
+related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot, the client build, the
 Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
@@ -579,7 +580,7 @@ reason `windows-server` cannot observe:
 
 | Full-plan reason | Runs | Windows-relevant? |
 | --- | --- | --- |
-| targeted test set exceeded safety cap | 17 | no — capacity, not risk |
+| targeted test set exceeded safety cap (no longer full; see "Full-suite sharding") | 17 | no — capacity, not risk |
 | wide change (>30 executable files) | 6 | no — capacity, not risk |
 | client composition root / build config / lint config / test setup | 1 | no — client-only |
 | dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
@@ -689,69 +690,20 @@ green PRs, and the `main` → `release` PR catches it before a release ships.
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
 
-### Fail-fast sibling cancellation
+### Failures do not cancel other jobs
 
-Each selected leaf job (`server`, `client`, `lint`, `database`, and
-`windows-server`) ends with an `if: failure() && github.event_name ==
-'pull_request'` step that asks GitHub to cancel the current pull-request
-workflow run. The event guard is important because the same workflow is reused
-by the release workflow: a failing reusable `full-ci` job must not cancel its
-parent release run before that workflow can report the release failure. The
-request uses the repository-owned
-`scripts/cancel-current-ci-run.js` helper and the standard workflow-run cancel
-endpoint. The helper accepts no repository or run arguments: it validates and
-uses only `GITHUB_REPOSITORY` and `GITHUB_RUN_ID` supplied by Actions, with the
-step-scoped `GITHUB_TOKEN`.
+A failing job does not cancel its siblings, and every matrix sets
+`fail-fast: false`. The run finishes with the failing job concluded `failure`
+and the rest concluded on their own results, so **Re-run failed jobs** repeats
+only the red shard. Runners on this public repository are not billed, so the
+siblings that keep running cost concurrency, not money.
 
-The leaf jobs request only `contents: read` and `actions: write`, and check
-out with `persist-credentials: false` so a token that can now cancel runs is
-not left in `.git/config` for the test suite's own subprocesses to read. The
-token is present in the environment only for the cancellation step, and no
-third-party action or long-lived secret is involved. The failing test/build
-step runs before cancellation, so its annotations and logs remain the evidence
-for the failure. A successful cancellation returns `202`; a `409` means the run
-is already terminal and is treated as a no-op.
-
-`release.yml`'s `full-ci` job must grant `actions: write` to the workflow it
-calls even though the cancellation step never fires there — a called workflow's
-jobs cannot hold a permission the calling job lacks. See the comment on that
-job; `scripts/ci-fail-fast.test.js` pins it.
-
-Cancellation is deliberately best-effort. Fork pull requests and other
-read-only-token runs may receive a permission failure, and transient API or
-network failures are also possible. The helper logs the unavailable
-cancellation and exits normally, preserving the original failed step and its
-failed job result when the API is unavailable. It imports only Node builtins,
-so it still runs from a job that failed before `npm ci`
-(`scripts/pre-install-entrypoints.test.js` enforces that).
-
-**Canceled is not mergeable.** A run-wide cancellation lands on the requesting
-job and on `CI Gate`, which is usually still waiting on its `needs` and so ends
-`cancelled` rather than running its comparison. Every consumer treats that as a
-non-pass, by allowlisting the green results rather than denylisting the red
-ones:
-
-- Branch protection requires the `CI Gate` context to conclude `success`;
-  `cancelled` does not satisfy it, and a gate that never publishes leaves the
-  required context unreported, which also blocks.
-- If the gate job does run, it accepts only `success` or `skipped` per job, so
-  the failed leaf (or its own `cancelled` result) fails the gate. It reports a
-  cancel and a failure differently — see the next section — but neither passes.
-- `scripts/verify-ci-status.js` accepts a `Full CI Gate` only at
-  `conclusion === 'success'`, so a canceled run can never let a release skip
-  the full suite.
-- PortOS's own auto-merge watcher (`server/services/prWatcher.js`) counts only
-  `SUCCESS`/`NEUTRAL`/`SKIPPED` as green.
-
-The consequence to expect in the UI: on a fail-fast run the required check
-reads *canceled*, not *failed*. The failing step's log and annotations are
-still the diagnosis. The target is for siblings to become canceled within 30
-seconds of the first failing job completing, while the existing workflow-level
-`concurrency.cancel-in-progress` continues to handle superseded runs
-independently — the two are orthogonal, one canceling this run by id and the
-other canceling an older run when a newer commit arrives. Scheduled, manually
-dispatched, and release-called runs skip this sibling cancellation so their
-aggregate diagnostics and cache post-steps can complete normally.
+**Cancelled is not mergeable.** Every consumer allowlists green results:
+branch protection requires `CI Gate` to conclude `success`; the gate accepts
+only `success` or `skipped` per job; `scripts/verify-ci-status.js` accepts a
+`Full CI Gate` only at `success`; and PortOS's auto-merge watcher
+(`server/services/prWatcher.js`) counts only `SUCCESS`/`NEUTRAL`/`SKIPPED` as
+green.
 
 ### Windows native worker crash evidence
 
@@ -774,8 +726,7 @@ handling (#8152). Microsoft documents these fields in its
 ### External cancellation and one automatic retry
 
 Not every cancel comes from this repository. When several PRs build at once,
-GitHub itself cancels in-flight runs — no job fails, the fail-fast step above
-stays `skipped`, and **no successor run exists for the branch** (issue 7437).
+GitHub itself cancels in-flight runs — no job fails, and **no successor run exists for the branch** (issue 7437).
 That last property is the whole diagnosis: a `cancel-in-progress` supersession
 always leaves a newer run for the same PR, and an external cancel leaves none.
 
@@ -788,7 +739,8 @@ retries only when every one of these holds:
 | conclusion is `cancelled` | A failure is a failure. |
 | event is `pull_request` | Nightly, dispatch, and release-called runs are not ours to re-drive. |
 | `run_attempt == 1` | The retry budget. `POST /rerun` makes attempt 2, whose cancel sees attempt 2 and stops — one retry per run, and a PR run is one run per head SHA. |
-| no job concluded `failure`/`timed_out` | Fail-fast cancellation makes a genuinely red run *look* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no job concluded `failure`/`timed_out` | A run cancelled while one job was already red *looks* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no job hit its own `timeout-minutes` | GitHub reports a timed-out job as `cancelled`; only its check-run annotation ("exceeded the maximum execution time") tells it from an external cancel (#11910). A re-run would time out again, so it skips as `job-timed-out`. |
 | no newer run for the branch | That is a supersession; the newer run already covers this code. |
 
 Any API lookup that cannot be completed skips the retry rather than assuming a
@@ -810,8 +762,7 @@ raising the delay fails the build rather than quietly eating the margin.
 Every API-backed guard in the table is evaluated **twice**: once before the wait
 and once after it. A push or a human re-run that lands during the delay
 therefore still wins, and the post-wait job listing is the more reliable one —
-a failing job's step records can still be settling when the run's own fail-fast
-cancel lands.
+a failing job's step records can still be settling when a cancel lands.
 
 The two passes are **not** equal in authority. The post-wait pass is the reading
 the re-dispatch is made on, and it fails CLOSED as before. The pre-wait pass is
@@ -832,14 +783,9 @@ retrying only once the repository is quiet. On a busy repo that can mean never
 retrying, which is worse than retrying into a cancel.
 
 **Why the failing-job guard reads the jobs' own conclusions** rather than a
-marker written by the fail-fast step: a marker fails OPEN. It would be written
-by a job that is already failing, on a run about to be cancelled out from under
-it, so a lost write makes a red run look externally cancelled — and get
-retried. Reading conclusions fails CLOSED: an unreadable listing is
+marker a failing job writes: a marker fails OPEN. A lost write makes a red run
+look externally cancelled, and it gets retried. Reading conclusions fails CLOSED: an unreadable listing is
 `jobs-unavailable` and skips the retry. Do not "simplify" this into a marker.
-The ambiguity itself is the price of cancelling the run on first failure rather
-than letting the remaining jobs fail naturally; that trade buys the 30-second
-fail-fast above and is not on the table.
 
 **This is also the only layer that can explain a run-wide cancel.** `if:
 always()` on the gate defeats an upstream failure, not a cancellation of the
@@ -851,7 +797,7 @@ That summary lives on the recovery run, which nobody finds from the pull
 request, so the workflow also **publishes the verdict back onto the cancelled
 head SHA as a check run** named `CI cancel recovery` (issue #7438). It carries
 the same fixed reason code the step summary renders — `superseded`,
-`job-failed`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
+`job-failed`, `job-timed-out`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
 or one of the `*-unavailable` lookup failures — plus one sentence saying what
 to do about it.
 
@@ -908,9 +854,16 @@ successor run".
   case fails closed to the complete suite.
 - Database adapters, DB scripts, and relevant migrations add the complete
   serial DB suite.
+- A changed source's basename lookup (`git grep` of test files, #6363) keeps
+  every hit for a unique basename. For a basename several tracked sources
+  share (`index.js`, `providers.js`), it keeps only tests inside the source's
+  directory subtree or whose text also names its parent directory, so a
+  `server/cos-runner/index.js` edit no longer selects every test naming any
+  `index.js` (#11870). Import-graph selection still reaches real importers.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
-  shared roots/config, more than 30 executable changes, or more than 125
-  selected tests fail safe to full CI.
+  shared roots/config, or more than 30 executable changes fail safe to full
+  CI. More than 125 selected tests on one runner keeps the scoped selection
+  and shards that runner instead.
 
 ## Release Workflow (`release.yml`)
 

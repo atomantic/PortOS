@@ -4,6 +4,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix } from 'path';
 import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
+import { escapeRegExp } from '../server/lib/textUtils.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -25,9 +26,12 @@ const SERVER_LINT_RE = /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\
 const isLintSurface = (path) => CLIENT_LINT_RE.test(path) || SERVER_LINT_RE.test(path);
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
-// 125, not 120: the always-run guards grew to the old edge, and the real-repo
-// editorial-leaf planner test sat exactly on it (#10312).
-const MAX_TARGETED_TEST_FILES = 125;
+// Explicit selectors one runner carries before its scoped plan fans out across
+// the full-suite shard matrix. It used to escalate the whole repository to a
+// full plan; over-selection is a capacity limit, not a risk signal, so the
+// selection now stays exactly as computed and only execution is partitioned
+// (#11871). 125 is that former full-plan threshold (#10312).
+export const MAX_TARGETED_TEST_FILES = 125;
 
 // Preserve the planner's public registry export for existing callers.
 export { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -61,6 +65,31 @@ export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
 export const shardIndexes = (mode, count) => (
   mode === 'full' ? Array.from({ length: count }, (_, index) => index + 1) : [1]
 );
+
+/**
+ * Whether a scoped Linux runner fans out across its full-suite shard count.
+ *
+ * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
+ * - Server `related` mode: always. Its import-graph fan-out is unbounded by the
+ *   explicit count (#9999: 57 selectors became ~941 files), and scoped server
+ *   runs took 6.1 min median / 9.4 p90 on one runner. Each shard repeats
+ *   Vitest's related-graph pass, which is the Windows job's existing trade.
+ *   Client related plans stay on one runner unless over the cap.
+ * - Exact-file plans under the cap stay on one runner: they run in seconds.
+ *
+ * Vitest throws when the shard count exceeds the files it resolved
+ * (`--shard <count> must be a smaller than count of test files`). Every
+ * explicit selector is in the resolved set — `vitest related` selects a test
+ * file passed as input — so the floor counts explicit files the Linux runner
+ * does not exclude (DB suites run in their own job, browser suites in theirs).
+ * Below the floor the runner stays on one shard.
+ */
+const fansOut = (runner, { mode, files }, excludedFiles) => {
+  if (mode === 'skip' || mode === 'full') return false;
+  const runnable = files.filter((path) => !excludedFiles.has(path));
+  if (runnable.length < FULL_SUITE_SHARDS[runner]) return false;
+  return files.length > MAX_TARGETED_TEST_FILES || (runner === 'server' && mode === 'related');
+};
 
 // `windowsEscalates` decides whether a trigger widens the WINDOWS job too, not
 // only the Linux ones. Three windows-server shards are 3 of a full run's 12
@@ -386,12 +415,14 @@ const SLASHDO_CONTRACT_SOURCE_FILES = [
  * changing would not set this, even though Vitest's real `related` selection
  * can still transitively pull the contract tests in — in which case they run
  * without the submodule and take the documented skip. In practice a
- * sufficiently shared dependency changing also tends to select enough tests
- * to exceed MAX_TARGETED_TEST_FILES and force a full plan, which does trigger
- * this; a narrowly-shared one is the remaining gap.
+ * sufficiently shared dependency changing also tends to select more than
+ * MAX_TARGETED_TEST_FILES explicit server tests, which does trigger this (as
+ * the full plan that cap used to force did); a narrowly-shared one is the
+ * remaining gap.
  */
 export const needsSlashdoSubmodule = (plan) => Boolean(
   plan.full
+  || plan.server.files.length > MAX_TARGETED_TEST_FILES
   || plan.changedFiles.includes(SLASHDO_GITLINK_PATH)
   || plan.server.files.some((path) => SLASHDO_CONTRACT_TEST_FILES.includes(path))
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
@@ -634,19 +665,29 @@ export const isRouteOnlyAppDiff = (diff) => {
   return changedLines.length > 0 && changedLines.every((line) => /^[-+]\s*<\/?Route\b.*>(?:\s*)$/.test(line));
 };
 
+// A scoped runner spread over several shards says why, so the summary never
+// reads as a full run.
+const fanOutNote = (plan, runner) => {
+  const count = plan.shards[runner].length;
+  if (plan.full || count === 1) return '';
+  return plan[runner].files.length > MAX_TARGETED_TEST_FILES
+    ? `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`
+    : `; related import graph sharded ${count} ways`;
+};
+
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   server: plan.server.mode === 'skip'
     ? 'skipped: no server-impacting source changed'
     : plan.full
       ? `full matrix: ${plan.reason}`
-      : 'always-run cross-install and repository guards',
+      : `always-run cross-install and repository guards${fanOutNote(plan, 'server')}`,
   client: plan.client.mode === 'skip'
     ? 'skipped: no client-impacting source changed'
     : appRouteOnly
-      ? 'route-only client App.jsx change: related client contracts'
+      ? `route-only client App.jsx change: related client contracts${fanOutNote(plan, 'client')}`
       : plan.full
         ? `full matrix: ${plan.reason}`
-        : 'client-impacting source changed',
+        : `client-impacting source changed${fanOutNote(plan, 'client')}`,
   browser: plan.browserFiles.length > 0
     ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
     : 'skipped: no cross-workspace browser suite selected',
@@ -853,10 +894,6 @@ export function buildCiTestPlan(changedFiles, {
   const serverFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'server'));
   const clientFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'client'));
 
-  if (serverFiles.length > MAX_TARGETED_TEST_FILES || clientFiles.length > MAX_TARGETED_TEST_FILES) {
-    return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly, trackedSet, windowsEscalates: false });
-  }
-
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);
 
@@ -931,25 +968,38 @@ export function buildCiTestPlan(changedFiles, {
       ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
     ]) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
-  }, { appRouteOnly });
+  }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
 }
 
-/** The derived fields every plan carries: per-suite reasons and shard matrices. */
-const finishPlan = (plan, options) => ({
-  ...plan,
-  slashdo: needsSlashdoSubmodule(plan),
-  suiteReasons: suiteReasonsFor(plan, options),
-  shards: {
-    server: shardIndexes(plan.server.mode, FULL_SUITE_SHARDS.server),
-    client: shardIndexes(plan.client.mode, FULL_SUITE_SHARDS.client),
+/**
+ * The derived fields every plan carries: per-suite reasons and shard matrices.
+ *
+ * `linuxRunnerExcludes` names selected files the Linux test jobs never run
+ * (DB and browser suites have their own jobs); fansOut() keeps them out of the
+ * shard-count floor.
+ */
+const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) => {
+  const linuxShards = (runner) => shardIndexes(
+    fansOut(runner, plan[runner], linuxRunnerExcludes) ? 'full' : plan[runner].mode,
+    FULL_SUITE_SHARDS[runner],
+  );
+  const shards = {
+    server: linuxShards('server'),
+    client: linuxShards('client'),
     // Related mode can reach most of the server graph through one shared
     // source. The explicit selector count does not bound that work: one Windows
     // runner exceeded the unchanged 15-minute step budget on a TUI handshake
     // edit. Split execution across the existing matrix without widening or
     // reducing related-test selection; exact-file plans stay on one runner.
     windows: shardIndexes(plan.windowsMode === 'related' ? 'full' : plan.windowsMode, FULL_SUITE_SHARDS.windows),
-  },
-});
+  };
+  return {
+    ...plan,
+    slashdo: needsSlashdoSubmodule(plan),
+    suiteReasons: suiteReasonsFor({ ...plan, shards }, options),
+    shards,
+  };
+};
 
 /**
  * A full plan for every Linux suite — with the Windows job at the depth the
@@ -957,7 +1007,7 @@ const finishPlan = (plan, options) => ({
  *
  * `windowsEscalates` (default true, so an unlisted caller fails closed) is
  * false only for a trigger windows-server cannot observe: a client-only
- * surface, or a CAPACITY escalation (the targeted-test cap, a wide diff) that
+ * surface, or a CAPACITY escalation (a wide diff) that
  * says the planner ran out of scoping headroom, not that anything risky
  * changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
  *
@@ -1009,6 +1059,41 @@ const gitGrepFiles = (pattern, pathspecs, cwd) => {
     if (err.status === 1) return [];
     throw err;
   }
+};
+
+const basenameOf = (path) => path.slice(path.lastIndexOf('/') + 1);
+
+/** Basenames carried by more than one present, executable, non-test source. */
+const sharedSourceBasenames = (files) => {
+  const seen = new Set();
+  const shared = new Set();
+  for (const path of files) {
+    if (!isExecutable(path) || isTestFile(path)) continue;
+    const name = basenameOf(path);
+    (seen.has(name) ? shared : seen).add(name);
+  }
+  return shared;
+};
+
+/**
+ * Keep the basename hits that plausibly mean THIS copy of a shared basename:
+ * a test inside the source's directory subtree (it reaches the file as
+ * `./name` or `../name`), or one whose text also names the source's parent
+ * directory as a token (`cos-runner`, `aiToolkit`, `join(…, 'imageGen', …)`).
+ * A test naming only another directory's `index.js` is dropped; Vitest's
+ * import graph still selects every real importer. A repo-root source has no
+ * parent to tell copies apart, so it keeps every hit (#11870).
+ */
+const narrowSharedBasenameHits = (source, hits, cwd) => {
+  const dir = posix.dirname(source);
+  if (dir === '.' || hits.length === 0) return hits;
+  const parent = basenameOf(dir);
+  const naming = new Set(gitGrepFiles(
+    `(^|[^A-Za-z0-9_])${escapeRegExp(parent)}([^A-Za-z0-9_]|$)`,
+    hits.map((path) => `:(literal)${path}`),
+    cwd,
+  ));
+  return hits.filter((path) => path.startsWith(`${dir}/`) || naming.has(path));
 };
 
 export function emitGitHubPlan(plan) {
@@ -1184,11 +1269,17 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   // the text-reading contract tests (mirror parity, navManifest.js's 20+ client
   // reads) that no import edge or feature-directory match can reach. Basename
   // matching is deliberate: a mirror test names the client copy only as e.g.
-  // 'canonPrompt.js', never by its full path. Over-selection here costs
-  // seconds; under-selection is the bug this closes (issue #6363).
-  const pathContractTests = Object.fromEntries(collectedChangedFiles
-    .filter((path) => isExecutable(path) && !isTestFile(path))
-    .map((path) => [path, gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd)]));
+  // 'canonPrompt.js', never by its full path. Under-selection is the bug this
+  // closes (issue #6363), but over-selection is not free: every hit is an
+  // explicit selector, and a broad selection fans the runner out across shards.
+  // A basename several tracked sources share (42 `index.js`) is narrowed by
+  // narrowSharedBasenameHits (#11870).
+  const changedSources = collectedChangedFiles.filter((path) => isExecutable(path) && !isTestFile(path));
+  const sharedBasenames = changedSources.length > 0 ? sharedSourceBasenames(presentFiles) : new Set();
+  const pathContractTests = Object.fromEntries(changedSources.map((path) => {
+    const hits = gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd);
+    return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, cwd) : hits];
+  }));
 
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))

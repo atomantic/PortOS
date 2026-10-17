@@ -122,7 +122,7 @@ describe('fetchJobsWithFailedSteps', () => {
   const jobs = (value) => vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => value });
 
   it('names the failed steps of a job GitHub recorded as cancelled', () => {
-    // The fail-fast cancel lands before the job's `failure` conclusion is
+    // A mid-step cancel lands before the job's `failure` conclusion is
     // written, so the step conclusions are the only surviving evidence (7574).
     return expect(fetchJobsWithFailedSteps(jobs({
       jobs: [

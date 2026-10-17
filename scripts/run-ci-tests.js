@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { writeStepEnv, writeStepSummary } from './lib/githubOutput.js';
+import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
@@ -347,7 +347,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 
   const plan = planCrashRetry(scope, result.output);
   if (!plan.retry) {
-    if (plan.crashedPath) writeStepEnv('CI_CRASHED_TEST_FILE', plan.crashedPath);
+    if (plan.crashedPath) console.error(formatErrorAnnotation('Vitest worker crashed', `The worker crashed natively on ${plan.crashedPath}`));
     return result.status;
   }
   const { relPath, selector } = plan;
@@ -374,7 +374,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   if (extractCrashedTestFile(retry.output)) {
     await diagnose(retryStartedAt);
     console.error(`❌ ${relPath} crashed again on retry — this reproduces, not a runner fluke`);
-    writeStepEnv('CI_CRASHED_TEST_FILE', relPath);
+    console.error(formatErrorAnnotation('Vitest worker crashed', `The worker crashed natively on ${relPath}, again on retry`));
   } else {
     // The retry failed for a different reason (an assertion, a real error) —
     // report it as an ordinary test failure, not a repeat native crash.
@@ -430,7 +430,9 @@ async function main() {
       process.exitCode = 0;
       return;
     }
-    process.exitCode = await spawnNpm(scope, 'test:ci', selectedFiles, 'selected tests');
+    // The planner fans an exact-file plan out only when it selects more files
+    // than the shard count (ci-test-plan.js fansOut), so the slice is never empty.
+    process.exitCode = await spawnNpm(scope, 'test:ci', [...selectedFiles, ...shardArgs(process.env.CI_SHARD)], 'selected tests');
     return;
   }
 

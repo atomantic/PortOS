@@ -58,7 +58,7 @@ describe('summarizeGateResults', () => {
     const text = summary.lines.join('\n');
     expect(text).toContain('CANCELLED, not failed');
     expect(text).toContain('no job REPORTED a failure');
-    // The gate reads job CONCLUSIONS, and a fail-fast run hides a real
+    // The gate reads job CONCLUSIONS, and a cancelled job can hide a real
     // failure behind the same conclusions (#7482, #7571). The summary must
     // therefore send the reader to the logs, never imply the tree is green.
     expect(text).toContain('READ THE JOB LOGS FIRST');
@@ -140,7 +140,7 @@ describe('summarizeGateResults', () => {
   });
 
   it('names the culprit instead of reporting a cancel when a job has a failed step', () => {
-    // The shape of every fail-fast run (7574): the failing job's own conclusion
+    // A job cancelled mid-step (7574): the failing job's own conclusion
     // is `cancelled` because the cancel beat GitHub to writing it, so this is
     // the ONLY input that can tell the reader a test actually failed.
     const summary = summarizeGateResults(
