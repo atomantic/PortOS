@@ -185,7 +185,7 @@ describe('module contract conventions', () => {
   it('mocks only members the real modules export', () => {
     const drift = trackedTestFiles().flatMap((file) => scanMockDrift(join(CLIENT_ROOT, file), read(file)));
     expect(drift, 'delete the dead key, or mock the module that really exports it').toEqual([]);
-  });
+  }, 60_000); // reads every tracked client test file; a loaded runner overran the 15s default
 
   it('never calls the browser alert/confirm/prompt dialogs', () => {
     const violations = files.flatMap((file) => blockingDialogs(read(file), file));
