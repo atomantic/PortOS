@@ -185,4 +185,32 @@ describe('migration 412 — prune config seeds that duplicate DEFAULT_CONFIG', (
     expect(readJson(memoryConfigPath)).toEqual({ model: 'custom-llm' });
     expect(readJson(browserConfigPath)).toEqual({ cdpHost: 'custom-host' });
   });
+
+  describe('keys and files the migration must not touch', () => {
+    it('keeps a user-added key that is not in the shipped seed', async () => {
+      writeJson(memoryConfigPath, {
+        enabled: true,
+        provider: 'lmstudio',
+        customKey: 'x',
+      });
+      writeJson(browserConfigPath, { cdpPort: 5556, customKey: 'y' });
+
+      await migration.up({ rootDir });
+
+      expect(readJson(memoryConfigPath)).toEqual({ customKey: 'x' });
+      expect(readJson(browserConfigPath)).toEqual({ customKey: 'y' });
+    });
+
+    it('leaves an unparseable config file byte-for-byte untouched', async () => {
+      const corrupt = '{ "enabled": true, "provider": ';
+      writeFileSync(memoryConfigPath, corrupt);
+      writeFileSync(browserConfigPath, corrupt);
+
+      const result = await migration.up({ rootDir });
+
+      expect(result).toEqual({ memoryClassifier: null, browser: null });
+      expect(readFileSync(memoryConfigPath, 'utf-8')).toBe(corrupt);
+      expect(readFileSync(browserConfigPath, 'utf-8')).toBe(corrupt);
+    });
+  });
 });

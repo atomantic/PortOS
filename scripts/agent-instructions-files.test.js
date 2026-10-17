@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { readFileSync, lstatSync, existsSync, readlinkSync } from 'fs';
+import { readFileSync, lstatSync, existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -122,7 +122,9 @@ describe('agent-instructions files (#4852)', () => {
     expect(links.length, 'detector self-check: .claude/ must track symlinks').toBeGreaterThan(0);
 
     const dangling = links.filter((link) => {
-      const target = readlinkSync(join(REPO_ROOT, link));
+      // The blob content IS the link target; a Windows checkout without symlink
+      // support materializes a text file, so the disk entry can't be trusted.
+      const target = git('cat-file', 'blob', `:${link}`);
       if (!submoduleReady && target.includes('lib/slashdo/')) return false;
       return !existsSync(resolve(dirname(join(REPO_ROOT, link)), target));
     });
