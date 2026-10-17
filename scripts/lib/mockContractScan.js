@@ -179,6 +179,8 @@ function literalKeys(raw, masked, open) {
 
 const FACTORY_RE = /\bvi\.mock\(\s*(['"])([^'"]+)\1\s*,\s*(?:async\s*)?\(\s*\)\s*=>\s*\(\s*\{/g;
 
+const exportCache = new Map();
+
 /** `file:line — spec mocks <key>` for each key the real module does not export. */
 export function mockDrift(testFile, rawSource, { root, allowed = new Map() }) {
   const masked = mask(rawSource);
@@ -193,7 +195,8 @@ export function mockDrift(testFile, rawSource, { root, allowed = new Map() }) {
     const open = m.index + m[0].length - 1;
     const keys = literalKeys(rawSource, masked, open);
     if (!keys) continue;
-    const exported = exportNames(target);
+    if (!exportCache.has(target)) exportCache.set(target, exportNames(target));
+    const exported = exportCache.get(target);
     for (const key of keys) {
       if (key === '__esModule' || exported.has(key) || allowed.has(`${rel}|${m[2]}|${key}`)) continue;
       const line = rawSource.slice(0, m.index).split('\n').length;
