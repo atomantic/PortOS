@@ -268,6 +268,8 @@ describe('commandSecurity', () => {
       'pm2 scale all 2',
       'pm2 KILL',          // case-insensitive subcommand
       'pm2 stop ALL',      // case-insensitive target
+      'pm2 stop --namespace=x all',  // --opt=value split must not hide the target
+      'pm2 delete --name=x all',
     ])('rejects %s', (cmd) => {
       const result = validateCommand(cmd)
       expect(result.valid).toBe(false)
@@ -435,6 +437,8 @@ describe('commandSecurity', () => {
 
     it.each([
       ['git branch -D deletes a branch', 'git branch -D main'],
+      ['git branch --unset-upstream is a mutating flag', 'git branch --unset-upstream'],
+      ['git branch -D with a list-mode flag is still a delete', 'git branch -D old --merged'],
       ['git branch <name> creates one', 'git branch newbranch'],
       ['git tag <name> creates a tag', 'git tag v9.9.9'],
       ['git tag -d deletes one', 'git tag -d v1'],
@@ -469,6 +473,8 @@ describe('commandSecurity', () => {
       ['gh api --method DELETE is an authenticated write', 'gh api --method DELETE /repos/x/y/issues/1'],
       ['gh api --method=PATCH is an authenticated write', 'gh api --method=PATCH /repos/x/y/issues/1'],
       ['a field flag makes gh api an implicit POST', 'gh api /repos/x/y/issues -f title=hi'],
+      ['--raw-field= makes gh api an implicit POST', 'gh api repos/o/r/issues --raw-field=title=hi'],
+      ['--field= makes gh api an implicit POST', 'gh api repos/o/r/issues --field=title=hi'],
       ['gh pr merge merges with operator credentials', 'gh pr merge 1'],
       ['gh issue close mutates the tracker', 'gh issue close 1'],
       ['gh pr create mutates the tracker', 'gh pr create --fill'],
