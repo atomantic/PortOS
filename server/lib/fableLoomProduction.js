@@ -887,20 +887,8 @@ export function buildEpisodeProductionPlan({
     if (node.interactionWindow?.enabled && node.interactionWindow?.protagonistCharacterId) {
       const charId = node.interactionWindow.protagonistCharacterId;
       const dialogueAssetId = `asset-${node.id}-dialogue-${charId}`;
-      const character = characterById.get(charId);
-      const charInUniverse = Boolean(character);
-      const profile = localVoiceProfiles?.find((p) => (
-        p.binding?.characterId === charId
-        && (!universe?.id || p.binding?.universeId === universe.id)
-        && p.approval?.status === 'approved'
-        && p.routes?.interactive?.enabled === true
-      ));
-
-      const dialogueBlockers = [];
-      if (!charInUniverse && universe) dialogueBlockers.push(`Protagonist "${charId}" not found in Universe.`);
-      if (!profile && !character?.voiceId && !loom?.defaultVoiceId) dialogueBlockers.push(`No approved voice binding for "${charId}".`);
-      dialogueBlockers.push(...nodeBlockers);
-      const dialogueBlocked = dialogueBlockers.length > 0;
+      // Protagonist and voice-binding blockers are already in nodeBlockers.
+      const dialogueBlocked = nodeBlockers.length > 0;
 
       plannedAssets.push({
         id: dialogueAssetId,
@@ -917,7 +905,7 @@ export function buildEpisodeProductionPlan({
         readiness: {
           ready: !dialogueBlocked,
           reasons: dialogueBlocked
-            ? dialogueBlockers
+            ? [...nodeBlockers]
             : ['Live dialogue is generated per hosted interaction; no standalone batch audio is created.'],
         },
       });
