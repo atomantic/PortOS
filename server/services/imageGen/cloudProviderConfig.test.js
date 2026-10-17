@@ -35,6 +35,7 @@ describe('resolveCloudProviderConfig', () => {
     expect(cloud.providerParams).toEqual({
       codexPath: '/bin/codex',
       model: CODEX_IMAGEGEN_DEFAULT_MODEL,
+      modelIsShippedDefault: true,
       effort: 'high',
     });
     expect(cloud.jobParams).toEqual({ mode: IMAGE_GEN_MODE.CODEX, ...cloud.providerParams });
@@ -47,6 +48,21 @@ describe('resolveCloudProviderConfig', () => {
     );
     expect(cloud.modelId).toBe('gpt-5.4');
     expect(cloud.providerParams.model).toBe('gpt-5.4');
+  });
+
+  it('preserves Codex default provenance across render-target dispatch', () => {
+    const settings = settingsWith({ codex: { enabled: true } });
+    const resolved = resolveRenderTargetConfig(settings, 'universe-bible', { mode: IMAGE_GEN_MODE.CODEX });
+    const dispatched = resolveCloudProviderConfig(settings, resolved.mode, {
+      model: resolved.cloud.modelId,
+      modelIsShippedDefault: resolved.cloud.modelIsShippedDefault,
+    });
+    expect(dispatched.providerParams.modelIsShippedDefault).toBe(true);
+    expect(resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.CODEX, {
+      model: CODEX_IMAGEGEN_DEFAULT_MODEL,
+    }).providerParams.modelIsShippedDefault).toBe(false);
+    expect(resolveCloudProviderConfig(settingsWith({ codex: { enabled: true, model: CODEX_IMAGEGEN_DEFAULT_MODEL } }),
+      IMAGE_GEN_MODE.CODEX, { modelIsShippedDefault: true }).providerParams.modelIsShippedDefault).toBe(false);
   });
 
   it('bundles grok job params (no model knob — fixed backend id)', () => {
