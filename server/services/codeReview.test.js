@@ -487,6 +487,22 @@ describe('codeReview helpers', () => {
       })
     })
 
+    it('counts concurrent provider failures against the persisted record and pauses on the second', async () => {
+      const reviewer = 'provider:opencode-zen'
+      mockedSettings.current = { codeReview: { reviewerFallbackGroups: [[reviewer], ['claude']] } }
+      const transient = { error: 'Unexpected server error. Check server logs for details.' }
+      await Promise.all([
+        reportReviewerFailure(reviewer, transient, 1000),
+        reportReviewerFailure(reviewer, transient, 1000),
+      ])
+      expect(mockedSettings.current.codeReview.reviewerHealth[reviewer]).toMatchObject({
+        pausedUntil: 1000 + REVIEWER_PAUSE_MS,
+        reason: 'unavailable',
+        failureCount: 2,
+      })
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual(['claude'])
+    })
+
     it('recognizes free API quota limits and pauses provider for 24h', async () => {
       mockedSettings.current = { codeReview: {
         reviewerFallbackGroups: [['provider:opencode-orcarouter'], ['provider:nvidia-nim'], ['claude']],
