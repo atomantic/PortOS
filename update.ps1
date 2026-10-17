@@ -336,6 +336,47 @@ if (-not (Repair-StaleSubmodules)) {
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
+# Runtime pre-check (see update.sh): evaluate the TARGET revision's own Node gate
+# from `git archive` BEFORE HEAD, submodules or apps change, so a refusal leaves
+# the checkout untouched. package.json rides along for its "type": "module".
+# An unresolvable target or one that predates the gate skips this check.
+if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
+    $preflightTarget = $env:PORTOS_PEER_UPDATE_TARGET_SHA
+} else {
+    Invoke-Logged git fetch
+    $preflightTarget = git rev-parse -q --verify '@{upstream}^{commit}' 2>$null
+}
+$global:LASTEXITCODE = 0
+if ($preflightTarget) {
+    git cat-file -e "${preflightTarget}:scripts/checkNodeVersion.js" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $gateDir = Join-Path ([System.IO.Path]::GetTempPath()) ("portos-node-gate-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $gateDir | Out-Null
+        $gatePaths = @('scripts/checkNodeVersion.js')
+        foreach ($optional in @('package.json', 'scripts/lib')) {
+            git cat-file -e "${preflightTarget}:$optional" 2>$null
+            if ($LASTEXITCODE -eq 0) { $gatePaths += $optional }
+        }
+        $gateArchive = Join-Path $gateDir 'gate.tar'
+        git archive --output=$gateArchive $preflightTarget @gatePaths 2>$null
+        $archived = ($LASTEXITCODE -eq 0)
+        if ($archived) { tar.exe -xf $gateArchive -C $gateDir 2>$null; $archived = ($LASTEXITCODE -eq 0) }
+        $gateRejected = $false
+        if ($archived) {
+            Push-Location $gateDir
+            try { $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim(); $gateRejected = ($LASTEXITCODE -ne 0) }
+            finally { Pop-Location }
+        }
+        Remove-Item -Recurse -Force $gateDir -ErrorAction SilentlyContinue
+        if ($gateRejected) {
+            Write-SafeHost $nodeGateOutput
+            Write-SafeHost "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
+            Stop-UpdateScript 1
+        }
+    }
+}
+$global:LASTEXITCODE = 0
 if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
     Invoke-Logged git merge --ff-only $env:PORTOS_PEER_UPDATE_TARGET_SHA
 } else {
@@ -376,7 +417,8 @@ Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
 # Runtime preflight (see update.sh): run the pulled target's own Node gate before
-# any PM2 delete or dependency change. The checkout stays on the pulled revision.
+# any PM2 delete or dependency change. The pre-check above already refused an
+# unsupported runtime before HEAD moved; this is the second line of defence.
 Step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if (Test-Path "scripts/checkNodeVersion.js") {
     $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()

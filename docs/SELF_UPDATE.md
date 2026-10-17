@@ -49,6 +49,8 @@ submodule, so those changes remain a visible update blocker.
 
 ### Submodules follow the pulled parent revision
 
+**An unsupported Node.js runtime refuses the update before anything changes.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero with HEAD, submodules, dependencies and PM2 apps untouched, so the running server never ends up as old code over a newer checkout. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
+
 Before pulling, both platform scripts repair any recursive submodule checkout
 that is not at the commit pinned by the current parent tree. After switching to
 `main` they repeat that repair, then after pulling `main` both platform scripts
