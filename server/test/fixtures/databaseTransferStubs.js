@@ -41,7 +41,7 @@ export function installDatabaseStubs(root) {
   const R = quote(dir);
   const logInvocation = name => `{ echo "${name} $*"; env | grep '^PG' | sort | sed 's/^/env /'; echo "tmpdir \${TMPDIR:-}"; } >> "$R/calls.log"`;
   const phase = (kind, event) => `echo "$$ ${kind} ${event} $(date +%s)" >> "$R/phases.log"`;
-  const pause = kind => `: > "$R/${kind}-started"; while [ ! -e "$R/${kind}-release" ]; do sleep 0.05; done`;
+  const pause = kind => `: > "$R/${kind}-started"; while [ ! -e "$R/${kind}-release" ]; do [ -d "$R" ] || exit 1; sleep 0.05; done`;
   writeStub(join(bin, 'uname'), '#!/bin/sh\necho Linux\n');
   writeStub(join(bin, 'pg_dump'), `#!/bin/sh
 R=${R}
