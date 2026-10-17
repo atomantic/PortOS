@@ -623,6 +623,37 @@ describe('parseAgyUsage', () => {
     expect(parseAgyUsage('').limits).toEqual([]);
   });
 
+  it('reports the separate Argon weekly bucket without replacing shared Gemini quota', () => {
+    const argon = `
+GEMINI 4 ARGON
+  For paid Pro plans, Argon quota is separate.
+
+  Gemini 4 Argon Weekly Limit
+    [██░░░░░░░░] 23.00%
+    Refreshes in 120h 15m
+`;
+    const { limits, groups } = parseAgyUsage(AGY_PANEL + argon, { now: NOW });
+    expect(groups).toBe(3);
+    expect(limits).toHaveLength(5);
+    expect(limits.find((l) => l.key === 'gemini-weekly')).toMatchObject({ percentRemaining: 99 });
+    expect(limits.find((l) => l.key === 'gemini-4-argon-weekly')).toEqual({
+      key: 'gemini-4-argon-weekly',
+      label: 'Gemini 4 Argon · Weekly',
+      scope: 'weekly',
+      model: 'Gemini 4 Argon',
+      percentUsed: 77,
+      percentRemaining: 23,
+      resetsAt: new Date(NOW + (120 * 3600 + 15 * 60) * 1000).toISOString(),
+      timezone: null,
+    });
+    const repainted = AGY_PANEL + argon + argon.replace('23.00%', '100.00%').replace('Refreshes in 120h 15m', 'Quota available');
+    const latest = parseAgyUsage(repainted, { now: NOW }).limits;
+    expect(latest).toHaveLength(5);
+    expect(latest.find((l) => l.key === 'gemini-4-argon-weekly')).toMatchObject({
+      percentUsed: 0, percentRemaining: 100, resetsAt: null,
+    });
+  });
+
   it('dedups repainted frames to one row per key (no duplicate React keys)', () => {
     // The append-only PTY buffer can contain the panel twice if the TUI
     // repaints; latest-wins so keys stay unique and the newer value survives.
