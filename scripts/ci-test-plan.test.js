@@ -670,6 +670,28 @@ describe('CI test impact planner', () => {
     expect(plan.windows).toBe(false);
   });
 
+  // One row per structural trigger in structuralTestsFor. Each diff pairs the
+  // trigger with an unrelated path, so a rule that only fires when every changed
+  // file matches (`.some` → `.every`) drops its guard and fails here.
+  const STRUCTURAL_GUARD_ROWS = [
+    { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
+    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/index.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/index.test.js'] },
+    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/index.test.js'] },
+    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/index.test.js'] },
+    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11yConventions.test.js'] },
+  ];
+  it.each(STRUCTURAL_GUARD_ROWS)('schedules the structural guards for $changed in a mixed diff', ({ changed, runner, guards }) => {
+    const trackedFiles = [...TRACKED, changed, ...STRUCTURAL_GUARD_ROWS.flatMap((row) => row.guards)];
+    const plan = buildCiTestPlan([changed, 'server/services/auth.js'], { trackedFiles });
+
+    expect(plan.full).toBe(false);
+    for (const guard of guards) {
+      expect(plan[runner].files, guard).toContain(guard);
+    }
+  });
+
   it('does not treat a source .grit or a mistyped biome.json as lint configuration', () => {
     // Guards the trigger regex against over-matching: only the client's top-level
     // config and its sibling .grit plugins should force a full run.
