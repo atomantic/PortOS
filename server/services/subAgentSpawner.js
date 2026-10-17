@@ -95,6 +95,9 @@ async function holdTask(task, reason) {
   if (task.metadata?.jobId) {
     cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'held' });
   }
+  // Unpersisted tasks (feature-agent runs) hold a pending pointer that only a
+  // lifecycle event clears; a held dispatch emits none of the usual ones.
+  cosEvents.emit('task:held', { taskId: task.id, reason });
 }
 
 /**
@@ -224,6 +227,8 @@ async function handleTaskReady(task) {
       if (jobId) {
         cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed' });
       }
+      // Same task-level error contract as the workspace-prep failure path.
+      cosEvents.emit('agent:error', { taskId: task.id, error: err?.message || String(err) });
     } finally {
       localSlot.release();
     }
