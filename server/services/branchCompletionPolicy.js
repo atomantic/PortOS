@@ -2,7 +2,7 @@
  * Read the existing agent records, including archives; PR bodies, summaries and
  * shared forge logins never authorize reconciliation. No parallel policy store.
  */
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -14,38 +14,69 @@ const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
 const held = 'pr-completion-human-handoff';
 const unavailable = 'pr-completion-policy-unavailable';
 
+const unavailableBecause = cause => new Error(unavailable, { cause });
+
 /** Read once per gather, freshly again at mutation. Missing old policy fields
  * are unknown history, not invented leave-open instructions. Corrupt records
- * cannot establish that a known handoff has been released.
+ * cannot establish that a known handoff has been released. An unavailable read
+ * logs its cause here, once per read, because every caller collapses the
+ * rejection into the same per-branch reason. Any other failure is wrapped as
+ * the unavailable reason with that failure as its cause.
  */
 export async function readBranchCompletionPolicies() {
+  return readPolicies().catch(error => {
+    const cause = error.cause ?? error;
+    console.warn(`⚠️ Branch completion policy unavailable: ${cause.code ? `${cause.code} ` : ''}${cause.message}`);
+    throw error.message === unavailable ? error : unavailableBecause(error);
+  });
+}
+
+async function readPolicies() {
   const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
   const snapshot = await readAgentsStateForSafetyCheck();
-  if (!snapshot.trusted || !isPlainObject(snapshot.agents)) throw new Error(unavailable);
+  if (!snapshot.trusted || !isPlainObject(snapshot.agents)) throw unavailableBecause(new Error('live agent state is untrusted'));
   const agents = new Map(Object.entries(snapshot.agents));
-  if ([...agents].some(([id, agent]) => !isPlainObject(agent) || agent.id !== id)) throw new Error(unavailable);
+  if ([...agents].some(([id, agent]) => !isPlainObject(agent) || agent.id !== id)) throw unavailableBecause(new Error('live agent state has a mismatched record'));
   const dir = join(PATHS.cos, 'agents');
   const raw = await readFile(join(dir, 'index.json'), 'utf8').catch(async error => {
     if (error.code === 'ENOENT') {
       const entries = await readdir(dir).catch(missing => { if (missing.code === 'ENOENT') return []; throw missing; });
-      if (entries.some(entry => /^\d{4}-\d{2}-\d{2}$/.test(entry) || (entry.startsWith('agent-') && !agents.has(entry)))) throw new Error(unavailable);
+      if (entries.some(entry => /^\d{4}-\d{2}-\d{2}$/.test(entry) || (entry.startsWith('agent-') && !agents.has(entry)))) throw error;
       return '{}';
     }
     throw error;
   });
   const index = JSON.parse(raw);
-  if (!isPlainObject(index)) throw new Error(unavailable);
+  if (!isPlainObject(index)) throw unavailableBecause(new Error('agent index is not an object'));
   const entries = Object.entries(index).filter(([id]) => !agents.has(id));
-  // Bounded parallelism; never read transcripts or repair/archive records here.
+  const dangling = [];
+  // Bounded parallelism; never read transcripts or archive records here.
   for (let offset = 0; offset < entries.length; offset += 50) {
     await Promise.all(entries.slice(offset, offset + 50).map(async ([id, date]) => {
-      if (!/^[A-Za-z0-9_-]+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(unavailable);
-      const agent = JSON.parse(await readFile(join(dir, date, id, 'metadata.json'), 'utf8'));
-      if (!isPlainObject(agent) || (agent.id || agent.agentId) !== id) throw new Error(unavailable);
+      if (!/^[A-Za-z0-9_-]+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw unavailableBecause(new Error('agent index has a malformed row'));
+      const recordDir = join(dir, date, id);
+      const content = await readFile(join(recordDir, 'metadata.json'), 'utf8').catch(async error => {
+        // A row with no record directory at all is a legacy dangling pointer,
+        // not a record that exists but cannot be trusted: it holds no policy.
+        if (error.code === 'ENOENT' && await stat(recordDir).then(() => false, missing => missing.code === 'ENOENT')) return null;
+        throw error;
+      });
+      if (content === null) { dangling.push(id); return; }
+      const agent = JSON.parse(content);
+      if (!isPlainObject(agent) || (agent.id || agent.agentId) !== id) throw unavailableBecause(new Error('archived agent record id mismatch'));
       agents.set(id, agent);
     }));
   }
+  if (dangling.length) dropDanglingIndexRows(dangling);
   return [...agents.values()];
+}
+
+// Fire-and-forget repair of the source; the read above already ignores these rows.
+function dropDanglingIndexRows(ids) {
+  import('./cosAgentIndex.js')
+    .then(({ removeDanglingAgentIndexEntries }) => removeDanglingAgentIndexEntries(ids))
+    .then(count => { if (count) console.log(`🧹 Dropped ${count} agent-index row(s) with no archive directory`); })
+    .catch(error => console.error(`❌ Failed to drop dangling agent-index rows: ${error.message}`));
 }
 
 /** Exact repo/branch identity. A known PR receipt never applies to another PR

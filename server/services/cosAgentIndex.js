@@ -14,7 +14,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { AGENTS_DIR } from './cosState.js';
+import { AGENTS_DIR, withStateLock } from './cosState.js';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import {
@@ -156,6 +156,30 @@ export async function addAgentArchivesToIndex(pairs) {
   // before the peer receiver may mark that manifest reconciled.
   if (valid) await saveAgentIndex();
   return added;
+}
+
+/**
+ * Drop index rows whose `<date>/<id>/` archive directory no longer exists
+ * (legacy rows left by retired whole-run age deletion). Absence is rechecked
+ * under the state lock against the live mapping, because archive writers create
+ * the directory before indexing it. Returns the number of rows removed.
+ */
+export async function removeDanglingAgentIndexEntries(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  return withBackupAssetPublication(() => withStateLock(async () => {
+    const idx = await loadAgentIndex();
+    const removed = [];
+    for (const id of new Set(ids)) {
+      const date = idx.get(id);
+      if (typeof date !== 'string' || existsSync(join(AGENTS_DIR, date, id))) continue;
+      idx.delete(id);
+      removed.push([id, date]);
+    }
+    if (!removed.length) return 0;
+    try { await saveAgentIndex(); }
+    catch (err) { for (const [id, date] of removed) idx.set(id, date); throw err; }
+    return removed.length;
+  }));
 }
 
 // Resolve the correct directory for an agent (running = flat, completed = date bucket)
