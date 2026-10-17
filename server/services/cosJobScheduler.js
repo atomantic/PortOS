@@ -216,6 +216,35 @@ export function clearSpawningJob(jobId) {
 }
 
 /**
+ * Re-arm a job whose task:ready dispatch did not produce an agent. lastRun is
+ * only advanced by job:spawned, so re-registering here would compute a past-due
+ * fire time and re-fire every second.
+ *  - 'held': a transient dispatch hold (runner down, capacity, maintenance...);
+ *    keep the occurrence and retry on the 60s defer.
+ *  - anything else (a real spawn error): record a skip so the job re-arms at its
+ *    next real period, like a generation failure.
+ */
+export async function handleJobSpawnFailed(jobId, reason) {
+  clearSpawningJob(jobId);
+  if (reason === 'held') {
+    emitLog('debug', `Job spawn held, retrying in 60s: ${jobId}`, { jobId });
+    scheduleEvent({
+      id: `job:${jobId}`,
+      type: 'once',
+      delayMs: 60000,
+      handler: () => executeScheduledJob(jobId),
+      metadata: { description: 'Autonomous job (dispatch held)', jobId }
+    });
+    return;
+  }
+  emitLog('warn', `Job spawn failed, re-arming at next period: ${jobId}`, { jobId });
+  await recordJobGateSkip(jobId).catch(err =>
+    console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
+  );
+  await registerSingleJobSchedule(jobId);
+}
+
+/**
  * Execute a scheduled autonomous job and re-register its timer.
  */
 export async function executeScheduledJob(jobId) {

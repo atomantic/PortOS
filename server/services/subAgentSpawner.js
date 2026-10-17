@@ -93,7 +93,7 @@ async function holdTask(task, reason) {
     emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id })
   );
   if (task.metadata?.jobId) {
-    cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
+    cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'held' });
   }
 }
 
@@ -222,7 +222,7 @@ async function handleTaskReady(task) {
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {
-        cosEvents.emit('job:spawn-failed', { jobId });
+        cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed' });
       }
     } finally {
       localSlot.release();
