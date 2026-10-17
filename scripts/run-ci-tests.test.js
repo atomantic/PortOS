@@ -55,7 +55,7 @@ describe('shardArgs', () => {
   });
 });
 
-it('forwards the related matrix slice and all selectors through the real launcher', () => {
+it('forwards the scoped matrix slice and all selectors through the real launcher', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
   try {
     const npmScript = join(fixture, 'npm.js');
@@ -63,19 +63,26 @@ it('forwards the related matrix slice and all selectors through the real launche
     writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n`
       + 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o755 });
     writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-      encoding: 'utf8', timeout: 30000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-        CI_TEST_MODE: 'related', CI_SHARD: '2/3',
-        CI_TEST_SOURCES: JSON.stringify(['server/lib/example.js']),
-        CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
-        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
-    expect(args.slice(0, 9)).toEqual(['run', 'test:ci:related', '--prefix', 'server', '--',
-      './lib/example.js', './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3']);
+    // The planner fans both scoped modes out (ci-test-plan.js fansOut), so
+    // each must hand Vitest its slice rather than run the whole selection twice.
+    for (const [mode, script, sources, expected] of [
+      ['related', 'test:ci:related', ['server/lib/example.js'], ['./lib/example.js']],
+      ['files', 'test:ci', [], []],
+    ]) {
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: mode, CI_SHARD: '2/3',
+          CI_TEST_SOURCES: JSON.stringify(sources),
+          CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
+          GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
+      const selectors = [...expected, './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3'];
+      expect(args.slice(0, 5 + selectors.length), mode).toEqual(['run', script, '--prefix', 'server', '--', ...selectors]);
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

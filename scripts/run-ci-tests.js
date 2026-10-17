@@ -430,7 +430,9 @@ async function main() {
       process.exitCode = 0;
       return;
     }
-    process.exitCode = await spawnNpm(scope, 'test:ci', selectedFiles, 'selected tests');
+    // The planner fans an exact-file plan out only when it selects more files
+    // than the shard count (ci-test-plan.js fansOut), so the slice is never empty.
+    process.exitCode = await spawnNpm(scope, 'test:ci', [...selectedFiles, ...shardArgs(process.env.CI_SHARD)], 'selected tests');
     return;
   }
 

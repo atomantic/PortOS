@@ -527,9 +527,19 @@ extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
 Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete selected suite. Windows
 related plans retain the same source graph and explicit contracts on every
-shard; only execution is partitioned. Exact-file plans stay on one runner
-(their handful of files can trip Vitest's shard-count guard), and scoped Linux
-plans also retain one runner. Once-only steps — smoke boot, the client build, the
+shard; only execution is partitioned. Scoped Linux plans fan out the same way
+(`fansOut()` in the planner): a server `related` plan always does, because its
+import-graph reach is unbounded by the explicit selector count (scoped server
+runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
+its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap used to
+force a full plan for the whole repository; it now keeps the scoped selection
+and only partitions it, so a server-only overflow no longer starts three client
+shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
+under the cap and client `related` plans stay on one runner. Vitest refuses a
+shard count above the number of files it resolved, so a runner fans out only
+when at least that many explicit selectors are files the Linux job actually
+runs (DB and browser suites have their own jobs); each shard repeats Vitest's
+related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot, the client build, the
 Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
@@ -570,7 +580,7 @@ reason `windows-server` cannot observe:
 
 | Full-plan reason | Runs | Windows-relevant? |
 | --- | --- | --- |
-| targeted test set exceeded safety cap | 17 | no — capacity, not risk |
+| targeted test set exceeded safety cap (no longer full; see "Full-suite sharding") | 17 | no — capacity, not risk |
 | wide change (>30 executable files) | 6 | no — capacity, not risk |
 | client composition root / build config / lint config / test setup | 1 | no — client-only |
 | dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
@@ -844,9 +854,16 @@ successor run".
   case fails closed to the complete suite.
 - Database adapters, DB scripts, and relevant migrations add the complete
   serial DB suite.
+- A changed source's basename lookup (`git grep` of test files, #6363) keeps
+  every hit for a unique basename. For a basename several tracked sources
+  share (`index.js`, `providers.js`), it keeps only tests inside the source's
+  directory subtree or whose text also names its parent directory, so a
+  `server/cos-runner/index.js` edit no longer selects every test naming any
+  `index.js` (#11870). Import-graph selection still reaches real importers.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
-  shared roots/config, more than 30 executable changes, or more than 125
-  selected tests fail safe to full CI.
+  shared roots/config, or more than 30 executable changes fail safe to full
+  CI. More than 125 selected tests on one runner keeps the scoped selection
+  and shards that runner instead.
 
 ## Release Workflow (`release.yml`)
 
