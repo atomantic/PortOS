@@ -46,6 +46,24 @@ async function drainPublishKitBuilds() {
   }, { timeout: 15000, interval: 20 });
 }
 
+// Resolves with the build's terminal SSE frame (complete/error/canceled), so a
+// case waits on the build itself rather than polling the record against a
+// ceiling that background file I/O can outrun on a loaded runner.
+function buildEnded(jobId) {
+  return new Promise((resolve, reject) => {
+    const res = {
+      writeHead() {},
+      req: { on() {} },
+      end() {},
+      write(frame) {
+        const payload = JSON.parse(frame.slice('data: '.length));
+        if (payload.type !== 'progress') resolve(payload);
+      },
+    };
+    if (!kit.attachPublishKitSseClient(jobId, res)) reject(new Error(`publishing kit job ${jobId} is not registered`));
+  });
+}
+
 afterEach(drainPublishKitBuilds);
 afterAll(() => cleanupTempDataRoots());
 
@@ -120,11 +138,12 @@ describe('publishing kit build (#9281)', () => {
     const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess')
       .mockResolvedValue({ ok: true }).mockImplementationOnce(() => pendingEncode);
     try {
-      await kit.startPublishKitBuild(id);
+      const { jobId } = await kit.startPublishKitBuild(id);
+      const ended = buildEnded(jobId);
       await vi.waitFor(() => expect(encode).toHaveBeenCalledTimes(1));
       await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'new-render' } }));
       releaseEncode({ ok: true });
-      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy());
+      expect(await ended).toEqual({ type: 'complete', result: { projectId: id } });
       const project = await projects.getProject(id);
       expect(project.renderHistoryId).toBe('new-render');
       expect(project.publishKit.master).toEqual({ filename: 'original-master.mp4', renderHistoryId: 'original-render' });
