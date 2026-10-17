@@ -372,14 +372,18 @@ export default function ProviderModelSelector({
   };
   // Use available container space, including narrow drawers on desktop. Bound
   // labeled fields so a lone provider does not stretch across the whole page.
+  // Compact selects wrap by their own container's width, never the viewport: a
+  // field keeps at least 9rem (clamped to the row) so a narrow card puts each
+  // select on its own line instead of clipping the selected label (#11894).
   const rowClass = compact
-    ? (showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2')
+    ? 'flex flex-wrap items-center gap-2'
     : 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),24rem))] items-start gap-2';
+  const fieldClass = compact ? 'flex-1 min-w-[min(100%,9rem)]' : 'flex-1 min-w-0';
   const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : rowClass;
   const selectClass = dense ? `${SELECT_CLASS} sm:min-h-8 sm:py-1 sm:text-xs` : SELECT_CLASS;
   return (
     <div className={wrapperClass}>
-      <div className="flex-1 min-w-0">
+      <div className={fieldClass}>
         {!compact && <label htmlFor={providerSelectId} className="block text-xs text-gray-500 mb-1">{label}</label>}
         <select
           id={providerSelectId}
@@ -411,7 +415,7 @@ export default function ProviderModelSelector({
         </select>
       </div>
       {showModel && (
-        <div className="flex-1 min-w-0">
+        <div className={fieldClass}>
           {!compact && <label htmlFor={modelSelectId} className="block text-xs text-gray-500 mb-1">{modelLabel}</label>}
           <select
             id={modelSelectId}
@@ -454,7 +458,7 @@ export default function ProviderModelSelector({
         </div>
       )}
       {showEffort && (
-        <div className="flex-1 min-w-0">
+        <div className={fieldClass}>
           {!compact && (
             <label htmlFor={effortSelectId} className="block text-xs text-gray-500 mb-1">
               Thinking effort
