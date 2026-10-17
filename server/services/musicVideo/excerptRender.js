@@ -322,22 +322,34 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     const excerptId = excerpt.id;
     const jobId = excerptId;
 
-    // Only the cue/card windows overlapping the window are worth capturing —
-    // typography outside it never survives the final trim.
-    const { cues: plannedCues, style } = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
-    const allCues = composed ? plannedCues : [];
-    const cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
-    const lyricWindows = (composed ? composedLyricWindows(project, endClamped) : [])
-      .filter((w) => w.endSec > startSec).map((w) => ({ ...w, startSec: Math.max(w.startSec, startSec) }));
-    const composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
+    // The record and revision are already marked rendering, so a throw before
+    // the job takes ownership (e.g. the filter-graph temp write) must settle them,
+    // or the revision would refuse to resume until a restart (#11777).
+    let cues; let style; let lyricWindows; let composition; let totalDuration; let graphPath; let plainEncode; let job;
+    try {
+      // Only the cue/card windows overlapping the window are worth capturing —
+      // typography outside it never survives the final trim.
+      const planned = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
+      style = planned.style;
+      const allCues = composed ? planned.cues : [];
+      cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
+      lyricWindows = (composed ? composedLyricWindows(project, endClamped) : [])
+        .filter((w) => w.endSec > startSec).map((w) => ({ ...w, startSec: Math.max(w.startSec, startSec) }));
+      composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
 
-    const totalDuration = endClamped - startSec;
-    // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
-    const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
-    const plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect }).args, graphPath);
-    const job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration };
-    jobs.set(jobId, job);
-    projectExcerptRenders.set(projectId, jobId);
+      totalDuration = endClamped - startSec;
+      // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
+      graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
+      plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect }).args, graphPath);
+      job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration };
+      jobs.set(jobId, job);
+      projectExcerptRenders.set(projectId, jobId);
+    } catch (err) {
+      await settleExcerptRecord(projectId, excerptId, { status: 'error', error: err.message, filename: null, jobId: null }).catch((settleErr) => {
+        console.error(`❌ Music-video excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} could not settle after a setup failure: ${settleErr.message}`);
+      });
+      throw err;
+    }
     handedOff = true;
 
     console.log(`🎬 Rendering music-video excerpt [${jobId.slice(4, 12)}]: project=${projectId.slice(0, 8)} range=[${startSec.toFixed(2)},${endClamped.toFixed(2)}]s clips=${clips.length} cues=${cues.length}`);
