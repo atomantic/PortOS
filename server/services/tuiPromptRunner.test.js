@@ -874,7 +874,8 @@ describe('executeTuiRun', () => {
       await vi.advanceTimersByTimeAsync(15000);
       expect(pty.write).not.toHaveBeenCalled();
       pty.emitData('\x1b[?2004hAsk anything…\nUpdate Available esc\n'
-        + 'A new release v9.9.9 is available. Would you like to update now?\nSkip Confirm\n');
+        + 'A new release v9.9.9 is available. Would you like to\x1b[12;4H┃\n'
+        + '        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n');
       await vi.advanceTimersByTimeAsync(400);
       expect(pty.write.mock.calls.map(([data]) => data)).toEqual(['\x1b']);
       await vi.advanceTimersByTimeAsync(2000);
@@ -887,6 +888,38 @@ describe('executeTuiRun', () => {
       expect(pty.write).toHaveBeenCalledWith('\r');
       pty.emitExit({ exitCode: 0 });
       await promise;
+    });
+
+    it('fails OpenCode startup on a rejected model instead of pasting into its replacement composer', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'opencode', type: 'tui', command: 'opencode', defaultModel: 'example-provider/example-model', tuiPromptDelayMs: 50 };
+      const runId = 'run-opencode-model-rejected';
+      const promise = executeTuiRun({
+        runId, provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('\x1b[?2004hModel example-provider/exam');
+      pty.emitData('ple-model\n┃ is not valid\nreplacement-provider/replacement-model\nAsk anything…\n');
+      await vi.advanceTimersByTimeAsync(4000);
+      await promise;
+
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: false,
+        exitCode: 1,
+        error: expect.stringContaining('example-provider/example-model'),
+        extras: expect.objectContaining({
+          completionReason: 'opencode-model-rejected',
+          errorAnalysis: expect.objectContaining({
+            category: 'model-not-found',
+            affectedModel: 'example-provider/example-model',
+            configuredModel: 'example-provider/example-model',
+          }),
+        }),
+      }));
     });
 
     it('fails Claude startup after its input-readiness deadline instead of blind-pasting', async () => {

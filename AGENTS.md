@@ -13,6 +13,28 @@ Every agent must leave discovered problems either fixed and verified or captured
 - **Search before filing.** Reuse an existing issue that covers the finding; add new evidence when useful. For a new issue, include redacted evidence or reproduction steps, expected versus actual behavior, affected files, a chosen next step, and acceptance criteria. Distinguish a suspected flake from a reproduced cause. Follow the owning project's issue conventions; for PortOS, read [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and the canonical label guidance in `server/lib/dispatchLabels.js`.
 - **Close the loop.** Report fixes and issue links in the handoff. Chat-only notes and TODO comments do not replace a filed issue. If tracker access fails, report the exact blocker and provide a ready-to-file issue body; never claim it was filed.
 
+## Resolve every accepted finding
+
+PortOS is agent-developed: every accepted review, lint, test, or quality finding
+must be fixed, including warnings and nits. Severity determines sequencing, not
+whether a finding is resolved. Reject a false positive or irrelevant rule with
+concrete rationale; disable a deliberately rejected lint rule instead of leaving
+it as a tolerated warning. Rules retained after reassessment are errors.
+
+Previously accepted rules are revisable. Prefer investing effort in high-quality
+fixes. Reassess value and feasibility before retiring a rule that is no longer
+useful or has no current solution worth pursuing; remove it from linting or
+quality scanning with concise rationale. Difficulty alone is not an exemption,
+and reassessment is not permission to hide a known important defect merely to
+pass checks.
+
+Do not suppress findings, weaken tests, demote rules, or disable useful checks to
+get green. A hardware, permission, or genuinely user-owned decision blocker must
+remain explicitly unresolved with evidence, an owner, and a tracked next step;
+never relabel it clean. Bounded audits may track remaining accepted work, but
+severity alone never justifies deferral. Review scope stays tied to the requested
+change and affected contracts; subjective preferences are not accepted defects.
+
 ## Commands
 
 Non-obvious invocations only — everything else is in `package.json` scripts.
@@ -198,6 +220,17 @@ When CoS agents or AI tools work on managed apps outside PortOS, all research, p
 - **Absolute paths.** Prefer repo-relative paths in committed text; when an absolute path is unavoidable, strip the user segment (`~/…` or `<repo-root>/…`).
 
 This complements the Security Model (the deployed product) — this section governs what agents may *write down* while working against real data.
+
+## Code comments
+
+Write comments for coding agents maintaining the code: concise context that cannot
+be inferred from names and control flow. Keep the why, invariants, non-obvious
+constraints, safety rationale, external contracts, and justified workarounds.
+Remove redundant narration, stale explanations, commented-out code, and verbose
+walkthroughs; prefer clear code when it can express the same information. Preserve
+licenses, tool directives, meaningful type/JSDoc metadata, public API documentation,
+and needed rationale. Do not use comment counts or length quotas as quality goals.
+This policy governs code comments, not user-facing guides or product copy.
 
 ## Code Conventions
 

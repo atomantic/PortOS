@@ -13,7 +13,7 @@ export const registerPlatformAccount = ({ agentId, platform, name, description }
   body: JSON.stringify({ agentId, platform, name, description })
 });
 export const deletePlatformAccount = (id) => request(`/agents/accounts/${id}`, { method: 'DELETE' });
-export const testPlatformAccount = (id) => request(`/agents/accounts/${id}/test`, { method: 'POST' });
+export const testPlatformAccount = (id, options = {}) => request(`/agents/accounts/${id}/test`, { method: 'POST', ...options });
 export const claimPlatformAccount = (id) => request(`/agents/accounts/${id}/claim`, { method: 'POST' });
 
 // Agent Tools
@@ -51,8 +51,8 @@ export const getAgentRelevantPosts = ({ agentId, accountId, maxResults }) => {
 export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?accountId=${accountId}`);
 export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
 export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
-export const getAgentPublished = ({ agentId, accountId, days = 7 }) =>
-  request(`/agents/tools/published?agentId=${agentId}&accountId=${accountId}&days=${days}`);
+export const getAgentPublished = ({ agentId, accountId, days = 7 }, options = {}) =>
+  request(`/agents/tools/published?agentId=${agentId}&accountId=${accountId}&days=${days}`, options);
 export const checkAgentPosts = ({ agentId, accountId, days, maxReplies, maxUpvotes }) =>
   request('/agents/tools/check-posts', {
     method: 'POST',

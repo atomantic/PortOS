@@ -69,6 +69,15 @@ export const shellSessionIdSchema = z.object({
   sessionId: z.string().min(1, 'sessionId is required')
 });
 
+// shell:start — every field optional. `providerId` is resolved server-side to a
+// launch command; `cwd` / `initialCommand` must be strings so a malformed
+// payload never reaches createShellSession or the deferred submit.
+export const shellStartSchema = z.object({
+  cwd: z.string().max(1000).optional(),
+  initialCommand: z.string().max(10000).optional(),
+  providerId: z.string().max(200).optional()
+}).nullish();
+
 // shell:attach — session id + optional claim flag.
 // `claim: true` means "attach only if currently unattached or already mine" — used by
 // auto-pick paths so a multi-tab race doesn't displace another tab. Default (false)
@@ -127,22 +136,40 @@ export const appDeploySchema = z.object({
 // VALIDATION HELPER
 // =============================================================================
 
+const optionalString = (v) => (typeof v === 'string' ? v : undefined);
+
+// Domain error channels the client actually subscribes to. Each builder returns
+// [channel, payload-extras]; `error`/`message`/`code`/`details` are shared.
+const DOMAIN_ERROR_CHANNELS = [
+  ['shell:', 'shell:error', (d) => ({ sessionId: optionalString(d?.sessionId) })],
+  ['iterm:', 'iterm:error', (d) => ({ id: optionalString(d?.id) })],
+  ['logs:', 'logs:error', (d) => ({ processName: optionalString(d?.processName) ?? '' })],
+  ['detect:start', 'detect:complete', () => ({ success: false })],
+  ['standardize:start', 'standardize:complete', () => ({ success: false })],
+  ['app:', null, (d) => ({ appId: optionalString(d?.appId) })]
+];
+
 /**
  * Validate socket event data against a Zod schema.
- * Emits `${event}:error` on failure and returns null.
- * Returns the parsed (and defaulted) data on success.
+ * On failure emits the validation error on the event's domain error channel
+ * (the one its client hook listens to; `${event}:error` otherwise) and returns
+ * null. Returns the parsed (and defaulted) data on success.
  */
 export function validateSocketData(schema, data, socket, event) {
   const result = schema.safeParse(data);
-  if (!result.success) {
-    socket.emit(`${event}:error`, {
-      message: 'Validation failed',
-      details: result.error.issues.map(i => ({
-        path: i.path.join('.'),
-        message: i.message
-      }))
-    });
-    return null;
-  }
-  return result.data;
+  if (result.success) return result.data;
+  const details = result.error.issues.map(i => ({
+    path: i.path.join('.'),
+    message: i.message
+  }));
+  const route = DOMAIN_ERROR_CHANNELS.find(([prefix]) => event.startsWith(prefix));
+  const channel = route?.[1] ?? `${event}:error`;
+  socket.emit(channel, {
+    ...(route ? route[2](data) : {}),
+    error: details[0]?.message || 'Validation failed',
+    message: 'Validation failed',
+    code: 'VALIDATION_ERROR',
+    details
+  });
+  return null;
 }

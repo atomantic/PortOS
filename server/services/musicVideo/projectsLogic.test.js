@@ -11,10 +11,14 @@ import {
   removeScene,
   reorderScenes,
   mergeNextScene,
+  mergePreviousScene,
+  splitScene,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
 } from './projectsLogic.js';
+
+import { productionReviewBasis } from './productionReview.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
@@ -574,6 +578,72 @@ describe('scene board operations', () => {
     expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
   });
 
+  // Uniquely catches a planned camera move not seeding a new still's Move, or overriding one the shot sets.
+  it('seeds a shot\'s still move from its planned camera when it becomes a still, and keeps a move it is given', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', camera: { move: 'truck-left' } });
+    expect(scene.stillMove).toBe('hold');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('pan');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'hold' }).updated.stillMove).toBe('hold');
+    const still = applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'push' }).project;
+    expect(applySceneUpdate(still, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('push');
+  });
+
+  // Uniquely catches a split still's later pieces losing the Move the shot set.
+  it('keeps a still\'s Move on every piece of a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8 });
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.project.scenes.map((s) => s.stillMove)).toEqual(['push', 'push']);
+  });
+
+  // Catches the split text disagreeing with its storyboard anchors during an instrumental lead-in.
+  it('splits word-timed lyrics by their sung span and keeps retiming consistent', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 3.5, endSec: 8 });
+    project.lyricCues = [{ id: 'cue-1', text: '  Sung line  ', startSec: 3.5, endSec: 8,
+      words: [{ w: 'Sung', startSec: 5, endSec: 6 }, { w: 'line', startSec: 6, endSec: 8 }] }];
+    project.productionReview = { draft: { storyboard: [{ id: 'shot-1', sceneId: scene.sceneId, startSec: 3.5, endSec: 8 }] } };
+    const split = splitScene(project, scene.sceneId, { atSec: 4.9 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual([null, 'Sung line']);
+    expect(split.project.productionReview.draft.storyboard.map(shot => shot.lyricCueIds)).toEqual([[], ['cue-1']]);
+    expect(applySceneUpdate(split.project, scene.sceneId, { endSec: 4.8 }).updated.lyricText).toBeNull();
+  });
+
+  // Catches a shared text helper changing existing unaligned lyric formatting or the field's size cap.
+  it('keeps line-window lyrics, formatting and length limits on a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    project.lyricCues = [
+      { id: 'cue-1', text: '  First  ', startSec: 0, endSec: 4 },
+      { id: 'cue-2', text: 'Second', startSec: 1, endSec: 4 },
+      { id: 'cue-3', text: 'x'.repeat(2100), startSec: 4, endSec: 8 },
+    ];
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual(['First / Second', 'x'.repeat(2000)]);
+  });
+
+  // Catches valid legacy start-only cues losing their text during a split.
+  it.each([null, undefined])('keeps a start-only lyric on its split piece (endSec: %s)', endSec => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    project.lyricCues = [{ id: 'cue-1', text: 'Line', startSec: 1, endSec }];
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual(['Line', null]);
+  });
+
+  // Catches a split staling a whole-board approval or reviving one that was already stale.
+  it.each([true, false])('carries only a current whole-board approval across a split (current: %s)', current => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    const basis = productionReviewBasis(project);
+    const approval = { basis: current ? basis.storyboard : 'stale', shotsBasis: current ? basis.storyboardShots : 'stale' };
+    project.productionReview = { approvals: { storyboard: approval } };
+    const next = splitScene(project, scene.sceneId, { atSec: 4 }).project;
+    const after = next.productionReview.approvals.storyboard;
+    if (current) {
+      expect(after).toMatchObject({ basis: productionReviewBasis(next).storyboard,
+        shotsBasis: productionReviewBasis(next).storyboardShots, carriedOver: { reason: 'Split a shot' } });
+      expect(after.shotsBasis).not.toBe(basis.storyboardShots);
+    } else {
+      expect(after).toEqual(approval);
+    }
+  });
+
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {
     const { project, scene } = addScene(baseProject(), { prompt: 'a' });
     const { updated } = applySceneUpdate(project, scene.sceneId, { textZone: 'none', lyricRole: 'hook' });
@@ -661,6 +731,33 @@ describe('mergeNextScene', () => {
     const swapped = applySceneUpdate(project, ids[1], { startSec: 0, endSec: 2 }).project;
     expect(() => mergeNextScene(swapped, ids[0])).toThrow(/song order/);
     expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
+  });
+});
+
+// Uniquely catches merge-over-previous keeping the wrong shot's id/clip or leaving the removed shot's span behind.
+describe('mergePreviousScene', () => {
+  it('extends a shot back over the previous one, which is removed', () => {
+    let project = baseProject();
+    const ids = [];
+    for (const [startSec, endSec, lyricText] of [[0, 4, 'line one'], [4, 9, 'line two'], [9, 12, 'line three']]) {
+      const r = addScene(project, { startSec, endSec, lyricText, sectionLabel: 'Verse' });
+      project = r.project; ids.push(r.scene.sceneId);
+    }
+    project = applySceneUpdate(project, ids[1], { videoHistoryId: 'clip-a' }).project;
+    project = applySceneUpdate(project, ids[2], { videoHistoryId: 'clip-b' }).project;
+    const withDraft = { ...project, productionReview: { draft: { storyboard: [
+      { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'] },
+      { sceneId: ids[1], startSec: 4, endSec: 9, lyricCueIds: ['c2'] },
+      { sceneId: ids[2], startSec: 9, endSec: 12, lyricCueIds: ['c3'] },
+    ] } } };
+    const { project: next, scene } = mergePreviousScene(withDraft, ids[2]);
+    expect(next.scenes.map((s) => [s.sceneId, s.order])).toEqual([[ids[0], 0], [ids[2], 1]]);
+    expect(scene).toMatchObject({ sceneId: ids[2], startSec: 4, endSec: 12, lyricText: 'line two / line three', videoHistoryId: 'clip-b' });
+    expect(next.productionReview.draft.storyboard).toEqual([
+      { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'] },
+      { sceneId: ids[2], startSec: 4, endSec: 12, lyricCueIds: ['c2', 'c3'] },
+    ]);
+    expect(() => mergePreviousScene(withDraft, ids[0])).toThrow(/no previous scene/);
   });
 });
 

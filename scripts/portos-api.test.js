@@ -4,11 +4,25 @@
  * credential wins when both the spawn env and the key file are present.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { createServer, request as httpRequest } from 'node:http';
+import { EventEmitter } from 'node:events';
+
+vi.mock('node:http', async (importOriginal) => {
+  const original = await importOriginal();
+  return { ...original, request: vi.fn(original.request) };
+});
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer as createTlsServer } from 'node:https';
+import { PORTS } from '../server/lib/ports.js';
+import { DISPOSABLE_ROOT_MARKER } from '../server/lib/dataRoot.js';
 import { main, parseArgs, resolveCredentials } from './portos-api.js';
+
+
+// Synthetic TLS material; used only by isolated loopback fixtures.
+const TLS_KEY = '-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsmTM3L/sbDmQbdMy\nhB0Cr2yvl2GrcWmbQM+zu8RjsFyhRANCAASSt8pu/qVh51sOU9YpdzAkKufDGjbq\n4HHPRUwKYqQlDM2fVIKOqO+NqjyOlCiBX21gzbnYU057iXRVJZgEH8jH\n-----END PRIVATE KEY-----\n';
+const TLS_CERT = '-----BEGIN CERTIFICATE-----\nMIIBfTCCASKgAwIBAgIURm+4Ws6hBxzNDDslU4mibL+EV3QwCgYIKoZIzj0EAwIw\nJDEiMCAGA1UEAwwZc3ludGhldGljLXBvcnRvcy1hcGkudGVzdDAeFw0yNjEwMTcw\nMTU3NDlaFw0zNjEwMTQwMTU3NDlaMCQxIjAgBgNVBAMMGXN5bnRoZXRpYy1wb3J0\nb3MtYXBpLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASSt8pu/qVh51sO\nU9YpdzAkKufDGjbq4HHPRUwKYqQlDM2fVIKOqO+NqjyOlCiBX21gzbnYU057iXRV\nJZgEH8jHozIwMDAdBgNVHQ4EFgQUk3SePqT2M4mcfL9y9Y8MhK226oswDwYDVR0T\nAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEAsh5/nlEF2WXrJGDsdm2NrD81\nj5omkDkpxyJHHgjH8+wCIQD2U6RF+9aXsztQ/o27GH+/DZluuBgdNiQOVwK8nM0F\nfA==\n-----END CERTIFICATE-----\n';
 
 describe('parseArgs', () => {
   it('builds a CoS task from the task shorthand', () => {
@@ -118,7 +132,10 @@ describe('API request lifecycle', () => {
 
 describe('resolveCredentials', () => {
   let dir;
-  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
 
   it('reads the key file, with PORTOS_API_TOKEN and PORTOS_URL taking precedence', async () => {
     dir = await mkdtemp(join(tmpdir(), 'portos-api-cli-'));
@@ -132,7 +149,93 @@ describe('resolveCredentials', () => {
   });
 
   it('falls back to the default URL and no token without a key file', async () => {
-    await expect(resolveCredentials({ PORTOS_AGENT_KEY_FILE: join(tmpdir(), 'portos-missing-key.json') }))
-      .resolves.toEqual({ url: 'http://127.0.0.1:5555', token: null });
+    dir = await mkdtemp(join(tmpdir(), 'portos-api-no-cert-'));
+    await writeFile(join(dir, DISPOSABLE_ROOT_MARKER), 'test fixture');
+    vi.stubEnv('PORTOS_DATA_ROOT', dir);
+    await expect(resolveCredentials({ PORTOS_AGENT_KEY_FILE: join(dir, 'missing-key.json') }))
+      .resolves.toEqual({ url: `http://127.0.0.1:${PORTS.API}`, token: null });
+  });
+});
+
+
+describe('local install URL selection', () => {
+  let root;
+  const servers = [];
+  const listen = async (server) => {
+    servers.push(server);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    return server.address().port;
+  };
+  const setup = async (tls = false) => {
+    root = await mkdtemp(join(tmpdir(), 'portos-api-config-'));
+    await writeFile(join(root, DISPOSABLE_ROOT_MARKER), 'test fixture');
+    vi.stubEnv('PORTOS_DATA_ROOT', root);
+    await mkdir(join(root, 'data/certs'), { recursive: true });
+    if (tls) {
+      await writeFile(join(root, 'data/certs/cert.pem'), TLS_CERT);
+      await writeFile(join(root, 'data/certs/key.pem'), TLS_KEY);
+    }
+    return { PORTOS_AGENT_KEY_FILE: join(root, 'missing-key.json'), PORTOS_API_TOKEN: 'synthetic-token' };
+  };
+  afterEach(async () => {
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      if (server.listening) await new Promise(resolve => server.close(resolve));
+    }
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it('reaches the configured TLS mirror and preserves credentials', async () => {
+    const env = await setup(true);
+    const seen = [];
+    const port = await listen(createServer((req, res) => {
+      seen.push({ path: req.url, auth: req.headers.authorization });
+      res.end('{"authenticated":true}');
+    }));
+    await writeFile(join(root, '.env'), `PORTOS_HTTP_PORT=${port}\n`);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(main(['whoami'], env)).resolves.toBe(0);
+    expect(seen).toEqual([{ path: '/api/auth/whoami', auth: 'Bearer synthetic-token' }]);
+    await expect(resolveCredentials({ ...env, PORTOS_HTTP_PORT: '12345' }))
+      .resolves.toMatchObject({ url: 'http://127.0.0.1:12345' });
+    await expect(resolveCredentials({ ...env, PORTOS_HTTP_PORT: 'invalid' }))
+      .resolves.toMatchObject({ url: `http://127.0.0.1:${port}` });
+  });
+
+  it('uses the shared defaults and treats unusable certificate files like the server', async () => {
+    const env = await setup(true);
+    await expect(resolveCredentials(env)).resolves.toMatchObject({ url: `http://127.0.0.1:${PORTS.API_LOCAL}` });
+    await writeFile(join(root, 'data/certs/key.pem'), 'incomplete key');
+    await expect(resolveCredentials({ ...env, PORT: String(PORTS.COS) })).resolves.toMatchObject({ url: `http://127.0.0.1:${PORTS.API}` });
+  });
+
+  it('keeps explicit and key-file URLs ahead of TLS-derived defaults without rewriting their audience', async () => {
+    const env = await setup(true);
+    await writeFile(env.PORTOS_AGENT_KEY_FILE, JSON.stringify({ url: 'https://peer.example.test:9443/', token: 'from-file' }));
+    await expect(resolveCredentials(env)).resolves.toEqual({ url: 'https://peer.example.test:9443', token: 'synthetic-token' });
+    await expect(resolveCredentials({ ...env, PORTOS_URL: 'https://explicit.example.test/' }))
+      .resolves.toEqual({ url: 'https://explicit.example.test', token: 'synthetic-token' });
+  });
+
+  it('explains a local TLS-port reset without retrying or sending credentials to the mirror', async () => {
+    const env = await setup(true);
+    const tlsPort = await listen(createTlsServer({ key: TLS_KEY, cert: TLS_CERT }));
+    const mirrorRequests = vi.fn();
+    const mirrorPort = await listen(createServer((_req, res) => { mirrorRequests(); res.end('{}'); }));
+    const config = { ...env, PORTOS_HTTP_PORT: String(mirrorPort), PORTOS_URL: `http://127.0.0.1:${PORTS.API}` };
+    const resetRequest = () => {
+      const request = new EventEmitter();
+      request.end = () => queueMicrotask(() => request.emit('error', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })));
+      return request;
+    };
+    vi.mocked(httpRequest).mockImplementationOnce(resetRequest);
+    await expect(main(['whoami'], config)).rejects.toThrow(`PORTOS_URL=http://127.0.0.1:${mirrorPort}`);
+    vi.mocked(httpRequest).mockImplementationOnce(resetRequest);
+    await expect(main(['whoami'], { ...config, PORTOS_URL: `http://external.example.test:${PORTS.API}` }))
+      .rejects.toMatchObject({ code: 'ECONNRESET', message: 'socket hang up' });
+    expect(mirrorRequests).not.toHaveBeenCalled();
+    await expect(main(['whoami'], { ...config, PORTOS_URL: `http://127.0.0.1:${tlsPort}` })).rejects.toMatchObject({ code: 'ECONNRESET', message: 'socket hang up' });
   });
 });

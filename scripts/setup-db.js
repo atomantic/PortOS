@@ -72,7 +72,6 @@ function getMode() {
   return settings.mode;
 }
 
-// Check if Docker is available
 function hasDocker() {
   try {
     execFileSync('docker', ['--version'], { stdio: 'pipe' });
@@ -82,7 +81,6 @@ function hasDocker() {
   }
 }
 
-// Check if Docker daemon is running
 function isDockerRunning() {
   try {
     execFileSync('docker', ['info'], { stdio: 'pipe' });
@@ -92,7 +90,6 @@ function isDockerRunning() {
   }
 }
 
-// Check if docker compose is available (v2 plugin)
 function hasCompose() {
   try {
     execFileSync('docker', ['compose', 'version'], { stdio: 'pipe' });

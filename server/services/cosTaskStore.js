@@ -23,7 +23,7 @@ import { atomicWrite } from '../lib/fileUtils.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema, validateRequest } from '../lib/validation.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
@@ -468,6 +468,7 @@ export async function getTaskById(taskId) {
  * consumers, but the normal scheduler must not race that dispatch.
  */
 export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false } = {}) {
+  validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
   const state = await loadState();
@@ -638,6 +639,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
 export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null } = {}) {
+  validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
   const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata });
   if (release && !result?.error && !result?.statusChanged) {
@@ -976,6 +978,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
  * @returns {Promise<{ changed: boolean, count?: number }>}
  */
 export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
+  validateRequest(cosTaskTypeSchema, taskType);
   const { changed, count, merged } = await withStateLock(async () => {
     const state = await loadState();
     const filePath = taskType === 'user'
@@ -1029,6 +1032,7 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
  * Delete a task
  */
 export async function deleteTask(taskId, taskType = 'user') {
+  validateRequest(cosTaskTypeSchema, taskType);
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'

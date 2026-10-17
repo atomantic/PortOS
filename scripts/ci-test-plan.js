@@ -7,6 +7,7 @@ import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGrap
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -28,25 +29,8 @@ const MAX_CHANGED_CODE_FILES = 30;
 // editorial-leaf planner test sat exactly on it (#10312).
 const MAX_TARGETED_TEST_FILES = 125;
 
-// Server-runner suites that drive real client components in Chrome. The server
-// job installs no client workspace, so there they always skip; the `database`
-// job (client deps + Chrome + ffmpeg, PORTOS_REQUIRE_BROWSER_SUITES=1) is where
-// the files selected here run for real (issue #10312).
-//
-// An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
-// with server/lib/browserSuiteGate.js can be told to fail instead of skip. The
-// registry test (browser-suite-registry.test.js) fails when a suite importing
-// the gate is left out.
-export const BROWSER_SUITES = [
-  'server/lib/filmLook.browser.test.js',
-  'server/lib/musicVideoTitleCard.browser.test.js',
-  'server/routes/musicVideoProductionReview.browser.test.js',
-  'server/routes/musicVideoRichAuthoring.browser.test.js',
-  'server/routes/musicVideoSongRevision.browser.test.js',
-  'server/services/federatedMedia/sourceAudio.browser.test.js',
-  'server/services/musicVideo/documentRender.browser.test.js',
-  'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
-];
+// Preserve the planner's public registry export for existing callers.
+export { BROWSER_SUITES } from './lib/browserSuites.js';
 const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
 // Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph
@@ -141,6 +125,10 @@ export const WINDOWS_RISK_RULES = [
   // — green everywhere CI looked. These modules decide containment and worktree
   // identity, so they need a real Windows run.
   /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
+  // Fail-fast fixture removal raced continuing writes on Windows (#11641).
+  // Exercise the ownership helper and affected fixture on the real filesystem.
+  /^server\/lib\/mockPathsDataRoot(?:\.test)?\.js$/,
+  /^server\/services\/cosAgentIndex\.completionOrder\.test\.js$/,
   // Same class, different mechanism: staticImportGraph keys its module map by
   // string-concatenating entry names with "/" but resolves edge targets with
   // path.relative, which answers with "\\" on Windows. Every edge into a
@@ -158,6 +146,7 @@ export const WINDOWS_RISK_RULES = [
   /^server\/cos-runner\//,
   /^server\/services\/(?:shell|pm2|appBuilder)\b/,
   /^server\/services\/agentTuiSpawning(?:\.test)?\.js$/,
+  /^server\/services\/htmlComposition\/ownedBrowser(?:\.test)?\.js$/,
   /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
   // The voice fine-tuning service spawns a real Python trainer and settles the
   // job from its `close`/`error` events, so its assertions are the child-process
@@ -177,6 +166,7 @@ export const WINDOWS_RISK_RULES = [
 // spawn, shell, PowerShell, PTY, and path regressions without rerunning every
 // platform-independent server assertion. Full CI still runs the entire suite.
 export const WINDOWS_CONTRACT_TESTS = [
+  'server/services/htmlComposition/ownedBrowser.test.js',
   'scripts/ps1-bom.test.js',
   'server/cos-runner/allowedCommands.parity.test.js',
   'server/cos-runner/allowedCommands.test.js',
@@ -319,6 +309,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
+  // Whole-tree scanner: any server file can spawn a child and await before
+  // attaching its error/exit listener (#11761), with no import edge to this file.
+  'server/childListenerOrderConventions.test.js',
   // Whole-tree scanner: any server/autofixer file can re-implement raw
   // `pm2 jlist` execution/parsing outside the two designated readers (#8164).
   'server/pm2JlistOwnership.guard.test.js',
@@ -931,7 +924,12 @@ export function buildCiTestPlan(changedFiles, {
     smoke: hasServerSource,
     windows,
     windowsMode,
-    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
+    windowsFiles: windows ? uniqueSorted([
+      ...windowsContractTests(trackedSet),
+      // Test-only changes have no source path for `vitest related` to follow.
+      // A risk tag must select the changed contract itself as well as baseline.
+      ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
+    ]) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
   }, { appRouteOnly });
 }

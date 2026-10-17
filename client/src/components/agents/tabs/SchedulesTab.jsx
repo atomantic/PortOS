@@ -88,9 +88,14 @@ export default function SchedulesTab({ agentId }) {
 
   const handleRunNow = async (id) => {
     setRunningId(id);
-    await api.runAutomationScheduleNow(id);
-    setRunningId(null);
-    fetchData();
+    try {
+      await api.runAutomationScheduleNow(id);
+      fetchData();
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setRunningId(null);
+    }
   };
 
   const getAccountName = (accountId) => {

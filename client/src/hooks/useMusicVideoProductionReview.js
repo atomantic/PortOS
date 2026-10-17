@@ -82,6 +82,13 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     // Lock (or unlock) single shots: a locked shot's clip can be made before the whole board is approved.
     // Not silent: the buttons live on scene cards and the player, away from the review panel's error line.
     lockShots: (sceneIds, locked, stage = 'still') => call(() => lockMusicVideoShots(project.id, { sceneIds, locked, stage })),
+    // Lock all: the stills first, since a video locks only over a locked still.
+    lockAll: (stills, videos) => call(async () => {
+      let result = null;
+      if (stills.length) result = await lockMusicVideoShots(project.id, { sceneIds: stills, locked: true, stage: 'still' });
+      if (videos.length) result = await lockMusicVideoShots(project.id, { sceneIds: videos, locked: true, stage: 'video' });
+      return result;
+    }),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }

@@ -28,6 +28,15 @@ export function createRunnerShutdown({
     return promise;
   };
 
+  // HTTP route rejections (503 maintenance hold, 409 duplicate grant, validation)
+  // are answered by the Express error middleware; only drain work may flip `failed`.
+  const trackRequest = (work) => {
+    const promise = (async () => work())();
+    const settled = promise.then(() => {}, () => {}).finally(() => pending.delete(settled));
+    pending.add(settled);
+    return promise;
+  };
+
   const rejectSpawn = (res) => {
     if (!stopping) return false;
     res.status(503).json({ error: 'Runner is shutting down', code: 'SHUTTING_DOWN' });
@@ -36,7 +45,7 @@ export function createRunnerShutdown({
 
   const spawnRoute = (handler) => (req, res) => {
     if (rejectSpawn(res)) return;
-    if (!admission) return trackWork(() => handler(req, res));
+    if (!admission) return trackRequest(() => handler(req, res));
     let permit;
     try {
       permit = admission.admit('runner', String(req.body?.agentId ?? '').slice(0, 256), {
@@ -45,7 +54,7 @@ export function createRunnerShutdown({
     } catch (err) { return res.status(err.status || 503).json({ error: err.message, code: err.code }); }
     const entry = { permit, handedOff: false };
     spawnPermits.set(permit.id, entry);
-    return trackWork(() => permit.run(async () => {
+    return trackRequest(() => permit.run(async () => {
       try {
         const result = await handler(req, res);
         if (!entry.handedOff) permit.finish();

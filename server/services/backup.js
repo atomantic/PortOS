@@ -236,6 +236,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
+  { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
   { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
   // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer

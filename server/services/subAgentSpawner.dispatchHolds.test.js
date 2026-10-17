@@ -110,7 +110,7 @@ describe('subAgentSpawner — runner-down hold', () => {
     spawnAgentForTask.mockRejectedValueOnce(Object.assign(new Error('Held'), { code: 'MAINTENANCE_HELD' }));
     await dispatch({ id: 'held-task', metadata: { app: 'example-app', jobId: 'example-job' } });
     expect(releaseAppReviewMarker).toHaveBeenCalledWith('example-app');
-    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'example-job' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'example-job', reason: 'held' });
   });
 
   it('holds a manual/automatic task-ready event before runner preparation', async () => {
@@ -157,7 +157,7 @@ describe('subAgentSpawner — runner-down hold', () => {
 
     await dispatch({ id: 'cos-4', metadata: { jobId: 'job-7' } });
 
-    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-7' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-7', reason: 'held' });
   });
 
   it('does not consult the runner in direct mode', async () => {
@@ -223,7 +223,7 @@ describe('subAgentSpawner — self-update hold (#4124)', () => {
     await dispatch({ id: 'cos-u3', metadata: { app: 'some-app', jobId: 'job-9' } });
 
     expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
-    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-9' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-9', reason: 'held' });
   });
 
   it('resumes spawning once the update settles — the hold is not sticky', async () => {
@@ -289,7 +289,7 @@ describe('subAgentSpawner — local-endpoint capacity hold (#4834)', () => {
     await dispatch({ id: 'cos-l3', metadata: { app: 'some-app', jobId: 'job-11' } });
 
     expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
-    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-11' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-11', reason: 'held' });
   });
 
   it('releases the slot even when the spawn throws', async () => {
@@ -360,7 +360,7 @@ describe('subAgentSpawner — forge-unreachable hold (#5110)', () => {
     await dispatch({ id: 'cos-f3', metadata: { openPR: true, app: 'some-app', jobId: 'job-13' } });
 
     expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
-    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-13' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-13', reason: 'held' });
   });
 
   it('holds BEFORE reserving a capacity slot, so a held task never books one', async () => {
@@ -427,5 +427,27 @@ describe('subAgentSpawner — runner connection events', () => {
 
     const dequeues = cosEvents.emit.mock.calls.filter(([event]) => event === 'cos:dequeue-requested');
     expect(dequeues).toHaveLength(1);
+  });
+});
+
+describe('subAgentSpawner — release signals for unpersisted tasks', () => {
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+  });
+
+  it('emits task:held when a hold drops the task', async () => {
+    isRunnerReachable.mockResolvedValue(false);
+    await dispatch({ id: 'fa-run-1', metadata: {} });
+    expect(cosEvents.emit).toHaveBeenCalledWith('task:held', { taskId: 'fa-run-1', reason: 'CoS Runner is down' });
+  });
+
+  it('emits agent:error when spawnAgentForTask throws', async () => {
+    spawnAgentForTask.mockRejectedValueOnce(new Error('worktree failed'));
+    await dispatch({ id: 'fa-run-2', metadata: {} });
+    expect(cosEvents.emit).toHaveBeenCalledWith('agent:error', { taskId: 'fa-run-2', error: 'worktree failed' });
   });
 });

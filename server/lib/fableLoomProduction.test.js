@@ -354,6 +354,18 @@ describe('fableLoomProduction', () => {
     expect(reasons().some(reason => /no approved voice binding/i.test(reason))).toBe(false);
   });
 
+  it('reports each missing protagonist and voice-binding blocker once on the dialogue asset', () => {
+    const episode = { ...sampleEpisode, nodes: [{ ...sampleEpisode.nodes[0], transitions: [],
+      interactionWindow: { enabled: true, protagonistCharacterId: 'char-1' } }] };
+    const plan = buildEpisodeProductionPlan({ episode, universe: { id: 'u1', characters: [] },
+      loom: { id: 'loom-1' }, localVoiceProfiles: [] });
+    const reasons = plan.plannedAssets.find(asset => asset.type === 'dialogue').readiness.reasons;
+    expect(reasons.filter(reason => /not present in the linked Universe/i.test(reason))).toHaveLength(1);
+    expect(reasons.filter(reason => /no approved voice binding/i.test(reason))).toHaveLength(1);
+    expect(reasons.some(reason => /not found in Universe|No approved voice binding for/.test(reason))).toBe(false);
+    expect(new Set(reasons).size).toBe(reasons.length);
+  });
+
   it('refuses exact-input planning when a node has no recorded provenance', () => {
     const plan = buildEpisodeProductionPlan({
       episode: sampleEpisode,
@@ -508,5 +520,180 @@ describe('fableLoomProduction', () => {
       ...baseOptions,
       resolveAsset: () => null,
     }).errors).toContain('Recorded visual conditioning asset "environment.png" is unavailable locally.');
+  });
+
+  describe('episode-wide blockers and convergence', () => {
+    const lockedCanon = (extra = {}) => ({ mode: 'locked', storyboardImageApproved: false, ...extra });
+    const convergentEpisode = {
+      id: 'ep-conv',
+      startNodeId: 'a',
+      nodes: [
+        { id: 'a', title: 'A', prose: 'A.', transitions: [{ id: 't1', targetNodeId: 'b' }, { id: 't2', targetNodeId: 'c' }] },
+        { id: 'b', title: 'B', prose: 'B.', transitions: [{ id: 't3', targetNodeId: 'd' }] },
+        {
+          id: 'c',
+          title: 'C',
+          prose: 'C.',
+          visualCanon: lockedCanon({ continuitySourceNodeId: 'a-not-a-predecessor' }),
+          transitions: [{ id: 't4', targetNodeId: 'd' }],
+        },
+        { id: 'd', title: 'D', prose: 'D.', isEnding: true, visualCanon: lockedCanon(), transitions: [] },
+      ],
+    };
+
+    it('repeats the canonical protagonist blocker identically on every reachable node, ahead of per-node blockers', () => {
+      const plan = buildEpisodeProductionPlan({
+        episode: convergentEpisode,
+        loom: { id: 'loom-1', protagonistCharacterId: 'char-hero', protagonistWardrobeId: 'wardrobe-x' },
+        universe: { id: 'u-1', characters: [{ id: 'char-hero', wardrobes: [{ id: 'wardrobe-y' }] }], places: [], objects: [] },
+      });
+      const wardrobe = 'Canonical wardrobe \"wardrobe-x\" is not present on protagonist \"char-hero\".';
+      const stills = plan.plannedAssets.filter((asset) => asset.type === 'image');
+      expect(stills.map((asset) => asset.nodeId)).toEqual(['a', 'b', 'c', 'd']);
+      for (const still of stills) expect(still.readiness.reasons).toContain(wardrobe);
+      expect(stills.find((asset) => asset.nodeId === 'c').readiness.reasons).toEqual([
+        wardrobe,
+        'Locked visual canon names a predecessor that does not lead into this scene.',
+      ]);
+      expect(stills.find((asset) => asset.nodeId === 'd').readiness.reasons).toEqual([
+        wardrobe,
+        'Locked convergent scene needs an explicit temporal continuity source.',
+      ]);
+      expect(stills.find((asset) => asset.nodeId === 'a').readiness.reasons).toEqual([wardrobe]);
+    });
+
+    it('reports missing protagonists and an unavailable Universe on every node', () => {
+      const missing = buildEpisodeProductionPlan({
+        episode: convergentEpisode,
+        loom: { id: 'loom-1', protagonistCharacterId: 'char-hero' },
+        universe: { id: 'u-1', characters: [] },
+      });
+      const noUniverse = buildEpisodeProductionPlan({
+        episode: convergentEpisode,
+        loom: { id: 'loom-1', protagonistCharacterId: 'char-hero' },
+      });
+      const reasonsFor = (plan, nodeId) => plan.plannedAssets.find((asset) => asset.id === `asset-${nodeId}-still`).readiness.reasons;
+      expect(reasonsFor(missing, 'a')).toEqual(['Canonical protagonist \"char-hero\" is not present in the linked Universe.']);
+      expect(reasonsFor(missing, 'b')).toEqual(reasonsFor(missing, 'a'));
+      expect(reasonsFor(noUniverse, 'd')).toEqual([
+        'Locked visual canon cannot be resolved because its Universe is unavailable.',
+        'The canonical protagonist cannot be resolved because the linked Universe is unavailable.',
+        'Locked convergent scene needs an explicit temporal continuity source.',
+      ]);
+    });
+
+    it('records convergence issues without inheritance for invalid explicit and missing sources', () => {
+      const plan = buildEpisodeProductionPlan({ episode: convergentEpisode });
+      expect(plan.convergenceIssues).toEqual([
+        {
+          nodeId: 'c',
+          nodeTitle: 'C',
+          predecessorCount: 1,
+          selectedPredecessorId: null,
+          policy: 'no-inheritance',
+          reason: 'invalid-explicit-source',
+          remediation: 'Set visualCanon.continuitySourceNodeId to an incoming predecessor of this scene.',
+        },
+        {
+          nodeId: 'd',
+          nodeTitle: 'D',
+          predecessorCount: 2,
+          selectedPredecessorId: null,
+          policy: 'no-inheritance',
+          remediation: 'Set visualCanon.continuitySourceNodeId on this scene to explicitly select temporal continuity source.',
+        },
+      ]);
+      const stills = Object.fromEntries(plan.plannedAssets.filter((asset) => asset.type === 'image').map((asset) => [asset.nodeId, asset]));
+      expect(stills.b.temporalSourceNodeId).toBe('a');
+      expect(stills.c.temporalSourceNodeId).toBeNull();
+      expect(stills.d.temporalSourceNodeId).toBeNull();
+    });
+
+    it('requires an approved storyboard for each locked video role unless that asset already exists', () => {
+      const message = 'Locked canon video requires an author-approved storyboard image.';
+      const episode = {
+        id: 'ep-roles',
+        startNodeId: 'n',
+        nodes: [
+          { id: 'n', prose: 'N.', visualCanon: lockedCanon(), transitions: [{ id: 't1', targetNodeId: 'm' }, { id: 't2', targetNodeId: 'm' }] },
+          { id: 'm', prose: 'M.', isEnding: true, transitions: [] },
+        ],
+      };
+      const withVideos = structuredClone(episode);
+      withVideos.nodes[0].videoHistoryId = 'entry-1';
+      withVideos.nodes[0].playbackAssets = { holdLoopVideoHistoryIds: ['hold-1'], exitByTransition: { t1: 'exit-1' } };
+      const reasons = (plan, type) => plan.plannedAssets.filter((asset) => asset.nodeId === 'n' && asset.type === type).map((asset) => asset.readiness.reasons);
+      const universe = { id: 'u-1', characters: [], places: [], objects: [] };
+      const bare = buildEpisodeProductionPlan({ episode, universe });
+      expect(reasons(bare, 'video_entry')).toEqual([[message]]);
+      expect(reasons(bare, 'video_hold')).toEqual([[message]]);
+      expect(reasons(bare, 'video_exit')).toEqual([[message], [message]]);
+      const existing = buildEpisodeProductionPlan({ episode: withVideos, universe });
+      expect(reasons(existing, 'video_entry')).toEqual([[]]);
+      expect(reasons(existing, 'video_hold')).toEqual([[]]);
+      expect(reasons(existing, 'video_exit')).toEqual([[], [message]]);
+      withVideos.nodes[0].visualCanon.storyboardImageApproved = true;
+      expect(reasons(buildEpisodeProductionPlan({ episode: withVideos, universe }), 'video_exit')).toEqual([[], []]);
+    });
+
+    it('deduplicates identical exact-input manifests across a node and its per-asset conditioning', () => {
+      const manifest = { assetId: 'asset-n-still', version: 1, status: 'locked' };
+      const episode = {
+        id: 'ep-dedupe',
+        startNodeId: 'n',
+        nodes: [{
+          id: 'n',
+          prose: 'N.',
+          isEnding: true,
+          visualConditioning: manifest,
+          playbackAssets: { visualConditioningByAsset: { one: { ...manifest }, two: { assetId: 'asset-n-video', version: 1 } } },
+          transitions: [],
+        }],
+      };
+      const plan = buildEpisodeProductionPlan({ episode, mode: 'exact_inputs' });
+      expect(plan.exactInputIssues.map((issue) => issue.nodeId)).toEqual(['n', 'n']);
+      expect(plan.isFullyReady).toBe(false);
+    });
+  });
+
+  it('reports each stale visual binding reference once in recorded provenance', () => {
+    const manifest = {
+      version: 1,
+      compilerVersion: '1',
+      status: 'locked',
+      universeId: 'u-1',
+      capability: { backend: 'cloud', modelId: 'm', kind: 'image' },
+      bindings: {
+        characterAppearances: [
+          { characterId: 'ghost' },
+          { characterId: 'hero', wardrobeId: 'cloak' },
+          { characterId: 'hero', wardrobeId: 'gone' },
+        ],
+        placeId: 'nowhere',
+        objectIds: ['lamp', 'missing-object'],
+      },
+      assets: [],
+      adapters: [],
+      omitted: [],
+      warnings: [],
+      render: { kind: 'image', backend: 'cloud', parameters: {} },
+    };
+    const universe = {
+      id: 'u-1',
+      characters: [{ id: 'hero', wardrobes: [{ id: 'cloak' }] }],
+      places: [{ id: 'home' }],
+      objects: [{ id: 'lamp' }],
+    };
+    const errors = verifyExactInputProvenance(manifest, { universe }).errors
+      .filter((error) => error.includes('recorded visual bindings'));
+    expect(errors).toEqual([
+      'Character \"ghost\" in recorded visual bindings no longer exists in Universe.',
+      'Wardrobe \"gone\" in recorded visual bindings is not present on character \"hero\".',
+      'Place \"nowhere\" in recorded visual bindings no longer exists in Universe.',
+      'Object \"missing-object\" in recorded visual bindings no longer exists in Universe.',
+    ]);
+    const noBindings = { ...manifest, bindings: null };
+    expect(verifyExactInputProvenance(noBindings, { universe }).errors)
+      .toContain('Recorded visual conditioning has no scene bindings.');
   });
 });

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { OWNER_FILE, killTestBrowsersUnder, sweepStaleRunRoots, writeOwnerFile } from './vitestStaleRunRoots.js';
+import { OWNER_FILE, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './vitestStaleRunRoots.js';
 
 // Vitest sets these in every pool worker; the enclosing main process owns the root.
 const inVitestWorker = () => Boolean(process.env.VITEST_POOL_ID || process.env.VITEST_WORKER_ID);
@@ -23,15 +23,15 @@ function restoreInheritedRootOwnership(root) {
 }
 
 /**
- * The owner of a run root stops every test browser still running under it
+ * The owner of a run root stops every test process still running under it
  * when it exits or is interrupted (#10840), so an aborted run cannot strand a
- * Chrome whose worker died. A signal is re-raised once the sweep runs unless
+ * child whose worker died. A signal is re-raised once the sweep runs unless
  * another listener (Vitest's own) is there to handle it.
  */
-function killRootBrowsersOnExit(root) {
+function killRootProcessesOnExit(root) {
   if (process.platform === 'win32') return;
   const sweep = () => {
-    try { killTestBrowsersUnder(root); } catch { /* best effort at exit */ }
+    try { killTestProcessesUnder(root); } catch { /* best effort at exit */ }
   };
   process.once('exit', sweep);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -52,7 +52,7 @@ export function bootstrapVitestTempRoot() {
     root = mkdtempSync(join(hostRoot, 'pvt-'));
     writeOwnerFile(root);
     process.env.PORTOS_TEST_TEMP_ROOT = root;
-    killRootBrowsersOnExit(root);
+    killRootProcessesOnExit(root);
   } else {
     restoreInheritedRootOwnership(root);
   }
@@ -63,5 +63,7 @@ export function bootstrapVitestTempRoot() {
   // test-owned socket/download scratch escapes the root and its teardown.
   process.env.MAC_CHROMIUM_TMPDIR = root;
   process.env.NODE_DISABLE_COMPILE_CACHE = '1';
+  // Spawned npm would otherwise write debug logs into the developer's ~/.npm/_logs, evicting real ones (logs-max default 10).
+  process.env.npm_config_logs_max = '0';
   return root;
 }

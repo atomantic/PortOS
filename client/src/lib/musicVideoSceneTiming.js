@@ -14,6 +14,7 @@ const falEstimate = (take) => (take?.costUsd == null ? null
 export function buildSceneTimingPresentation({
   scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
   nextEndSec, isLast, documentComposition, hasMergeNext, lineCues = null,
+  prevStartSec = null, isFirst = true, hasMergePrevious = false,
 }) {
   const performance = isPerformanceScene(scene);
   const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
@@ -37,8 +38,12 @@ export function buildSceneTimingPresentation({
   const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
   const canMerge = hasMergeNext && !isLast && !documentComposition
     && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
+  // Merge over previous keeps this shot and starts it where the previous one did.
+  const mergedPreviousSpan = typeof prevStartSec === 'number' && typeof scene.endSec === 'number' ? scene.endSec - prevStartSec : null;
+  const canMergePrevious = hasMergePrevious && !isFirst && !documentComposition
+    && (splitLimit == null || (mergedPreviousSpan != null && mergedPreviousSpan <= splitLimit + 1e-6));
   return {
     performance, capability, timedSpan, plan, performanceBlocked, grokPlan,
-    falTake, falCost, performanceCost, splitLimit, canSplit, mergedSpan, canMerge,
+    falTake, falCost, performanceCost, splitLimit, canSplit, mergedSpan, canMerge, canMergePrevious,
   };
 }

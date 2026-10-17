@@ -6,7 +6,7 @@
  * snapshot to CoS state, and emits health events for downstream consumers.
  */
 
-import { execPm2, listProcessesStrict, clearJlistCache } from './pm2.js';
+import { restartApp, listProcessesStrict, clearJlistCache } from './pm2.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { loadState, saveState, withStateLock, isDaemonRunning } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -135,21 +135,27 @@ export async function runHealthCheck() {
 
       const restartResults = await Promise.all(erroredProcesses.map(async (proc) => {
         const name = proc.name;
-        // execPm2, not execFileAsync('pm2', …, { shell: true }) — `shell: true`
-        // resolves `pm2` to pm2.cmd and rebuilds the cmd.exe → pm2.cmd → node
-        // chain that v1.6.7 removed, flashing a console window on every restart.
-        const result = await execPm2(['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
-        const failed = result.stderr && !result.stdout;
-        if (failed) emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
-        return { proc, success: !failed };
+        const result = await restartApp(name).catch(error => ({ success: false, error }));
+        const uncertain = result.error?.outcome === 'unknown';
+        if (!result.success) emitLog('error', `❌ ${uncertain ? 'Restart outcome unknown for' : 'Failed to restart'} ${name}: ${result.error.message}`);
+        return { proc, success: result.success, uncertain };
       }));
 
-      const failedRestarts = restartResults.filter(r => !r.success);
+      const failedRestarts = restartResults.filter(r => !r.success && !r.uncertain);
       if (failedRestarts.length > 0) {
         issues.push({
           type: 'error',
           category: 'processes',
           message: `${failedRestarts.length} errored PM2 process(es) failed to auto-restart: ${failedRestarts.map(r => r.proc.name).join(', ')}`
+        });
+      }
+
+      const uncertainRestarts = restartResults.filter(r => r.uncertain);
+      if (uncertainRestarts.length > 0) {
+        issues.push({
+          type: 'error',
+          category: 'processes',
+          message: `PM2 restart outcome unknown after timeout: ${uncertainRestarts.map(r => r.proc.name).join(', ')}; the daemon may have accepted the restart`
         });
       }
 

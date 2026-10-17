@@ -80,7 +80,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // <=v11 peer would strip it in its `factual`-unaware `sanitizeTemplate`
   // and last-writer-wins the loss back, silently reclassifying the user's
   // Reality universe as fiction.
-  universes: 12,
+  // v13 = durable character sheet request identities (#11669). Older peers
+  // must not strip supersession state during an unrelated canon edit.
+  universes: 13,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -95,7 +97,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // ahead-version transfer; when its older snapshot is later received by a v3
   // peer, the merge preserves an existing climax role instead of letting the
   // older sanitizer's omission LWW-strip or overwrite it.
-  pipelineIssues: 3,
+  // v4 = text-stage generation identity for owner-scoped restart recovery.
+  // Older sanitizers strip it; gate transfers to keep execution ownership intact.
+  pipelineIssues: 4,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip

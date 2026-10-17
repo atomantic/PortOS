@@ -11,9 +11,11 @@ const compiledVisual = vi.hoisted(() => ({
   version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
 }));
 const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
+const probeVideoGeometry = vi.hoisted(() => vi.fn());
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   probeVideoDuration,
+  probeVideoGeometry,
 }));
 const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt, sourceImagePath }) => ({
   prompt: authoredPrompt,
@@ -722,7 +724,7 @@ describe('videoGen routes', () => {
     });
   });
 
-  describe('GET /models/:modelId/download — restricted terms', () => {
+  describe('POST /models/:modelId/download — restricted terms', () => {
     const h3CheckpointFiles = ['LICENSE', 'FL2VA/model_index.json', 'FL2VA/video_vae/source/model.safetensors'];
     const h3 = {
       id: 'minimax_h3_8bit',
@@ -750,7 +752,7 @@ describe('videoGen routes', () => {
 
     it('downloads both exact snapshots without a recorded acknowledgement', async () => {
       videoGenService.listVideoModels.mockReturnValueOnce([h3]);
-      const accepted = await request(app).get('/api/video-gen/models/minimax_h3_8bit/download');
+      const accepted = await request(app).post('/api/video-gen/models/minimax_h3_8bit/download');
       expect(accepted.status).toBe(200);
       expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
         repos: [
@@ -779,7 +781,7 @@ describe('videoGen routes', () => {
       };
       videoGenService.listVideoModels.mockReturnValueOnce([ref2va]);
 
-      const accepted = await request(app).get(`/api/video-gen/models/${ref2va.id}/download`);
+      const accepted = await request(app).post(`/api/video-gen/models/${ref2va.id}/download`);
 
       expect(accepted.status).toBe(200);
       expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
@@ -3013,6 +3015,34 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /history/:id', () => {
+    // Hosted clips lack stored geometry; the animatic needs the cadence the renderer measures.
+    it('measures geometry only when requested and missing, without changing the stored entry', async () => {
+      const entry = { id: 'hosted', filename: 'hosted.mp4' };
+      videoGenService.getHistoryItem.mockResolvedValue(entry);
+      probeVideoGeometry.mockResolvedValue({ width: 1280, height: 720, fps: 30, numFrames: 60 });
+      const plain = await request(app).get('/api/video-gen/history/hosted');
+      expect(plain.body).toEqual(entry);
+      expect(probeVideoGeometry).not.toHaveBeenCalled();
+      const measured = await request(app).get('/api/video-gen/history/hosted?geometry=true');
+      expect(measured.status).toBe(200);
+      expect(measured.body).toEqual({ ...entry, width: 1280, height: 720, fps: 30, numFrames: 60 });
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+      expect(entry).toEqual({ id: 'hosted', filename: 'hosted.mp4' });
+      videoGenService.getHistoryItem.mockResolvedValue(measured.body);
+      await request(app).get('/api/video-gen/history/hosted?geometry=true');
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses unavailable geometry, unsafe filenames and malformed geometry requests', async () => {
+      videoGenService.getHistoryItem.mockResolvedValue({ id: 'hosted', filename: 'hosted.mp4' });
+      probeVideoGeometry.mockResolvedValue(null);
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=true')).status).toBe(422);
+      videoGenService.getHistoryItem.mockResolvedValue({ id: 'hosted', filename: '../outside.mp4' });
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=true')).status).toBe(422);
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=maybe')).status).toBe(400);
+    });
+
     // The point of the route (#4165): a timeline render's history id is a
     // randomUUID() that has nothing to do with its `timeline-*.mp4` filename,
     // so a client holding only the id learns the real file from HERE instead of
@@ -3492,7 +3522,7 @@ describe('videoGen routes', () => {
     const upscaler = IC_LORA_MODES['pixel-upscale'];
 
     it('downloads a pinned weight single-file, at its pinned revision', async () => {
-      const res = await request(app).get(`/api/video-gen/ic-loras/${icLoraWeightKey(upscaler)}/download`);
+      const res = await request(app).post(`/api/video-gen/ic-loras/${icLoraWeightKey(upscaler)}/download`);
       expect(res.status).toBe(200);
       const [{ fallbacks, repo }] = sseDownload.start.mock.calls[0];
       // Never a whole-repo snapshot: the pin names one commit and one file, and
@@ -3506,7 +3536,7 @@ describe('videoGen routes', () => {
     });
 
     it('keeps an unpinned, un-mirrored weight on the cheap whole-repo path', async () => {
-      const res = await request(app).get('/api/video-gen/ic-loras/ic-control/download');
+      const res = await request(app).post('/api/video-gen/ic-loras/ic-control/download');
       expect(res.status).toBe(200);
       const [args] = sseDownload.start.mock.calls[0];
       expect(args.repo).toBe(IC_LORA_MODES.control.repo);
@@ -3514,7 +3544,7 @@ describe('videoGen routes', () => {
     });
 
     it('404s an unknown weight key and names the real ones', async () => {
-      const res = await request(app).get('/api/video-gen/ic-loras/not-a-weight/download');
+      const res = await request(app).post('/api/video-gen/ic-loras/not-a-weight/download');
       expect(res.status).toBe(404);
       expect(res.body.error).toMatch(/pixel-upscale/);
       expect(res.body.error).toMatch(/ic-control/);

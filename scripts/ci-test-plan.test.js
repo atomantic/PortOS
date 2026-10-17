@@ -1166,6 +1166,18 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
+  it.each(['js', 'test.js'])('runs owned-browser Windows contracts when its %s file changes', extension => {
+    const source = 'server/services/htmlComposition/ownedBrowser.js';
+    const test = 'server/services/htmlComposition/ownedBrowser.test.js';
+    const plan = buildCiTestPlan([`server/services/htmlComposition/ownedBrowser.${extension}`], {
+      trackedFiles: [...TRACKED, source, test],
+    });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsFiles).toContain(test);
+    expect(plan.windowsMode).toBe(extension === 'js' ? 'related' : 'files');
+    expect(plan.windowsSources).toEqual(extension === 'js' ? [source] : []);
+  });
+
   it('keeps the complete Windows suite for an explicit full-CI request', () => {
     const plan = buildCiTestPlan(['server/lib/bufferedSpawn.js'], {
       trackedFiles: TRACKED,
@@ -1400,6 +1412,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/ps1-bom.test.js',
       'server/lib/bufferedSpawn.js',
       'server/lib/pathSafety.js',
+      'server/lib/mockPathsDataRoot.js',
+      'server/services/cosAgentIndex.completionOrder.test.js',
       'server/lib/staticImportGraph.js',
       'server/services/agentImportCycles.test.js',
       'server/services/worktreeManager.js',
@@ -1408,6 +1422,7 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/cos-runner/index.js',
       'server/services/shell.js',
       'server/services/agentTuiSpawning.js',
+      'server/services/htmlComposition/ownedBrowser.js',
       'server/services/autonomousJobs/execution.shellSpawn.js',
       'server/services/voice/fineTuning.js',
       'server/services/imageGen/codex.js',
@@ -1441,6 +1456,21 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('selects the changed cancellation fixtures explicitly on Windows without widening unrelated tests (#11641)', () => {
+      const fixtures = ['server/lib/mockPathsDataRoot.test.js', 'server/services/cosAgentIndex.completionOrder.test.js'];
+      const unrelated = 'server/services/exampleUnrelated.test.js';
+      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...fixtures, unrelated];
+      for (const changedFiles of [fixtures, ...fixtures.map(path => [path])]) {
+        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
+        expect(selected.full).toBe(false);
+        expect(selected.windowsMode).toBe('files');
+        expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...changedFiles])].sort());
+        expect(selected.windowsFiles).not.toContain(unrelated);
+      }
+      const helper = 'server/lib/mockPathsDataRoot.js';
+      expect(buildCiTestPlan([helper], { trackedFiles: [...trackedFiles, helper], clientDependencies: [] }).windows).toBe(true);
     });
   });
 });
@@ -1506,6 +1536,18 @@ it('projects transitive browser consumers through the planner CLI without replac
 
 describe('cross-workspace browser suites (#10312)', () => {
 
+  it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
+    for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
+      expect(plan.full).toBe(false);
+      expect(plan.browserFiles).toContain(suite);
+    }
+  });
+
   it('selects every music-video browser suite when a client component they mount changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
@@ -1518,7 +1560,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
 
     // Server-only media suites do not mount the changed client component.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
+    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));

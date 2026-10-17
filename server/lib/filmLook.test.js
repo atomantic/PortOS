@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { runInNewContext } from 'node:vm';
 import {
   FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, describeFilmLook, filmLookFilterMarkup, filmLookMotionLayers, filmLookPreset, filmLookRuntimeSource,
-  isFilmLookNeutral, normalizeFilmLook,
+  isFilmLookNeutral, normalizeFilmLook, sameFilmLook, scaleFilmLook,
 } from './filmLook.js';
 import { filmLookSchema } from './filmLookValidation.js';
 
@@ -42,6 +42,20 @@ describe('film look settings', () => {
     expect(filmLookSchema.safeParse({ grain: 1.5 }).success).toBe(false);
     expect(filmLookSchema.safeParse({ castColor: 'green' }).success).toBe(false);
     expect(filmLookSchema.safeParse({ preset: 'polaroid', grain: 0.5, grainColor: true }).success).toBe(true);
+  });
+
+  it('scales a look toward clean: effects shrink, shaping values stay, and the amount is clamped', () => {
+    const vhs = filmLookPreset('vhs');
+    expect(isFilmLookNeutral(scaleFilmLook(vhs, 0))).toBe(true);
+    expect(sameFilmLook(scaleFilmLook(vhs, 1), vhs)).toBe(true);
+    const fifth = scaleFilmLook(vhs, 0.2);
+    for (const control of FILM_LOOK_CONTROLS) {
+      if (control.type || control.modifier) expect(fifth[control.id]).toBe(vhs[control.id]);
+      else expect(fifth[control.id]).toBeCloseTo(vhs[control.id] * 0.2, 6);
+    }
+    expect(sameFilmLook(scaleFilmLook(vhs, 3), vhs)).toBe(true);
+    expect(isFilmLookNeutral(scaleFilmLook(vhs, -1))).toBe(true);
+    expect(scaleFilmLook(null, 0.5)).toBeNull();
   });
 });
 

@@ -26,22 +26,21 @@ const InlineDiff = memo(function InlineDiff({ oldText, newText, emptyLabel = 'No
 
   const { tooLarge, oldRuns, newRuns } = diffWords(oldStr, newStr);
 
-  if (tooLarge) {
-    return (
-      <div className="font-mono text-xs p-4 space-y-2 bg-port-bg">
+  return (
+    <div className="font-mono text-xs p-4 space-y-2 bg-port-bg">
+      {tooLarge && (
         <div className="text-gray-500 text-[11px] uppercase tracking-wider">
           Diff too large for inline highlighting — both versions shown in full
         </div>
-        <div className="text-port-error leading-relaxed whitespace-pre-wrap">{oldStr}</div>
-        <div className="text-port-success leading-relaxed whitespace-pre-wrap">{newStr}</div>
+      )}
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Before</div>
+        <div className="text-port-error leading-relaxed whitespace-pre-wrap">{tooLarge ? oldStr : renderRuns(oldRuns, false)}</div>
       </div>
-    );
-  }
-
-  return (
-    <div className="font-mono text-xs p-4 space-y-2 bg-port-bg">
-      <div className="text-port-error leading-relaxed whitespace-pre-wrap">{renderRuns(oldRuns, false)}</div>
-      <div className="text-port-success leading-relaxed whitespace-pre-wrap">{renderRuns(newRuns, true)}</div>
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">After</div>
+        <div className="text-port-success leading-relaxed whitespace-pre-wrap">{tooLarge ? newStr : renderRuns(newRuns, true)}</div>
+      </div>
     </div>
   );
 });

@@ -39,6 +39,8 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   };
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
+      {/* The height limit caps the width, not the height alone: a capped height
+          over a full-width box made it wider than 16:9 and pillarboxed the video. */}
       <video
         ref={videoRef}
         src={source.src}
@@ -50,7 +52,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedData={(e) => setDuration(e.currentTarget.duration)}
         aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
-        className="aspect-video max-h-[50vh] w-full rounded border border-port-border bg-black object-contain"
+        className="mx-auto block aspect-video w-full max-w-[calc(50vh*16/9)] rounded border border-port-border bg-black object-contain"
       />
       <ShotStepper
         scenes={scenes}

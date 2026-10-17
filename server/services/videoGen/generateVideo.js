@@ -55,7 +55,7 @@ import {
 import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
 import { VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
-import { videoJobState } from './jobState.js';
+import { videoJobState, beginPreparation } from './jobState.js';
 import {
   assertRenderModeContract,
   buildArgs,
@@ -315,7 +315,7 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
+async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -722,6 +722,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
       await ensureMiniMaxH3Weights(model);
     }
+    // Weights can take a long first-run download; honor a cancel that landed during it.
+    preparation.throwIfCanceled();
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
@@ -742,6 +744,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   await spawnAndWatchVideo({
     jobId,
+    preparation,
     batch,
     // Keeps this render's ETA samples in its own cost bucket — a speed profile
     // changes the slope, not just the step count.
@@ -781,4 +784,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
+}
+
+// Pre-spawn work (weight download, memory preparation) runs with no child to
+// signal, so cancel() answers 'pending' and the spawn gates abort the render.
+export async function generateVideo(params) {
+  const preparation = beginPreparation();
+  try {
+    return await renderLocalVideo(preparation, params);
+  } finally {
+    preparation.end();
+  }
 }

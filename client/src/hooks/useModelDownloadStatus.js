@@ -64,7 +64,7 @@ export const buildDownloadUrl = (kind, modelId, force = false) => {
 // "Download (~8 GB)" badge next to the image/video gen model picker.
 //
 // `kind` selects the endpoint family ('image' | 'video'). `start(modelId)`
-// opens an EventSource against the download endpoint. When the stream
+// opens a POST stream against the download endpoint. When the stream
 // emits a terminal frame we automatically refetch /models/status so the
 // badge flips to "Available" without the caller wiring that up.
 //
@@ -114,10 +114,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
 
   useEffect(() => { fetchStatuses(); }, [fetchStatuses]);
 
-  // EventSource for the active download. `null` URL = idle (useSseProgress's
+  // POST stream for the active download. `null` URL = idle (useSseProgress's
   // `enabled: false` cleanup tears the connection down on cancel).
   const downloadUrl = buildDownloadUrl(kind, activeModelId, forceDownload);
-  const sse = useSseProgress(downloadUrl, { enabled: !!downloadUrl });
+  const sse = useSseProgress(downloadUrl, { enabled: !!downloadUrl, method: 'POST' });
 
   // Refetch on natural stream close. useSseProgress flips `closed:true` once
   // per subscription and resets to false when the URL changes; that single
@@ -256,7 +256,7 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   // Download click. Lives here rather than in the caller because both things it
   // has to wait on are this hook's: the cache verdict (`statuses` may still be
   // loading, and starting on an unknown verdict would re-pull a resident
-  // multi-GB repo) and the single EventSource lane (`start` would otherwise
+  // multi-GB repo) and the single download lane (`start` would otherwise
   // hijack a download already in flight).
   //
   // Passing a falsy id clears a queued intent, so a caller whose selection moved

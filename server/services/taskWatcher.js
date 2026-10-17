@@ -15,6 +15,8 @@ const ROOT_DIR = PATHS.root;
 
 let watcher = null;
 let isWatching = false;
+// In-flight start; set synchronously so overlapping starts coalesce and a stop can await it.
+let startPromise = null;
 let lastUserTasks = null;
 let lastCosTasks = null;
 const pendingFileEvents = new Map();
@@ -40,10 +42,16 @@ function queueFileEvent(path, event, operation) {
 /**
  * Start watching task files
  */
-export async function startWatching() {
+export function startWatching() {
+  if (startPromise) return startPromise;
   if (isWatching) {
-    return { success: false, error: 'Already watching' };
+    return Promise.resolve({ success: false, error: 'Already watching' });
   }
+  startPromise = doStartWatching().finally(() => { startPromise = null; });
+  return startPromise;
+}
+
+async function doStartWatching() {
 
   const config = await getConfig();
   const userTasksPath = join(ROOT_DIR, config.userTasksFile);
@@ -112,6 +120,8 @@ export async function startWatching() {
  * Stop watching task files
  */
 export async function stopWatching() {
+  // A stop issued mid-start must tear down the watcher that start creates.
+  if (startPromise) await startPromise.catch(() => {});
   if (!isWatching || !watcher) {
     return { success: false, error: 'Not watching' };
   }

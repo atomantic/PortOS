@@ -143,6 +143,13 @@ export const deletePipelineIssue = (id, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 
 // ---- Stage operations ----
+export const getPipelineStageRecovery = (issueId, stageId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/recovery`, options);
+export const recoverPipelineStage = (issueId, stageId, revision, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/recover`, {
+    method: 'POST', body: JSON.stringify({ revision }), ...options,
+  });
+
 export const generatePipelineStage = (issueId, stageId, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/generate`, {
     method: 'POST',

@@ -3936,6 +3936,9 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
   // barrel and thin-wrapper idioms. `seen` bounds the chase so a forwarding
   // cycle resolves to "no" rather than recursing.
   const suppliesPageHeading = (file, exportedName, seen = new Set()) => {
+    // Error boundaries own a recovery heading only while their children fail.
+    // Crediting that heading to a layout exempts every healthy outlet page.
+    if (/ErrorBoundary\.jsx$/.test(file)) return false;
     const key = `${file}#${exportedName}`;
     if (seen.has(key) || seen.size >= 8) return false;
     seen.add(key);
@@ -4055,7 +4058,8 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
       'src/pages/ProbeLazyBad.jsx': 'export default function ProbeLazyBad() { return <h2>Lazy</h2>; }',
       'src/pages/ProbeLazyGood.jsx': "import PageHeader from '../components/PageHeader';\nexport default function ProbeLazyGood() { return <PageHeader title=\"Lazy\" />; }",
       'src/pages/ProbeShell.jsx': 'export default function ProbeShell() { return <h1>Shell</h1>; }',
-      'src/pages/ProbeShellBare.jsx': 'export default function ProbeShellBare() { return <div />; }',
+      'src/pages/ProbeShellBare.jsx': "import ProbeErrorBoundary from '../components/ProbeErrorBoundary';\nexport default function ProbeShellBare() { return <ProbeErrorBoundary><div /></ProbeErrorBoundary>; }",
+      'src/components/ProbeErrorBoundary.jsx': 'export default function ProbeErrorBoundary({ children }) { return failed ? <h1>Recovery only</h1> : children; }',
     }, () => {
       const offenders = routedPageElements('src/ProbeApp.jsx')
         .filter((e) => !e.shelled)

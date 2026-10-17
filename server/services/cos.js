@@ -156,7 +156,8 @@ import {
   unregisterJobSchedules,
   scheduleNextImprovementCheck,
   registerSingleJobSchedule,
-  clearSpawningJob
+  clearSpawningJob,
+  handleJobSpawnFailed
 } from './cosJobScheduler.js';
 
 // Shared capacity and idle-review admission owner. The engines retain their
@@ -1544,13 +1545,11 @@ export async function init() {
     );
   });
 
-  cosEvents.on('job:spawn-failed', async ({ jobId }) => {
-    emitLog('warn', `Job spawn failed, re-registering schedule: ${jobId}`, { jobId });
-    clearSpawningJob(jobId);
-    await registerSingleJobSchedule(jobId).catch(err =>
-      console.error(`❌ Failed to re-register job schedule after spawn failure for ${jobId}: ${err.message}`)
-    );
-  });
+  cosEvents.on('job:spawn-failed', ({ jobId, reason }) =>
+    handleJobSpawnFailed(jobId, reason).catch(err =>
+      console.error(`❌ Failed to re-arm job schedule after spawn failure for ${jobId}: ${err.message}`)
+    )
+  );
 
   // Event-driven triggers: task/file changes → dequeueNextTask.
   // The task store (cosTaskStore.js) persists tasks and emits this event; the

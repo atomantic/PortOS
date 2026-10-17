@@ -16,6 +16,7 @@ import { request } from '../lib/testHelper.js';
 import { captureMusicVideoEvidence } from '../lib/musicVideoDependencies.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { stillMoveForCamera } from '../lib/cameraMovements.js';
 
 const ROOT = () => lazyTempDataRoot('mv-treatment-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -421,7 +422,8 @@ describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer
     expect(res.status).toBe(200);
     const after = await reload(project.id);
     expect(after.scenes[sung]).toMatchObject({ visualLayer: 'card', cardText: scenes[sung].lyricText.split(' / ')[0] });
-    expect(after.scenes[instrumental]).toMatchObject({ visualLayer: 'still', stillMove: 'push' });
+    // Its planned camera picks the still's move; with none it is pushed.
+    expect(after.scenes[instrumental]).toMatchObject({ visualLayer: 'still', stillMove: stillMoveForCamera(scenes[instrumental].camera) || 'push' });
     expect(after.scenes[chosen]).toMatchObject({ visualLayer: 'still', stillMove: 'pan' });
     expect(after.composition.mode).toBe('concat');
     // The card draws its own line, so no lyric cue is stacked over it.

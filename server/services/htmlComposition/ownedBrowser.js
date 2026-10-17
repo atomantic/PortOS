@@ -10,6 +10,7 @@ import { browserExecutablePath } from '../../lib/browserConfig.js';
 import { isVitestRunner } from '../../lib/runtimeEnv.js';
 import { PREVIEW_HOST_RESOLVER_SOCKETS, previewIsolationPlan } from '../../lib/generatedPreviewSandbox.js';
 import { createCdpPipeTransport } from './cdpPipe.js';
+import { drainBrowserProcessGroup, signalBrowserProcessGroup } from './browserProcessGroup.js';
 
 // Chrome refuses to run as root with its sandbox on. Only a Vitest worker
 // running as root (a root dev/CI container) drops it, matching the test-owned
@@ -79,6 +80,7 @@ export async function launchCompositionBrowser({
 } = {}) {
   signal?.throwIfAborted();
   const piped = isolation !== 'legacy';
+  const ownsProcessGroup = process.platform !== 'win32';
   const { loadConfig } = await import('../browserService.js');
   const executable = browserExecutablePath(await loadConfig());
   signal?.throwIfAborted();
@@ -104,17 +106,26 @@ export async function launchCompositionBrowser({
   let closing;
   let profileCleanup;
   let terminationStarted;
+  let closeDeadlineExpired = false;
   // Fixed-size observations from this retained child only. Observation
   // timestamps are monotonic milliseconds since ownership began.
   const observedSince = performance.now();
   const observed = { spawnMs: null, exitMs: null, closeMs: null, termMs: null, killMs: null };
   const observedMs = () => Math.round(performance.now() - observedSince);
+  const groupTermination = { term: 'not-attempted', kill: 'not-attempted', error: 'none', failedSignal: 'none', failedPhase: 'none' };
   const termination = { term: 'not-attempted', kill: 'not-attempted', error: 'none' };
   const safeSignalError = error => ['EPERM', 'ESRCH', 'EINVAL', 'ENOSYS'].includes(error?.code) ? error.code : 'other';
   const cleanupProfile = () => {
     if (!profileCleanup) {
-      observe('remove-start', profile);
-      profileCleanup = removeProfile(profile);
+      profileCleanup = (async () => {
+        if (ownsProcessGroup && proc?.pid && closed) {
+          // Late child close still owns cleanup, without changing the rejected close verdict.
+          const deadline = (closeDeadlineExpired ? performance.now() : terminationStarted ?? performance.now()) + shutdownMs;
+          await drainBrowserProcessGroup(proc.pid, deadline, Math.min(1000, shutdownMs / 2), groupTermination);
+        }
+        observe('remove-start', profile);
+        await removeProfile(profile);
+      })();
       // Observe settlement without replacing the cached promise or its verdict.
       if (lifecycle.hasSubscribers) profileCleanup.then(
         () => observe('remove-resolved', profile),
@@ -153,8 +164,8 @@ export async function launchCompositionBrowser({
   const signalChild = (name) => {
     // sandbox-exec / bwrap wait on Chrome. Signal the group, then the wrapper,
     // so a helper cannot keep the profile open after close.
-    if (piped && proc?.pid) {
-      try { process.kill(-proc.pid, name); } catch { /* the wrapper kill below still runs */ }
+    if (ownsProcessGroup && proc?.pid) {
+      signalBrowserProcessGroup(proc.pid, name, groupTermination, 'shutdown');
     }
     return proc.kill(name);
   };
@@ -192,6 +203,7 @@ export async function launchCompositionBrowser({
         });
         await Promise.race([childClosed, new Promise((_, reject) => {
           deadline = setTimeout(() => {
+            closeDeadlineExpired = true;
             // Never interpolate arbitrary child properties, errors or output.
             // Public status and observed events are separate evidence: accepted
             // signals alone do not establish that the child has exited.
@@ -201,6 +213,8 @@ export async function launchCompositionBrowser({
             const facts = {
               exit: exited, stdioClosed: Boolean(proc.stderr?.destroyed),
               term: termination.term, kill: termination.kill, signalError: termination.error,
+              groupTerm: groupTermination.term, groupKill: groupTermination.kill, groupSignalError: groupTermination.error,
+              groupFailedSignal: groupTermination.failedSignal, groupFailedPhase: groupTermination.failedPhase,
               elapsedMs: Math.round(performance.now() - terminationStarted),
               spawned, closed, exitCode, signalCode,
               exitListener: proc.listeners('exit').includes(onExit),
@@ -243,7 +257,7 @@ export async function launchCompositionBrowser({
     ];
     proc = spawn(command, args, piped
       ? { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], env: previewBrowserEnv(), detached: true }
-      : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
+      : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'], detached: ownsProcessGroup }));
     proc.once('spawn', () => { spawned = true; observed.spawnMs = observedMs(); });
     proc.once('exit', onExit);
     proc.once('close', onClose);

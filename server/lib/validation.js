@@ -4,6 +4,7 @@ export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
 import { ServerError } from './errorHandler.js';
@@ -1739,6 +1740,26 @@ export const appIconQuerySchema = z.object({
   size: z.enum(['64', '128', '256']).default('128').transform(Number),
 });
 
+// Read-route query contracts: a malformed limit is a 400, never a silent
+// negative slice or an ignored NaN.
+export const listNotificationsQuerySchema = z.object({
+  type: z.enum(Object.values(NOTIFICATION_TYPES)).optional(),
+  unreadOnly: z.enum(['true', 'false']).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+});
+
+export const agentToolsFeedQuerySchema = z.object({
+  accountId: z.string().min(1),
+  sort: z.enum(['hot', 'new', 'top', 'rising']).default('hot'),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const agentToolsRelevantPostsQuerySchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  maxResults: z.coerce.number().int().min(1).max(100).default(10),
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.
@@ -2859,3 +2880,11 @@ export const providerFallbackEntrySchema = z.object({
 export const providerFallbackChainBodySchema = z.object({
   entries: z.array(providerFallbackEntrySchema).max(50),
 });
+
+// Model-cache reads and explicit download streams share the same URL contract.
+export const modelDownloadQuerySchema = z.object({
+  force: z.enum(['0', '1']).optional().transform(value => value === '1'),
+});
+export const modelDownloadParamsSchema = z.object({ modelId: z.string().min(1).max(256) });
+export const icLoraDownloadParamsSchema = z.object({ mode: z.string().min(1).max(256) });
+export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).max(256) });

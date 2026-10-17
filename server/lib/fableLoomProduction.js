@@ -334,180 +334,146 @@ export function inspectEpisodeProductionOrder(loom, episode) {
   };
 }
 
-/**
- * Verify recorded asset provenance against the current local environment.
- * For `exact_inputs` mode: refuses when a recorded revision/hash/model is missing
- * or mismatched, preventing silent substitution.
- */
-export function verifyExactInputProvenance(recordedProvenance, {
-  universe = null,
-  localVoiceProfiles = [],
-  localLoras = [],
-  availableImageModels = null,
-  availableVideoModels = null,
-  resolveAsset = null,
-} = {}) {
+function verifyVisualCapabilityAndModel(capability, { availableImageModels, availableVideoModels }) {
+  if (!capability || typeof capability !== 'object') {
+    return ['Recorded visual conditioning has no provider capability manifest.'];
+  }
+  const errors = [];
+  if (!isNonBlankStr(capability.backend)) errors.push('Recorded visual conditioning has no backend.');
+  if (!isNonBlankStr(capability.modelId)) errors.push('Recorded visual conditioning has no model revision or model id.');
+  if (capability.backend === 'local' && !isNonBlankStr(capability.modelRevision)) {
+    errors.push(`Recorded local ${capability.kind || 'media'} model "${capability.modelId || 'unknown'}" has no immutable model revision to verify exact inputs.`);
+  }
+  // Local model registries can only verify local manifests. Cloud model ids
+  // are provider-owned and are not present in the local registry, so do not
+  // mistake a perfectly valid cloud provenance record for a missing local
+  // model.
+  const availableModels = capability.backend === 'local'
+    ? (capability.kind === 'video' ? availableVideoModels : availableImageModels)
+    : null;
+  if (Array.isArray(availableModels) && isNonBlankStr(capability.modelId)) {
+    const matchingModel = availableModels.find((model) => model?.id === capability.modelId);
+    if (!matchingModel) {
+      errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" is not available locally.`);
+    } else if (isNonBlankStr(capability.modelRevision)
+      && (!isNonBlankStr(matchingModel.revision) || matchingModel.revision !== capability.modelRevision)) {
+      errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" revision mismatch (recorded ${capability.modelRevision}, current local ${matchingModel.revision || 'unknown'}).`);
+    }
+  }
+  return errors;
+}
+
+function verifyRecordedVisualBindings(bindings, universe) {
+  if (!bindings || typeof bindings !== 'object') {
+    return ['Recorded visual conditioning has no scene bindings.'];
+  }
+  const errors = [];
+  const appearances = Array.isArray(bindings.characterAppearances)
+    ? bindings.characterAppearances
+    : [];
+  if (universe && Array.isArray(universe.characters)) {
+    for (const appearance of appearances) {
+      const charId = appearance?.characterId;
+      const canonChar = universe.characters.find((character) => character.id === charId);
+      if (!canonChar) {
+        errors.push(`Character "${charId || 'unknown'}" in recorded visual bindings no longer exists in Universe.`);
+      } else if (isNonBlankStr(appearance.wardrobeId)
+        && (!Array.isArray(canonChar.wardrobes)
+          || !canonChar.wardrobes.some((wardrobe) => wardrobe.id === appearance.wardrobeId))) {
+        errors.push(`Wardrobe "${appearance.wardrobeId}" in recorded visual bindings is not present on character "${charId}".`);
+      }
+    }
+  }
+  if (universe && isNonBlankStr(bindings.placeId)
+    && Array.isArray(universe.places)
+    && !universe.places.some((place) => place.id === bindings.placeId)) {
+    errors.push(`Place "${bindings.placeId}" in recorded visual bindings no longer exists in Universe.`);
+  }
+  if (universe && Array.isArray(bindings.objectIds) && Array.isArray(universe.objects)) {
+    for (const objectId of bindings.objectIds) {
+      if (!universe.objects.some((object) => object.id === objectId)) {
+        errors.push(`Object "${objectId}" in recorded visual bindings no longer exists in Universe.`);
+      }
+    }
+  }
+  return errors;
+}
+
+function verifyVisualManifestEnvelopes(recordedProvenance, { installedLoras, resolveAsset }) {
   const errors = [];
   const warnings = [];
-  const installedVoiceProfiles = Array.isArray(localVoiceProfiles) ? localVoiceProfiles : [];
-  const installedLoras = Array.isArray(localLoras) ? localLoras : [];
-
-  if (!recordedProvenance || typeof recordedProvenance !== 'object') {
-    return {
-      valid: false,
-      errors: ['No recorded provenance manifest found for exact-input reproduction.'],
-      warnings: [],
-    };
+  if (!Array.isArray(recordedProvenance.assets)) {
+    errors.push('Recorded visual conditioning has no asset manifest.');
+  } else {
+    for (const asset of recordedProvenance.assets) {
+      if (!isNonBlankStr(asset?.filename)) {
+        errors.push(`Recorded visual conditioning asset "${asset?.role || 'unknown'}" has no filename.`);
+      } else if (typeof resolveAsset === 'function' && !resolveAsset(asset.filename)) {
+        errors.push(`Recorded visual conditioning asset "${asset.filename}" is unavailable locally.`);
+      }
+    }
   }
 
-  if (recordedProvenance.universeId) {
-    if (!universe) {
-      errors.push('The recorded Universe is unavailable for exact-input reproduction.');
-    } else if (universe.id && universe.id !== recordedProvenance.universeId) {
-      errors.push(`Recorded Universe "${recordedProvenance.universeId}" does not match the current Universe "${universe.id}".`);
+  if (!Array.isArray(recordedProvenance.adapters)) {
+    errors.push('Recorded visual conditioning has no adapter manifest.');
+  } else {
+    for (const adapter of recordedProvenance.adapters) {
+      const issue = recordedFileChecksumIssue({ ...adapter, label: 'adapter' }, installedLoras);
+      if (issue) errors.push(issue);
     }
   }
-  if (Array.isArray(recordedProvenance.omitted) && recordedProvenance.omitted.length > 0) {
-    errors.push('The recorded provenance contains omitted inputs, so exact reproduction cannot be proven.');
+  if (!Array.isArray(recordedProvenance.omitted)) {
+    errors.push('Recorded visual conditioning has no omitted-input manifest.');
   }
-
-  // The visual-conditioning compiler writes a different, capability-based
-  // manifest than the original dialogue provenance envelope below. Keep both
-  // shapes readable so older renders remain reproducible, but never treat a
-  // visual manifest as verified merely because it has a `version` field.
-  const hasVisualManifest = recordedProvenance.capability
-    || recordedProvenance.bindings
-    || recordedProvenance.assets
-    || recordedProvenance.compilerVersion;
-  if (hasVisualManifest) {
-    if (recordedProvenance.version !== 1) {
-      errors.push(`Recorded visual conditioning manifest version "${recordedProvenance.version ?? 'unknown'}" is unsupported.`);
-    }
-    if (!isNonBlankStr(recordedProvenance.compilerVersion)) {
-      errors.push('Recorded visual conditioning has no compiler revision.');
-    }
-    if (recordedProvenance.status !== 'locked') {
-      errors.push('Recorded visual conditioning is not canon-locked, so exact reproduction cannot be proven.');
-    }
-
-    const capability = recordedProvenance.capability;
-    if (!capability || typeof capability !== 'object') {
-      errors.push('Recorded visual conditioning has no provider capability manifest.');
-    } else {
-      if (!isNonBlankStr(capability.backend)) errors.push('Recorded visual conditioning has no backend.');
-      if (!isNonBlankStr(capability.modelId)) errors.push('Recorded visual conditioning has no model revision or model id.');
-      if (capability.backend === 'local' && !isNonBlankStr(capability.modelRevision)) {
-        errors.push(`Recorded local ${capability.kind || 'media'} model "${capability.modelId || 'unknown'}" has no immutable model revision to verify exact inputs.`);
-      }
-      // Local model registries can only verify local manifests. Cloud model ids
-      // are provider-owned and are not present in the local registry, so do not
-      // mistake a perfectly valid cloud provenance record for a missing local
-      // model.
-      const availableModels = capability.backend === 'local'
-        ? (capability.kind === 'video' ? availableVideoModels : availableImageModels)
-        : null;
-      if (Array.isArray(availableModels) && isNonBlankStr(capability.modelId)) {
-        const matchingModel = availableModels.find((model) => model?.id === capability.modelId);
-        if (!matchingModel) {
-          errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" is not available locally.`);
-        } else if (isNonBlankStr(capability.modelRevision)
-          && (!isNonBlankStr(matchingModel.revision) || matchingModel.revision !== capability.modelRevision)) {
-          errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" revision mismatch (recorded ${capability.modelRevision}, current local ${matchingModel.revision || 'unknown'}).`);
-        }
-      }
-    }
-    errors.push(...exactRenderParameterIssues(recordedProvenance));
-
-    const bindings = recordedProvenance.bindings;
-    if (!bindings || typeof bindings !== 'object') {
-      errors.push('Recorded visual conditioning has no scene bindings.');
-    } else {
-      const appearances = Array.isArray(bindings.characterAppearances)
-        ? bindings.characterAppearances
-        : [];
-      if (universe && Array.isArray(universe.characters)) {
-        for (const appearance of appearances) {
-          const charId = appearance?.characterId;
-          const canonChar = universe.characters.find((character) => character.id === charId);
-          if (!canonChar) {
-            errors.push(`Character "${charId || 'unknown'}" in recorded visual bindings no longer exists in Universe.`);
-          } else if (isNonBlankStr(appearance.wardrobeId)
-            && (!Array.isArray(canonChar.wardrobes)
-              || !canonChar.wardrobes.some((wardrobe) => wardrobe.id === appearance.wardrobeId))) {
-            errors.push(`Wardrobe "${appearance.wardrobeId}" in recorded visual bindings is not present on character "${charId}".`);
-          }
-        }
-      }
-      if (universe && isNonBlankStr(bindings.placeId)
-        && Array.isArray(universe.places)
-        && !universe.places.some((place) => place.id === bindings.placeId)) {
-        errors.push(`Place "${bindings.placeId}" in recorded visual bindings no longer exists in Universe.`);
-      }
-      if (universe && Array.isArray(bindings.objectIds) && Array.isArray(universe.objects)) {
-        for (const objectId of bindings.objectIds) {
-          if (!universe.objects.some((object) => object.id === objectId)) {
-            errors.push(`Object "${objectId}" in recorded visual bindings no longer exists in Universe.`);
-          }
-        }
-      }
-    }
-
-    if (!Array.isArray(recordedProvenance.assets)) {
-      errors.push('Recorded visual conditioning has no asset manifest.');
-    } else {
-      for (const asset of recordedProvenance.assets) {
-        if (!isNonBlankStr(asset?.filename)) {
-          errors.push(`Recorded visual conditioning asset "${asset?.role || 'unknown'}" has no filename.`);
-        } else if (typeof resolveAsset === 'function' && !resolveAsset(asset.filename)) {
-          errors.push(`Recorded visual conditioning asset "${asset.filename}" is unavailable locally.`);
-        }
-      }
-    }
-
-    if (!Array.isArray(recordedProvenance.adapters)) {
-      errors.push('Recorded visual conditioning has no adapter manifest.');
-    } else {
-      for (const adapter of recordedProvenance.adapters) {
-        const issue = recordedFileChecksumIssue({ ...adapter, label: 'adapter' }, installedLoras);
-        if (issue) errors.push(issue);
-      }
-    }
-    if (!Array.isArray(recordedProvenance.omitted)) {
-      errors.push('Recorded visual conditioning has no omitted-input manifest.');
-    }
-    if (!Array.isArray(recordedProvenance.warnings)) {
-      warnings.push('Recorded visual conditioning has no warnings manifest.');
-    }
-  } else if (!Array.isArray(recordedProvenance.characters)) {
-    errors.push('Recorded provenance has no recognized asset bindings.');
+  if (!Array.isArray(recordedProvenance.warnings)) {
+    warnings.push('Recorded visual conditioning has no warnings manifest.');
   }
+  return { errors, warnings };
+}
 
+function verifyVisualManifest(recordedProvenance, {
+  universe, installedLoras, availableImageModels, availableVideoModels, resolveAsset,
+}) {
+  const errors = [];
+  if (recordedProvenance.version !== 1) {
+    errors.push(`Recorded visual conditioning manifest version "${recordedProvenance.version ?? 'unknown'}" is unsupported.`);
+  }
+  if (!isNonBlankStr(recordedProvenance.compilerVersion)) {
+    errors.push('Recorded visual conditioning has no compiler revision.');
+  }
+  if (recordedProvenance.status !== 'locked') {
+    errors.push('Recorded visual conditioning is not canon-locked, so exact reproduction cannot be proven.');
+  }
+  errors.push(
+    ...verifyVisualCapabilityAndModel(recordedProvenance.capability, { availableImageModels, availableVideoModels }),
+    ...exactRenderParameterIssues(recordedProvenance),
+    ...verifyRecordedVisualBindings(recordedProvenance.bindings, universe),
+  );
+  const envelopes = verifyVisualManifestEnvelopes(recordedProvenance, { installedLoras, resolveAsset });
+  errors.push(...envelopes.errors);
+  return { errors, warnings: envelopes.warnings };
+}
+
+function verifyCharacterProvenanceEntries(recordedProvenance, { universe, installedLoras, installedVoiceProfiles }) {
+  const errors = [];
   const characters = Array.isArray(recordedProvenance.characters) ? recordedProvenance.characters : [];
 
   for (const char of characters) {
     const charId = char?.characterId;
     if (!charId) continue;
 
-    // Check Universe Character existence if universe provided
-    if (universe && Array.isArray(universe.characters)) {
-      const canonChar = universe.characters.find((c) => c.id === charId);
-      if (!canonChar) {
-        errors.push(`Character "${charId}" in recorded provenance no longer exists in Universe.`);
-      }
+    if (universe && Array.isArray(universe.characters)
+      && !universe.characters.some((c) => c.id === charId)) {
+      errors.push(`Character "${charId}" in recorded provenance no longer exists in Universe.`);
     }
 
-    // Check LoRA matching
     if (char.lora) {
       const issue = recordedFileChecksumIssue({ ...char.lora, label: 'LoRA' }, installedLoras);
       if (issue) errors.push(issue);
     }
 
-    // Check Voice Profile matching
     if (char.voice) {
       const recordedProfileId = char.voice.profileId;
-      const recordedVersion = char.voice.profileVersion;
-      const recordedEngine = char.voice.engine;
-      const recordedModelRev = char.voice.modelRevision;
       if (!isNonBlankStr(recordedProfileId)) {
         errors.push(`Recorded voice binding for character "${charId}" has no profile id.`);
         continue;
@@ -521,13 +487,74 @@ export function verifyExactInputProvenance(recordedProvenance, {
       errors.push(...exactVoiceProfileIssues({
         characterId: charId,
         universeId: recordedProvenance.universeId,
-        recordedVersion,
-        recordedEngine,
-        recordedModelRev,
+        recordedVersion: char.voice.profileVersion,
+        recordedEngine: char.voice.engine,
+        recordedModelRev: char.voice.modelRevision,
         profile: matchedProfile,
       }));
     }
   }
+  return errors;
+}
+
+/**
+ * Verify recorded asset provenance against the current local environment.
+ * For `exact_inputs` mode: refuses when a recorded revision/hash/model is missing
+ * or mismatched, preventing silent substitution.
+ */
+export function verifyExactInputProvenance(recordedProvenance, {
+  universe = null,
+  localVoiceProfiles = [],
+  localLoras = [],
+  availableImageModels = null,
+  availableVideoModels = null,
+  resolveAsset = null,
+} = {}) {
+  if (!recordedProvenance || typeof recordedProvenance !== 'object') {
+    return {
+      valid: false,
+      errors: ['No recorded provenance manifest found for exact-input reproduction.'],
+      warnings: [],
+    };
+  }
+
+  const errors = [];
+  const warnings = [];
+  const installedVoiceProfiles = Array.isArray(localVoiceProfiles) ? localVoiceProfiles : [];
+  const installedLoras = Array.isArray(localLoras) ? localLoras : [];
+
+  if (recordedProvenance.universeId) {
+    if (!universe) {
+      errors.push('The recorded Universe is unavailable for exact-input reproduction.');
+    } else if (universe.id && universe.id !== recordedProvenance.universeId) {
+      errors.push(`Recorded Universe "${recordedProvenance.universeId}" does not match the current Universe "${universe.id}".`);
+    }
+  }
+  if (Array.isArray(recordedProvenance.omitted) && recordedProvenance.omitted.length > 0) {
+    errors.push('The recorded provenance contains omitted inputs, so exact reproduction cannot be proven.');
+  }
+
+  // The visual-conditioning compiler writes a different, capability-based
+  // manifest than the original dialogue provenance envelope. Keep both
+  // shapes readable so older renders remain reproducible, but never treat a
+  // visual manifest as verified merely because it has a `version` field.
+  const hasVisualManifest = recordedProvenance.capability
+    || recordedProvenance.bindings
+    || recordedProvenance.assets
+    || recordedProvenance.compilerVersion;
+  if (hasVisualManifest) {
+    const visual = verifyVisualManifest(recordedProvenance, {
+      universe, installedLoras, availableImageModels, availableVideoModels, resolveAsset,
+    });
+    errors.push(...visual.errors);
+    warnings.push(...visual.warnings);
+  } else if (!Array.isArray(recordedProvenance.characters)) {
+    errors.push('Recorded provenance has no recognized asset bindings.');
+  }
+
+  errors.push(...verifyCharacterProvenanceEntries(recordedProvenance, {
+    universe, installedLoras, installedVoiceProfiles,
+  }));
 
   return {
     valid: errors.length === 0,
@@ -536,10 +563,6 @@ export function verifyExactInputProvenance(recordedProvenance, {
   };
 }
 
-/**
- * Enumerate and plan all production assets for an episode.
- * Pure deterministic preflight and DAG generation.
- */
 // One status policy for the still/entry/hold/exit media assets: an existing asset
 // is reused unless exact_inputs demands a re-render; everything else is ready or
 // blocked. `reuseAllowed` is supplied per asset (it is deliberately not derived
@@ -549,6 +572,382 @@ const plannedMediaAssetStatus = ({ existingAssetId, reuseAllowed, ready, mode })
   return ready ? 'ready' : 'blocked';
 };
 
+const LOCKED_STORYBOARD_APPROVAL_BLOCKER = 'Locked canon video requires an author-approved storyboard image.';
+
+// Locked canon may only render a missing video from an author-approved storyboard.
+const needsLockedStoryboardApproval = (lockedCanon, existingAssetId, node) => (
+  lockedCanon && !existingAssetId && node.visualCanon?.storyboardImageApproved !== true
+);
+
+// Episode-invariant: the Universe lookup table and the canonical protagonist /
+// wardrobe blockers are identical for every node, so resolve them once.
+function resolveEpisodeProtagonistContext(loom, universe) {
+  const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
+  const characterById = new Map(universeCharacters.map((character) => [character.id, character]));
+  const canonicalProtagonistId = isNonBlankStr(loom?.protagonistCharacterId)
+    ? loom.protagonistCharacterId
+    : null;
+  const canonicalProtagonist = canonicalProtagonistId
+    ? characterById.get(canonicalProtagonistId)
+    : null;
+
+  const canonicalProtagonistBlockers = [];
+  if (canonicalProtagonistId && !universe) {
+    canonicalProtagonistBlockers.push('The canonical protagonist cannot be resolved because the linked Universe is unavailable.');
+  } else if (canonicalProtagonistId && !canonicalProtagonist) {
+    canonicalProtagonistBlockers.push(`Canonical protagonist "${canonicalProtagonistId}" is not present in the linked Universe.`);
+  } else if (canonicalProtagonist?.id && loom.protagonistWardrobeId
+    && !canonicalProtagonist.wardrobes?.some((wardrobe) => wardrobe.id === loom.protagonistWardrobeId)) {
+    canonicalProtagonistBlockers.push(`Canonical wardrobe "${loom.protagonistWardrobeId}" is not present on protagonist "${canonicalProtagonistId}".`);
+  }
+  return { characterById, canonicalProtagonistId, canonicalProtagonistBlockers };
+}
+
+function collectBoundVisualCanonBlockers(visualCanon, universe, characterById) {
+  const blockers = [];
+  for (const appearance of (Array.isArray(visualCanon.characterAppearances)
+    ? visualCanon.characterAppearances
+    : [])) {
+    const character = characterById.get(appearance.characterId);
+    if (!character) {
+      blockers.push(`Bound character "${appearance.characterId}" is not present in the linked Universe.`);
+    } else if (appearance.wardrobeId
+      && !character.wardrobes?.some((wardrobe) => wardrobe.id === appearance.wardrobeId)) {
+      blockers.push(`Bound wardrobe "${appearance.wardrobeId}" is not present on character "${appearance.characterId}".`);
+    }
+  }
+  if (visualCanon.placeId && !universe.places?.some((place) => place.id === visualCanon.placeId)) {
+    blockers.push(`Bound place "${visualCanon.placeId}" is not present in the linked Universe.`);
+  }
+  for (const objectId of (Array.isArray(visualCanon.objectIds) ? visualCanon.objectIds : [])) {
+    if (!universe.objects?.some((object) => object.id === objectId)) {
+      blockers.push(`Bound object "${objectId}" is not present in the linked Universe.`);
+    }
+  }
+  return blockers;
+}
+
+// Convergent scenes never inherit an arbitrary predecessor. Drafts may still
+// render from their own prompt, while locked canon must choose an explicit
+// incoming source before continuity can be approved.
+function resolveTemporalContinuity(node, preds, lockedCanon) {
+  const explicitSource = isNonBlankStr(node.visualCanon?.continuitySourceNodeId)
+    ? node.visualCanon.continuitySourceNodeId
+    : null;
+  const noInheritance = (extra) => ({
+    nodeId: node.id,
+    nodeTitle: node.title || node.id,
+    predecessorCount: preds.length,
+    selectedPredecessorId: null,
+    policy: 'no-inheritance',
+    ...extra,
+  });
+
+  if (explicitSource && !preds.some((pred) => pred.nodeId === explicitSource)) {
+    return {
+      temporalSourceNodeId: null,
+      convergenceDetail: noInheritance({
+        reason: 'invalid-explicit-source',
+        remediation: 'Set visualCanon.continuitySourceNodeId to an incoming predecessor of this scene.',
+      }),
+      blocker: lockedCanon ? 'Locked visual canon names a predecessor that does not lead into this scene.' : null,
+    };
+  }
+  if (preds.length === 1) {
+    return { temporalSourceNodeId: explicitSource || preds[0].nodeId, convergenceDetail: null, blocker: null };
+  }
+  if (preds.length > 1) {
+    if (explicitSource) return { temporalSourceNodeId: explicitSource, convergenceDetail: null, blocker: null };
+    return {
+      temporalSourceNodeId: null,
+      convergenceDetail: noInheritance({
+        remediation: 'Set visualCanon.continuitySourceNodeId on this scene to explicitly select temporal continuity source.',
+      }),
+      blocker: lockedCanon ? 'Locked convergent scene needs an explicit temporal continuity source.' : null,
+    };
+  }
+  return { temporalSourceNodeId: null, convergenceDetail: null, blocker: null };
+}
+
+function evaluateNodeVisualAndConvergence({
+  node, preds, universe, characterById, canonicalProtagonistBlockers,
+}) {
+  const nodeBlockers = analyzeEpisodeShots({ nodes: [node] }).issues.map((issue) => issue.message);
+  const lockedCanon = isLockedCanon(node);
+  if (lockedCanon && !universe) {
+    nodeBlockers.push('Locked visual canon cannot be resolved because its Universe is unavailable.');
+  }
+  nodeBlockers.push(...canonicalProtagonistBlockers);
+  if (node.visualCanon && universe) {
+    nodeBlockers.push(...collectBoundVisualCanonBlockers(node.visualCanon, universe, characterById));
+  }
+  const { temporalSourceNodeId, convergenceDetail, blocker } = resolveTemporalContinuity(node, preds, lockedCanon);
+  if (blocker) nodeBlockers.push(blocker);
+  return { nodeBlockers, lockedCanon, temporalSourceNodeId, convergenceDetail };
+}
+
+function collectNodeExactInputIssues(node, provenanceOptions) {
+  const assets = node.playbackAssets || null;
+  const seenManifestKeys = new Set();
+  const provenanceManifests = [
+    assets?.provenance,
+    node.visualConditioning,
+    ...Object.values(assets?.visualConditioningByAsset || {}),
+  ].filter((manifest) => {
+    if (!manifest) return false;
+    const key = manifest.assetId || JSON.stringify(manifest);
+    if (seenManifestKeys.has(key)) return false;
+    seenManifestKeys.add(key);
+    return true;
+  });
+  if (provenanceManifests.length === 0) provenanceManifests.push(null);
+
+  const issues = [];
+  for (const recordedProvenance of provenanceManifests) {
+    const provCheck = verifyExactInputProvenance(recordedProvenance, provenanceOptions);
+    if (!provCheck.valid) {
+      issues.push({ nodeId: node.id, errors: provCheck.errors, warnings: provCheck.warnings });
+    }
+  }
+  return issues;
+}
+
+function collectLiveInteractionBlockers({
+  node, assets, loom, universe, characterById, canonicalProtagonistId, localVoiceProfiles,
+}) {
+  const blockers = [];
+  const interactionCharacterId = node.interactionWindow.protagonistCharacterId;
+  const interactionCharacter = characterById.get(interactionCharacterId);
+  if (!interactionCharacterId) {
+    blockers.push('Live interaction is enabled without a protagonist character binding.');
+  } else if (!universe || !interactionCharacter) {
+    blockers.push(`Live interaction protagonist "${interactionCharacterId}" is not present in the linked Universe.`);
+  }
+  if (canonicalProtagonistId && interactionCharacterId && interactionCharacterId !== canonicalProtagonistId) {
+    blockers.push(`Live interaction protagonist "${interactionCharacterId}" differs from the loom's canonical protagonist "${canonicalProtagonistId}".`);
+  }
+
+  const approvedProfile = localVoiceProfiles?.find((profile) => (
+    profile.binding?.characterId === interactionCharacterId
+    && (!universe?.id || profile.binding?.universeId === universe.id)
+    && profile.approval?.status === 'approved'
+    && profile.routes?.interactive?.enabled === true
+  ));
+  if (!approvedProfile && !interactionCharacter?.voiceId && !loom?.defaultVoiceId) {
+    blockers.push(`Live interaction protagonist "${interactionCharacterId || 'unknown'}" has no approved voice binding.`);
+  }
+
+  const holdIds = Array.isArray(assets?.holdLoopVideoHistoryIds)
+    ? assets.holdLoopVideoHistoryIds
+    : [];
+  if (!holdIds.length) {
+    blockers.push('Live interaction requires a dedicated hold loop asset.');
+  }
+  for (const holdId of holdIds) {
+    const occupancy = assets?.audioOccupancy?.[holdId];
+    if (occupancy && !validateAudioOccupancy(occupancy).safeForLiveVoice) {
+      blockers.push(`Hold loop "${holdId}" is not safe for live voice.`);
+    }
+  }
+  return blockers;
+}
+
+function buildNodePlannedAssets({
+  node, depth, assets, lockedCanon, temporalSourceNodeId, nodeBlockers, effectiveMode,
+}) {
+  const planned = [];
+  const nodeBase = { nodeId: node.id, nodeTitle: node.title || node.id };
+  const existingStill = isNonBlankStr(node.image) ? node.image : null;
+  const existingEntryVideo = isNonBlankStr(assets?.entryVideoHistoryId) ? assets.entryVideoHistoryId : (isNonBlankStr(node.videoHistoryId) ? node.videoHistoryId : null);
+
+  // 1. Image still asset
+  const imageAssetId = `asset-${node.id}-still`;
+  const imageDependencies = temporalSourceNodeId ? [`asset-${temporalSourceNodeId}-still`] : [];
+  const imageHasPrompt = Boolean(node.imagePrompt || node.prose);
+  const imageReady = imageHasPrompt && nodeBlockers.length === 0;
+  const imageBlockers = [...nodeBlockers];
+  if (!imageHasPrompt) imageBlockers.push('Scene has neither imagePrompt nor prose.');
+
+  planned.push({
+    id: imageAssetId,
+    ...nodeBase,
+    depth,
+    type: 'image',
+    role: 'image',
+    prompt: node.imagePrompt || node.prose || '',
+    temporalSourceNodeId,
+    dependencies: imageDependencies,
+    existingAssetId: existingStill,
+    status: plannedMediaAssetStatus({
+      existingAssetId: existingStill,
+      reuseAllowed: nodeBlockers.length === 0,
+      ready: imageReady,
+      mode: effectiveMode,
+    }),
+    readiness: {
+      ready: imageReady,
+      reasons: imageBlockers,
+    },
+  });
+
+  // 2. Video entry asset
+  const videoPrompt = node.videoPrompt || node.prose || '';
+  const videoHasPrompt = Boolean(videoPrompt);
+  const videoBlockers = [...nodeBlockers];
+  if (!videoHasPrompt) videoBlockers.push('Scene has neither videoPrompt nor prose for video.');
+  if (needsLockedStoryboardApproval(lockedCanon, existingEntryVideo, node)) {
+    videoBlockers.push(LOCKED_STORYBOARD_APPROVAL_BLOCKER);
+  }
+  const videoReady = videoBlockers.length === 0;
+
+  planned.push({
+    id: `asset-${node.id}-video-entry`,
+    ...nodeBase,
+    depth,
+    type: 'video_entry',
+    role: 'entry',
+    prompt: videoPrompt,
+    cameraMovement: node.cameraMovement || null,
+    dependencies: [imageAssetId],
+    existingAssetId: existingEntryVideo,
+    status: plannedMediaAssetStatus({
+      existingAssetId: existingEntryVideo,
+      reuseAllowed: nodeBlockers.length === 0,
+      ready: videoReady,
+      mode: effectiveMode,
+    }),
+    readiness: {
+      ready: videoReady,
+      reasons: videoBlockers,
+    },
+  });
+
+  // 3. Video hold loop assets (for non-cut decision / interactive scenes)
+  if (!node.isEnding && node.playbackMode !== 'cut') {
+    const holdLoops = Array.isArray(assets?.holdLoopVideoHistoryIds) ? assets.holdLoopVideoHistoryIds : [];
+    const existingHold = holdLoops[0] || null;
+    const holdBlockers = [...nodeBlockers];
+    if (needsLockedStoryboardApproval(lockedCanon, existingHold, node)) {
+      holdBlockers.push(LOCKED_STORYBOARD_APPROVAL_BLOCKER);
+    }
+
+    const holdReady = videoHasPrompt && holdBlockers.length === 0;
+    planned.push({
+      id: `asset-${node.id}-video-hold-0`,
+      ...nodeBase,
+      depth,
+      type: 'video_hold',
+      role: 'hold',
+      prompt: videoPrompt,
+      cameraMovement: node.cameraMovement || null,
+      dependencies: [imageAssetId],
+      existingAssetId: existingHold,
+      status: plannedMediaAssetStatus({
+        existingAssetId: existingHold,
+        reuseAllowed: holdBlockers.length === 0,
+        ready: holdReady,
+        mode: effectiveMode,
+      }),
+      readiness: {
+        ready: holdReady,
+        reasons: videoHasPrompt ? holdBlockers : [...holdBlockers, 'Scene has neither videoPrompt nor prose for video.'],
+      },
+    });
+  }
+
+  // 4. Video exit assets for transitions
+  for (const tr of (node.transitions || [])) {
+    const existingExit = assets?.exitByTransition?.[tr.id] || null;
+    const exitHasPrompt = Boolean(tr.description || videoPrompt);
+    const exitBlockers = [...nodeBlockers];
+    if (!exitHasPrompt) exitBlockers.push('Transition has no description or scene video prompt.');
+    if (needsLockedStoryboardApproval(lockedCanon, existingExit, node)) {
+      exitBlockers.push(LOCKED_STORYBOARD_APPROVAL_BLOCKER);
+    }
+    const exitReady = exitHasPrompt && exitBlockers.length === 0;
+    planned.push({
+      id: `asset-${node.id}-video-exit-${tr.id}`,
+      ...nodeBase,
+      transitionId: tr.id,
+      intent: tr.intent || '',
+      depth,
+      type: 'video_exit',
+      role: 'exit',
+      prompt: tr.description || videoPrompt,
+      dependencies: [imageAssetId],
+      existingAssetId: existingExit,
+      status: plannedMediaAssetStatus({
+        existingAssetId: existingExit,
+        reuseAllowed: exitBlockers.length === 0,
+        ready: exitReady,
+        mode: effectiveMode,
+      }),
+      readiness: {
+        ready: exitReady,
+        reasons: exitBlockers,
+      },
+    });
+  }
+
+  // 5. Dialogue assets if character interaction is configured
+  if (node.interactionWindow?.enabled && node.interactionWindow?.protagonistCharacterId) {
+    const charId = node.interactionWindow.protagonistCharacterId;
+    // Protagonist and voice-binding blockers are already in nodeBlockers.
+    const dialogueBlocked = nodeBlockers.length > 0;
+    planned.push({
+      id: `asset-${node.id}-dialogue-${charId}`,
+      ...nodeBase,
+      characterId: charId,
+      depth,
+      type: 'dialogue',
+      role: 'dialogue',
+      dependencies: [imageAssetId],
+      existingAssetId: null,
+      status: dialogueBlocked ? 'blocked' : 'skipped',
+      skipReason: dialogueBlocked ? null : 'Live dialogue is generated per hosted interaction; no standalone batch audio is created.',
+      readiness: {
+        ready: !dialogueBlocked,
+        reasons: dialogueBlocked
+          ? [...nodeBlockers]
+          : ['Live dialogue is generated per hosted interaction; no standalone batch audio is created.'],
+      },
+    });
+  }
+  return planned;
+}
+
+// Execution stages come from asset dependencies, not only node depth. A scene's
+// video depends on its still, so grouping by scene depth alone would
+// incorrectly expose both as independent work in one batch. Stamps
+// `stageIndex` onto each asset.
+function buildExecutionStages(plannedAssets) {
+  const stageByAssetId = new Map();
+  for (const asset of plannedAssets) {
+    const stageIndex = (asset.dependencies || []).reduce(
+      (maxStage, dependencyId) => Math.max(maxStage, (stageByAssetId.get(dependencyId) ?? -1) + 1),
+      0,
+    );
+    stageByAssetId.set(asset.id, stageIndex);
+    asset.stageIndex = stageIndex;
+  }
+  const stageGroups = new Map();
+  for (const asset of plannedAssets) {
+    const stage = stageGroups.get(asset.stageIndex) || [];
+    stage.push(asset);
+    stageGroups.set(asset.stageIndex, stage);
+  }
+  return Array.from(stageGroups.entries()).map(([stageIndex, stageAssets]) => ({
+    stageIndex,
+    depth: Math.min(...stageAssets.map((asset) => asset.depth)),
+    assetCount: stageAssets.length,
+    assetIds: stageAssets.map((asset) => asset.id),
+  }));
+}
+
+/**
+ * Enumerate and plan all production assets for an episode.
+ * Pure deterministic preflight and DAG generation.
+ */
 export function buildEpisodeProductionPlan({
   loom = null,
   episode = null,
@@ -580,380 +979,54 @@ export function buildEpisodeProductionPlan({
     planningIssues.push('Episode has no reachable scenes from a valid start node.');
   }
 
-  let totalImageAssets = 0;
-  let totalVideoAssets = 0;
-  let totalDialogueAssets = 0;
+  const { characterById, canonicalProtagonistId, canonicalProtagonistBlockers } = resolveEpisodeProtagonistContext(loom, universe);
+  const provenanceOptions = {
+    universe,
+    localVoiceProfiles,
+    localLoras,
+    availableImageModels,
+    availableVideoModels,
+    resolveAsset,
+  };
 
   for (const node of orderedNodes) {
-    const depth = depthById.get(node.id) ?? 0;
-    const preds = predecessorsByNodeId.get(node.id) || [];
-    const nodeBlockers = analyzeEpisodeShots({ nodes: [node] }).issues.map((issue) => issue.message);
-    const visualCanon = node.visualCanon || null;
-    const lockedCanon = isLockedCanon(node);
-    const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
-    const characterById = new Map(universeCharacters.map((character) => [character.id, character]));
-    const canonicalProtagonistId = isNonBlankStr(loom?.protagonistCharacterId)
-      ? loom.protagonistCharacterId
-      : null;
-    const canonicalProtagonist = canonicalProtagonistId
-      ? characterById.get(canonicalProtagonistId)
-      : null;
-
-    if (lockedCanon && !universe) {
-      nodeBlockers.push('Locked visual canon cannot be resolved because its Universe is unavailable.');
-    }
-    if (canonicalProtagonistId && !universe) {
-      nodeBlockers.push('The canonical protagonist cannot be resolved because the linked Universe is unavailable.');
-    } else if (canonicalProtagonistId && !canonicalProtagonist) {
-      nodeBlockers.push(`Canonical protagonist "${canonicalProtagonistId}" is not present in the linked Universe.`);
-    } else if (canonicalProtagonist?.id && loom.protagonistWardrobeId
-      && !canonicalProtagonist.wardrobes?.some((wardrobe) => wardrobe.id === loom.protagonistWardrobeId)) {
-      nodeBlockers.push(`Canonical wardrobe "${loom.protagonistWardrobeId}" is not present on protagonist "${canonicalProtagonistId}".`);
-    }
-    if (visualCanon && universe) {
-      for (const appearance of (Array.isArray(visualCanon.characterAppearances)
-        ? visualCanon.characterAppearances
-        : [])) {
-        const character = characterById.get(appearance.characterId);
-        if (!character) {
-          nodeBlockers.push(`Bound character "${appearance.characterId}" is not present in the linked Universe.`);
-        } else if (appearance.wardrobeId
-          && !character.wardrobes?.some((wardrobe) => wardrobe.id === appearance.wardrobeId)) {
-          nodeBlockers.push(`Bound wardrobe "${appearance.wardrobeId}" is not present on character "${appearance.characterId}".`);
-        }
-      }
-      if (visualCanon.placeId && !universe.places?.some((place) => place.id === visualCanon.placeId)) {
-        nodeBlockers.push(`Bound place "${visualCanon.placeId}" is not present in the linked Universe.`);
-      }
-      for (const objectId of (Array.isArray(visualCanon.objectIds) ? visualCanon.objectIds : [])) {
-        if (!universe.objects?.some((object) => object.id === objectId)) {
-          nodeBlockers.push(`Bound object "${objectId}" is not present in the linked Universe.`);
-        }
-      }
-    }
-
-    let temporalSourceNodeId = null;
-    const explicitTemporalSource = isNonBlankStr(visualCanon?.continuitySourceNodeId)
-      ? visualCanon.continuitySourceNodeId
-      : null;
-
-    if (explicitTemporalSource && !preds.some((pred) => pred.nodeId === explicitTemporalSource)) {
-      convergenceDetails.push({
-        nodeId: node.id,
-        nodeTitle: node.title || node.id,
-        predecessorCount: preds.length,
-        selectedPredecessorId: null,
-        policy: 'no-inheritance',
-        reason: 'invalid-explicit-source',
-        remediation: 'Set visualCanon.continuitySourceNodeId to an incoming predecessor of this scene.',
-      });
-      if (lockedCanon) nodeBlockers.push('Locked visual canon names a predecessor that does not lead into this scene.');
-    } else if (preds.length === 1) {
-      temporalSourceNodeId = explicitTemporalSource || preds[0].nodeId;
-    } else if (preds.length > 1) {
-      if (explicitTemporalSource) {
-        temporalSourceNodeId = explicitTemporalSource;
-      } else {
-        // Convergent scenes never inherit an arbitrary predecessor. Drafts may
-        // still render from their own prompt, while locked canon must choose an
-        // explicit incoming source before continuity can be approved.
-        convergenceDetails.push({
-          nodeId: node.id,
-          nodeTitle: node.title || node.id,
-          predecessorCount: preds.length,
-          selectedPredecessorId: null,
-          policy: 'no-inheritance',
-          remediation: 'Set visualCanon.continuitySourceNodeId on this scene to explicitly select temporal continuity source.',
-        });
-        if (lockedCanon) nodeBlockers.push('Locked convergent scene needs an explicit temporal continuity source.');
-      }
-    }
-
     const assets = node.playbackAssets || null;
-    const existingStill = isNonBlankStr(node.image) ? node.image : null;
-    const existingEntryVideo = isNonBlankStr(assets?.entryVideoHistoryId) ? assets.entryVideoHistoryId : (isNonBlankStr(node.videoHistoryId) ? node.videoHistoryId : null);
+    const {
+      nodeBlockers, lockedCanon, temporalSourceNodeId, convergenceDetail,
+    } = evaluateNodeVisualAndConvergence({
+      node,
+      preds: predecessorsByNodeId.get(node.id) || [],
+      universe,
+      characterById,
+      canonicalProtagonistBlockers,
+    });
+    if (convergenceDetail) convergenceDetails.push(convergenceDetail);
 
-    // Exact input provenance verification if requested
     if (effectiveMode === 'exact_inputs') {
-      const seenManifestKeys = new Set();
-      const provenanceManifests = [
-        assets?.provenance,
-        node.visualConditioning,
-        ...Object.values(assets?.visualConditioningByAsset || {}),
-      ].filter((manifest) => {
-        if (!manifest) return false;
-        const key = manifest.assetId || JSON.stringify(manifest);
-        if (seenManifestKeys.has(key)) return false;
-        seenManifestKeys.add(key);
-        return true;
-      });
-      if (provenanceManifests.length === 0) provenanceManifests.push(null);
-      for (const recordedProvenance of provenanceManifests) {
-        const provCheck = verifyExactInputProvenance(recordedProvenance, {
-          universe,
-          localVoiceProfiles,
-          localLoras,
-          availableImageModels,
-          availableVideoModels,
-          resolveAsset,
-        });
-        if (!provCheck.valid) {
-          exactInputIssues.push({
-            nodeId: node.id,
-            errors: provCheck.errors,
-            warnings: provCheck.warnings,
-          });
-        }
-      }
+      exactInputIssues.push(...collectNodeExactInputIssues(node, provenanceOptions));
     }
-
     if (node.interactionWindow?.enabled) {
-      const interactionCharacterId = node.interactionWindow.protagonistCharacterId;
-      const interactionCharacter = characterById.get(interactionCharacterId);
-      if (!interactionCharacterId) {
-        nodeBlockers.push('Live interaction is enabled without a protagonist character binding.');
-      } else if (!universe || !interactionCharacter) {
-        nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId}" is not present in the linked Universe.`);
-      }
-      if (canonicalProtagonistId && interactionCharacterId && interactionCharacterId !== canonicalProtagonistId) {
-        nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId}" differs from the loom's canonical protagonist "${canonicalProtagonistId}".`);
-      }
-
-      const approvedProfile = localVoiceProfiles?.find((profile) => (
-        profile.binding?.characterId === interactionCharacterId
-        && (!universe?.id || profile.binding?.universeId === universe.id)
-        && profile.approval?.status === 'approved'
-        && profile.routes?.interactive?.enabled === true
-      ));
-      if (!approvedProfile && !interactionCharacter?.voiceId && !loom?.defaultVoiceId) {
-        nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId || 'unknown'}" has no approved voice binding.`);
-      }
-
-      const holdIds = Array.isArray(assets?.holdLoopVideoHistoryIds)
-        ? assets.holdLoopVideoHistoryIds
-        : [];
-      if (!holdIds.length) {
-        nodeBlockers.push('Live interaction requires a dedicated hold loop asset.');
-      }
-      for (const holdId of holdIds) {
-        const occupancy = assets?.audioOccupancy?.[holdId];
-        if (occupancy && !validateAudioOccupancy(occupancy).safeForLiveVoice) {
-          nodeBlockers.push(`Hold loop "${holdId}" is not safe for live voice.`);
-        }
-      }
+      nodeBlockers.push(...collectLiveInteractionBlockers({
+        node, assets, loom, universe, characterById, canonicalProtagonistId, localVoiceProfiles,
+      }));
     }
 
-    // 1. Image still asset
-    const imageAssetId = `asset-${node.id}-still`;
-    const imageDependencies = temporalSourceNodeId ? [`asset-${temporalSourceNodeId}-still`] : [];
-    const imageReady = Boolean(node.imagePrompt || node.prose) && nodeBlockers.length === 0;
-    const imageBlockers = [...nodeBlockers];
-    const imageHasPrompt = Boolean(node.imagePrompt || node.prose);
-    if (!imageHasPrompt) imageBlockers.push('Scene has neither imagePrompt nor prose.');
-
-    plannedAssets.push({
-      id: imageAssetId,
-      nodeId: node.id,
-      nodeTitle: node.title || node.id,
-      depth,
-      type: 'image',
-      role: 'image',
-      prompt: node.imagePrompt || node.prose || '',
+    plannedAssets.push(...buildNodePlannedAssets({
+      node,
+      depth: depthById.get(node.id) ?? 0,
+      assets,
+      lockedCanon,
       temporalSourceNodeId,
-      dependencies: imageDependencies,
-      existingAssetId: existingStill,
-      status: plannedMediaAssetStatus({
-        existingAssetId: existingStill,
-        reuseAllowed: nodeBlockers.length === 0,
-        ready: imageReady,
-        mode: effectiveMode,
-      }),
-      readiness: {
-        ready: imageReady,
-        reasons: imageBlockers,
-      },
-    });
-    totalImageAssets += 1;
-
-    // 2. Video entry asset
-    const videoEntryAssetId = `asset-${node.id}-video-entry`;
-    const videoPrompt = node.videoPrompt || node.prose || '';
-    const videoHasPrompt = Boolean(videoPrompt);
-    const videoBlockers = [...nodeBlockers];
-    if (!videoHasPrompt) videoBlockers.push('Scene has neither videoPrompt nor prose for video.');
-    if (lockedCanon && !existingEntryVideo && node.visualCanon?.storyboardImageApproved !== true) {
-      videoBlockers.push('Locked canon video requires an author-approved storyboard image.');
-    }
-    const videoReady = videoBlockers.length === 0;
-
-    plannedAssets.push({
-      id: videoEntryAssetId,
-      nodeId: node.id,
-      nodeTitle: node.title || node.id,
-      depth,
-      type: 'video_entry',
-      role: 'entry',
-      prompt: videoPrompt,
-      cameraMovement: node.cameraMovement || null,
-      dependencies: [imageAssetId],
-      existingAssetId: existingEntryVideo,
-      status: plannedMediaAssetStatus({
-        existingAssetId: existingEntryVideo,
-        reuseAllowed: nodeBlockers.length === 0,
-        ready: videoReady,
-        mode: effectiveMode,
-      }),
-      readiness: {
-        ready: videoReady,
-        reasons: videoBlockers,
-      },
-    });
-    totalVideoAssets += 1;
-
-    // 3. Video hold loop assets (for non-cut decision / interactive scenes)
-    if (!node.isEnding && node.playbackMode !== 'cut') {
-      const holdLoops = Array.isArray(assets?.holdLoopVideoHistoryIds) ? assets.holdLoopVideoHistoryIds : [];
-      const holdAssetId = `asset-${node.id}-video-hold-0`;
-      const existingHold = holdLoops[0] || null;
-      const holdBlockers = [...nodeBlockers];
-      if (lockedCanon && !existingHold && node.visualCanon?.storyboardImageApproved !== true) {
-        holdBlockers.push('Locked canon video requires an author-approved storyboard image.');
-      }
-
-      const holdReady = videoHasPrompt && holdBlockers.length === 0;
-      plannedAssets.push({
-        id: holdAssetId,
-        nodeId: node.id,
-        nodeTitle: node.title || node.id,
-        depth,
-        type: 'video_hold',
-        role: 'hold',
-        prompt: videoPrompt,
-        cameraMovement: node.cameraMovement || null,
-        dependencies: [imageAssetId],
-        existingAssetId: existingHold,
-        status: plannedMediaAssetStatus({
-          existingAssetId: existingHold,
-          reuseAllowed: holdBlockers.length === 0,
-          ready: holdReady,
-          mode: effectiveMode,
-        }),
-        readiness: {
-          ready: holdReady,
-          reasons: videoHasPrompt ? holdBlockers : [...holdBlockers, 'Scene has neither videoPrompt nor prose for video.'],
-        },
-      });
-      totalVideoAssets += 1;
-    }
-
-    // 4. Video exit assets for transitions
-    for (const tr of (node.transitions || [])) {
-      const exitAssetId = `asset-${node.id}-video-exit-${tr.id}`;
-      const existingExit = assets?.exitByTransition?.[tr.id] || null;
-      const exitHasPrompt = Boolean(tr.description || videoPrompt);
-      const exitBlockers = [...nodeBlockers];
-      if (!exitHasPrompt) exitBlockers.push('Transition has no description or scene video prompt.');
-      if (lockedCanon && !existingExit && node.visualCanon?.storyboardImageApproved !== true) {
-        exitBlockers.push('Locked canon video requires an author-approved storyboard image.');
-      }
-      const exitReady = exitHasPrompt && exitBlockers.length === 0;
-      plannedAssets.push({
-        id: exitAssetId,
-        nodeId: node.id,
-        nodeTitle: node.title || node.id,
-        transitionId: tr.id,
-        intent: tr.intent || '',
-        depth,
-        type: 'video_exit',
-        role: 'exit',
-        prompt: tr.description || videoPrompt,
-        dependencies: [imageAssetId],
-        existingAssetId: existingExit,
-        status: plannedMediaAssetStatus({
-          existingAssetId: existingExit,
-          reuseAllowed: exitBlockers.length === 0,
-          ready: exitReady,
-          mode: effectiveMode,
-        }),
-        readiness: {
-          ready: exitReady,
-          reasons: exitBlockers,
-        },
-      });
-      totalVideoAssets += 1;
-    }
-
-    // 5. Dialogue assets if character interaction is configured
-    if (node.interactionWindow?.enabled && node.interactionWindow?.protagonistCharacterId) {
-      const charId = node.interactionWindow.protagonistCharacterId;
-      const dialogueAssetId = `asset-${node.id}-dialogue-${charId}`;
-      const character = characterById.get(charId);
-      const charInUniverse = Boolean(character);
-      const profile = localVoiceProfiles?.find((p) => (
-        p.binding?.characterId === charId
-        && (!universe?.id || p.binding?.universeId === universe.id)
-        && p.approval?.status === 'approved'
-        && p.routes?.interactive?.enabled === true
-      ));
-
-      const dialogueBlockers = [];
-      if (!charInUniverse && universe) dialogueBlockers.push(`Protagonist "${charId}" not found in Universe.`);
-      if (!profile && !character?.voiceId && !loom?.defaultVoiceId) dialogueBlockers.push(`No approved voice binding for "${charId}".`);
-      dialogueBlockers.push(...nodeBlockers);
-      const dialogueBlocked = dialogueBlockers.length > 0;
-
-      plannedAssets.push({
-        id: dialogueAssetId,
-        nodeId: node.id,
-        nodeTitle: node.title || node.id,
-        characterId: charId,
-        depth,
-        type: 'dialogue',
-        role: 'dialogue',
-        dependencies: [imageAssetId],
-        existingAssetId: null,
-        status: dialogueBlocked ? 'blocked' : 'skipped',
-        skipReason: dialogueBlocked ? null : 'Live dialogue is generated per hosted interaction; no standalone batch audio is created.',
-        readiness: {
-          ready: !dialogueBlocked,
-          reasons: dialogueBlocked
-            ? dialogueBlockers
-            : ['Live dialogue is generated per hosted interaction; no standalone batch audio is created.'],
-        },
-      });
-      totalDialogueAssets += 1;
-    }
+      nodeBlockers,
+      effectiveMode,
+    }));
   }
 
-  // Compute execution stages from asset dependencies, not only node depth.
-  // A scene's video depends on its still, so grouping by scene depth alone
-  // would incorrectly expose both as independent work in one batch.
-  const stageByAssetId = new Map();
-  for (const asset of plannedAssets) {
-    const stageIndex = (asset.dependencies || []).reduce(
-      (maxStage, dependencyId) => Math.max(maxStage, (stageByAssetId.get(dependencyId) ?? -1) + 1),
-      0,
-    );
-    stageByAssetId.set(asset.id, stageIndex);
-    asset.stageIndex = stageIndex;
-  }
-  const stageGroups = new Map();
-  for (const asset of plannedAssets) {
-    const stage = stageGroups.get(asset.stageIndex) || [];
-    stage.push(asset);
-    stageGroups.set(asset.stageIndex, stage);
-  }
-  const executionStages = Array.from(stageGroups.entries()).map(([stageIndex, stageAssets]) => ({
-    stageIndex,
-    depth: Math.min(...stageAssets.map((asset) => asset.depth)),
-    assetCount: stageAssets.length,
-    assetIds: stageAssets.map((asset) => asset.id),
-  }));
+  const executionStages = buildExecutionStages(plannedAssets);
 
-  const readyAssetsCount = plannedAssets.filter((a) => a.status === 'ready').length;
-  const alreadyRenderedCount = plannedAssets.filter((a) => a.status === 'already_rendered').length;
-  const skippedAssetsCount = plannedAssets.filter((a) => a.status === 'skipped').length;
-  const blockedAssetsCount = plannedAssets.filter((a) => a.status === 'blocked').length;
+  const countByStatus = (status) => plannedAssets.filter((asset) => asset.status === status).length;
+  const countByType = (...types) => plannedAssets.filter((asset) => types.includes(asset.type)).length;
+  const blockedAssetsCount = countByStatus('blocked');
 
   return {
     mode: effectiveMode,
@@ -963,13 +1036,13 @@ export function buildEpisodeProductionPlan({
     unreachableNodeIds: Array.from(unreachableNodeIds),
     totalAssets: plannedAssets.length,
     assetsByType: {
-      image: totalImageAssets,
-      video: totalVideoAssets,
-      dialogue: totalDialogueAssets,
+      image: countByType('image'),
+      video: countByType('video_entry', 'video_hold', 'video_exit'),
+      dialogue: countByType('dialogue'),
     },
-    readyAssetsCount,
-    alreadyRenderedCount,
-    skippedAssetsCount,
+    readyAssetsCount: countByStatus('ready'),
+    alreadyRenderedCount: countByStatus('already_rendered'),
+    skippedAssetsCount: countByStatus('skipped'),
     blockedAssetsCount,
     isFullyReady: blockedAssetsCount === 0 && exactInputIssues.length === 0 && planningIssues.length === 0,
     planningIssues,

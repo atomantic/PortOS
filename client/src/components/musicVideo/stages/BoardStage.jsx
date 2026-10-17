@@ -1,15 +1,19 @@
 import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen, X } from 'lucide-react';
 import ContactSheetButton from '../ContactSheetButton.jsx';
+import LockAllShots from '../LockAllShots.jsx';
 import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
-import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
+import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
+import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
+import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, shotUsesEffect } from '../../../lib/musicVideoShotEffects.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
@@ -89,8 +93,10 @@ export default function BoardStage({ board }) {
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
   };
-  // A locked shot is settled: its other takes are no longer something to review.
-  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx, locked: shotLocks[scene.sceneId] === 'locked' })]));
+  // A locked shot is settled: its other takes are no longer something to review. A still or
+  // video the checklist counts as not locked yet needs attention too.
+  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx,
+    locked: shotLocks[scene.sceneId] === 'locked', unlocked: shotUnlocked(lockValue, scene.sceneId) })]));
   const numbers = shotNumbers(scenes);
   const shotName = (scene) => [numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
     scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
@@ -99,8 +105,18 @@ export default function BoardStage({ board }) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
     if (sceneMatchesFilter(codes, 'missing')) counts.missing += 1;
   }
+  // Each shot's start, mid-shot and end effects, and the option the board is narrowed to (`?effect=`).
+  const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
+  const effectsById = new Map(scenes.map((scene) => [scene.sceneId, shotEffects(scene, { layered, planned })]));
+  const effectFilter = SHOT_EFFECT_OPTIONS.some((option) => option.id === searchParams.get('effect')) ? searchParams.get('effect') : null;
+  const setEffectFilter = (next) => setSearchParams((prev) => {
+    const params = new URLSearchParams(prev);
+    if (next) params.set('effect', next); else params.delete('effect');
+    return params;
+  }, { replace: true });
   // The open scene stays listed while it is edited, even once fixing it drops it from the filter.
-  const visible = scenes.filter((scene) => scene.sceneId === activeSceneId || sceneMatchesFilter(codesById.get(scene.sceneId), filter));
+  const visible = scenes.filter((scene) => scene.sceneId === activeSceneId || (sceneMatchesFilter(codesById.get(scene.sceneId), filter)
+    && (!effectFilter || shotUsesEffect(effectsById.get(scene.sceneId), effectFilter))));
   const visibleIds = visible.map((scene) => scene.sceneId).join('\n');
   const thumbnailsRef = useRef(new Map());
   const inspectorRef = useRef(null);
@@ -159,6 +175,7 @@ export default function BoardStage({ board }) {
       <div id="mv-scene-board" className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Scene board</h3>
         <div className="flex items-center gap-2">
+          <LockAllShots scenes={scenes} layered={layered} />
           <ContactSheetButton onOpen={board.openContactSheet} />
           <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
             <Plus size={15} /> Add scene
@@ -175,8 +192,17 @@ export default function BoardStage({ board }) {
               {label} ({counts[id]})
             </button>
           ))}
+          {effectFilter && (
+            <button type="button" onClick={() => setEffectFilter(null)} aria-label={`Stop showing only shots with ${shotEffectLabel(effectFilter)}`}
+              className="flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent sm:min-h-0">
+              {shotEffectLabel(effectFilter)} <X size={12} aria-hidden="true" />
+            </button>
+          )}
           <span className="hidden text-port-text-muted sm:inline">j / k to move between scenes</span>
         </div>
+      )}
+      {scenes.length > 0 && (
+        <ShotEffectsCard counts={shotEffectCounts([...effectsById.values()])} selected={effectFilter} onSelect={setEffectFilter} />
       )}
       {scenes.length > 0 && visible.length === 0 && (
         <p className="text-sm text-port-text-muted">No scenes match this filter.</p>
@@ -188,12 +214,14 @@ export default function BoardStage({ board }) {
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
             aria-describedby={[LOCK_BADGED.includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
-              (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
+              (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`,
+              Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
               <ScenePoster scene={scene} className="aspect-video w-full rounded" />
               <SceneLockBadge sceneId={scene.sceneId} state={shotLocks[scene.sceneId]} />
               <SceneMediaBadges scene={scene} layered={layered} />
+              <SceneEffectBadges sceneId={scene.sceneId} effects={effectsById.get(scene.sceneId)} />
             </span>
             <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
             {/* Run time first, then where it sits in the song. */}
@@ -243,6 +271,8 @@ export default function BoardStage({ board }) {
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
               onMergeNext={board.onMergeNextScene}
+              onMergePrevious={board.onMergePreviousScene}
+              prevStartSec={scenes[idx - 1]?.startSec ?? null}
               onMoveStart={board.onMoveSceneStart}
               nextEndSec={scenes[idx + 1]?.endSec ?? null}
               onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}

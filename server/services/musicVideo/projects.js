@@ -330,6 +330,22 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
 }
 
 /**
+ * Merge a scene over the one before it (projectsLogic.mergePreviousScene): this
+ * scene starts where the previous one did and the previous one is removed.
+ * Returns `{ project, scene }`.
+ */
+export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
+  const [{ mergePreviousScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex(scene => scene.sceneId === sceneId);
+    assertClipUnlocked(current, sceneId);
+    if (index > 0) assertClipUnlocked(current, scenes[index - 1].sceneId);
+    return mergePreviousScene(current, sceneId, options);
+  });
+}
+
+/**
  * Move the cut before a shot: the shot starts at `startSec` and the shot
  * before it ends there, so the two stay joined. Either shot's locked video
  * refuses the move. Returns `{ project, scene, previous }`.

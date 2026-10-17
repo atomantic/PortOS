@@ -20,7 +20,6 @@ export async function parseTestSuite() {
   const content = await readFile(testFile, 'utf-8');
   const tests = [];
 
-  // Parse test blocks using regex
   const testPattern = /### Test (\d+): (.+?)\n\n\*\*Prompt\*\*\s*\n([\s\S]*?)\n\n\*\*Expected Behavior\*\*\s*\n([\s\S]*?)\n\n\*\*Failure Signals\*\*\s*\n([\s\S]*?)(?=\n---|\n### Test|\n## |$)/g;
 
   let match;
@@ -52,7 +51,6 @@ export async function runTests(providerId, model, testIds = null, personaId = nu
     throw new Error(`Provider ${providerId} not found or disabled`);
   }
 
-  // Filter tests if specific IDs provided
   const testsToRun = testIds
     ? tests.filter(t => testIds.includes(t.testId))
     : tests;

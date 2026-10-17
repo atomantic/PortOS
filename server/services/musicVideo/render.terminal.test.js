@@ -31,15 +31,7 @@ const h = vi.hoisted(() => {
     procs.push(p);
     return p;
   };
-  // #8984 — the overlay capture, held open until a test settles it (or the
-  // render's abort signal rejects it, as the real capture does).
-  const overlays = { calls: [], resolve: null };
-  const renderTypographyOverlays = (options) => new Promise((resolve, reject) => {
-    overlays.calls.push(options);
-    overlays.resolve = resolve;
-    options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
-  });
-  return { procs, spawn, overlays, renderTypographyOverlays };
+  return { procs, spawn };
 });
 
 vi.mock('../../lib/childProcess.js', () => ({ spawn: h.spawn }));
@@ -71,7 +63,6 @@ vi.mock('../videoGen/local.js', () => ({
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
 vi.mock('./compositionRender.js', () => ({
-  renderTypographyOverlays: h.renderTypographyOverlays,
   removeCompositionScratch: vi.fn(async () => {}),
   sweepCompositionScratch: vi.fn(async () => {}),
 }));
@@ -113,7 +104,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
 // A terminal project write: the status plus the cleared in-flight mark (#9010).
-const settled = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
+const settled = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 const prime = (projectId) => {
   getProject.mockResolvedValue({
@@ -128,7 +119,6 @@ const prime = (projectId) => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.procs.length = 0;
-  h.overlays.calls.length = 0;
   seg.render = null;
   seg.plans.length = 0;
 });
@@ -152,7 +142,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
     expect(getRenderJobStatus(jobId).status).toBe('error');
     expect(getRenderJobStatus(jobId).error).toMatch(/Failed to spawn ffmpeg/);
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'Failed to spawn ffmpeg: spawn ENOENT' }));
 
     // Slot released — a re-render reaches spawn again instead of 409ing.
     const again = await renderMusicVideo(pid);
@@ -181,7 +171,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     proc.emit('close', 1, null);
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('error');
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'ffmpeg exit 1' }));
 
     // Slot now released.
     const again = await renderMusicVideo(pid);
@@ -273,6 +263,22 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(getRenderJobStatus(jobId).error).toBeUndefined();
+  });
+
+  it('persists a bounded finalization error while releasing the render slot', async () => {
+    const pid = 'finalize-failure';
+    prime(pid);
+    const failure = `poster write failed ${'x'.repeat(3000)}`;
+    generateThumbnail.mockRejectedValueOnce(new Error(failure));
+    const { jobId } = await renderMusicVideo(pid);
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await tick();
+
+    expect(getRenderJobStatus(jobId).status).toBe('error');
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: `Finalize failed: ${failure}`.slice(0, 2000) }));
+    const again = await renderMusicVideo(pid);
+    expect(again.jobId).not.toBe(jobId);
   });
 });
 
@@ -450,6 +456,28 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(updateProject).toHaveBeenCalledWith('resume-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 1 } }));
     logSpy.mockRestore();
   });
+
+  it('leaves no error when the render was started again before the resume ran', async () => {
+    const { recoverStuckMusicVideoRenders, renderMusicVideo } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    prime('again-1');
+    getProject.mockResolvedValue({
+      id: 'again-1', name: 'P', trackId: 't1', status: 'ready',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+      composition: { version: 1, mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null },
+    });
+    seedStore([{ id: 'again-1', status: 'rendering', renderResume: { attempt: 0 } }]);
+
+    await recoverStuckMusicVideoRenders();
+    await renderMusicVideo('again-1', { resumable: true });
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    await tick();
+    expect(seg.plans).toHaveLength(1);
+    expect(updateProject.mock.calls.some(([, patch]) => /could not restart/.test(patch?.renderError || ''))).toBe(false);
+    logSpy.mockRestore();
+  });
 });
 
 it('chooses the loudest section midpoint within the rendered duration', async () => {
@@ -550,7 +578,6 @@ describe('composed render lifecycle (#8984)', () => {
   it('renders a concat-mode manifest through the plain path', async () => {
     primeComposed('plain-1', { mode: 'concat', textCues: [cue] });
     await renderMusicVideo('plain-1');
-    expect(h.overlays.calls).toHaveLength(0);
     expect(lastProc().args).not.toContain('-itsoffset');
   });
 
@@ -637,7 +664,6 @@ describe('layered sections (#8985)', () => {
     expect(args).not.toContain('/data/images/frame.png');
     expect(filterGraph(args)).not.toContain('color=');
     expect(filterGraph(args)).toContain('concat=n=2:v=1:a=0[outv]');
-    expect(h.overlays.calls).toHaveLength(0);
   });
 
   it('refuses a still with no reference frame and an untimed card, without spawning', async () => {
@@ -728,6 +754,6 @@ describe('film look finishing pass on a footage render', () => {
     await tick();
     expect(getRenderJobStatus(jobId)).toEqual({ status: 'error', error: 'Film look pass failed: no browser' });
     expect(unlink).toHaveBeenCalledWith(look.calls[0].path);
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'Film look pass failed: no browser' }));
   });
 });

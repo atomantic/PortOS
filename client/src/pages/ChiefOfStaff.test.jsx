@@ -322,7 +322,8 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
     // State contract: a failed evaluate must NOT switch the status bubble to the
     // "Evaluating tasks..." (thinking) message — it stays on the idle message.
     expect(screen.queryAllByText('Evaluating tasks...')).toHaveLength(0);
-    expect(screen.queryAllByText('Idle - waiting for tasks...').length).toBeGreaterThan(0);
+    // Generic idle text renders as the avatar pill, which carries it as its title.
+    expect(screen.queryAllByTitle('Idle - waiting for tasks...').length).toBeGreaterThan(0);
   });
 
   it('toasts success and advances the status message after the evaluate resolves', async () => {

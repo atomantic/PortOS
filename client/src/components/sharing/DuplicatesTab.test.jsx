@@ -37,6 +37,44 @@ beforeEach(() => {
 });
 
 describe('DuplicatesTab', () => {
+  it('shows a section-specific retry when universe duplicate loading fails', async () => {
+    api.listUniverseDuplicates.mockRejectedValueOnce(new Error('unavailable'));
+    api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
+    const user = userEvent.setup();
+    render(<DuplicatesTab />);
+    expect(await screen.findByText('Could not load universe duplicates.')).toBeInTheDocument();
+    expect(screen.queryByText(/No duplicates found/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/2 copies/)).toBeInTheDocument();
+  });
+
+  it('shows a section-specific retry when series duplicate loading fails', async () => {
+    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    api.listSeriesDuplicates.mockRejectedValueOnce(new Error('unavailable'));
+    render(<DuplicatesTab />);
+    expect(await screen.findByText('Could not load series duplicates.')).toBeInTheDocument();
+    expect(screen.queryByText(/No duplicates found/)).not.toBeInTheDocument();
+  });
+
+  it('shows the existing empty copy after both requests succeed empty', async () => {
+    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
+    render(<DuplicatesTab />);
+    expect(await screen.findByText(/No duplicates found/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['universe', () => api.listUniverseDuplicates.mockResolvedValue({}), () => api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 })],
+    ['series', () => api.listUniverseDuplicates.mockResolvedValue({ groups: [] }), () => api.listSeriesDuplicates.mockResolvedValue({})],
+  ])('treats a malformed successful %s payload as a section failure', async (_section, setUniverse, setSeries) => {
+    setUniverse();
+    setSeries();
+    render(<DuplicatesTab />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(`Could not load ${_section} duplicates.`);
+    expect(screen.queryByText(/No duplicates found/)).not.toBeInTheDocument();
+  });
+
   it('lists a universe duplicate group with both records', async () => {
     render(<DuplicatesTab />);
     await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());

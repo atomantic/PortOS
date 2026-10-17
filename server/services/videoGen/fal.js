@@ -315,6 +315,26 @@ async function runFalVideo(job, jobId, {
 }) {
   const entry = createFalRequestEntry(apiKey);
   const publication = {};
+  // Every terminal path shares the same cleanup attempt. A publication error
+  // can enter the catch after the success path has already settled its inputs.
+  let inputCleanup;
+  const settleInputs = () => (inputCleanup ??= (async () => {
+    const inputs = new Set([uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
+    for (const path of inputs) {
+      if (!path || !isStagedUpload(path)) continue;
+      await unlink(path).catch(error => {
+        if (error.code === 'ENOENT') return;
+        maintenance.markCurrentUnsettled();
+        maintenance.markResourceUnsettled('media', jobId);
+        console.error(`❌ fal staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+      });
+    }
+  })());
+  const finishFailure = async (reason) => {
+    await settleInputs();
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    return finalizeJobFailure(job, jobId, null, reason, { force: true });
+  };
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
@@ -347,7 +367,7 @@ async function runFalVideo(job, jobId, {
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });
     // Cancelled while the inputs were being read: nothing was submitted, so
     // there is nothing to pay for or cancel remotely.
-    if (entry.aborted) return finalizeCanceled(job, jobId);
+    if (entry.aborted) return finishFailure('Canceled');
     const submitted = await submitFalRequest({ apiKey, modelId, body });
     entry.cancelUrl = submitted.cancel_url;
     const responseUrl = submitted.response_url;
@@ -362,8 +382,8 @@ async function runFalVideo(job, jobId, {
         ? emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering…')
         : emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Queued at fal.ai…')),
     });
-    if (polled.outcome === 'canceled') return finalizeCanceled(job, jobId);
-    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, polled.reason);
+    if (polled.outcome === 'canceled') return finishFailure('Canceled');
+    if (polled.outcome === 'failed') return finishFailure(polled.reason);
 
     const buffer = await withAbortTimeout(FAL_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
       const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
@@ -378,11 +398,11 @@ async function runFalVideo(job, jobId, {
         signal, deadline: retrievalDeadline, binary: true, binaryTimeoutMs: FAL_DOWNLOAD_TIMEOUT_MS, label: 'video download',
       }));
     });
-    if (entry.aborted) return finalizeCanceled(job, jobId);
+    if (entry.aborted) return finishFailure('Canceled');
     await writeFile(outputPath, buffer);
     if (entry.aborted) {
       await unlink(outputPath);
-      return finalizeCanceled(job, jobId);
+      return finishFailure('Canceled');
     }
 
     // Record what the provider actually delivered: fal reports no frame count,
@@ -394,6 +414,7 @@ async function runFalVideo(job, jobId, {
       console.warn(`⚠️ fal source-audio take [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
     }
     activeRequests.delete(jobId);
+    await settleInputs();
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
     closeJobAfterDelay(jobs, jobId);
@@ -413,15 +434,7 @@ async function runFalVideo(job, jobId, {
       console.error(`❌ fal video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
     });
     await cancelFalRequest(entry);
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`, { force: true });
-  } finally {
-    // The inline inputs are spent on every terminal outcome. Delete only
-    // queue-owned uploads; gallery frames and the original song stay intact.
-    const inputs = new Set([uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
-    for (const path of inputs) {
-      if (path && isStagedUpload(path)) await unlink(path).catch(() => {});
-    }
+    return finishFailure(`fal.ai video generation failed: ${err?.message || err}`);
   }
 }
 

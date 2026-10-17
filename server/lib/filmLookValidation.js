@@ -24,3 +24,14 @@ export const filmLookSchema = z.object({
 export const filmLookBakeSchema = z.object({
   look: filmLookSchema,
 }).strict();
+
+/**
+ * The install's saved film looks (`settings.filmLookPresets`): named looks the
+ * user keeps to reapply on any project, shot or gallery image.
+ */
+export const FILM_LOOK_SAVED_PRESETS_MAX = 50;
+export const filmLookSavedPresetsSchema = z.array(z.object({
+  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  label: z.string().trim().min(1).max(60),
+  look: filmLookSchema,
+}).strict()).max(FILM_LOOK_SAVED_PRESETS_MAX);

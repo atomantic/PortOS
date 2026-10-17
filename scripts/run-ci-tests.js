@@ -12,6 +12,7 @@ import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js
 import { writeStepEnv, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
+import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -189,12 +190,13 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
  * stderr live (so a long CI job keeps showing progress) while also retaining
  * a bounded tail of the combined output for post-run crash detection.
  *
- * @returns {Promise<{status: number, output: string, interrupted?: NodeJS.Signals, error?: Error}>}
+ * @returns {Promise<{status: number, output: string, interrupted?: NodeJS.Signals, error?: Error, cleanupUnverified?: boolean, diagnosticsPath?: string}>}
  */
-export async function runNpm(scope, script, extraArgs) {
+export async function runNpm(scope, script, extraArgs, { env = process.env, signal, cancellationTimeoutMs = 10000 } = {}) {
+  signal?.throwIfAborted();
   // Opt-in, job-owned storage survives an abruptly terminated launcher. Keep
   // separate roots for the initial attempt and the existing single retry.
-  const durableRoot = process.env.PORTOS_CI_DIAGNOSTICS_DIR;
+  const durableRoot = env.PORTOS_CI_DIAGNOSTICS_DIR;
   let hostRoot = tmpdir();
   if (durableRoot) {
     try { mkdirSync(durableRoot, { recursive: true }); hostRoot = durableRoot; }
@@ -204,15 +206,31 @@ export async function runNpm(scope, script, extraArgs) {
   if (!durable) sweepStaleRunRoots(hostRoot, { prefix: 'portos-vitest-' });
   const reportDir = mkdtempSync(join(hostRoot, 'portos-vitest-'));
   const reportPath = join(reportDir, 'failures.json');
+  let cleanupUnverified = false;
   try {
     writeOwnerFile(reportDir);
-    return await runNpmWithReport(scope, script, extraArgs, reportPath);
+    const result = await runNpmWithReport(scope, script, extraArgs, reportPath, env, signal, cancellationTimeoutMs);
+    cleanupUnverified = result.cleanupUnverified === true;
+    if (cleanupUnverified) {
+      console.error(`Test launcher cleanup unverified; diagnostics retained at ${reportDir}`);
+      return { ...result, diagnosticsPath: reportDir };
+    }
+    const profile = env.PORTOS_BROWSER_TEST_PROFILE;
+    if (profile !== undefined && result.status === 0) {
+      try {
+        assertBrowserProfileExecuted(profile, JSON.parse(readFileSync(reportPath, 'utf8')));
+      } catch (error) {
+        console.error(`Browser profile evidence rejected: ${error.message}`);
+        return { ...result, status: 1 };
+      }
+    }
+    return result;
   } finally {
-    if (!durable) rmSync(reportDir, { recursive: true, force: true });
+    if (!durable && !cleanupUnverified) rmSync(reportDir, { recursive: true, force: true });
   }
 }
 
-function runNpmWithReport(scope, script, extraArgs, reportPath) {
+function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal, cancellationTimeoutMs) {
   const runReportPath = join(dirname(reportPath), 'run.json');
   const invocationPath = join(dirname(reportPath), 'invocation.json');
   const invocation = {
@@ -227,21 +245,27 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
   // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
   // `shell:false` and throws EINVAL, so this script could never run on a
   // Windows checkout. See server/lib/bufferedSpawn.js.
-  const { command, args: spawnArgs } = prepareCliSpawn('npm', args);
+  const { command, args: spawnArgs } = prepareCliSpawn('npm', args, env);
   return new Promise((resolve) => {
     // npm is a launcher, not the entire test tree. Give this invocation its
-    // own POSIX group; Windows killProcessTree uses taskkill /T instead.
-    const processGroup = process.platform !== 'win32';
-    const childEnv = { ...process.env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
+    // own POSIX group; Windows killProcessTree uses taskkill /T instead. The
+    // browser supervisor instead owns the inherited group, so its independent
+    // watchdog can retire npm even if this launcher's event loop is stopped.
+    const processGroup = process.platform !== 'win32' && env.PORTOS_CI_TEST_SUPERVISED_GROUP !== '1';
+    const childEnv = { ...env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
     // Only the workflow launcher owns durable attempts. Nested launcher
     // fixtures must not overwrite or add to the job's failure provenance.
     delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;
+    delete childEnv.PORTOS_CI_TEST_SUPERVISED_GROUP;
     const child = spawn(command, spawnArgs, {
       env: childEnv, cwd: repoRoot, detached: processGroup,
     });
     let interrupted;
     let escalation;
     let spawnError;
+    let cancellationDeadline;
+    let settled = false;
+    let cleanupUnverified = false;
     const cancel = (signal) => {
       if (interrupted) return;
       interrupted = signal;
@@ -249,9 +273,20 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
       escalation = setTimeout(() => {
         killProcessTree(child, 'SIGKILL', { processGroup });
       }, 2000);
+      if (abortSignal) cancellationDeadline = setTimeout(() => {
+        cleanupUnverified = true;
+        spawnError = new Error('Owned test launcher cleanup unverified after cancellation.');
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+        finish(null, null);
+      }, cancellationTimeoutMs);
     };
     const onSigint = () => cancel('SIGINT');
     const onSigterm = () => cancel('SIGTERM');
+    const onAbort = () => cancel('SIGTERM');
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    if (abortSignal?.aborted) onAbort();
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
     let output = '';
@@ -263,8 +298,11 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
     child.stderr.on('data', (chunk) => tee(process.stderr, chunk));
     // A spawn error also emits close. Settle only there, after the pipes close.
     child.on('error', (error) => { spawnError = error; });
-    child.on('close', (code, signal) => {
+    const finish = (code, signal) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(escalation);
+      clearTimeout(cancellationDeadline);
       if (interrupted) {
         // npm may close before a descendant that detached its stdio. Finish
         // the owned group as well, including children that ignored SIGTERM.
@@ -272,8 +310,9 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
       }
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
+      abortSignal?.removeEventListener('abort', onAbort);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
-      persistTestDiagnostic(invocationPath, { ...invocation, completed: true, status, signal: signal ?? interrupted ?? null });
+      persistTestDiagnostic(invocationPath, { ...invocation, completed: !cleanupUnverified, status, signal: signal ?? interrupted ?? null });
       if (status !== 0) {
         console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
         console.error(structuredFailureDiagnostics(reportPath, runReportPath));
@@ -281,8 +320,10 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
         // hook, including exit codes unavailable through the reporter API.
         console.error(`Vitest output tail (last 16000 characters):\n${stripVTControlCharacters(output).slice(-16_000)}`);
       }
-      resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}) });
-    });
+      resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}),
+        ...(cleanupUnverified ? { cleanupUnverified: true } : {}) });
+    };
+    child.on('close', finish);
   });
 }
 
@@ -291,7 +332,9 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 } = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
-  const result = await run(scope, script, extraArgs);
+  const profileArgs = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+    ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const result = await run(scope, script, [...extraArgs, ...profileArgs]);
   recordVitestDuration(scope, label, startedAt);
   if (result.error) {
     console.error(result.error.message);
@@ -315,7 +358,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   // reproduces or was a one-off runner fault.
   console.warn(`⚠️ Vitest worker crashed natively on ${relPath} — retrying that file once`);
   const retryStartedAt = Date.now();
-  const retry = await run(scope, script, [selector]);
+  const retry = await run(scope, script, [selector, ...profileArgs]);
   recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
   if (!retry.error && retry.status === 0) {
     if (hasOtherTestFailures(result.output)) {
@@ -348,7 +391,9 @@ async function main() {
   }
 
   const mode = process.env.CI_TEST_MODE || 'full';
-  const repoFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
+  const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
+  const repoFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+    ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(scope, path));
   const sourceFiles = repoSources.map((path) => toRunnerPath(scope, path));
@@ -377,7 +422,11 @@ async function main() {
 
   if (mode === 'files') {
     if (selectedFiles.length === 0) {
-      console.log(`No ${scope} tests selected.`);
+      const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
+      const deferredOnly = profile === 'smoke' && inputFiles.length > 0
+        && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
+      if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
+      console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
       process.exitCode = 0;
       return;
     }

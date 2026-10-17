@@ -1510,7 +1510,9 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(600);
     expect(pasteCount()).toBe(0);
     await capturedOnData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
-    await capturedOnData(Buffer.from('able. Would you like to update now?\nSkip Confirm\n'));
+    // The composer border is painted between the two wrapped message rows.
+    await capturedOnData(Buffer.from('able. Would you like to\x1b[12;4H┃\n'));
+    await capturedOnData(Buffer.from('        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n'));
     await vi.advanceTimersByTimeAsync(400);
     expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toEqual(['\x1b']);
     expect(pasteCount()).toBe(0);
@@ -1527,6 +1529,25 @@ describe('spawnTuiAgent runtime', () => {
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
     await capturedOnExit({ exitCode: 0, killed: false });
     await spawnPromise;
+  });
+
+  it('fails OpenCode startup on a rejected model without pasting into its replacement composer', async () => {
+    const spawnPromise = runSpawn({
+      provider: { ...defaultProvider, id: 'opencode-tui', name: 'OpenCode TUI' },
+      tuiConfig: { ...defaultTuiConfig, command: '/opt/bin/opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
+    });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hModel example-provider/exam'));
+    await capturedOnData(Buffer.from('ple-model\n┃ is not valid\nreplacement-provider/replacement-model\nAsk anything…\n'));
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(pasteCount()).toBe(0);
+    await spawnPromise;
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      completionReason: 'opencode-model-rejected',
+      errorAnalysis: expect.objectContaining({ category: 'model-not-found', affectedModel: 'example-provider/example-model' }),
+    }));
   });
 
   it('codex hook-review offer: continues without trusting hooks before pasting the prompt', async () => {

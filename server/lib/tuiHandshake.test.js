@@ -1263,6 +1263,39 @@ describe('createInputReadyTracker', () => {
     });
   });
 
+  describe('OpenCode startup model rejection', () => {
+    const toast = 'Model example-provider/example-model is not valid';
+
+    it('latches a model-specific verdict when the toast is split across PTY reads and wrapped rows', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', 'Mod');
+      tracker.observe('', 'el example-prov');
+      tracker.observe('', 'ider/example-\n┃  model is no');
+      tracker.observe('', 't valid  ┃\n');
+      expect(tracker.opencodeModelRejection).toMatchObject({
+        category: 'model-not-found', actionable: true, origin: 'provider', affectedModel: 'example-provider/example-model',
+      });
+      expect(tracker.opencodeModelRejection.message).toContain('example-provider/example-model');
+    });
+
+    it.each([
+      ['an unrelated validation message', 'Model example is not valid for this plan'],
+      ['prose with no provider/model id', 'The model is not valid JSON'],
+      ['a healthy startup', 'Ask anything…\n example-provider/example-model'],
+    ])('ignores %s', (_name, text) => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', text);
+      expect(tracker.opencodeModelRejection).toBeNull();
+    });
+
+    it('keeps the first verdict', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', toast);
+      tracker.observe('', 'Model other-provider/other-model is not valid');
+      expect(tracker.opencodeModelRejection.affectedModel).toBe('example-provider/example-model');
+    });
+  });
+
   describe('Codex hook-review offer', () => {
     const OFFER = 'Hooks need review\n'
       + '1 hook is new or changed.\n'

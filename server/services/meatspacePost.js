@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge } from '../lib/objects.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 import { nBackBalancedAccuracy, resolveEstimationTolerancePct } from '../lib/postScoring.js';
 import { normalizeHistoricalPostLlmEvaluation, normalizePostLlmEvaluation } from '../lib/postLlmContracts.js';
@@ -74,6 +75,7 @@ export { computePostStreaks };
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const CONFIG_FILE = join(MEATSPACE_DIR, 'post-config.json');
+const queueConfigWrite = createFileWriteQueue();
 
 // Tiny pub/sub (mirrors settingsEvents in server/services/settings.js) so
 // features that react to a specific config slice — e.g. meatspacePostReminder.js
@@ -333,7 +335,11 @@ export async function getPostConfig() {
   return deepMerge(baseDefaults, config);
 }
 
-export async function updatePostConfig(updates) {
+export function updatePostConfig(updates) {
+  return queueConfigWrite(() => applyPostConfigUpdate(updates));
+}
+
+async function applyPostConfigUpdate(updates) {
   const config = await getPostConfig();
   const merged = deepMerge(config, updates);
   // A partial patch (one field of a pair) is judged against the merged record

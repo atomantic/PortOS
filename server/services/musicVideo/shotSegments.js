@@ -21,10 +21,10 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { availableParallelism, tmpdir, totalmem } from 'os';
 import { join } from 'path';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
@@ -52,15 +52,21 @@ const KEY_MARGIN_SEC = 5;
 const SEGMENT_TAG = 'setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 32);
+// A segment's film-look file is keyed by its base file, its place in the song
+// and the (normalized) look, so any look's files can be found again from the plan.
+const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
+const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
 const safeProjectId = (projectId) => {
   if (typeof projectId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw new ServerError('Invalid project id', { status: 400, code: 'VALIDATION_ERROR' });
   return projectId;
 };
 export const shotSegmentDir = (projectId) => join(PATHS.data, SHOT_SEGMENT_DIR, safeProjectId(projectId));
 
+const hasOwnLook = (scene) => !!(scene?.filmLook && typeof scene.filmLook === 'object');
+
 /** A shot's own pinned look, else the video's; null when the shot plays clean. Pure. */
 function shotFilmLook(project, scene) {
-  const own = scene?.filmLook && typeof scene.filmLook === 'object' ? scene.filmLook : null;
+  const own = hasOwnLook(scene) ? scene.filmLook : null;
   const look = normalizeFilmLook(own || project?.filmLook);
   return look && !isFilmLookNeutral(look) ? look : null;
 }
@@ -131,11 +137,14 @@ export async function planShotSegments(project) {
       ...(overlayPages.some((p) => p.name === 'lyrics') ? { lyrics: windowedKeyData({ ...lyricData, render: nearEnd ? lyricData.render : null }, lo, hi) } : {}),
     };
     const baseKey = hash({ v: SHOT_SEGMENT_VERSION, args: await fingerprintArgs(built.args), overlays: overlayKey, width, height, fps });
-    const look = shotFilmLook(project, scenes.get(built.sceneId));
-    const lookKey = look ? hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec: built.startSec, fps }) : null;
+    // Each segment belongs to the shot whose span it plays in, so a shot's
+    // render, look and cached files cover exactly its own time on the song.
+    const scene = scenes.get(built.shotId);
+    const look = shotFilmLook(project, scene);
+    const lookKey = look ? segmentLookKey({ baseKey, startSec: built.startSec }, look, fps) : null;
     segments.push({
-      index, sceneId: built.sceneId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
-      startFrame, frames: built.frames, window, segment, look, baseKey, lookKey,
+      index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
+      startFrame, frames: built.frames, window, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
       basePath: join(dir, `${baseKey}.mp4`),
       path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
     });
@@ -156,7 +165,7 @@ async function planOutroSegment(project, { dir, width, height, fps, offsetSec })
   const stats = await getMusicVideoOutroStats(project);
   const baseKey = hash({ v: SHOT_SEGMENT_VERSION, outro, stats, width, height, fps });
   const look = shotFilmLook(project, null);
-  const lookKey = look ? hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec: offsetSec, fps }) : null;
+  const lookKey = look ? segmentLookKey({ baseKey, startSec: offsetSec }, look, fps) : null;
   return {
     outro: true, stats, startSec: offsetSec, durationSec: outro.durationSec, frames: Math.round(outro.durationSec * fps), look, baseKey, lookKey,
     basePath: join(dir, `outro-${baseKey}.mp4`),
@@ -182,12 +191,15 @@ export const segmentRendering = (segment) => inFlight.has(segment.path);
 export function renderSegment(plan, segment, { signal, onProgress } = {}) {
   if (existsSync(segment.path)) return Promise.resolve(segment.path);
   let entry = inFlight.get(segment.path);
-  if (!entry) {
+  // An aborted entry is still tearing down (ffmpeg/browser) and can only reject
+  // with the abort, so a new caller replaces it rather than joining it.
+  if (!entry || entry.controller.signal.aborted) {
     const controller = new AbortController();
-    entry = { controller, waiters: 0, listeners: new Set() };
-    entry.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => entry.listeners.forEach((fn) => fn(f)) })
-      .finally(() => inFlight.delete(segment.path));
-    inFlight.set(segment.path, entry);
+    const fresh = { controller, waiters: 0, listeners: new Set() };
+    fresh.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => fresh.listeners.forEach((fn) => fn(f)) })
+      .finally(() => { if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path); });
+    inFlight.set(segment.path, fresh);
+    entry = fresh;
   }
   entry.waiters += 1;
   if (onProgress) entry.listeners.add(onProgress);
@@ -247,6 +259,8 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
         label: `Music-video film look ${segment.outro ? 'ending card' : `shot ${segment.sceneId.slice(0, 8)}`}`,
         onProgress: (f) => onProgress?.(1 - lookShare + f * lookShare) });
       await rename(partial, segment.path);
+      // A shot rendered from its card lists its look too, so it can be deleted later.
+      if (!segment.ownLook) await rememberFilmLook(plan.dir, segment.look);
     } catch (err) {
       await rm(partial, { force: true }).catch(() => {});
       if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
@@ -279,23 +293,34 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   }
 }
 
-// Each segment in flight may hold a film-look browser (about one core, since
-// the filter rasterizes serially) and an encoder. Two thirds of the cores keep
-// the server and the user's own apps responsive; the memory term keeps a small
-// machine from running out of RAM with a browser per shot.
-const SEGMENT_MAX_CONCURRENCY = 12;
+// Each segment in flight may hold a film-look browser and an encoder. Browsers
+// seeking video in parallel contend for the same decoder and compositor, so
+// past a few they slow each other down instead of adding throughput: twelve
+// on an 18-core Mac finished fewer shots than three and timed out seeks. The
+// memory term keeps a small machine from running out of RAM with a browser per
+// shot. PORTOS_MUSIC_VIDEO_SEGMENT_WORKERS overrides the count.
+const SEGMENT_MAX_CONCURRENCY = 4;
 const SEGMENT_BYTES_EACH = 3 * 1024 ** 3;
 
 /** How many segments render at once: each may hold a browser and an encoder. */
-export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) => Math.max(1, Math.min(
-  SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH),
-));
+export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem(), override = process.env.PORTOS_MUSIC_VIDEO_SEGMENT_WORKERS } = {}) => {
+  const forced = Number.parseInt(override, 10);
+  if (Number.isInteger(forced) && forced > 0) return Math.min(forced, 32);
+  return Math.max(1, Math.min(SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH)));
+};
+
+// A shot whose render fails (a stalled browser, an overloaded host) is tried
+// again after the rest of the queue before the whole render fails.
+const SEGMENT_ATTEMPTS = 2;
 
 /**
  * Render every missing segment of `plan` (`concurrency` at a time). `onProgress`
  * reports the share of frames ready, counting cached ones as done.
  */
 export async function renderMissingSegments(plan, { signal, onProgress, concurrency = segmentConcurrency() } = {}) {
+  // The video's look is listed even when every one of its shots was cached already.
+  const videoLook = videoLookSegments(plan).find((s) => s.look)?.look;
+  if (videoLook) await rememberFilmLook(plan.dir, videoLook);
   const all = [...plan.segments, ...(plan.outro ? [plan.outro] : [])];
   const total = all.reduce((sum, s) => sum + s.frames, 0) || 1;
   const done = new Map(all.map((s) => [s, existsSync(s.path) ? 1 : 0]));
@@ -303,9 +328,11 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
   report();
   const queue = all.filter((s) => done.get(s) < 1);
   const failures = [];
+  const attempts = new Map();
   const worker = async () => {
     while (queue.length && !signal?.aborted) {
       const segment = queue.shift();
+      attempts.set(segment, (attempts.get(segment) || 0) + 1);
       try {
         await renderSegment(plan, segment, { signal, onProgress: (f) => { done.set(segment, f); report(); } });
         done.set(segment, 1);
@@ -314,6 +341,14 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
         if (segment.sceneId) emitShotRender({ projectId: plan.project?.id, sceneId: segment.sceneId, state: 'rendered', progress: 1 });
       } catch (err) {
         if (signal?.aborted || err.code === 'CANCELED') throw err;
+        done.set(segment, 0);
+        report();
+        // Once a shot has failed for good the render has failed: no more retries.
+        if (!failures.length && attempts.get(segment) < SEGMENT_ATTEMPTS) {
+          console.warn(`⚠️ ${err.message}; trying it again after the other shots`);
+          queue.push(segment);
+          continue;
+        }
         failures.push(err);
         queue.length = 0;
       }
@@ -328,16 +363,17 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
 /**
  * Join the cached segments by stream copy and lay the song (with any sound
  * bed) under them once, silence under the outro, into `outputPath`. Resolves
- * `{ durationSec, songSec }`.
+ * `{ durationSec, songSec }`. `segments` (default: all, in order) joins a
+ * leading run of them instead, with the song under just that part.
  */
-export async function stitchSegments(plan, outputPath, { signal } = {}) {
-  const parts = [...plan.segments, ...(plan.outro ? [plan.outro] : [])].map((s) => s.path);
+export async function stitchSegments(plan, outputPath, { signal, segments = [...plan.segments, ...(plan.outro ? [plan.outro] : [])] } = {}) {
+  const parts = segments.map((s) => s.path);
   const missing = parts.filter((p) => !existsSync(p));
   if (missing.length) throw new ServerError('A shot segment went missing before stitching — render again', { status: 409, code: 'SHOT_SEGMENT_MISSING' });
   const listPath = `${outputPath}.segments.txt`;
   const silent = `${outputPath}.silent.mp4`;
-  const songSec = plan.songSec;
-  const durationSec = songSec + (plan.outro ? plan.outro.frames / plan.fps : 0);
+  const songSec = segments.filter((s) => !s.outro).reduce((sum, s) => sum + s.frames, 0) / plan.fps;
+  const durationSec = songSec + segments.filter((s) => s.outro).reduce((sum, s) => sum + s.frames, 0) / plan.fps;
   try {
     await writeFile(listPath, parts.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join('\n'));
     const joined = await runFfmpegProcess({ bin: plan.ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
@@ -370,15 +406,33 @@ export async function stitchSegments(plan, outputPath, { signal } = {}) {
   }
 }
 
-/** Remove cached files the current plan no longer uses (older takes of each shot and look). */
-export async function pruneSegments(plan) {
+/**
+ * Remove cached files the current plan no longer uses: older takes of each
+ * shot, with every look rendered over them. Each listed video look over a
+ * current take stays, so a look can be restored without rendering
+ * (deleteFilmLook drops one); a look that isn't listed could never be found
+ * again, so its files go. The rendered-so-far previews are replaced by their
+ * own builder. A file written at or after `startedAtMs` (a shot rendered while
+ * the final render ran) was made after this plan was cut, so the plan cannot
+ * tell whether it is current and it stays.
+ */
+export async function pruneSegments(plan, { startedAtMs = Infinity } = {}) {
   const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
+  // Only takes that play the video's look keep its other looks; a shot's own
+  // look keeps just its current file, as before.
+  await lookWrites.get(plan.dir);
+  const listed = Object.values(await readFilmLooks(plan.dir)).map((entry) => entry?.look).filter(Boolean);
+  for (const segment of videoLookSegments(plan)) {
+    for (const look of listed) keep.add(segmentLookPath(plan, segment, look));
+  }
   const names = await readdir(plan.dir).catch(() => []);
   let removed = 0;
   for (const name of names) {
     const path = join(plan.dir, name);
     if (keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
-    if (name.endsWith('.partial.mp4')) continue;
+    if (name.endsWith('.partial.mp4') || name.startsWith(LOOKS_FILE) || name.startsWith('preview-')) continue;
+    const info = await stat(path).catch(() => null);
+    if (!info || info.mtimeMs >= startedAtMs) continue;
     await rm(path, { force: true }).then(() => { removed += 1; }, () => {});
   }
   return removed;
@@ -525,7 +579,177 @@ export function cancelShotRender(projectId, sceneId) {
 
 /** A cached segment file of `projectId` by name, or null when the name is not one or it is gone. */
 export function shotSegmentFile(projectId, name) {
-  if (typeof name !== 'string' || !/^(outro-)?[0-9a-f]{32}(-[0-9a-f]{32})?\.mp4$/.test(name)) return null;
+  if (typeof name !== 'string' || !/^(?:(outro-)?[0-9a-f]{32}(-[0-9a-f]{32})?|preview-[0-9a-f]{32}(-light)?)\.mp4$/.test(name)) return null;
   const path = join(shotSegmentDir(projectId), name);
   return existsSync(path) ? path : null;
+}
+
+// ── Film looks kept side by side ────────────────────────────────────────────
+// Every video-wide look rendered over the current takes stays cached until it
+// is deleted, so switching back to one only stitches. `looks.json` remembers
+// each look's settings (its files are found again from the plan).
+const LOOKS_FILE = 'looks.json';
+const filmLookId = (look) => hash({ look });
+const lookWrites = new Map();
+
+async function readFilmLooks(dir) {
+  const raw = await readFile(join(dir, LOOKS_FILE), 'utf8').catch(() => null);
+  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
+  return parsed?.looks && typeof parsed.looks === 'object' ? parsed.looks : {};
+}
+
+// One read-modify-write at a time per project: shots finish in parallel.
+function updateFilmLooks(dir, change) {
+  const run = (lookWrites.get(dir) || Promise.resolve()).then(async () => {
+    const looks = await readFilmLooks(dir);
+    if (change(looks) === false) return;
+    await mkdir(dir, { recursive: true });
+    const tmp = join(dir, `${LOOKS_FILE}.${randomUUID()}.tmp`);
+    await writeFile(tmp, JSON.stringify({ looks }, null, 2));
+    await rename(tmp, join(dir, LOOKS_FILE));
+  });
+  const settled = run.catch((err) => console.warn(`⚠️ Music-video film look list not saved: ${err.message}`));
+  lookWrites.set(dir, settled);
+  return settled;
+}
+
+const rememberFilmLook = (dir, look) => updateFilmLooks(dir, (looks) => {
+  const id = filmLookId(look);
+  if (looks[id]) return false;
+  looks[id] = { look, savedAt: new Date().toISOString() };
+  return true;
+});
+
+const videoLookSegments = (plan) => [...plan.segments.filter((s) => !s.ownLook), ...(plan.outro ? [plan.outro] : [])];
+
+async function planForLooks(projectId) {
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.composition?.mode !== 'composed') return { project, plan: null };
+  const plan = await planShotSegments(project).catch((err) => {
+    if (!err?.status || err.status >= 500) throw err;
+    return { error: { message: err.message, code: err.code || null } };
+  });
+  return { project, plan };
+}
+
+/**
+ * The video-wide film looks cached over the current takes: each one's
+ * settings, how many of the shots that use the video's look have it rendered,
+ * and the disk it holds. The look in use comes first.
+ */
+export async function listFilmLooks(projectId) {
+  const { project, plan } = await planForLooks(projectId);
+  if (!plan) return { available: false, looks: [], total: 0 };
+  if (plan.error) return { available: true, error: plan.error, looks: [], total: 0 };
+  const stored = await readFilmLooks(plan.dir);
+  const current = normalizeFilmLook(project.filmLook);
+  const currentId = current && !isFilmLookNeutral(current) ? filmLookId(current) : null;
+  if (currentId && !stored[currentId]) {
+    await rememberFilmLook(plan.dir, current);
+    stored[currentId] = { look: current, savedAt: new Date().toISOString() };
+  }
+  const segments = videoLookSegments(plan);
+  const looks = [];
+  for (const [id, entry] of Object.entries(stored)) {
+    const look = normalizeFilmLook(entry?.look);
+    if (!look || isFilmLookNeutral(look)) continue;
+    let rendered = 0;
+    let bytes = 0;
+    for (const segment of segments) {
+      const info = await stat(segmentLookPath(plan, segment, look)).catch(() => null);
+      if (info) { rendered += 1; bytes += info.size; }
+    }
+    if (!rendered && id !== currentId) continue;
+    looks.push({ id, look, current: id === currentId, rendered, bytes, savedAt: entry.savedAt || null });
+  }
+  looks.sort((a, b) => Number(b.current) - Number(a.current) || String(b.savedAt).localeCompare(String(a.savedAt)));
+  return { available: true, looks, total: segments.length };
+}
+
+/** Delete one cached look's files over the current takes, and forget it. */
+export async function deleteFilmLook(projectId, lookId) {
+  if (typeof lookId !== 'string' || !/^[0-9a-f]{32}$/.test(lookId)) throw new ServerError('Invalid film look id', { status: 400, code: 'VALIDATION_ERROR' });
+  const { project, plan } = await planForLooks(projectId);
+  if (!plan || plan.error) throw new ServerError('This video has no shot renders to delete', { status: 409, code: 'NO_SHOT_RENDERS' });
+  if ([...inFlight.keys()].some((path) => path.startsWith(plan.dir))) {
+    throw new ServerError('Shots of this video are rendering. Delete the look after they finish, or stop the render', { status: 409, code: 'SHOT_RENDER_ACTIVE' });
+  }
+  const entry = (await readFilmLooks(plan.dir))[lookId];
+  const current = normalizeFilmLook(project.filmLook);
+  const look = normalizeFilmLook(entry?.look) || (current && filmLookId(current) === lookId ? current : null);
+  let removed = 0;
+  if (look) {
+    for (const segment of videoLookSegments(plan)) {
+      await rm(segmentLookPath(plan, segment, look)).then(() => { removed += 1; }, () => {});
+    }
+  }
+  await updateFilmLooks(plan.dir, (looks) => {
+    if (!looks[lookId]) return false;
+    delete looks[lookId];
+    return true;
+  });
+  if (removed) console.log(`🗑️ Music-video film look [${projectId.slice(0, 8)}] deleted: ${removed} shot files`);
+  return listFilmLooks(projectId);
+}
+
+// ── Rendered so far ────────────────────────────────────────────────────────
+// The shots finished so far, stitched in order up to the first one still
+// missing, with the song under them: a seam check while the rest renders.
+// `light` adds a lighter encode for a phone (grain makes the master heavy).
+const previewBuilds = new Map();
+const LIGHT_ENCODE_ARGS = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-maxrate', '5M', '-bufsize', '10M', '-pix_fmt', 'yuv420p'];
+
+export async function buildRenderPreview(projectId, { light = false } = {}) {
+  const { plan } = await planForLooks(projectId);
+  if (!plan) throw new ServerError('Rendered-so-far playback needs the composed render style', { status: 409, code: 'SHOT_RENDER_NEEDS_COMPOSED' });
+  if (plan.error) throw new ServerError(plan.error.message, { status: 409, code: plan.error.code || 'SHOT_RENDER_REFUSED' });
+  const lead = [];
+  for (const segment of plan.segments) {
+    if (!segmentRendered(segment)) break;
+    lead.push(segment);
+  }
+  if (lead.length === plan.segments.length && plan.outro && segmentRendered(plan.outro)) lead.push(plan.outro);
+  if (!lead.length) throw new ServerError('No shot is rendered yet: the first shot plays here once it is done', { status: 409, code: 'NO_SHOTS_RENDERED' });
+  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null });
+  const name = `preview-${key}${light ? '-light' : ''}.mp4`;
+  const path = join(plan.dir, name);
+  const shots = new Set(lead.filter((s) => !s.outro).map((s) => s.sceneId)).size;
+  const result = {
+    name, light,
+    durationSec: lead.reduce((sum, s) => sum + s.frames, 0) / plan.fps,
+    shots, totalShots: new Set(plan.segments.map((s) => s.sceneId)).size,
+    complete: lead.length === plan.segments.length + (plan.outro ? 1 : 0),
+  };
+  if (existsSync(path)) return result;
+  let build = previewBuilds.get(path);
+  if (!build) {
+    build = writePreview(plan, lead, path, { light }).finally(() => previewBuilds.delete(path));
+    previewBuilds.set(path, build);
+  }
+  await build;
+  return result;
+}
+
+async function writePreview(plan, lead, path, { light }) {
+  const jobId = randomUUID();
+  const full = `${path}.${jobId}.full.mp4`;
+  const partial = `${path}.${jobId}.partial.mp4`;
+  try {
+    await stitchSegments(plan, light ? full : partial, { segments: lead });
+    if (light) {
+      const encoded = await runFfmpegProcess({ bin: plan.ffmpeg, args: ['-hide_banner', '-loglevel', 'error', '-i', full,
+        '-vf', "scale=-2:'min(720,ih)'", ...LIGHT_ENCODE_ARGS, '-c:a', 'copy', '-movflags', '+faststart', '-y', partial] });
+      if (!encoded.ok) throw new ServerError(`The phone copy failed: ${encoded.reason}`, { status: 500, code: 'SHOT_PREVIEW_ENCODE' });
+    }
+    // Only the newest preview of each kind is kept.
+    const variant = light ? /^preview-[0-9a-f]{32}-light\.mp4$/ : /^preview-[0-9a-f]{32}\.mp4$/;
+    for (const old of await readdir(plan.dir).catch(() => [])) {
+      if (variant.test(old)) await rm(join(plan.dir, old), { force: true }).catch(() => {});
+    }
+    await rename(partial, path);
+  } finally {
+    await rm(full, { force: true }).catch(() => {});
+    await rm(partial, { force: true }).catch(() => {});
+  }
 }

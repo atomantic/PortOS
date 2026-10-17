@@ -109,12 +109,12 @@ export async function executeAction(accountId, messageId, action) {
  */
 async function executeGmailApiAction(message, action) {
   const { gmail } = await import('@googleapis/gmail');
-  const { getAuthenticatedClient } = await import('./googleAuth.js');
+  const { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } = await import('./googleAuth.js');
 
   const auth = await getAuthenticatedClient();
   if (!auth) throw new Error('Google OAuth not configured');
 
-  const gmailClient = gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
 
   if (action === 'delete') {
     await gmailClient.users.messages.trash({ userId: 'me', id: message.apiId });

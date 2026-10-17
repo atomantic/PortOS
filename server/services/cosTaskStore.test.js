@@ -1970,6 +1970,25 @@ describe('cosTaskStore.updateTask', () => {
   });
 });
 
+describe('cosTaskStore collection selection', () => {
+  it.each([
+    ['add', () => addTask({ description: 'Unexpected task' }, 'cos')],
+    ['update', () => updateTask('sys-example', { description: 'Unexpected edit' }, 'cos')],
+    ['delete', () => deleteTask('sys-example', ['user', 'internal'])],
+    ['merge', () => mergePeerTasks('cos', [{ id: 'sys-example', description: 'Unexpected peer edit' }])],
+  ])('rejects an invalid %s selector without changing either task file', async (_name, mutate) => {
+    await addTask({ description: 'User task', id: 'task-example' });
+    await addTask({ description: 'Internal task', id: 'sys-example', approvalRequired: true }, 'internal');
+    const before = new Map(mock.files);
+    mock.events = [];
+
+    await expect(mutate()).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+
+    expect(mock.files).toEqual(before);
+    expect(mock.events).toEqual([]);
+  });
+});
+
 describe('cosTaskStore.deleteTask', () => {
   it('removes the task and emits tasks:changed deleted', async () => {
     const created = await addTask({ description: 'del', id: 'task-del' }, 'user');

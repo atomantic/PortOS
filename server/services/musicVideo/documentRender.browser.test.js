@@ -16,10 +16,10 @@ import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
-import { browserSuiteCanRun } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, chromeWithH264 } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
-const lifecycle = vi.hoisted(() => ({ diagnostics: null }));
+const lifecycle = vi.hoisted(() => ({ diagnostics: null, chromeProcess: null, fixtureWritersSettled: false }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
   return { ...actual, rm: (...args) => lifecycle.diagnostics
@@ -68,9 +68,12 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
+const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testBrowserCleanupSettled, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
-afterAll(() => { lifecycle.diagnostics.dispose(); cleanupTempDataRoots(); });
+afterAll(() => {
+  lifecycle.diagnostics.dispose();
+  if (!lifecycle.chromeProcess || (lifecycle.fixtureWritersSettled && _testBrowserCleanupSettled(lifecycle.chromeProcess))) cleanupTempDataRoots();
+});
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -78,12 +81,15 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find((path) => path && existsSync(path));
 const ffmpeg = await findFfmpeg();
 // Imported discovery helpers can initialize mocked paths even on a skip.
-const canRun = browserSuiteCanRun('documentRender browser suite', { Chrome: chrome, ffmpeg }, { onUnavailable: cleanupTempDataRoots });
+const canRun = browserSuiteCanRun('documentRender browser suite', { 'Chrome with H.264': await chromeWithH264(chrome), ffmpeg }, { onUnavailable: cleanupTempDataRoots });
 
 describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
   let artifacts;
+  const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
+  let closingFixture;
+  const closeFixture = () => closingFixture ??= _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {}, detachedProcessGroupId: detachedChromeProcessGroupId() });
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
   let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
@@ -101,7 +107,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     ({ buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES } = await import('./documentPreview.js'));
     projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+    lifecycle.chromeProcess = proc;
+    lifecycle.fixtureWritersSettled = false;
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     artifacts = _createTestArtifactsRoot();
@@ -114,8 +122,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
         expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
-    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} }); }
-  });
+      lifecycle.fixtureWritersSettled = true;
+    } finally { await closeFixture(); }
+  }, 35000);
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
   it('develops a still from white in the encoded document render and live preview', async () => {
@@ -266,7 +275,55 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   // Server-only CI does not install client dependencies; the full local install
   // exercises this cross-workspace package/render contract alongside the UI proof.
   const threeIt = existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)) ? it : vitestIt.skip;
-  threeIt('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+  // Hosted coverage exercises the generated adapter and encoded content without
+  // certifying live playback throughput or judging creative quality.
+  threeIt('generates and exports a Three.js scene with visible authored content', async () => {
+    const created = await projects.createProject({ name: 'Synthetic generated export', mediaMode: 'code-only' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
+      composition: { mode: 'document', authoringRenderer: 'three' },
+    } }));
+    author.response = JSON.stringify({ sections: [{ id: 'world', source: `function render(ctx, env) {
+      const { THREE, scene, camera } = ctx;
+      camera.position.set(0, 0, 5); camera.lookAt(0, 0, 0);
+      scene.add(new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshBasicMaterial({ color: 0xff0000 })));
+    }` }] });
+    try {
+      const candidate = await generateMixedMediaDocument(created.id, { providerId: 'stub-provider' });
+      await acceptMixedMediaDocument(created.id, candidate.document.directory);
+    } finally { author.response = null; }
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'generated-smoke.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
+    const outputPath = join(PATHS.videos, 'generated-smoke.mp4');
+    const result = await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project),
+      jobId: 'generated-smoke', audioPath: master, outputPath, windowStart: 0, windowEnd: 2/24 });
+    expect(result).toMatchObject({ width: 1920, height: 1080, fps: 24 });
+    const rendered = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const center = (18 * 64 + 32) * 3;
+    expect(rendered[center]).toBeGreaterThan(150);
+    expect(rendered[center + 1]).toBeLessThan(80);
+    expect(rendered[center + 2]).toBeLessThan(80);
+  }, 60000);
+
+  threeIt('[fidelity] [local-performance] authors a local Three.js world and renders the same deterministic scene through module preview and export', async ({ signal }) => {
+    let bodyError;
+    let page;
+    const abort = () => {
+      // The cached verdict is awaited below and by suite teardown. Termination
+      // must begin before drain can wait on a blocked renderer evaluation.
+      closeFixture().catch(() => {});
+    };
+    const newPage = async options => {
+      signal.throwIfAborted();
+      const page = await browser.newPage(options);
+      if (signal.aborted) { await closeFixture(); signal.throwIfAborted(); }
+      return page;
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+    signal.throwIfAborted();
     const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
       audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
@@ -281,7 +338,42 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     expect(preview.assets).toEqual([]);
     expect(preview.html).toContain("img-src 'none'");
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    const { readDocumentFiles } = await import('./compositionDocument.js');
+    const referenceFiles = await readDocumentFiles(project);
+    referenceFiles.set('engine.js', referenceFiles.get('engine-reference.js'));
+    // Keep only one eager WebGL world alive: retain the reference pixels, then
+    // retire its page before creating the generated preview in the same browser.
+    const referenceFrames = [];
+    let portrait;
+    const reference = await newPage({ viewport: { width: 1920, height: 1080 } });
+    try {
+      await _withTestPreviewLoadDiagnostics(reference, async markReadiness => {
+        await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
+        markReadiness();
+        await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+      });
+      await reference.evaluate(() => {
+        window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
+        window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
+      });
+      for (const t of [0, 0.03125, 0.25, 0.5, 0.03125]) {
+        const pixels = await reference.evaluate(async t => {
+          await window.portosComposition.seek(t);
+          return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+        }, t);
+        referenceFrames.push({ t, pixels });
+      }
+      await reference.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
+      portrait = await reference.evaluate(async () => {
+        await window.portosComposition.seek(0.03125);
+        return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+      });
+      await reference.evaluate(() => {
+        window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
+        window.portosComposition.layout({ width: 1920, height: 1080 });
+      });
+    } finally { await reference.close(); }
+    page = await newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
     const warnings = []; page.on('console', (message) => { if (message.type() === 'warning') warnings.push(message.text()); });
     await page.evaluate(() => {
@@ -307,15 +399,65 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await window.portosComposition.seek(t);
       return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
     }, t);
+    await page.evaluate(() => {
+      window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
+      window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
+    });
+    for (const { t, pixels } of referenceFrames) expect(await at(t)).toEqual(pixels);
+    await page.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
+    expect(await at(0.03125)).toEqual(portrait);
+    await page.evaluate(() => {
+      window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
+      window.portosComposition.layout({ width: 1920, height: 1080 });
+    });
+    const live = await page.evaluate(async () => {
+      const api = window.portosComposition.previewPlayback;
+      const times = [], failures = [];
+      const original = window.PORTOS_MV_GENERATED.sections.world;
+      const receive = ({ data }) => { if (data?.type === 'portos-mv:playback-error') failures.push(data.message); };
+      addEventListener('message', receive);
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => { times.push(env.t); return original(ctx, env); };
+      try {
+        const prepared = await api.prepare({ epoch: 1, sequence: 1, t: 0 });
+        const played = await api.play({ epoch: 1, sequence: 2, t: 0, workerTime: api.clock() });
+        for (let i = 0; i < 8; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+        await api.pause({ epoch: 2, t: 0 });
+        return { prepared, played, times, failures };
+      } finally { window.PORTOS_MV_GENERATED.sections.world = original; removeEventListener('message', receive); }
+    });
+    expect(live.prepared.status).toBe('prepared');
+    expect(live.played.status).toBe('playing');
+    expect(live.failures).toEqual([]);
+    expect(new Set(live.times).size).toBeGreaterThan(1);
+    const beforeCancel = await at(0);
+    await page.evaluate(() => {
+      window.originalTitleReady = window.__portosTitleCard.ready;
+      window.__portosTitleCard.ready = () => new Promise(resolve => { window.releaseThreeTitle = resolve; });
+      window.pendingThreeExact = window.portosComposition.seek(0.75);
+    });
+    try {
+      await page.waitForFunction(() => typeof window.releaseThreeTitle === 'function');
+      expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
+      await page.evaluate(async () => {
+        const paused = window.portosComposition.previewPlayback.pause({ epoch: 3, t: 0 });
+        window.releaseThreeTitle();
+        await Promise.all([paused, window.pendingThreeExact]);
+      });
+      expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
+    } finally {
+      if (!signal.aborted && !page.isClosed()) await page.evaluate(async () => {
+        window.releaseThreeTitle?.();
+        await window.pendingThreeExact;
+        window.__portosTitleCard.ready = window.originalTitleReady;
+      });
+    }
     const first = await at(0);
+    const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
     const textures = await page.evaluate(() => window.liveTextureCount());
     const moved = await at(0.5);
     expect(moved.world).not.toBe(first.world);
     expect(await at(0)).toEqual(first);
     expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
-    const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
-    const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
-    expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
     expect(errors).toEqual([]);
     // ctx.lens drives the host post stack: a wide aperture focused in front of
     // the character softens every edge without allocating new GPU textures.
@@ -376,6 +518,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
     await page.close();
+    signal.throwIfAborted();
     await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });
     const master = join(PATHS.music, 'world.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
@@ -384,6 +527,20 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(result).toMatchObject({ width: 1920, height: 1080, fps: 24 });
     const rendered = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
+    } catch (error) {
+      bodyError = error;
+      throw error;
+    } finally {
+      const cleanupErrors = [];
+      try {
+        if (!signal.aborted && page && !page.isClosed()) await page.close().catch(error => cleanupErrors.push(error));
+        // Keep the listener installed while ordinary page closure is pending.
+        // If cancellation starts there, await its cached fixture verdict too.
+        if (signal.aborted) await closeFixture().catch(error => cleanupErrors.push(error));
+        if (cleanupErrors.length) throw new AggregateError([...(bodyError ? [bodyError] : []), ...cleanupErrors],
+          'Three test or owned browser cleanup failed', { cause: bodyError ?? cleanupErrors[0] });
+      } finally { signal.removeEventListener('abort', abort); }
+    }
   }, 120000);
 
   it('revokes idle preview media past the budget, keeps what a media element still plays, and asks again on reuse', async () => {
@@ -664,7 +821,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await rm(second.outputPath, { force: true });
   }, 120000);
 
-  ['ramps', 'generated-shots'].forEach(fixture => it(`matches bounded grades across real composed/document ${fixture} and song-time excerpts`, async () => {
+  ['ramps', 'generated-shots'].forEach(fixture => it(`[fidelity] matches bounded grades across real composed/document ${fixture} and song-time excerpts`, async () => {
     // render.js initializes the media registry. Import it only when this test
     // runs: a skipped browser suite never executes afterAll cleanup.
     const { buildMusicVideoFfmpegArgs } = await import('./render.js');

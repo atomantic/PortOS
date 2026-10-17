@@ -1,6 +1,7 @@
 /** Runtime-backed payload contracts for modeled Socket.IO events. */
 
 import { zodToOpenApiSchema } from './apiContractSchemas.js';
+import { generatedPreviewPlaybackSchema } from './generatedPreviewPlaybackSchema.js';
 import {
   appDeploySchema,
   appStandardizeSchema,
@@ -44,6 +45,23 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
+  'generated-preview:playback-state': {
+    direction: 'server-to-client',
+    summary: 'Correlated preview clock, preparation, playback and synchronization result.',
+    payloadSchema: {
+      type: 'object', required: ['requestId', 'sessionId', 'action'],
+      properties: {
+        requestId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' },
+        action: { type: 'string', enum: ['clock', 'prepare', 'play', 'sync'] },
+        probeId: { type: 'integer', minimum: 0 }, clientTime: { type: 'number' }, workerTime: { type: 'number' },
+        epoch: { type: 'integer', minimum: 0 }, sequence: { type: 'integer', minimum: 0 },
+        status: { type: 'string', enum: ['ready', 'playing', 'accepted', 'stale', 'resync-required', 'error'] },
+        message: { type: 'string' },
+        reason: { type: 'string', enum: ['controls', 'clock'] },
+      },
+    },
+  },
   'messages:sync:completed': {
     direction: 'server-to-client',
     summary: 'Account cache persisted after sync; visible inbox consumers reconcile a bounded summary page. No message bodies.',

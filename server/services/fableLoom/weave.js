@@ -1329,7 +1329,7 @@ export async function playTurn(loomId, episodeId, {
     sceneProse: node.prose || node.title || '',
     choicesDigest,
     transcriptDigest: transcriptDigest(transcript) || '(start of the read-through)',
-    readerMessage: trimTo(message, 1000),
+    readerMessage: isStr(message) && message.length <= 1000 ? message : trimTo(message, 1000),
     narrationFormatContract: narrationFormatContract(loom.format),
   }, { ...llmOptions(playRouting(loom, { providerId, model, effort }), 'fableloom-play'), callerPolicy });
 

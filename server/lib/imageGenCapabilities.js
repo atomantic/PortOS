@@ -89,10 +89,9 @@ export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 //    (`imageGen/agy.js#resolveAgyDriverModel`), because an install can outrun
 //    its PortOS version: the catalog refreshes from the live CLI on its own
 //    schedule. That covers only this PortOS-chosen pin — a model the user typed
-//    is theirs. Codex has no such heal: its pin is passed through verbatim by
-//    `imageGen/codex.js` with no model/effort pairing to validate, so a retired
-//    id surfaces as codex's own error rather than a confusing one, and the CI
-//    guard above is the defense. Give it one if that ever stops being true.
+//    is theirs. Codex similarly checks its local model cache at render time
+//    and uses a known listed lightweight fallback only for the shipped default.
+//    Missing cache evidence leaves the default unchanged; explicit pins win.
 //
 // So this constant is a shipped STARTING POINT — but keep it current: it is
 // what the Settings/ImageGen pickers display as "the default", and what an

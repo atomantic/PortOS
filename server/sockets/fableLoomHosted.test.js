@@ -181,7 +181,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       }
     });
 
-    async function guestTurn(input) {
+    async function guestTurn(input, text = 'go next') {
       const { session, token, preflight } = await createHostedSession('loom-1', 'ep-1');
       const audience = makeSocket({ role: 'audience', sessionId: session.id });
       audience.handshake = { auth: { role: 'audience', sessionId: session.id, token } };
@@ -191,7 +191,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       connectionHandler(audience);
       await audience.listeners['hosted:mic:start']();
       if (input === 'audio') await audience.listeners['hosted:mic:stop'](Buffer.from('synthetic audio'));
-      else await audience.listeners['hosted:turn:text']({ text: 'go next', callerPolicy: 'any-text', providerId: cli.id });
+      else await audience.listeners['hosted:turn:text']({ text, callerPolicy: 'any-text', providerId: cli.id });
       expect(runner.executeCliRun).not.toHaveBeenCalled();
       expect(tuiRunner.executeTuiRun).not.toHaveBeenCalled();
       return { preflight, session: getHostedSession(session.id) };
@@ -219,6 +219,13 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         requestCapabilities: expect.objectContaining({ allowedModes: ['api'] }),
       }));
       expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves the full accepted guest text through the real play prompt boundary', async () => {
+      const text = `  ${'x'.repeat(996)}  `;
+      const { session } = await guestTurn('text', text);
+      expect(prompts.buildPrompt).toHaveBeenCalledWith('fableloom-play-turn', expect.objectContaining({ readerMessage: text }));
+      expect(session.transcript.find((item) => item.role === 'audience')?.text).toBe(text);
     });
 
     it('refuses proactive process substitution and retains authored narration', async () => {
@@ -453,22 +460,130 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(roomEvent('hosted:story:transition')).toBeUndefined();
     });
 
-    it('emits hosted:error to the audience when the turn fails', async () => {
+    it('reports a failed turn once to the room, then returns every client to idle', async () => {
       await audience.listeners['hosted:mic:start']();
       records.getLoom.mockRejectedValueOnce(new Error('loom read failed'));
 
       await audience.listeners['hosted:turn:text']({ text: 'go next' });
 
-      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
-        .toMatchObject({ code: 'TEXT_FAILED', message: 'loom read failed' });
+      const errors = roomEvents.filter((e) => e.event === 'hosted:error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0].data).toMatchObject({ code: 'TURN_FAILED', message: 'loom read failed' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')).toBeUndefined();
+      const names = roomEvents.map((e) => e.event);
+      const phaseAfterError = roomEvents.slice(names.indexOf('hosted:error') + 1)
+        .find((e) => e.event === 'hosted:turn:phase');
+      expect(phaseAfterError?.data).toMatchObject({ phase: 'idle' });
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
     });
 
-    it('ignores hosted:turn:text when the session is not listening', async () => {
+    it('opens a text turn from the initial idle session without a microphone start', async () => {
       await audience.listeners['hosted:turn:text']({ text: 'go next' });
 
-      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ message: 'go next' }));
       expect(getHostedSession(session.id).currentNodeId).toBe('node-1');
       expect(audience.emitted.find((e) => e.event === 'hosted:error')).toBeUndefined();
+    });
+
+    it('opens another typed turn after a scene transition returns the session to idle', async () => {
+      weave.playTurn.mockResolvedValueOnce({
+        action: 'move', transitionId: 'tr-1', narration: 'Onward.', node: { id: 'node-2' }, ended: false,
+      });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      expect(getHostedSession(session.id)).toMatchObject({ turnPhase: 'idle', currentNodeId: 'node-2' });
+
+      await audience.listeners['hosted:turn:text']({ text: 'look around' });
+      expect(weave.playTurn).toHaveBeenLastCalledWith('loom-1', 'ep-1', expect.objectContaining({
+        nodeId: 'node-2', message: 'look around',
+      }));
+      expect(weave.playTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports the live gate refusal and permits a new text turn after playback returns to hold', async () => {
+      const host = connectHost();
+      await host.listeners['hosted:playback:update']({ phase: 'entry' });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'PLAYBACK_NOT_IN_HOLD_PHASE' });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+
+      await host.listeners['hosted:playback:update']({ phase: 'hold' });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      expect(weave.playTurn).toHaveBeenCalledOnce();
+    });
+
+    it.each(['thinking', 'speaking'])('refuses typed turns while %s', async (phase) => {
+      _getInternalSession(session.id).turnPhase = phase;
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'TURN_IN_PROGRESS' });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).turnPhase).toBe(phase);
+    });
+
+    it.each(['text', 'mic'])('refuses a concurrent idle %s admission without replacing the first text turn', async (second) => {
+      let resolveLoom;
+      records.getLoom.mockImplementationOnce(() => new Promise((resolve) => { resolveLoom = resolve; }));
+      const pending = audience.listeners['hosted:turn:text']({ text: 'first request' });
+      if (second === 'text') await audience.listeners['hosted:turn:text']({ text: 'second request' });
+      else await audience.listeners['hosted:mic:start']();
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'TURN_IN_PROGRESS' });
+      resolveLoom(mockLoom);
+      await pending;
+      expect(weave.playTurn).toHaveBeenCalledOnce();
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ message: 'first request' }));
+      expect(getHostedSession(session.id).transcript.filter((item) => item.role === 'audience'))
+        .toMatchObject([{ text: 'first request' }]);
+    });
+
+    it('releases text admission after a failed loom read so a retry can succeed', async () => {
+      records.getLoom.mockRejectedValueOnce(new Error('loom read failed'));
+      await audience.listeners['hosted:turn:text']({ text: 'first request' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'TEXT_FAILED', message: 'loom read failed' });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      await audience.listeners['hosted:turn:text']({ text: 'retry request' });
+      expect(weave.playTurn).toHaveBeenCalledOnce();
+    });
+
+    it('reports an episode-switch refusal and accepts text after the switch completes', async () => {
+      const host = connectHost();
+      let resolveLoom;
+      records.getLoom.mockImplementationOnce(() => new Promise((resolve) => { resolveLoom = resolve; }));
+      const pending = host.listeners['hosted:episode:switch']({ episodeId: 'ep-2' });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'EPISODE_SWITCH_IN_PROGRESS' });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      resolveLoom(mockLoom);
+      await pending;
+      await audience.listeners['hosted:turn:text']({ text: 'new episode request' });
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-2', expect.objectContaining({
+        nodeId: 'node-ep2-1', message: 'new episode request',
+      }));
+    });
+
+    it.each([{}, { text: 42 }, { text: { message: 'go next' } }, { text: null }, { text: '' }, { text: 'x'.repeat(1001) }])(
+      'rejects invalid text payload %# before opening a turn or publishing a transcript', async (payload) => {
+        await audience.listeners['hosted:turn:text'](payload);
+        const error = audience.emitted.find((e) => e.event === 'hosted:error')?.data;
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR', maxLength: 1000 });
+        expect(error.count).toBe(typeof payload.text === 'string' ? payload.text.length : null);
+        if (typeof payload.text === 'string') expect(error.message).toContain(String(payload.text.length));
+        expect(weave.playTurn).not.toHaveBeenCalled();
+        expect(getHostedSession(session.id)).toMatchObject({ turnPhase: 'idle' });
+        expect(getHostedSession(session.id).transcript).toHaveLength(1);
+        expect(roomEvent('hosted:turn:transcript')).toBeUndefined();
+      },
+    );
+
+    it('passes a text message at the REST limit through without cutting it', async () => {
+      const text = 'x'.repeat(1000);
+      await audience.listeners['hosted:turn:text']({ text });
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ message: text }));
+      expect(roomEvent('hosted:turn:transcript')?.data).toMatchObject({ text });
     });
 
     it('buffers mic frames while listening and transcribes them on mic:stop', async () => {
@@ -618,6 +733,23 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         activeHoldIndex: 0,
         currentNodeId: 'node-1',
       });
+    });
+
+    it.each([
+      { phase: 'not-a-phase' }, { activeHoldIndex: -1 }, { activeHoldIndex: 11 },
+      { activeHoldIndex: 1.5 }, { activeHoldIndex: '1' }, { nodeId: 42 },
+    ])('rejects playback payload %# outside the REST schema without changing state', async (payload) => {
+      const host = connectHost();
+      await host.listeners['hosted:playback:update'](payload);
+      expect(host.emitted.find((e) => e.event === 'hosted:error')?.data).toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(getHostedSession(session.id)).toMatchObject({ playbackPhase: 'hold', activeHoldIndex: 0, currentNodeId: 'node-1' });
+      expect(roomEvent('hosted:playback:sync')).toBeUndefined();
+    });
+
+    it.each([0, 10])('accepts the REST playback hold-index boundary %s', async (activeHoldIndex) => {
+      const host = connectHost();
+      await host.listeners['hosted:playback:update']({ phase: 'hold', activeHoldIndex, nodeId: 'node-2' });
+      expect(roomEvent('hosted:playback:sync')?.data).toEqual({ phase: 'hold', activeHoldIndex, nodeId: 'node-2' });
     });
 
     // #8112: only the host may re-bind this hosted session's episode. An

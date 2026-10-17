@@ -366,6 +366,11 @@ function stampOrigin(record, { bucket, source, sourceBio, manifestId }) {
  * deterministic (`sub-series-<id>-<senderInstanceId>.json`) so re-exports
  * overwrite in place instead of accumulating, and two peers sharing the same
  * series don't collide on the bucket file. Omit for one-shot legacy shares.
+ *
+ * `opts.isLive` (optional async predicate): consulted right before the
+ * manifest is written. When it resolves false (the subscription was removed
+ * mid-export) the manifest write is skipped and the export returns `null`;
+ * already-copied records/blobs are left for blob GC.
  */
 export async function exportSeries(seriesId, bucketId, opts = {}) {
   const bucket = await getBucket(bucketId);
@@ -487,6 +492,7 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
   });
 
   const manifest = { ...manifestStub, recordIds, assetRefs, reviewRefs, outlineRefs };
+  if (opts.isLive && !(await opts.isLive())) return null;
   const filename = await writeManifest(bucket.path, manifest);
   await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: recordIds.length, assetCount: assetRefs.length };
@@ -549,6 +555,7 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
   });
 
   const manifest = { ...manifestStub, recordIds: [universe.id], assetRefs };
+  if (opts.isLive && !(await opts.isLive())) return null;
   const filename = await writeManifest(bucket.path, manifest);
   await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: 1, assetCount: assetRefs.length };

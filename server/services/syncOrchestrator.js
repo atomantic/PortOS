@@ -12,7 +12,7 @@ import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded
 import { createMutex } from '../lib/asyncMutex.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
+import { getPeers, peerLogLabel, resolveEffectiveCategories, setPeerSchemaGap } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT, PEER_BODY_DEFAULT_MAX_BYTES } from '../lib/peerHttpClient.js';
@@ -661,39 +661,20 @@ const slotsQsOf = (manifest, forPeerQs) => (manifest
  * peers.json stays a pure config surface. For now we co-locate on the peer
  * record because that's the entity the Instances page already renders.
  */
-// Look up the local peer row by remote instanceId (the only id we have at
-// the orchestrator level) and resolve to the LOCAL `peer.id` that updatePeer
-// keys by. Passing `peer.instanceId` straight to updatePeer would silently
-// return null because instances.js matches on `p.id === id`.
+// Writes go through setPeerSchemaGap, which resolves the peer by remote
+// instanceId and merges this one category inside the serialized peers write —
+// categories sync in parallel and must not overwrite each other's gaps.
 async function recordPeerSchemaGap(peerId, category, gap) {
-  const peers = await getPeers().catch(() => []);
-  const peer = peers.find((p) => p.instanceId === peerId);
-  if (!peer) return;
-  const existingGaps = isPlainObjectShallow(peer.schemaGaps) ? peer.schemaGaps : {};
-  await updatePeer(peer.id, {
-    schemaGaps: {
-      ...existingGaps,
-      [category]: {
-        detectedAt: new Date().toISOString(),
-        ahead: Array.isArray(gap.ahead) ? gap.ahead : [],
-        behind: Array.isArray(gap.behind) ? gap.behind : [],
-        senderPortosVersion: typeof gap.senderPortosVersion === 'string' ? gap.senderPortosVersion : null,
-      },
-    },
+  await setPeerSchemaGap(peerId, category, {
+    detectedAt: new Date().toISOString(),
+    ahead: Array.isArray(gap.ahead) ? gap.ahead : [],
+    behind: Array.isArray(gap.behind) ? gap.behind : [],
+    senderPortosVersion: typeof gap.senderPortosVersion === 'string' ? gap.senderPortosVersion : null,
   });
 }
 
 async function clearPeerSchemaGap(peerId, category) {
-  const peers = await getPeers().catch(() => []);
-  const peer = peers.find((p) => p.instanceId === peerId);
-  if (!peer) return;
-  const existingGaps = isPlainObjectShallow(peer.schemaGaps) ? peer.schemaGaps : null;
-  if (!existingGaps || !(category in existingGaps)) return;
-  const next = { ...existingGaps };
-  delete next[category];
-  await updatePeer(peer.id, {
-    schemaGaps: Object.keys(next).length > 0 ? next : null,
-  });
+  await setPeerSchemaGap(peerId, category, null);
 }
 
 const isPlainObjectShallow = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

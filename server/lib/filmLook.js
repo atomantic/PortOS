@@ -184,6 +184,30 @@ export function describeFilmLook(look) {
   return [...new Set(phrases)].slice(0, 8).join(', ');
 }
 
+/**
+ * The look at a fraction of its strength: every effect scaled toward zero (1 =
+ * as given, 0 = clean). Modifiers, colors and toggles only shape an effect, so
+ * they keep their values.
+ */
+export function scaleFilmLook(look, amount) {
+  const settings = normalizeFilmLook(look);
+  if (!settings) return null;
+  const k = Math.min(1, Math.max(0, Number(amount) || 0));
+  const scaled = { ...settings };
+  for (const control of FILM_LOOK_CONTROLS) {
+    if (!control.type && !control.modifier) scaled[control.id] = settings[control.id] * k;
+  }
+  return normalizeFilmLook(scaled);
+}
+
+/** True when two looks set every control the same (their preset names aside). */
+export function sameFilmLook(a, b) {
+  const left = normalizeFilmLook(a);
+  const right = normalizeFilmLook(b);
+  if (!left || !right) return left === right;
+  return FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
+}
+
 /** The control record for an id (label, term, hint, range). */
 export const filmLookControl = (id) => CONTROL_BY_ID.get(id) || null;
 

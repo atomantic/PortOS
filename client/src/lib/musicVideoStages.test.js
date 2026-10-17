@@ -89,6 +89,19 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(interrupted)).toMatchObject({ id: 'resume-production' });
   });
 
+  it('a parked run no longer holds Shots open once every shot is done', () => {
+    const finished = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], renderHistoryId: 'rh-1' };
+    const parked = { ...finished, productionRuns: [run({ status: 'awaiting-video' })] };
+    expect(stateOf(parked).produce).toBe('done');
+    expect(stateOf(parked).review).toBe('done');
+    expect(deriveNextAction(parked).id).not.toBe('resume-production');
+    expect(autopilotStatus(parked)).toMatchObject({ short: 'Autopilot', tone: 'muted' });
+    // A run still working keeps Shots open, and a parked run with shots left still owns the header.
+    expect(stateOf({ ...finished, productionRuns: [run()] }).produce).toBe('active');
+    const unfinished = { ...parked, scenes: [scene({ videoHistoryId: null, referenceImageId: null })] };
+    expect(deriveNextAction(unfinished)).toMatchObject({ id: 'resume-production' });
+  });
+
   it('walks Storyboard → Make → Final render, then reports a finished project', () => {
     const planned = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     expect(deriveStages(planned).current).toBe('produce');
@@ -535,6 +548,14 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { ...readiness.storyboard, stale: { changedFields: ['scene 2 prompt'] } } };
     expect(stills(stale).detail).toMatch(/^2 shots not locked yet\. .*changed since: scene 2 prompt/);
   });
+  // Uniquely catches the video count losing its one-tap way to the shots it counts.
+  it('counts the videos left to lock and shows them on the board', () => {
+    const readiness = { ...NOT_APPROVED, art: { approved: true, problems: [] },
+      storyboard: { approved: true, problems: [], unlocked: [], clipLocks: { s1: 'locked', s2: 'changed', s3: 'open' }, clipsUnlocked: ['s2', 's3'] } };
+    const clips = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'lock-clips');
+    expect(clips).toMatchObject({ done: false, detail: '2 videos not locked yet. Lock each on its card once its clip is right.',
+      action: { label: 'Show these 2', anchor: 'mv-scene-board', params: { scenes: 'attention' } } });
+  });
   it('counts per-scene changes in a stale approval instead of naming every scene', () => {
     const prompts = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
     expect(changedFieldsText(['storyboard shots', ...prompts, 'scene 4 timing'])).toBe('storyboard shots, 26 scene prompts, scene 4 timing');
@@ -656,6 +677,17 @@ describe('stepNotes', () => {
     expect(stepNotes({ ...project, renderHistoryId: 'r', renderDependencyState: { status: 'stale' } }).review).toBe('Out of date');
     // Before the final render, Final render says how many drafts and proofs there are to watch.
     expect(stepNotes({ ...project, excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }, { id: 'b', status: 'complete', filename: 'b.mp4' }, { id: 'c', status: 'error' }] }).review).toBe('2 drafts to watch');
+  });
+
+  it('names what keeps a pictured Shots step from done instead of the picture count', () => {
+    const project = { id: 'p', scenes: [scene(), scene({ sceneId: 's2' }), scene({ sceneId: 's3' })] };
+    const clipLocks = { s1: 'locked', s2: 'changed', s3: 'open' };
+    const locked = { ...APPROVED, storyboard: { approved: true, problems: [], unlocked: [], clipLocks, clipsUnlocked: ['s2', 's3'] } };
+    expect(stepNotes(project, locked).produce).toBe('2 videos not locked');
+    const stills = { ...locked, storyboard: { approved: false, problems: [], unlocked: ['s3'], clipLocks, clipsUnlocked: ['s2', 's3'] } };
+    expect(stepNotes(project, stills).produce).toBe('1 still and 2 videos not locked');
+    const done = { ...locked, storyboard: { ...locked.storyboard, clipLocks: { s1: 'locked', s2: 'locked', s3: 'locked' }, clipsUnlocked: [] } };
+    expect(stepNotes(project, done).produce).toBe('3 of 3 shots have their picture');
   });
 });
 

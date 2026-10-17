@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { sameJsonShape } from '../lib/sameJsonShape';
 import { subscribeVisibility } from './useVisibilityEvent.js';
 
 /**
@@ -20,39 +21,7 @@ import { subscribeVisibility } from './useVisibilityEvent.js';
 
 export const SYSTEM_ACTIVITY_COALESCE_MS = 50;
 
-export const sameProcessingSnapshot = (a, b) => {
-  if (!a || !b) return a === b;
-  return a.agents?.active === b.agents?.active
-    && a.agents?.queued === b.agents?.queued
-    && a.agents?.trusted === b.agents?.trusted
-    && a.gpu?.status === b.gpu?.status
-    && a.gpu?.laneBusy === b.gpu?.laneBusy
-    && a.gpu?.gpus?.[0]?.utilizationPercent === b.gpu?.gpus?.[0]?.utilizationPercent
-    && a.mind?.thinking === b.mind?.thinking
-    && a.mind?.queued === b.mind?.queued
-    && a.mind?.status === b.mind?.status
-    && a.mind?.trusted === b.mind?.trusted
-    && a.llm?.active === b.llm?.active
-    && a.llm?.trusted === b.llm?.trusted
-    && JSON.stringify(a.llm?.runs) === JSON.stringify(b.llm?.runs)
-    && JSON.stringify(a.ollama) === JSON.stringify(b.ollama)
-    && a.backup?.inProgress === b.backup?.inProgress
-    && a.update?.inProgress === b.update?.inProgress
-    && a.activity?.idle === b.activity?.idle
-    && a.activity?.activeCount === b.activity?.activeCount
-    && a.activity?.queuedCount === b.activity?.queuedCount
-    && (a.appOperations || []).length === (b.appOperations || []).length
-    && JSON.stringify(a.renders || []) === JSON.stringify(b.renders || [])
-    && a.jobs?.length === b.jobs?.length
-    && (a.extras?.imageTo3d || []).length === (b.extras?.imageTo3d || []).length
-    && (a.jobs || []).every((job, index) => job?.id === b.jobs[index]?.id
-      && job?.status === b.jobs[index]?.status
-      && job?.progress === b.jobs[index]?.progress
-      && job?.position === b.jobs[index]?.position
-      && job?.statusMsg === b.jobs[index]?.statusMsg)
-    && (a.extras?.imageTo3d || []).every((item, index) => item?.id === b.extras?.imageTo3d?.[index]?.id
-      && item?.name === b.extras?.imageTo3d?.[index]?.name);
-};
+export const sameProcessingSnapshot = sameJsonShape;
 
 const EMPTY = { snapshot: null, status: 'unknown', error: null };
 
@@ -84,8 +53,13 @@ function read() {
       publish({ snapshot: state.snapshot, status: 'error', error: new Error('Invalid system activity') });
       return;
     }
-    const nextSnapshot = state.snapshot && sameProcessingSnapshot(state.snapshot, snapshot) ? state.snapshot : snapshot;
-    publish({ snapshot: nextSnapshot, status: 'ready', error: null });
+    if (state.snapshot && sameProcessingSnapshot(state.snapshot, snapshot)) {
+      if (state.status !== 'ready' || state.error !== null) {
+        publish({ snapshot: state.snapshot, status: 'ready', error: null });
+      }
+      return;
+    }
+    publish({ snapshot, status: 'ready', error: null });
   }).catch((error) => {
     if (started !== generation) return;
     const err = error instanceof Error ? error : new Error(String(error ?? 'System activity read failed'));

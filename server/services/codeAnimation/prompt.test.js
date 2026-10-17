@@ -223,6 +223,11 @@ describe('music-video craft and measured choreography', () => {
     expect(prompt).toContain('does not require rapid cuts or constant motion');
     expect(prompt).toContain("Preserve the host's lyric pass as the authority");
     expect(prompt).toContain('never invent a kick, snare, drop, word timing or missing event');
+    if (_label.startsWith('document ')) {
+      expect(prompt).toContain('Finish all drawing before render returns');
+      expect(prompt).toContain('Do not return a Promise, schedule deferred drawing callbacks or retain ctx');
+      expect(prompt).toContain('The host awaits packaged fonts and any selected media');
+    }
     const snapshot = songSnapshot(prompt);
     expect(snapshot.beats).toEqual(project.audioAnalysis.beats);
     expect(snapshot.downbeats).toEqual(project.audioAnalysis.downbeats);

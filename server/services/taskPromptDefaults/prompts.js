@@ -1472,9 +1472,18 @@ shows is changed most often.
   where the caller needs the intent.
 - **Negated booleans** — \`notDisabled\`, \`hideNothing\`, \`skipUnlessMissing\` —
   anything forcing double-negative reasoning at a call site.
-- **Comments that compensate for the code** — a paragraph explaining what a
-  rename or an extraction would have made self-evident, and commented-out code
-  left behind as documentation.
+- **Excessive code comments** — redundant narration, stale explanations,
+  commented-out code, and verbose walkthroughs of obvious control flow. Read the
+  surrounding code before deciding what to remove or shorten. Keep concise context
+  that cannot be inferred from names and code paths: why, invariants, non-obvious
+  constraints, safety rationale, external contracts, and justified workarounds.
+  Preserve licenses, tool directives, meaningful type/JSDoc metadata, public API
+  documentation, and needed rationale. Prefer clearer code when it can express
+  the same information. Do not use comment counts or length quotas as targets.
+  This is code-comment maintenance, not a rewrite of user-facing documentation.
+  In file-issues mode, report concrete examples and the proposed cleanup without
+  editing source; in implement mode, remove or tighten excessive comments and
+  review the diff for behavior preservation.
 - **Action at a distance** — module-level mutable state, implicit ordering
   requirements between calls ("you must call init first"), and side effects
   hidden behind names that read as pure.
@@ -1897,6 +1906,46 @@ the project's documented deployment model decides which exposure is intended.
   reads it) that disagree about a port, a variable, or a resource, so the first
   deploy to the other one fails.
 
+## CI efficiency and placement
+
+This is part of the audit, alongside deployment safety. Trace workflow files
+through their planner, runners, scripts and required-check rules; YAML alone
+may hide what actually runs.
+
+- **Measure before changing.** Sample recent representative PR/MR, merge,
+  nightly and release runs, including a small change and a broad-risk change.
+  Record run links/commit SHAs, sample window and count, execution frequency,
+  per-job/step durations, queue time, summed runner time and the dependency
+  critical path. Separate measured data from estimates and explain missing
+  telemetry; estimate savings per run and at the observed cadence.
+- **Select work by risk.** Inspect event triggers, path filters, affected-test
+  selection and full-suite fallbacks. Check that small unrelated changes do
+  not select expensive work without a reason, and relevant changes cannot skip
+  required coverage. Evaluate PR/MR versus merge, nightly, release and opt-in
+  placement against the failures each check catches and when detection is
+  needed. Preserve required status reporting and fail closed on uncertain scope.
+- **Remove demonstrated duplicate work.** Trace overlapping workflows, matrix
+  jobs, installs, builds, test processes and setup. Inspect job dependencies for
+  unnecessary serialization or repeated prerequisites. Distinguish runner-time
+  savings from critical-path latency; more parallelism can increase total cost.
+- **Reuse safely.** Check cache hits/misses, keys and invalidation, restore cost,
+  artifact upload/download cost, retention and same-input build reuse. Preserve
+  platform/toolchain compatibility, provenance and untrusted-PR isolation.
+- **Bound obsolete work.** Inspect concurrency groups, superseded-run
+  cancellation, failure cancellation, retries and timeouts. Keep release work,
+  required gates and failure diagnostics reliable; do not trade waste for
+  missing results or restart loops.
+- **Prove test value.** Coordinate with Test Quality for redundant or vacuous
+  tests: identify the stronger surviving coverage or use a bounded mutation
+  probe, reverted before commit. A slow test is not a valueless test. Improve
+  fixtures, imports or setup before removing useful correctness/security checks.
+
+For a CI finding, give the measured baseline, exact selection/dependency change,
+expected savings, retained risk coverage and validation. Test representative
+changed-path/event cases and required-check behavior, then compare equivalent
+before/after runs where available. If access prevents measurement, report that
+limit; do not invent savings or weaken essential coverage to obtain green CI.
+
 ## Not yours
 
 Application-code vulnerabilities belong to the security work; package version
@@ -1908,7 +1957,8 @@ reliability work. Name the overlap if it is the cause, then leave it to its owne
 
 Every finding names the file and line, the environment it affects, and the
 concrete consequence: who can reach what, what a leaked credential grants, or
-which deploy breaks. Redact before you publish — describe a secret's location
+which deploy breaks, measured avoidable runner time or critical-path delay,
+or a coverage/required-check failure. Redact before you publish — describe a secret's location
 and shape, never its value, and never paste account ids, hostnames, or addresses.`,
 
   'data-integrity': `[Improvement: {appName}] Data integrity and pipeline audit
@@ -2858,7 +2908,7 @@ ${REQUIRED_REVIEW_PUBLICATION_RULE}
 The configured reviewers for this task, in order, are \`{reviewers}\`. Split them by where they can run, preserving order: **LOCAL reviewers** — every token that is NOT an \`@<login>\` (\`claude\` / \`codex\` / \`antigravity\` (CLI binary: \`agy\`) / \`grok\` / \`cursor\` invoke a local-CLI critique; \`lmstudio\` / \`ollama\` use the appended Local Reviewer Procedure) read the working tree and need no PR, so they run BEFORE the PR is opened. **PR-SIDE reviewers** — every \`@<login>\` token, plus any review bot the repo requests automatically on open — review cloud-side, so they can only run once the PR exists. Open the PR only when the branch is already review-clean (or a required reviewer is recorded as review-blocked) and all that remains is CI plus those PR-side reviewers.
 
 1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff — BEFORE opening the PR, not retroactively. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
-2. **Run each LOCAL reviewer in order against the BRANCH diff, not a PR diff.** No PR exists yet, so use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`); local LLM reviewers go through the appended endpoint procedure. Apply the fixes, run the tests, and commit them — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to step 3 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If a local reviewer still has substantive findings after 3 rounds, or its fixes leave the build/tests red, do NOT open a PR — leave the branch and worktree in place, report the reviewer and the failure, and stop. Reviewer unavailability alone is review-blocked, so it does not take this stop path.
+2. **Run each LOCAL reviewer in order against the BRANCH diff, not a PR diff.** No PR exists yet, so use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`); local LLM reviewers go through the appended endpoint procedure. Apply the fixes, run the tests, and commit them — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to step 3 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If a local reviewer still has accepted findings after 3 rounds, or its fixes leave the build/tests red, do NOT open a PR — leave the branch and worktree in place, report the reviewer and the failure, and stop. Reviewer unavailability alone is review-blocked, so it does not take this stop path.
 3. Push the branch: \`git push -u origin claim/<slug>\`, then confirm \`git log --oneline @{u}..HEAD\` is empty so every review fix from step 2 is in the PR's diff.
 4. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
 4a. Read the review status back — shell variables do not survive between calls, so run \`REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)"\` and source it. If \`REVIEW_STATUS=review-blocked\` from a required reviewer, preserve the claim branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
@@ -3112,7 +3162,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the PR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this — the PR + commit history is the record.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
 3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not a PR diff.** No PR exists yet, so \`gh pr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`). Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means substantive reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.
+4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.
 
 ## Phase 6 — Open the PR, satisfy PR-side review + CI, and merge
 
@@ -3300,7 +3350,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the MR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
 3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR diff.** No MR exists yet, so \`glab mr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means substantive reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.
+4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.
 
 ## Phase 6 — Open the merge request, satisfy MR-side review + CI, and merge
 
@@ -3488,7 +3538,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the MR/PR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. Otherwise skip it.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent by hand.
-3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR/PR diff.** Nothing is open yet, so use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`; local LLM reviewers go through the appended endpoint procedure. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If substantive findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted, do NOT open one — leave the branch and worktree in place, comment the failure on the ticket (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments), and stop. Reviewer unavailability alone is REVIEW_STATUS=review-blocked, so it does not take this stop path.
+3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR/PR diff.** Nothing is open yet, so use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`; local LLM reviewers go through the appended endpoint procedure. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If accepted findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted, do NOT open one — leave the branch and worktree in place, comment the failure on the ticket (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments), and stop. Reviewer unavailability alone is REVIEW_STATUS=review-blocked, so it does not take this stop path.
 4. Push the branch: \`git push -u origin "claim/\${KEY}"\`, then confirm \`git log --oneline @{u}..HEAD\` is empty so every review fix from step 3 is in the MR/PR's diff.
 5. Open the MR/PR. Reference the JIRA \`KEY\` in the title and description (there is NO \`Closes\` auto-close for JIRA). Summarize what shipped + a short test plan.
    - GitHub: \`gh pr create --fill --head "claim/\${KEY}"\` (then edit the body to mention \`KEY\` if \`--fill\` didn't).
@@ -3568,12 +3618,13 @@ Generated: <today's date>
 \\\`\\\`\\\`
 
 Order recommendations by priority (HIGH first), then by effort (Small first).
+These labels set sequencing only: every accepted issue must be resolved, including LOW findings.
 
 16. Do NOT implement any changes — this is a review-only stage`,
 
   'code-reviewer-implement': `[Review: {appName}] Triage & Implement Review (Stage 2)
 
-You are the implementation stage of a code review pipeline. A different AI model reviewed the codebase and wrote recommendations to REVIEW.md. Your job is to evaluate each recommendation, implement the best ones, and triage the rest.
+You are the implementation stage of a code review pipeline. A different AI model reviewed the codebase and wrote recommendations to REVIEW.md. Your job is to validate each recommendation, fix every accepted issue regardless of severity, and record the disposition of every item.
 
 Repository: {repoPath}
 
@@ -3590,12 +3641,14 @@ Repository: {repoPath}
 For each recommendation in REVIEW.md, evaluate:
 - Does it align with GOALS.md?
 - Is it already in PLAN.md, the changelog, or shipped per git log?
-- What is the actual value vs effort?
+- Is it a verified defect or established-convention violation, or an optional product proposal? Severity and effort determine order, never whether an accepted issue is fixed.
 
 Categorize into:
-- **IMPLEMENT**: High value, achievable in this session (small/medium effort, clear scope)
-- **PLAN**: High value but too large for this session — add to PLAN.md
-- **REJECT**: Low value, misaligned with goals, or already addressed
+- **IMPLEMENT**: Every accepted issue, including warnings and nits
+- **PLAN**: Accepted work genuinely blocked by hardware, permissions, a user-owned decision, or a dependency — track the evidence, owner, and next step; it remains unresolved
+- **REJECT**: A demonstrated false positive, rule retired after reassessing its value or current feasibility, or product proposal explicitly declined with rationale; low severity alone is not rejection
+
+Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 - **DONE**: Already implemented (found in the changelog, git history, or codebase)
 
 ## Phase 3 — Implement
@@ -3796,9 +3849,9 @@ Merge them one at a time and let CI settle between merges, since lockfile change
 
 The bundled slashdo \`release\` workflow is the single source of truth for release mechanics. Do not duplicate its branch, version, changelog, readiness, test/build, PR, review, CI, merge, tag, or report steps here.
 
-The PortOS Code Review Defaults rendered into \`{reviewers}\` are advisory for this run. Use exactly that reviewer list and no other when review is available. The task builder attaches the same list to the bundled slashdo invocation; do not invoke a bare workflow that falls back to saved slashdo defaults. Code review is optional: run configured reviewers when available and address valid findings, but an empty, unavailable, timed-out, malformed, no-verdict, or otherwise inconclusive review must never stop the release.
+The PortOS Code Review Defaults rendered into \`{reviewers}\` are advisory for this run. Use exactly that reviewer list and no other when review is available. The task builder attaches the same list to the bundled slashdo invocation; do not invoke a bare workflow that falls back to saved slashdo defaults. Code review is optional: run configured reviewers when available and address valid findings, but an empty, unavailable, timed-out, malformed, no-verdict, or otherwise inconclusive review does not itself stop the release. Known unresolved accepted findings still block release regardless of severity. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 
-Run the bundled \`/do:release\` workflow (or its equivalent \`release\` skill) in autonomous mode with no \`--interactive\` flag. It owns release readiness, version/changelog finalization, tests/build, optional code review, PR creation, CI, merge, tagging, and the final report. Only CI is the review/merge gate; required release tests/build checks still must pass — and a failing test or red CI run is work for Step 4, not a reason to end the run.
+Run the bundled \`/do:release\` workflow (or its equivalent \`release\` skill) in autonomous mode with no \`--interactive\` flag. It owns release readiness, version/changelog finalization, tests/build, optional code review, PR creation, CI, merge, tagging, and the final report. Every accepted finding must be resolved before merge or release; required CI and release tests/build checks must also pass — and a failing test or red CI run is work for Step 4, not a reason to end the run.
 
 ### Release naming and notes
 
@@ -4289,13 +4342,13 @@ rechecking the exact content and current PR state.
 1. Evaluate every supplied PR exactly once, preserving its numeric \`number\`
    and exact \`headSha\`.
 2. Compare the diff with its linked issues before judging implementation quality.
-   Wrong scope and a mismatch with the requested behavior are blocking findings.
+   Wrong scope and a mismatch with the requested behavior are findings requiring resolution.
 3. Review the complete supplied diff for correctness, privacy, malware,
    data-loss, compatibility, and security regressions. State what the supplied
    evidence proves and where it is insufficient. Never claim a test was run;
    report test evidence as \`not-run\` and require the trusted CI result.
 4. Anchor findings to added RIGHT-side lines. Use \`request_changes\` for
-   blocking findings, \`approve\` for a supported clean review, and \`defer\`
+   every accepted finding regardless of severity, \`approve\` for a supported clean review, and \`defer\`
    when missing context prevents a sound decision. Set \`ciPolicy: "required"\`
    for executable code, dependency, build, config, schema, or security changes.
    Only plainly static documentation may use \`skippable\`; no failing check

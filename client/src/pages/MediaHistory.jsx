@@ -12,6 +12,7 @@ import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
+import MediaHistoryGrid from '../components/media/MediaHistoryGrid';
 import MediaPreview from '../components/media/MediaPreview';
 import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
@@ -52,7 +53,7 @@ export default function MediaHistory() {
   // negative prompt, settings — is read when a card is opened or handed to a
   // generator, never for the whole page. Search and counts stay server-side
   // over the full metadata.
-  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true, hidden: false, compact: true }, { media: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
+  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true, hidden: false, compact: true }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
   const setItems = useCallback(updater => page.setItems(previous => {
@@ -61,7 +62,6 @@ export default function MediaHistory() {
     return next.map(item => ({ kind: item.kind, data: { ...item.raw, prompt: item.prompt } }));
   }), [page.setItems]);
   const filtered = items;
-  const visibleItems = items;
   const [preview, setPreview] = useHydratedPreviewRoute(items);
   useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh });
 
@@ -223,8 +223,8 @@ export default function MediaHistory() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {visibleItems.map((it) => {
+          <MediaHistoryGrid items={items}>
+            {(it) => {
               const inStitch = stitchMode && it.kind === 'video';
               const idx = inStitch ? selected.indexOf(it.id) : -1;
               return (
@@ -249,8 +249,8 @@ export default function MediaHistory() {
                   onAnnotate={!stitchMode && it.kind === 'image' ? handleAnnotate : undefined}
                 />
               );
-            })}
-          </div>
+            }}
+          </MediaHistoryGrid>
           <InfiniteScrollFooter hasMore={page.hasMore} loading={loading} error={page.error}
             onLoadMore={page.error ? page.retry : page.loadMore} autoLoad={!stitchMode}
             label={`Show more (${page.total - items.length} remaining)`} />

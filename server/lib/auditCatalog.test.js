@@ -212,15 +212,15 @@ describe('mode contracts + wrapper', () => {
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('recurring manual churn');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('first issue is NOT a stopping condition');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('at least three distinct relevant paths');
-    expect(FILE_ISSUES_MODE_CONTRACT).toContain('filing ceiling, not a review limit or a quota');
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain('every accepted finding in the reviewed slice');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('do not idle to fill time or exceed the run budget');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('any unreviewed inventory');
-    expect(FILE_ISSUES_MODE_CONTRACT).toContain('Zero or one issue is valid after a substantive review');
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain('Zero or one issue is valid when the reviewed evidence supports it');
     expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
   });
 
   it('do-work contract requires fixes or tracked dispositions', () => {
-    expect(DO_WORK_MODE_CONTRACT).toContain('Implement worthwhile verified fixes');
+    expect(DO_WORK_MODE_CONTRACT).toContain('Implement all accepted fixes');
     expect(DO_WORK_MODE_CONTRACT).toContain('{trackerInstructions}');
     expect(DO_WORK_MODE_CONTRACT).toContain('Every actionable finding');
     expect(DO_WORK_MODE_CONTRACT).not.toContain('Do not create tracker issues');

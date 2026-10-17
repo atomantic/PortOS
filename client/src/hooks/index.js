@@ -27,6 +27,7 @@ export { default as useContainerWidth } from './useContainerWidth.js';
 export { default as useDragToPan } from './useDragToPan.js';
 export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
+export { default as useFilmLookPresets } from './useFilmLookPresets.js';
 export { default as useFableLoomAiRun } from './useFableLoomAiRun.js';
 export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useGallerySidecars } from './useGallerySidecars.js';
@@ -283,6 +284,7 @@ export { default as useGraphNodeDetail } from './useGraphNodeDetail.js';
 export * from './useModelLifecycle.js';
 
 export { default as useMusicVideoProductionReview } from './useMusicVideoProductionReview.js';
+export { default as useMusicVideoProofReview } from './useMusicVideoProofReview.js';
 
 export * from './useCalendarWindowEvents.js';
 

@@ -3,7 +3,7 @@
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
     "app-launch-video": "271c1e8bc301ba02b4a2207e0abf8573",
-    "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
+    "better-cognitive-load": "882bbda803edcdef5a4308521050f8fd",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
     "better-dev-environment": "62523b82066e70ff1c786da22ccf0372",
@@ -12,25 +12,25 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "90acf7a56c0de2147cf7463ba338a099",
-    "claim-issue": "34557a99689bd2e089b0e1e634ce1ff3",
-    "claim-issue-gitlab": "251e7d56a8d8585469dfb8174c4d3e1f",
-    "claim-issue-jira": "6bdf175a604f9c712a22b2b31dd6cf7a",
+    "claim-issue": "cea12f4209a3f20ebe1a5ad8cc7b38b5",
+    "claim-issue-gitlab": "29f025187d20a8583292bb53bb974c06",
+    "claim-issue-jira": "d0df766dd9ef326c8578efe2953af13e",
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
-    "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
-    "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
+    "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
+    "code-reviewer-review": "10037a8a366f5c98482d2de11cdb127a",
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "eb97988dfc16d4c655f1834acc91d665",
     "dependency-updates": "2d94021c979a86a349e125f5c15665d8",
-    "do-release": "b185da91e17d796514d841378fc7be6b",
+    "do-release": "0ee9c504bad68f4a73be15f0b955a796",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
-    "infrastructure": "b4ad755eb115b82679c601a0df1ffd7b",
+    "infrastructure": "bd31db72a371136f6c32d119d76c0281",
     "issue-reconcile": "716c87476d77d7e4f98613dadc06f228",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
@@ -42,10 +42,10 @@
     "performance": "8b297d723f9f39154c9cf6d501738494",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "5dd527c47e736094949c4605cfb2d973",
-    "plan-task-claim": "2f2398eb3ed48b266635df6e7d118b72",
+    "plan-task-claim": "7b87285534fc52cc99fa676ecf6939ba",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
-    "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
+    "pr-reviewer-review": "511b26a376439cc6cb268a736897fefd",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
     "privacy": "ecf3c57c064e3c4ab662d70252c686fb",
@@ -68,7 +68,7 @@
     "accessibility": 5,
     "api-contract": 2,
     "app-launch-video": 8,
-    "better-cognitive-load": 1,
+    "better-cognitive-load": 2,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
     "better-dev-environment": 1,
@@ -76,9 +76,9 @@
     "better-structural-drift": 1,
     "better-test-quality": 2,
     "branch-reconcile": 8,
-    "claim-issue": 40,
-    "claim-issue-gitlab": 36,
-    "claim-issue-jira": 23,
+    "claim-issue": 41,
+    "claim-issue-gitlab": 37,
+    "claim-issue-jira": 24,
     "code-quality": 4,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
@@ -88,13 +88,13 @@
     "data-integrity": 1,
     "data-safety": 2,
     "dependency-updates": 7,
-    "do-release": 15,
+    "do-release": 17,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
     "feature-completeness": 1,
     "feature-ideas": 11,
-    "infrastructure": 1,
+    "infrastructure": 2,
     "issue-reconcile": 8,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
@@ -144,6 +144,9 @@
       "c5f125ac04d41921030f7cd36a3ff3ee",
       "e355d37fb682c1f6c2ad4c031a7988a7",
       "d9ce59c884841cdfcab7139d05778e74"
+    ],
+    "better-cognitive-load": [
+      "a1fe22f6ef936131456c55a6b0623204"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"
@@ -203,7 +206,8 @@
       "182a18e2b37e7f1c22c5f853889d2290",
       "77be383966232f8115454e15237c31b7",
       "2663933c28056e0e23caf42acb1b41d0",
-      "9e51f8f382774585728c2c642e88539b"
+      "9e51f8f382774585728c2c642e88539b",
+      "34557a99689bd2e089b0e1e634ce1ff3"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -240,7 +244,8 @@
       "a33eb4fa904a59a09d71f030f55b1531",
       "486710f675ef8e753cdc89e07c47795b",
       "cbea4dbd5d031e2cff923d634831577d",
-      "d7fd606dceeedb0053d0b84088a2fb8a"
+      "d7fd606dceeedb0053d0b84088a2fb8a",
+      "251e7d56a8d8585469dfb8174c4d3e1f"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -264,7 +269,8 @@
       "3db3b89e956428913bf52a6a725afdc8",
       "64ccd403371ea2b55c53b665b789dd38",
       "e2f06509e4797cdc577c4684bd5d02e8",
-      "c83dc6504a61bc35a6bfdd147a7ac338"
+      "c83dc6504a61bc35a6bfdd147a7ac338",
+      "6bdf175a604f9c712a22b2b31dd6cf7a"
     ],
     "code-quality": [
       "62752723eba7a39aa94e010911923cc8",
@@ -303,7 +309,9 @@
       "64be10f6ac7bcf74d4fc257089fc179b",
       "644e5f2f6df1daf06f3792a81ba7a51a",
       "5a82eec9f86ad05185ed77a42dbfd9d4",
-      "cd936b9a4fb76273b36ec54c3ed6d5ba"
+      "cd936b9a4fb76273b36ec54c3ed6d5ba",
+      "b185da91e17d796514d841378fc7be6b",
+      "e2fb83ae74cc759d1fface857169badc"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
@@ -332,6 +340,9 @@
       "73cdc70f8d14fc909668054bbcee1259",
       "0741418bd275b8953131155f8bc89460",
       "d3282f16da29efe2d53595b3b34778bc"
+    ],
+    "infrastructure": [
+      "b4ad755eb115b82679c601a0df1ffd7b"
     ],
     "issue-reconcile": [
       "6f33db6ad0b57c36909229694b78891a",

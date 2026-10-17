@@ -27,11 +27,12 @@ router.post('/ingest', asyncHandler(async (req, res) => {
 }));
 
 /** GET /api/brain/youtube/ingest/:jobId/events — SSE progress stream. */
-router.get('/ingest/:jobId/events', (req, res) => {
+router.get('/ingest/:jobId/events', asyncHandler(async (req, res) => {
+  // Throw before SSE headers are written so the standard error envelope applies.
   if (!ingest.attachIngestSseClient(req.params.jobId, res)) {
-    res.status(404).json({ error: 'Ingest job not found' });
+    throw new ServerError('Ingest job not found', { status: 404, code: 'NOT_FOUND' });
   }
-});
+}));
 
 /** POST /api/brain/youtube/ingest/:jobId/cancel */
 router.post('/ingest/:jobId/cancel', asyncHandler(async (req, res) => {

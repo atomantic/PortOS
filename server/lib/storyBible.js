@@ -252,8 +252,8 @@ export function findBibleEntryByName(list, name) {
 //   render-completion mutator is the sole writer. Distinct from the
 //   `imageRefs[]` gallery — lives in `data/image-refs/`.
 //
-// `SERVER_OWNED_CHARACTER_FIELDS` is a strict subset: ONLY the pointers
-// that the *server* writes via render-completion mutators (never the
+// `SERVER_OWNED_CHARACTER_FIELDS` is a strict subset: pointers and request
+// identities that the *server* writes via render mutators (never the
 // client, never the LLM). `updateUniverse` preserves these across
 // literal-object PATCHes so a stale client body can't clobber a newer
 // server stamp (multi-tab / parallel render race). Mutator-form callers
@@ -265,11 +265,11 @@ export const CANON_CONTROL_FIELDS = Object.freeze([
   // Sheet pointers — see SHEET_VARIANTS in universeCharacterSheet.js for the
   // catalog of styles; legacy 'standard' stays in `referenceSheetImageRef`,
   // every other variant lives in `referenceSheets[<id>]`.
-  'referenceSheetImageRef', 'referenceSheets',
+  'referenceSheetImageRef', 'referenceSheets', 'referenceSheetRequests',
 ]);
 
 export const SERVER_OWNED_CHARACTER_FIELDS = Object.freeze([
-  'referenceSheetImageRef', 'referenceSheets',
+  'referenceSheetImageRef', 'referenceSheets', 'referenceSheetRequests',
 ]);
 
 export function stripCanonControlFields(entry) {
@@ -452,6 +452,8 @@ const ADDITIVE_CHARACTER_FIELD_VERSIONS = Object.freeze({
   identityPack: 10,
   // v11 — optional structured psychology profile (#6414).
   psychology: 11,
+  // v13 — durable per-variant render intent (#11669).
+  referenceSheetRequests: 13,
 });
 const ADDITIVE_OBJECT_FIELD_VERSIONS = Object.freeze({
   // v7 — structured object↔character attachments (#1288).
@@ -463,7 +465,8 @@ const ADDITIVE_OBJECT_FIELD_VERSIONS = Object.freeze({
 // sanitizer defaults to `[]` (relationshipLinks, attachments).
 export function isLegacyAbsentValue(value) {
   return value === undefined || value === null || value === false || value === ''
-    || (Array.isArray(value) && value.length === 0);
+    || (Array.isArray(value) && value.length === 0)
+    || (isPlainObject(value) && Object.keys(value).length === 0);
 }
 
 /**
@@ -534,7 +537,8 @@ function isValidVariantId(id) {
  *  immutable-by-convention. */
 export function mergePreservedSheetPointers(prev, patchChar, resolveExists) {
   if (!prev || !patchChar) return patchChar;
-  const out = { ...patchChar };
+  // Intent has no file yet and must survive even if a prior sheet was deleted.
+  const out = { ...patchChar, referenceSheetRequests: prev.referenceSheetRequests ?? {} };
 
   if (prev.referenceSheetImageRef && resolveExists(prev.referenceSheetImageRef)) {
     out.referenceSheetImageRef = prev.referenceSheetImageRef;
@@ -1021,6 +1025,9 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // migration. Sanitizer drops invalid keys and basename-validates every
     // value with the same rules as the legacy field.
     referenceSheets: deriveReferenceSheets(raw.referenceSheets),
+    referenceSheetRequests: Object.fromEntries(Object.entries(isPlainObject(raw.referenceSheetRequests) ? raw.referenceSheetRequests : {})
+      .filter(([variant, token]) => (variant === LEGACY_SHEET_VARIANT_ID || isValidVariantId(variant))
+        && typeof token === 'string' && /^[0-9a-f-]{36}$/.test(token))),
     // Wardrobes (A2): outfit/styling variants applied on top of
     // physicalDescription. Empty array stays the legacy shape — every
     // existing character keeps rendering through physicalDescription alone.

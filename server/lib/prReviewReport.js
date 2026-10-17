@@ -92,7 +92,7 @@ Each pull-request decision has this shape:
     {"command": "npm test -w server", "status": "pass|fail|expected-fail|blocked|not-run", "detail": "counts, the failure, or why the run says nothing about the change"}
   ],
   "verified": ["one claim you confirmed, citing path:line"],
-  "concerns": ["a non-blocking observation with no specific line to anchor"],
+  "concerns": ["context still needed for a sound decision"],
   "findings": [
     {
       "path": "src/file.js",
@@ -123,9 +123,10 @@ Field rules:
   that explains a \`fail\` away, the status was wrong.
 - \`verified\` holds claims you checked against the code, one per entry, each
   citing the \`path:line\` that proves it. Leave it empty rather than padding.
-- \`concerns\` is for non-blocking observations that have no line to anchor to.
-  Anything that does have a line belongs in \`findings\` with
-  \`"blocking": false\`.
+- \`concerns\` records missing context; use \`defer\` when it prevents a sound decision.
+  Every accepted defect belongs in \`findings\` with \`"blocking": true\`,
+  including warnings and nits. Severity never exempts a finding from resolution.
+- Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 - \`title\` and \`suggestion\` are optional. \`suggestion\` must be the literal
   replacement for the single anchored line, with no code fence and no
   surrounding prose — omit it when the fix is not a one-line edit.`;

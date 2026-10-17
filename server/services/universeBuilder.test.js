@@ -774,6 +774,7 @@ describe("universeBuilder service", () => {
     await svc.updateUniverse(w.id, (latest) => {
       const next = [...(latest.characters || []), {
         id: "c-1", name: "Vale", referenceSheetImageRef: "sheet-B.png",
+        referenceSheetRequests: { standard: "11111111-1111-4111-8111-111111111111" },
       }];
       return { characters: next };
     });
@@ -791,6 +792,7 @@ describe("universeBuilder service", () => {
     });
     const charOmit = afterOmitPatch.characters.find((c) => c.id === "c-1");
     expect(charOmit?.referenceSheetImageRef).toBe("sheet-B.png");
+    expect(charOmit?.referenceSheetRequests).toEqual({ standard: "11111111-1111-4111-8111-111111111111" });
 
     // Mutator path (the render-completion handler) IS trusted to update
     // referenceSheetImageRef — it constructs the patch from the latest

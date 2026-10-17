@@ -602,7 +602,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
   'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
   'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',
-  'better-cognitive-load': 'Cognitive load — mixed abstraction levels, flag arguments, misleading names, action at a distance; file issues (default) or implement one refactor',
+  'better-cognitive-load': 'Cognitive load — excessive code comments, mixed abstraction levels, flag arguments, misleading names, action at a distance; file issues (default) or implement one refactor',
   'better-structural-drift': 'Structural drift — generated artifacts as a second source of truth, hand-synced registries, layout coupling; file issues (default) or implement one consolidation',
   'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',

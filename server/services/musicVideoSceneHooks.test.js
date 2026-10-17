@@ -23,7 +23,9 @@ const projects = await import('./musicVideo/projects.js');
 const imageHook = await import('./musicVideoSceneImageHook.js');
 const videoHook = await import('./musicVideoSceneVideoHook.js');
 
-async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) {
+// A ceiling, not a delay: it returns the moment the predicate holds. Kept well under
+// the 30s test timeout so a slow file-backed write on a loaded runner still lands.
+async function waitFor(predicate, { timeoutMs = 20000, intervalMs = 5 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;

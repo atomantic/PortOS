@@ -491,3 +491,61 @@ describe('callProviderAISimple — endpoint guard (SSRF / key-exfiltration)', ()
     expect(result).toMatchObject({ text: 'hello' });
   });
 });
+
+
+describe('HTTP provider body cancellation', () => {
+  const provider = { id: 'body-test', type: 'api', endpoint: 'https://api.example.com/v1', timeout: 1000 };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['deadline', 'caller'])('keeps %s cancellation active after completion headers', async (cancel) => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    let requestSignal;
+    let started;
+    const bodyStarted = new Promise(resolve => { started = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => {
+      requestSignal = signal;
+      return { ok: true, text: () => {
+        started();
+        return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true }));
+      } };
+    }));
+    const pending = callProviderAISimple(provider, 'model', 'prompt', { signal: caller.signal, allowModelRecovery: false });
+    await bodyStarted;
+    expect(requestSignal.aborted).toBe(false);
+    if (cancel === 'caller') caller.abort();
+    else await vi.advanceTimersByTimeAsync(1000);
+    expect((await pending).error).toContain('body aborted');
+    expect(requestSignal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['list', 'load-error'])('bounds the LM Studio %s body after headers', async (stage) => {
+    vi.useFakeTimers();
+    let started;
+    const bodyStarted = new Promise(resolve => { started = resolve; });
+    let requestSignal;
+    vi.stubGlobal('fetch', vi.fn(async (url, { signal }) => {
+      if (url.endsWith('/chat/completions')) return { ok: false, status: 400, text: async () => 'No models loaded' };
+      if (url.endsWith('/api/v0/models') && stage !== 'list') {
+        return { ok: true, json: async () => ({ data: [{ type: 'llm', id: 'model', state: 'not-loaded' }] }) };
+      }
+      requestSignal = signal;
+      const stalled = () => {
+        started();
+        return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true }));
+      };
+      return { ok: stage === 'list', json: stalled, text: stalled };
+    }));
+    const pending = callProviderAISimple(provider, 'model', 'prompt');
+    await bodyStarted;
+    await vi.advanceTimersByTimeAsync(stage === 'list' ? 5000 : 120000);
+    expect((await pending).error).toContain('No models loaded');
+    expect(requestSignal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

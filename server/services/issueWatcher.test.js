@@ -834,7 +834,7 @@ describe('processTaskOutput', () => {
     expect(current).toMatchObject({ reviewed: 1, merged: 1 });
   });
 
-  it('posts non-blocking findings on an approving review and still merges', async () => {
+  it('requests resolution of legacy non-blocking findings and refuses to merge', async () => {
     installDefaultGhMock();
     mergePrMock.mockResolvedValue({ success: true });
     const payload = {
@@ -855,19 +855,19 @@ describe('processTaskOutput', () => {
 
     const result = await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
 
-    expect(result).toMatchObject({ reviewed: 1, merged: 1 });
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
     const reviewCall = execGhMock.mock.calls.find(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
     expect(JSON.parse(reviewCall[2].input)).toMatchObject({
-      event: 'APPROVE',
+      event: 'REQUEST_CHANGES',
       comments: [{
         path: 'src/example.js', line: 2, side: 'RIGHT',
-        body: '💡 **Non-blocking**\n\nConsider making this helper name more specific in a follow-up.',
+        body: '⛔ **Blocking**\n\nConsider making this helper name more specific in a follow-up.',
       }],
     });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
+    expect(mergePrMock).not.toHaveBeenCalled();
   });
 
-  it('approves without inline comments when GitHub rejects the comment anchors', async () => {
+  it('never approves unresolved findings when GitHub rejects the change-request review', async () => {
     installDefaultGhMock();
     const defaultGhImplementation = execGhMock.getMockImplementation();
     let reviewAttempts = 0;
@@ -897,11 +897,11 @@ describe('processTaskOutput', () => {
 
     const result = await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
 
-    expect(result).toMatchObject({ reviewed: 1, merged: 1 });
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
     const reviewCalls = execGhMock.mock.calls.filter(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
     expect(reviewCalls).toHaveLength(2);
-    expect(JSON.parse(reviewCalls[1][2].input)).toMatchObject({ event: 'APPROVE', comments: [], commit_id: 'a'.repeat(40) });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
+    expect(JSON.parse(reviewCalls[1][2].input)).toMatchObject({ event: 'COMMENT', commit_id: 'a'.repeat(40) });
+    expect(mergePrMock).not.toHaveBeenCalled();
   });
 
   it('treats a finding with no explicit blocking flag as blocking and does not merge', async () => {

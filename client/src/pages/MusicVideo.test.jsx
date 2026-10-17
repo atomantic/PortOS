@@ -116,7 +116,12 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoPromotionPlan: vi.fn(async () => ({ steps: [] })),
   planMusicVideoPromotion: vi.fn(),
   updateMusicVideoPublishCopy: vi.fn(),
-  selectMusicVideoPublishThumbnail: vi.fn(),
+  composeMusicVideoYoutubeThumbnail: vi.fn(),
+  clearMusicVideoYoutubeThumbnail: vi.fn(),
+  addMusicVideoThumbnailTest: vi.fn(),
+  paintMusicVideoYoutubeThumbnail: vi.fn(),
+  previewMusicVideoThumbnailPaint: vi.fn(),
+  removeMusicVideoThumbnailTest: vi.fn(),
   prepareMusicVideoPublishDraft: vi.fn(),
   discardMusicVideoPublishDraft: vi.fn(),
   getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: {}, history: {} })),
@@ -2384,6 +2389,13 @@ describe('MusicVideo media lightbox (#3718)', () => {
     // Image uses previewUrl (/data/images/<id>); img may be MediaImage-wrapped.
     expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML)
       .toMatch(/\/data\/images\/img1/);
+  });
+
+  it('opens the lightbox from an end-frame thumbnail click', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], endImageId: 'end1' }] }, 'produce');
+    fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 end frame full size' }));
+    const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML).toMatch(/\/data\/images\/end1/);
   });
 
   it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async () => {

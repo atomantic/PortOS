@@ -626,6 +626,27 @@ async function reviewStoryboard(run, project) {
   return askReview(run, 'storyboard', buildStoryboardReviewPrompt({ ...ideaOf(run), concept: project.concept, shots, incomplete }));
 }
 
+async function fileReviseAndClose(projectId, { requests, revise, resolutionFor, reviewer }) {
+  const feedbackIds = [];
+  for (const request of requests) {
+    const { feedbackId } = await deps.addFeedback(projectId, request);
+    feedbackIds.push(feedbackId);
+  }
+  const failure = await revise().then(() => null, (err) => err);
+  for (const feedbackId of feedbackIds) {
+    try {
+      await deps.closeFeedback(projectId, { feedbackId, resolution: resolutionFor(failure), reviewer });
+    } catch (err) {
+      // Only tolerate a reviewer resolving this run's request while revision was in flight.
+      const entry = err.code === 'MUSIC_VIDEO_FEEDBACK_CLOSED'
+        ? (await getProject(projectId)).productionReview?.feedback?.find((item) => item.id === feedbackId) : null;
+      if (!entry?.resolvedAt) throw err;
+      console.warn(`🎬 Autonomous feedback ${feedbackId} was already resolved; preserving its resolution`);
+    }
+  }
+  return failure;
+}
+
 /**
  * Apply a revise verdict to a production stage; returns false when nothing could
  * be applied. A storyboard re-plan that fails throws, so the stage fails and a
@@ -642,18 +663,14 @@ async function applyProductionRevision(projectId, run, stage, review) {
   const known = new Set((project.productionReview?.draft?.storyboard || []).map((shot) => shot.sceneId));
   const changes = review.changes.filter((c) => known.has(c.sceneId));
   if (!changes.length || project.productionReview?.draft?.storyboardSource === 'document') return false;
-  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
   const basis = productionReviewBasis(project).storyboard;
-  for (const change of changes) {
-    await deps.addFeedback(projectId, { stage, basis, target: change.sceneId, text: change.text, decision: 'request-changes' });
-  }
   const { route, ...plan } = await llmOf(run, 'plan');
-  const failure = await deps.reviseFromFeedback(projectId, { stage, ...plan }).then(() => null, (err) => err);
-  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-plan failed (${trimTo(failure.message, 200)}); the orchestrator will ask again on Retry.` : 'Revised by the orchestrator.';
-  for (const entry of created) {
-    await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run, review.route) });
-  }
+  const failure = await fileReviseAndClose(projectId, {
+    requests: changes.map((change) => ({ stage, basis, target: change.sceneId, text: change.text, decision: 'request-changes' })),
+    revise: () => deps.reviseFromFeedback(projectId, { stage, ...plan }),
+    resolutionFor: (error) => error ? `The re-plan failed (${trimTo(error.message, 200)}); the orchestrator will ask again on Retry.` : 'Revised by the orchestrator.',
+    reviewer: orchestratorIdentity(run, review.route),
+  });
   if (failure) {
     throw runError(502, 'ORCHESTRATOR_REVISION_FAILED', `The storyboard re-plan failed: ${trimTo(failure.message, 200)}`);
   }
@@ -828,22 +845,19 @@ async function startFinalRevision(projectId, run, issues) {
 async function reauthorFinal(projectId, run, issues, { target = 'final' } = {}) {
   const project = await getProject(projectId);
   const basis = productionReviewBasis(project).proof;
-  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
-  for (const issue of issues.slice(0, 12)) {
-    await deps.addFeedback(projectId, { stage: 'proof', basis, target: `${target}@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' });
-  }
   const authoring = !run.brief.llmStages?.authoring && run.brief.authoring ? run.brief.authoring : await llmOf(run, 'authoring');
   const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
-  const failure = await (async () => {
-    if ((await getProject(projectId)).composition?.mode === 'code') return deps.generateCode(projectId, input);
-    const candidate = await deps.generateDocument(projectId, input);
-    return deps.acceptDocument(projectId, candidate.document.directory);
-  })().then(() => null, (err) => err);
-  // Requests stay open through authoring (the prompt carries them), then close either way.
-  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-authoring failed (${trimTo(failure.message, 200)}); kept the film.`
-    : `Re-authored by the ${isOrchestratedRun(run) ? 'orchestrator' : 'autopilot'}.`;
-  for (const entry of created) await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: runReviewer(run) });
+  const failure = await fileReviseAndClose(projectId, {
+    requests: issues.slice(0, 12).map((issue) => ({ stage: 'proof', basis, target: `${target}@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' })),
+    revise: async () => {
+      if ((await getProject(projectId)).composition?.mode === 'code') return deps.generateCode(projectId, input);
+      const candidate = await deps.generateDocument(projectId, input);
+      return deps.acceptDocument(projectId, candidate.document.directory);
+    },
+    resolutionFor: (error) => error ? `The re-authoring failed (${trimTo(error.message, 200)}); kept the film.`
+      : `Re-authored by the ${isOrchestratedRun(run) ? 'orchestrator' : 'autopilot'}.`,
+    reviewer: runReviewer(run),
+  });
   if (failure) throw failure;
 }
 
@@ -1209,6 +1223,11 @@ const STAGES = {
       // The animated proof is optional review evidence, so the run renders the film once the
       // storyboard is approved; the director can still render and approve a proof by hand.
       const render = await deps.renderVideo(project.id);
+      // A cancel/stop during the render's preparation left no job id to cancel; the fresh job is stopped here.
+      if (render?.jobId && projectAutonomousRun(await getProject(project.id))?.status !== 'running') {
+        await deps.cancelRender(render.jobId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not cancel render ${render.jobId}: ${err.message}`));
+        throw runError(409, 'RUN_STOPPED', 'The run stopped while the final render was preparing');
+      }
       // The run is not finished until the MP4 exists: stay on produce and let the render's own event settle it.
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
@@ -1849,11 +1868,13 @@ export async function cancelAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!(AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed')) throw runError(409, 'NOT_CANCELABLE', `A ${run.status} run cannot be canceled`);
   const out = await patchRun(projectId, () => ({ status: 'canceled', awaiting: null }));
+  // Child ids come from the patched record: one stored just before the flip is missed by the earlier read.
+  const { renderJobId, finalAutoReviewId, productionRunId } = out.run.output;
   const childStopFailures = [];
-  if (run.output.renderJobId) await settleChildStop(childStopFailures, projectId, run, 'cancel render', run.output.renderJobId, () => deps.cancelRender(run.output.renderJobId));
-  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'cancel auto-review', run.output.finalAutoReviewId, () => deps.cancelAutoReview(projectId, run.output.finalAutoReviewId));
-  if (run.output.productionRunId) {
-    await settleChildStop(childStopFailures, projectId, run, 'cancel production', run.output.productionRunId, () => deps.cancelProduction(projectId, run.output.productionRunId));
+  if (renderJobId) await settleChildStop(childStopFailures, projectId, run, 'cancel render', renderJobId, () => deps.cancelRender(renderJobId));
+  if (finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'cancel auto-review', finalAutoReviewId, () => deps.cancelAutoReview(projectId, finalAutoReviewId));
+  if (productionRunId) {
+    await settleChildStop(childStopFailures, projectId, run, 'cancel production', productionRunId, () => deps.cancelProduction(projectId, productionRunId));
   }
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(projectId, out.run, childStopFailures);
@@ -2114,6 +2135,8 @@ musicVideoEvents.on('cast-and-sets', ({ projectId }) => {
 
 /** Park the run as failed on its final render, with the stage marked failed so Retry re-renders only. */
 async function failFinalRender(projectId, message, errorCode = 'FINAL_RENDER_FAILED') {
+  // A cancel/stop that landed while the render prepared is not a failure.
+  if (projectAutonomousRun(await getProject(projectId))?.status !== 'running') return;
   const error = trimTo(message, 500);
   await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'failed', error, step: null }));
   await park(projectId, 'failed', { error, errorCode });
@@ -2205,7 +2228,16 @@ async function startFinalRender(projectId, run) {
   if (!rendersFromCode(await getProject(projectId), run)) await ensureFootageComposition(projectId);
   const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
   if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
-  await patchRun(projectId, (r) => ({ output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null }));
+  let stopped = false;
+  await patchRun(projectId, (r) => {
+    stopped = r.status !== 'running';
+    return stopped ? {} : { output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null };
+  });
+  if (stopped) {
+    // Canceled/stopped while the render prepared: the cancel saw no job id, so stop the fresh job here.
+    if (render.jobId) await deps.cancelRender(render.jobId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not cancel render ${render.jobId}: ${err.message}`));
+    return;
+  }
   console.log(`🎬 Autonomous music video ${short(run.id)} is rendering the final video`);
   // A render that settled before its id was stored.
   await reconcileFinalRender(projectId);

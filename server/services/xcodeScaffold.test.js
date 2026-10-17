@@ -3,13 +3,11 @@ import { mkdtemp, rm, readdir, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, relative, sep } from 'path';
 
-// xcodegen is an external binary that may or may not exist on the machine
-// running the suite — stub the spawn so the scaffolder's file emission is what
-// is under test, not the generator's availability.
-vi.mock('../lib/childProcess.js', async importOriginal => ({
-  ...await importOriginal(),
-  exec: vi.fn((cmd, opts, cb) => cb(null, { stdout: 'Created project', stderr: '' }))
+// Keep project generation at its external-process boundary.
+vi.mock('../lib/runCliBounded.js', () => ({
+  runCliBounded: vi.fn().mockResolvedValue({ code: 0, stdout: 'Created project', stderr: '' }),
 }));
+import { runCliBounded } from '../lib/runCliBounded.js';
 
 import { scaffoldXcode } from './xcodeScaffold.js';
 
@@ -34,6 +32,16 @@ describe('scaffoldXcode', () => {
 
   afterEach(async () => {
     await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('bounds xcodegen and records a timeout without losing emitted project files', async () => {
+    runCliBounded.mockResolvedValueOnce({ code: -1, stdout: '', stderr: 'timed out' });
+    await scaffoldXcode(repoPath, 'Sample App', 'sample-app', addStep, { platforms: ['ios'] });
+    expect(runCliBounded).toHaveBeenLastCalledWith('xcodegen', ['generate'], {
+      cwd: repoPath, timeoutMs: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    expect(steps).toContainEqual(['Generate Xcode project', 'error']);
+    expect(await listFiles(repoPath)).toContain('project.yml');
   });
 
   it('emits an iOS-only project for platforms: ["ios"]', async () => {

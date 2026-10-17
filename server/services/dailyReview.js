@@ -58,7 +58,6 @@ export async function getDailyReview(date, { limit = DAILY_REVIEW_PAGE_SIZE, off
     }
     return review;
   });
-  // Get all events for this date across all accounts
   const startDate = `${date}T00:00:00`;
   const endDate = `${date}T23:59:59`;
   const [dayEvents, accounts, goalsData] = await Promise.all([
@@ -73,7 +72,6 @@ export async function getDailyReview(date, { limit = DAILY_REVIEW_PAGE_SIZE, off
     }
   }
 
-  // Build goal and subcalendar maps for linking info
   const goalMap = {};
   for (const goal of goalsData.goals) {
     goalMap[goal.id] = goal;
@@ -85,7 +83,6 @@ export async function getDailyReview(date, { limit = DAILY_REVIEW_PAGE_SIZE, off
     }
   }
 
-  // Enrich events with confirmation status and goal matches
   const pageEvents = dayEvents.slice(offset, offset + limit);
   const enrichedEvents = pageEvents.map(event => {
     const confirmation = existing.confirmations[eventKey(event)];
@@ -104,7 +101,6 @@ export async function getDailyReview(date, { limit = DAILY_REVIEW_PAGE_SIZE, off
     };
   });
 
-  // Get progress entries for this date
   const progressEntries = [];
   for (const goal of goalsData.goals) {
     for (const entry of (goal.progressLog || [])) {

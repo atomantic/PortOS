@@ -154,6 +154,19 @@ const render = ({ phase, forge, leaveOpen, verbose }) => stable(buildReviewLoopF
 
 const CELL = (phase, forge, leaveOpen, verbose) => ({ phase, forge, leaveOpen, verbose });
 
+it.each(['local', 'inline', 'followUp'])('requires resolving accepted findings in the %s phase', (phase) => {
+  const section = render({ phase, forge: 'gh', leaveOpen: false, verbose: true });
+  expect(section).toContain('Resolve every accepted finding; severity only determines sequencing');
+  expect(section).toContain('A round cap never makes unresolved accepted findings clean');
+  expect(section).toContain('Previously accepted rules are revisable');
+  expect(section).toContain('Prefer investing effort in high-quality fixes');
+  expect(section).toContain('Difficulty alone is not an exemption');
+  expect(section).toContain('no current solution worth pursuing');
+  expect(section).toContain('not permission to hide a known important defect');
+  expect(section).not.toContain('skip repository-wide audits, style, refactoring preferences, speculation, and nits');
+  expect(section).not.toContain('Marginal findings alone do not earn another round');
+});
+
 describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verbosity matrix', () => {
   // The pre-PR local phase never merges, never comments on a PR and never emits
   // the verbose variant (`verbose && !localOnly`), so `leaveOpen` and `verbose`
@@ -233,7 +246,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     // #5106, twice over: a local reviewer must not push or publish.
     expect(section).toContain('**Pre-PR rule:** keep reviewer fixes committed locally. Do NOT push or open a PR/MR here');
     expect(section).toContain('Do NOT push or open a PR/MR yet.');
-    expect(section).toContain('**Hard stop:** if a required reviewer\'s loop is not converged after 10 rounds, do NOT push or open a PR/MR when substantive findings remain');
+    expect(section).toContain('**Hard stop:** if a required reviewer\'s loop is not converged after 10 rounds, do NOT push or open a PR/MR when accepted findings remain');
     // …and must not carry any merge, comment or exit step.
     expect(section).not.toContain('gh pr merge');
     expect(section).not.toContain('glab mr merge');

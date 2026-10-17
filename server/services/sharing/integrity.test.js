@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock peerFetch so no network calls go out.
-vi.mock('../../lib/peerHttpClient.js', async () => ({
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
+  readPeerBody: (await importOriginal()).readPeerBody,
   peerFetch: vi.fn(),
   peerSocketOptions: {},
 }));
@@ -142,6 +143,34 @@ describe('buildLocalManifest', () => {
 });
 
 describe('getPeerIntegrity', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['stalled', 'oversized'])('rejects a %s manifest body without computing a misleading diff', async (failure) => {
+    vi.useFakeTimers();
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    const cancel = vi.fn();
+    let started;
+    const bodyStarted = new Promise(resolve => { started = resolve; });
+    const stream = new ReadableStream({
+      start(controller) {
+        if (failure === 'oversized') controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+      },
+      pull() { started(); },
+      cancel,
+    });
+    vi.mocked(peerFetch).mockResolvedValue(new Response(stream));
+    const pending = getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
+    await bodyStarted;
+    if (failure === 'stalled') await vi.advanceTimersByTimeAsync(15000);
+    expect(await pending).toEqual({ available: false, reason: 'fetch-failed', records: [] });
+    expect(cancel).toHaveBeenCalled();
+    expect(listCollections).not.toHaveBeenCalled();
+    const [, options] = vi.mocked(peerFetch).mock.calls.at(-1);
+    expect(options.maxBytes).toBe(16 * 1024 * 1024);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('returns available:false with reason peer-not-found when peer is unknown', async () => {
     vi.mocked(getPeers).mockResolvedValue([]);
     const result = await getPeerIntegrity({ peerId: 'no-such-peer', kind: 'mediaCollection' });
@@ -283,7 +312,7 @@ describe('getPeerIntegrity', () => {
     expect(result.records).toEqual([]);
   });
 
-  it('returns an empty available result when peer json parsing fails', async () => {
+  it('returns unavailable when peer json parsing fails', async () => {
     const peer = makePeer('peer-x');
     vi.mocked(getPeers).mockResolvedValue([peer]);
     vi.mocked(listCollections).mockResolvedValue([]);
@@ -294,6 +323,6 @@ describe('getPeerIntegrity', () => {
     });
 
     const result = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
-    expect(result).toEqual({ available: true, records: [] });
+    expect(result).toEqual({ available: false, reason: 'fetch-failed', records: [] });
   });
 });

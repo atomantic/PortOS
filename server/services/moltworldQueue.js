@@ -38,11 +38,19 @@ function evictCompleted(queue) {
 }
 
 /**
- * Get non-completed items for an agent (pending + executing)
+ * Get actionable items for an agent: executing items, plus pending items that
+ * are due (no scheduledFor, or scheduledFor <= now). Future-scheduled items
+ * stay queued (and count toward the cap) but are not returned until due.
  */
-export function getQueue(agentId) {
+export function getQueue(agentId, { now = Date.now() } = {}) {
   const queue = queues.get(agentId) || [];
-  return queue.filter(item => item.status === 'pending' || item.status === 'executing');
+  return queue.filter(item => {
+    if (item.status === 'executing') return true;
+    if (item.status !== 'pending') return false;
+    if (!item.scheduledFor) return true;
+    const due = Date.parse(item.scheduledFor);
+    return Number.isNaN(due) || due <= now;
+  });
 }
 
 /**

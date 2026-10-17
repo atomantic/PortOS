@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { vitestCaptureProjects, vitestCiPool } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
+import { BROWSER_SUITES } from '../scripts/lib/browserSuites.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a
@@ -39,6 +40,12 @@ process.env.NODE_ENV = 'test';
 // engines), so every supported Node build respects it.
 process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
+// Linux CI gives these registered contracts one browser-owner job. Only the
+// explicitly opted-in unit profile excludes them; local and Windows defaults
+// retain their current collection, including browser suites outside the registry.
+const browserOwnerExcludes = process.platform === 'linux' && process.env.PORTOS_CI_BROWSER_OWNER === 'unit'
+  ? BROWSER_SUITES.map(path => path.slice('server/'.length)) : [];
+
 const config = defineConfig({
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
@@ -54,6 +61,8 @@ const config = defineConfig({
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
+      // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
+      npm_config_logs_max: '0',
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform
@@ -138,6 +147,7 @@ const config = defineConfig({
       '**/node_modules/**',
       '../lib/slashdo/**',
       ...DB_TEST_INCLUDE,
+      ...browserOwnerExcludes,
       ...(process.env.VITEST_FAST ? [
         'services/worktreeReap.test.js',
         'services/sprites/atlas.test.js',

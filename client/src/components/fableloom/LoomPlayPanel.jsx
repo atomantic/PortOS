@@ -142,6 +142,10 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       setHostedTurnPhase(data.phase || 'idle');
     });
 
+    socket.on('hosted:error', (data) => {
+      toast.error(data?.message || 'Hosted session error');
+    });
+
     socket.on('hosted:turn:transcript', (item) => {
       setTranscript((prev) => [...prev, { role: item.role === 'audience' ? 'reader' : 'narrator', text: item.text }]);
     });

@@ -20,6 +20,7 @@ import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { iterateJournals, getJournal } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
+const PENDING_RESYNC_PATH = join(PATHS.brain, 'memory-resync-pending.json');
 
 // brainType → { memoryType, category }
 const TYPE_MAP = {
@@ -539,6 +540,63 @@ let resyncFlushing = false; // single-flight guard so two flushes can't overlap
 const JOURNAL_RESYNC_DEBOUNCE_MS = 30_000;
 const journalResyncTimers = new Map(); // journal id (the ISO date) → timer
 
+// Durable mirror of every resync that has been triggered but not yet settled:
+// queued entries, the batch a flush is working through, and journal days still
+// inside their debounce window. Persisted so a restart replays the work instead
+// of leaving stale embeddings or still-searchable deleted records behind.
+const durablePending = new Map(); // bridgeKey → { type, id, hardDelete }
+let pendingWriteTail = Promise.resolve();
+let pendingWriteQueued = false;
+
+function persistPending() {
+  // Calls made while a write is queued or running coalesce into one snapshot
+  // taken when the write actually starts.
+  if (pendingWriteQueued) return;
+  pendingWriteQueued = true;
+  pendingWriteTail = pendingWriteTail.then(async () => {
+    pendingWriteQueued = false;
+    const dir = dirname(PENDING_RESYNC_PATH);
+    if (!existsSync(dir)) await ensureDir(dir);
+    await atomicWrite(PENDING_RESYNC_PATH, { entries: [...durablePending.values()] });
+  }).catch((err) => {
+    console.error(`❌ Brain bridge pending-resync persist failed: ${err.message}`);
+  });
+}
+
+// An entry is only finished once nothing newer is waiting for the same key.
+function settleDurable(key, journalId) {
+  if (pendingResync.has(key) || (journalId && journalResyncTimers.has(journalId))) return;
+  if (durablePending.delete(key)) persistPending();
+}
+
+/** Resolves once every queued pending-set write has reached disk. Exported for tests. */
+export const flushPendingResyncWrites = () => pendingWriteTail;
+
+/**
+ * Replay resyncs a previous process queued but never finished. Re-queues them
+ * through the normal path (sticky hard-delete included); an absent or empty
+ * file makes no call at all.
+ */
+export async function replayPersistedResync() {
+  const raw = await readFile(PENDING_RESYNC_PATH, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw === null) return 0;
+  let entries;
+  try {
+    entries = JSON.parse(raw)?.entries;
+  } catch {
+    console.warn('⚠️ Corrupt brain pending-resync file; ignoring');
+    return 0;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) return 0;
+  const valid = entries.filter((entry) => entry && typeof entry.id === 'string' && TYPE_MAP[entry.type]);
+  queueResync(valid.map(({ type, id, hardDelete }) => ({ type, id, hardDelete: hardDelete === true })));
+  console.log(`🧠🔗 Replaying ${valid.length} brain resync(s) interrupted by a restart`);
+  return valid.length;
+}
+
 /**
  * Archive the memory entry mapped to a brain record (if any). Used when the
  * canonical record is gone (tombstoned), archived, or otherwise should no
@@ -642,6 +700,7 @@ export async function flushPendingResync() {
         await resyncBrainRecord(type, id, { hardDelete }).catch((err) => {
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
         });
+        settleDurable(bridgeKey(type, id), type === 'journals' ? id : null);
       }
     }
   } finally {
@@ -657,6 +716,7 @@ export async function flushPendingResync() {
  */
 export function queueResync(records) {
   if (!Array.isArray(records)) return;
+  let queued = false;
   for (const { type, id, hardDelete } of records) {
     if (!id || !TYPE_MAP[type]) continue;
     const key = bridgeKey(type, id);
@@ -667,8 +727,12 @@ export function queueResync(records) {
     // resyncBrainRecord's record-present branch upserts a resurrected record
     // regardless of the flag, so a true intent can never hard-delete a live row.
     const prevHardDelete = pendingResync.get(key)?.hardDelete;
-    pendingResync.set(key, { type, id, hardDelete: !!hardDelete || !!prevHardDelete });
+    const entry = { type, id, hardDelete: !!hardDelete || !!prevHardDelete };
+    pendingResync.set(key, entry);
+    durablePending.set(key, entry);
+    queued = true;
   }
+  if (queued) persistPending();
   if (pendingResync.size === 0 || resyncTimer || resyncFlushing) return;
   resyncTimer = setTimeout(() => {
     flushPendingResync().catch((err) => {
@@ -765,6 +829,11 @@ export function initBridge() {
  */
 function queueJournalResync(id) {
   clearTimeout(journalResyncTimers.get(id));
+  const key = bridgeKey('journals', id);
+  if (!durablePending.has(key)) {
+    durablePending.set(key, { type: 'journals', id, hardDelete: false });
+    persistPending();
+  }
   const timer = setTimeout(() => {
     journalResyncTimers.delete(id);
     queueResync([{ type: 'journals', id }]);
@@ -782,6 +851,7 @@ function queueJournalResync(id) {
 export function cancelPendingJournalResync(id) {
   clearTimeout(journalResyncTimers.get(id));
   journalResyncTimers.delete(id);
+  settleDurable(bridgeKey('journals', id), id);
 }
 
 async function handleJournalDeleted(entry) {

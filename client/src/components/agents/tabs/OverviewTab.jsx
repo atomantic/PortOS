@@ -196,10 +196,15 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleEngage = async () => {
     if (!agentId || !quickAccountId) return;
     setEngaging(true);
-    const result = await api.engageAgent({ agentId, accountId: quickAccountId, maxComments: 1, maxVotes: 3 });
-    setEngaging(false);
-    toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
-    refetchRateLimits();
+    try {
+      const result = await api.engageAgent({ agentId, accountId: quickAccountId, maxComments: 1, maxVotes: 3 });
+      toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
+      refetchRateLimits();
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setEngaging(false);
+    }
   };
 
   const handleCheckPosts = async () => {
@@ -262,9 +267,14 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleAccountTest = async (id) => {
     setTestingId(id);
     setTestResult(null);
-    const result = await api.testPlatformAccount(id);
-    setTestResult({ accountId: id, ...result });
-    setTestingId(null);
+    try {
+      const result = await api.testPlatformAccount(id, { silent: true });
+      setTestResult({ accountId: id, ...result });
+    } catch (err) {
+      setTestResult({ accountId: id, success: false, message: err.message || 'Account test failed' });
+    } finally {
+      setTestingId(null);
+    }
   };
 
   const handleAccountClaim = async (id) => {

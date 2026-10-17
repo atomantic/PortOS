@@ -166,13 +166,11 @@ export async function getToken(provider) {
   const config = PROVIDERS[provider];
   if (!config) return { error: 'unknown-provider', message: `Unknown provider: ${provider}`, provider };
 
-  // Return cached token if still valid
   const cached = tokenCache.get(provider);
   if (cached && isTokenValid(cached)) {
     return { token: cached.token, decoded: cached.decoded, fresh: false, provider };
   }
 
-  // Find the provider's tab in the browser
   const pages = await getPages().catch(() => []);
   const page = pages.find(p => p.url?.includes(config.tabPattern));
 

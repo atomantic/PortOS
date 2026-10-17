@@ -1818,6 +1818,9 @@ export async function cancelJob(jobId) {
       // cancellation rather than silently resurrecting the remote render.
       await persist();
     }
+    // Provider contract: `true` = child signalled, `'pending'` = the provider owns
+    // the job but is still preparing (it aborts at its spawn gate and emits
+    // `failed`), `false` = nothing cancelable, i.e. finalization already began.
     if (mod?.cancel && mod.cancel(jobId) === false
       && (runningJob.providerInvoked || isRemoteMediaJob(runningJob))) {
       // A provider may have crossed its durable finalization boundary before

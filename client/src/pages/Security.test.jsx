@@ -12,8 +12,8 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 
 vi.mock('../services/api', () => ({
   default: {
-    get: vi.fn(async () => ({ data: { video: [{ id: 'cam-1', name: 'Camera 1' }], audio: [{ id: 'mic-1', name: 'Mic 1' }] } })),
-    post: vi.fn(async () => ({ data: {} })),
+    get: vi.fn(async () => ({ video: [{ id: 'cam-1', name: 'Camera 1' }], audio: [{ id: 'mic-1', name: 'Mic 1' }] })),
+    post: vi.fn(async () => ({})),
   },
 }));
 
@@ -219,6 +219,99 @@ describe('Security monitor toggle posts the new flag value', () => {
 
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/media/start', expect.objectContaining({
       audio: false,
-    })));
+    }), { silent: true }));
   });
+
+  it('shows unwrapped devices on mount and refresh', async () => {
+    const api = (await import('../services/api')).default;
+    render(<Security />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
+    expect(screen.getByRole('option', { name: 'Camera 1' })).toBeTruthy();
+    api.get.mockResolvedValueOnce({ video: [{ id: '2', name: 'Example replacement camera' }], audio: [] });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh devices/i }));
+    expect(await screen.findByRole('option', { name: 'Example replacement camera' })).toBeTruthy();
+  });
+
+  it('allows another start after a failed start request', async () => {
+    const api = (await import('../services/api')).default;
+    api.post.mockRejectedValueOnce(new Error('Example start refusal'));
+    render(<Security />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /Start Media/i }));
+    expect(await screen.findByText(/Failed to start media: Example start refusal/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Start Media/i }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /Refresh devices/i }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Start Media/i }));
+    await waitFor(() => expect(sessionType()).toBe('playback'));
+  });
+
+  it('cleans up local playback when the server stop fails and preserves the microphone preference', async () => {
+    const api = (await import('../services/api')).default;
+    const { container } = await startMonitor();
+    api.post.mockRejectedValueOnce(new Error('Example stop failure'));
+    fireEvent.click(screen.getByRole('button', { name: /Stop Media/i }));
+    expect(await screen.findByText(/Failed to stop server media: Example stop failure/)).toBeTruthy();
+    expect(sessionType()).toBe('auto');
+    expect(container.querySelector('audio').hasAttribute('src')).toBe(false);
+    expect(window.HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+    expect(cancelAnimationFrame).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Mute microphone/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Start Media/i }).disabled).toBe(false);
+  });
+
+  it('reports a rejected interaction playback and keeps the enable button usable', async () => {
+    window.HTMLMediaElement.prototype.play = vi.fn().mockRejectedValue(new Error('Example playback block'));
+    await startMonitor();
+    const enable = screen.getByRole('button', { name: /Enable Audio/i });
+    fireEvent.click(enable);
+    expect(await screen.findByText(/Failed to enable audio: Example playback block/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Enable Audio/i }).disabled).toBe(false);
+  });
+
+
+  it('does not suspend a restarted monitor when the previous resume settles late', async () => {
+    let resolveOldResume;
+    let context;
+    let resumes = 0;
+    let suspends = 0;
+    window.AudioContext = class extends FakeAudioContext {
+      constructor() { super(); this.state = 'suspended'; context = this; }
+      resume() {
+        resumes += 1;
+        if (resumes === 1) return new Promise(resolve => { resolveOldResume = resolve; });
+        return super.resume();
+      }
+      suspend() { suspends += 1; return super.suspend(); }
+    };
+    await startMonitor();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Stop Media/i })); });
+    fireEvent.click(screen.getByRole('button', { name: /Start Media/i }));
+    await waitFor(() => expect(context.state).toBe('running'));
+    const suspendsBeforeOldResume = suspends;
+    await act(async () => { resolveOldResume(); });
+    expect(suspends).toBe(suspendsBeforeOldResume);
+    expect(context.state).toBe('running');
+    expect(sessionType()).toBe('playback');
+  });
+
+
+  it('does not play after stop when interaction resume settles late', async () => {
+    let context;
+    window.AudioContext = class extends FakeAudioContext {
+      constructor() { super(); context = this; }
+    };
+    window.HTMLMediaElement.prototype.play = vi.fn().mockRejectedValue(new Error('Example autoplay block'));
+    await startMonitor();
+    let resolveResume;
+    context.state = 'suspended';
+    context.resume = () => new Promise(resolve => { resolveResume = resolve; });
+    fireEvent.click(screen.getByRole('button', { name: /Enable Audio/i }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Stop Media/i })); });
+    const playsBeforeResume = window.HTMLMediaElement.prototype.play.mock.calls.length;
+    await act(async () => { resolveResume(); });
+    expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(playsBeforeResume);
+    expect(sessionType()).toBe('auto');
+  });
+
 });

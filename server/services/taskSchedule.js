@@ -868,7 +868,9 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
   return { satisfied: pending.length === 0, pending };
 }
 
-async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain, schedule: injected = null }) {
+// `now` pins the clock for one scheduler tick so every app is judged against the
+// same instant, however long earlier apps took to prepare (#11755).
+async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain, schedule: injected = null, now = Date.now() }) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: TASK_READINESS_REASON.REQUIRES_INSTALL_WIDE_TARGET };
   }
@@ -895,7 +897,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
 
   // Weekday-only tasks skip weekends (timezone-aware)
   if (interval.weekdaysOnly) {
-    const { dayOfWeek } = getLocalParts(new Date(), timezone);
+    const { dayOfWeek } = getLocalParts(new Date(now), timezone);
     if (dayOfWeek === 0 || dayOfWeek === 6) {
       return { shouldRun: false, reason: TASK_READINESS_REASON.WEEKDAY_ONLY };
     }
@@ -949,7 +951,6 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     };
   }
 
-  const now = Date.now();
   const lastRun = appExecution.lastRun ? new Date(appExecution.lastRun).getTime() : 0;
 
   let result;
@@ -1071,22 +1072,22 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
 /**
  * Check whether a task should initiate a scheduled run for an app or globally.
  */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), schedule = null } = {}) {
-  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false, schedule });
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), schedule = null, now = Date.now() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false, schedule, now });
 }
 
 /**
  * Check whether an already-started perpetual drain should take another hop.
  * If asked to continue a non-perpetual type, its normal cadence remains in force.
  */
-export async function shouldContinuePerpetualDrain(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
-  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: true });
+export async function shouldContinuePerpetualDrain(taskType, appId = null, { featureEnabled = createFeatureGate(), now = Date.now() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: true, now });
 }
 
 /**
  * Get all enabled task types that are due to run (optionally for a specific app)
  */
-export async function getDueTasks(appId = null, { continuingTaskType = null } = {}) {
+export async function getDueTasks(appId = null, { continuingTaskType = null, now = Date.now() } = {}) {
   const schedule = await loadSchedule();
   const due = [];
   const featureEnabled = createFeatureGate();
@@ -1097,7 +1098,7 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
     const checkTask = taskType === continuingTaskType
       ? shouldContinuePerpetualDrain
       : shouldRunTask;
-    const check = await checkTask(taskType, appId, { featureEnabled });
+    const check = await checkTask(taskType, appId, { featureEnabled, now });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }

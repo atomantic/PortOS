@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
-import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots, sweepStrayTempRoots } from '../lib/mockPathsDataRoot.js';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 
@@ -18,7 +18,7 @@ vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyP
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
-const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
+const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
@@ -37,13 +37,19 @@ try {
 const canRun = browserSuiteCanRun('musicVideo browser suite', { Chrome: chrome, ffmpeg, 'client workspace dependencies': clientBundler }, { onUnavailable: cleanupTempDataRoots });
 
 let browser, artifacts, proc, server;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 afterAll(async () => {
-  await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} });
-  if (server) await new Promise(resolve => server.close(resolve));
-  cleanupTempDataRoots();
-  // A just-killed Chrome helper can recreate the data root after removal; CI's Linux run left one (#10312).
-  await sweepStrayTempRoots('mv-review-browser-');
-});
+  let cleanupError;
+  const recordCleanupError = error => { cleanupError = cleanupError ? new AggregateError([cleanupError, error], 'Music-video review fixture cleanup failed') : error; };
+  try { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {}, detachedProcessGroupId: detachedChromeProcessGroupId() }); }
+  catch (error) { recordCleanupError(error); }
+  try { if (server) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  catch (error) { recordCleanupError(error); }
+  if (!cleanupError && _testBrowserCleanupSettled(proc)) {
+    try { cleanupTempDataRoots(); } catch (error) { recordCleanupError(error); }
+  }
+  if (cleanupError) throw cleanupError;
+}, 25000);
 
 describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg and client dependencies required)', () => {
   it('reviews, requests targeted revisions, renders and watches real animated evidence before approval', async () => {
@@ -93,7 +99,7 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await build({ configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' });
     const app = express(); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/videos', express.static(PATHS.videos)); app.use('/fonts', express.static(join(client, 'public/fonts'))); app.use(express.static(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
-    proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
     artifacts = _createTestArtifactsRoot();
     browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });

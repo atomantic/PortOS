@@ -7,7 +7,7 @@ import { messageLogError } from '../lib/messageLogError.js';
 import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
-import { getAuthenticatedClient } from './googleAuth.js';
+import { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -236,7 +236,7 @@ export async function syncGmail(account, cache, io, options = {}) {
     return { messages: [], status: 'not-configured' };
   }
 
-  const gmailClient = gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   // Refresh the owner's send-as aliases opportunistically each sync (#2831) — one cheap
   // settings call. Returned up to syncAccount so the activity timeline can exclude every
   // owner address, not just the primary, from received-message participants. `null` on
@@ -416,7 +416,7 @@ export async function prepareGmailReply(account, draft, original) {
   }
   const auth = await getAuthenticatedClient();
   if (!auth) return replyRefusal('GMAIL_NOT_CONFIGURED', 'Google OAuth is not configured. Connect Google before sending this reply.', 502);
-  const gmailClient = gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const metadata = await gmailClient.users.messages.get({
     userId: 'me', id: original.apiId, format: 'metadata',
     metadataHeaders: ['Message-ID', 'References', 'In-Reply-To', 'Subject']
@@ -487,7 +487,7 @@ export async function sendGmail(account, draft, delivery = null) {
     return { success: false, error: 'Google sign-in could not be refreshed — nothing was sent', status: 502, code: 'GMAIL_AUTH_FAILED' };
   }
 
-  const gmailClient = gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
 
   // Build RFC 2822 message
   const toLine = Array.isArray(draft.to) ? draft.to.join(', ') : draft.to;

@@ -20,24 +20,24 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * disabled the dispatcher rejects up front; this module assumes it's enabled
  * by the time generateImage() is called.
  *
- * No fabrication guard here, unlike agy/grok (see imageGen/fabricationGuard.js):
- * those direct the agent to write a PNG at a path PortOS chose, which is a goal
- * a coding agent can satisfy by drawing one when the image tool is unavailable.
- * Codex is never told a destination — we harvest from its own
- * `~/.codex/generated_images/<session-id>/` dir and the session JSONL, and it
- * has no scratch cwd — so there is no "a file exists at path X" criterion for a
- * fabricated image to meet. If Codex ever gains a directed staging path, it
- * needs the guard too.
+ * Each child runs in an owned temporary workspace. Only the Codex generated
+ * image directory and image-generation session events are harvested; scratch
+ * drawings are never accepted. Missing tool events do not prove an account
+ * lacks image generation, so diagnostics distinguish observation from capability.
  */
 
 import { spawn } from '../../lib/childProcess.js';
 import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
-import { readFile, readdir, stat } from 'fs/promises';
+import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { join, isAbsolute, resolve, sep } from 'path';
+import { tmpdir } from 'os';
+import { codexHomeDir } from '../../lib/codexUserConfig.js';
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { noFabricationClause } from './fabricationGuard.js';
 import { randomUUID } from 'crypto';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -75,8 +75,30 @@ const DEFAULT_HARVEST_TIMEOUT_MS = 5000;
 let harvestTimeoutMs = DEFAULT_HARVEST_TIMEOUT_MS;
 
 const codexImagesDir = (sessionId) =>
-  join(homedir(), '.codex', 'generated_images', sessionId);
-const codexSessionsDir = () => join(homedir(), '.codex', 'sessions');
+  join(codexHomeDir(), 'generated_images', sessionId);
+const codexSessionsDir = () => join(codexHomeDir(), 'sessions');
+
+// Cache evidence only changes PortOS's default, never an explicit selection.
+async function resolveCodexDriverModel(model, modelIsShippedDefault) {
+  const explicit = typeof model === 'string' && model.trim();
+  if (explicit && !modelIsShippedDefault) return explicit;
+  const preferred = CODEX_IMAGEGEN_DEFAULT_MODEL;
+  let listed;
+  try {
+    const path = join(codexHomeDir(), 'models_cache.json');
+    if ((await stat(path)).size > 2 * 1024 * 1024) return preferred;
+    const cache = JSON.parse(await readFile(path, 'utf8'));
+    if (!Array.isArray(cache.models)) return preferred;
+    listed = new Set(cache.models.filter(item => item?.visibility === 'list' && typeof item.slug === 'string').map(item => item.slug));
+  } catch { /* Missing or unreadable cache provides no model availability evidence. */ }
+  if (!listed?.size || listed.has(preferred)) return preferred;
+  const fallback = ['gpt-5.6-luna', 'gpt-5.6-terra'].find(id => listed.has(id));
+  if (fallback) {
+    console.log(`🔀 Codex image default ${preferred} is not listed in the local model cache; using ${fallback}`);
+    return fallback;
+  }
+  throw new ServerError('The local Codex model cache lists no supported low-cost image-generation driver default. Select an available model explicitly in Settings → Image Gen.', { status: 400 });
+}
 
 // Per-job state — keyed by jobId so multiple codex renders can run in
 // parallel under the mediaJobQueue's configurable lane limit. Same client
@@ -204,11 +226,11 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
     initImageStrength,
   });
   const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
-  const fullPrompt = buildWith(prompt);
+  const fullPrompt = buildWith(prompt) + '\n' + noFabricationClause('image_gen');
   return {
     fullPrompt,
     record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Codex image tool instructions', buildWith)] }),
+      added: [agentInstructionsAddition('Codex image tool instructions', text => buildWith(text) + '\n' + noFabricationClause('image_gen'))] }),
   };
 }
 
@@ -217,7 +239,7 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
 // feeds the attachments to `image_gen` as references.
 export async function generateImage({
   promptAdditions = [],
-  codexPath, model, effort, prompt = '', width, height, negativePrompt,
+  codexPath, model, modelIsShippedDefault = false, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
   jobId: providedJobId = null,
@@ -233,7 +255,7 @@ export async function generateImage({
   // A caller-supplied model/effort (an explicit Settings → Image Gen override,
   // threaded through the dispatcher) wins; `null`/`''`/absent falls back to the
   // shipped default so a bare install never runs Codex's heaviest tier.
-  const effectiveModel = (typeof model === 'string' && model.trim()) ? model.trim() : CODEX_IMAGEGEN_DEFAULT_MODEL;
+  const effectiveModel = await resolveCodexDriverModel(model, modelIsShippedDefault);
   // Validate the effort against the known codex levels before use: an
   // unrecognized non-empty value (a hand-edited settings.json / the unvalidated
   // settings PUT) would otherwise pass through, buildEffortArgs would emit no
@@ -306,19 +328,35 @@ export async function generateImage({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
+  // Per-render scratch cwd for the child (#11734). Rooted at the OS temp dir —
+  // the same pattern every other ephemeral PortOS workspace uses, including the
+  // sibling Codex text turn in `services/codexAppServer.js`. Deliberately NOT a
+  // `PATHS` entry: `PATHS` names durable, documented directories under the
+  // install root that backup and federation reason about, and this one is
+  // created per render and removed when the job settles. An earlier revision
+  // read `PATHS.tmp`, which has never existed on the object — `ensureDir`
+  // received `undefined` and every Codex render died here before spawning.
+  const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
+  try {
+    jobs.set(jobId, job);
 
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex: ${prompt.slice(0, 60)}…`);
-  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-  broadcastSse(job, { type: 'status', message: 'Spawning codex…' });
+    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex: ${prompt.slice(0, 60)}…`);
+    imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
+    activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
+    broadcastSse(job, { type: 'status', message: 'Spawning codex…' });
+  } catch (err) {
+    jobs.delete(jobId);
+    activeJobs.delete(jobId);
+    await removeScratchDirectory(scratchDir);
+    throw err;
+  }
 
   // generateImage returns a job descriptor synchronously; the actual codex
   // child runs out-of-band so the HTTP response can ship while the client
   // attaches to the per-job SSE stream (mirrors local.js). runCodex settles
   // every launch failure through the job's own failure finalizer.
-  runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise });
+  runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise, scratchDir });
 
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
@@ -329,39 +367,45 @@ export async function generateImage({
   };
 }
 
-// Codex exited 0 with a session id but wrote no PNG. Turn its stdout narration
-// into the most useful error we can — surfacing the model's own words (#imagegen
-// declines, content refusals, "generated" claims with no file) instead of a
-// fixed guess. The legacy account/enablement hint is kept as a fallback when
-// codex said nothing usable. The line walk itself lives in the shared
-// `buildNoImageReason` so the codex and grok narrations cannot drift.
+// Preserve the model's reported reason without inferring account capability
+// from a missing output file or a narrated success claim.
 const CODEX_NO_IMAGE_HINT =
-  'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.';
+  'Codex returned no generated image. Check the Codex session and Settings → Image Gen.';
 export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
   hint: CODEX_NO_IMAGE_HINT,
   // Codex's own structural labels, on top of the shared dashed-rule /
   // bare-token-count filter.
   dropLine: (l) => /^(codex|user)$/i.test(l) || /^tokens used\b/i.test(l),
   describe: (said) => (
-    // Codex claims success but no file landed → the image tool wasn't actually
-    // run (image-gen unavailable / rate-limited on the account), even though the
-    // turn narrated a generation. Call that out specifically.
     /\b(generated|created|here(?:'|’)s|i(?:'|’)ve (?:made|generated))\b/i.test(said)
-      ? `Codex reported success but wrote no image file — the built-in image tool likely didn't run (image generation may be unavailable or rate-limited on your account, even though the feature is enabled). Codex said: "${said}"`
+      ? `Codex reported success but no generated image file was found. Codex said: "${said}"`
       : `Codex did not produce an image. Codex said: "${said}"`
   ),
 });
+
+function removeScratchDirectory(scratchDir) {
+  return maintenance.continueSettlement(
+    () => rmGuarded(scratchDir, { recursive: true, force: true }),
+  ).catch(err => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Codex scratch cleanup failed: ${err.message}`);
+  });
+}
 
 // Launch is synchronous so every failure has one owner: a refusal before a
 // child exists (Node rejects an invalid argv/bin synchronously) settles the job
 // here, and a setup failure after spawn terminates the child and leaves the
 // close handler to settle once it has physically exited.
-function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
+function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false, scratchDir } = {}) {
+  const removeScratch = () => removeScratchDirectory(scratchDir);
   let proc;
   try {
-    const prepared = prepareCliSpawn(bin, args);
-    proc = spawn(prepared.command, prepared.args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const resolvedBin = !isAbsolute(bin) && (bin.includes('/') || bin.includes(sep)) ? resolve(bin) : bin;
+    const prepared = prepareCliSpawn(resolvedBin, args);
+    const env = process.env.CODEX_HOME ? { ...process.env, CODEX_HOME: resolve(process.env.CODEX_HOME) } : process.env;
+    proc = spawn(prepared.command, prepared.args, { cwd: scratchDir, env: withSpawnCwdEnv(env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
+    void removeScratch();
     return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
   }
   activeProcs.set(jobId, proc);
@@ -409,6 +453,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
     // A failed kill/send on a live child is not physical exit.
     if (proc.pid) return;
     clearTimeout(timeoutTimer);
+    void removeScratch();
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
@@ -441,7 +486,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         // poll for a few seconds in case there's a flush lag on slow disks.
         const harvested = await harvestGeneratedImage(sessionId, harvestTimeoutMs);
         if (!harvested) {
-          return finalizeJobFailure(job, jobId, proc, noImageReason(stdoutTail));
+          return finalizeJobFailure(job, jobId, proc, await noImageSessionReason(sessionId, stdoutTail));
         }
         if (harvested.path) {
           await copyFileGuarded(harvested.path, outputPath);
@@ -494,7 +539,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
       // EventEmitter does not await this listener, so settle the job here too.
       clearTimeout(timeoutTimer);
       finalizeJobFailure(job, jobId, proc, `Codex publication admission failed: ${err?.message || err}`);
-    });
+    }).finally(removeScratch);
   });
 
   // Post-spawn setup. The error/close owners above are already installed, so a
@@ -515,7 +560,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
       // text and break the regex match.
       // We DO retain stdout here (the model's turn narration) so a no-image
       // finish can report why — a content decline, or a "generated" claim with
-      // no file (tool unavailable / image-gen rate-limited on the account).
+      // no file.
       stdoutTail += chunk.toString();
       if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
       broadcastSse(job, { type: 'status', message: 'Running…' });
@@ -596,6 +641,24 @@ async function findSessionLogFile(sessionId) {
     }
   }
   return null;
+}
+
+async function noImageSessionReason(sessionId, stdoutTail) {
+  const path = await findSessionLogFile(sessionId);
+  if (!path) return noImageReason(stdoutTail);
+  const text = await readFile(path, 'utf8').catch(() => '');
+  let imageToolObserved = false;
+  let shellObserved = false;
+  for (const line of text.split('\n')) {
+    try {
+      const payload = JSON.parse(line)?.payload;
+      const name = payload?.name || '';
+      if (['image_gen', 'image_gen.text2im', 'image_gen.imagegen'].includes(name) || ['image_generation_call', 'image_generation_end'].includes(payload?.type)) imageToolObserved = true;
+      if (['function_call', 'custom_tool_call'].includes(payload?.type) && /^(exec|exec_command|shell|shell_command)$/.test(name)) shellObserved = true;
+    } catch { /* Incomplete transcript lines do not establish tool usage. */ }
+  }
+  if (imageToolObserved) return noImageReason(stdoutTail);
+  return `No image_gen call was observed in the Codex session${shellObserved ? '; shell activity was recorded' : ''}. No generated image was found. This does not establish whether the tool is available to this account. Check Settings → Image Gen and the Codex session. ${noImageReason(stdoutTail)}`;
 }
 
 async function harvestSessionLogImage(sessionId) {

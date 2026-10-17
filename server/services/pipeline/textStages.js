@@ -10,8 +10,7 @@
  * styleNotes) plus every *prior* stage's output, so downstream stages can
  * reference upstream content with `{{stages.idea.output}}` etc.
  *
- * Errors bubble (per project convention — no try/catch) except at the SSE
- * boundary in autoRunner.js, which routes failures through a finalizer.
+ * Generation owns a persist-then-rethrow boundary so every failure is retryable.
  *
  * Progress (#3393): every phase of a run is broadcast through
  * `textStageProgress.js` so the UI shows attempt/judge progress instead of a
@@ -19,12 +18,15 @@
  * emit is a no-op and generation is byte-for-byte the un-streamed path.
  */
 
+import { codedError } from '../../lib/codedError.js';
+import { randomUUID } from 'node:crypto';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { beginStageProgress, emitStageProgress, finishStageProgress } from './textStageProgress.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
-import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
+import { getIssue, listIssues, updateStage, updateStageWithLatest, assertStageUnlocked, textStageRevision, TEXT_STAGE_IDS } from './issues.js';
 import { pickCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
 import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
@@ -35,6 +37,11 @@ import { renderTickingClock } from '../../lib/storyArc.js';
 import { filterCanonForIssue } from '../../lib/storyBible.js';
 import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
+
+// Separate from the advisory progress channel: overlapping runs each stay live.
+const liveGenerations = new Map();
+const hasLiveGeneration = (issueId, stageId) => [...liveGenerations.values()]
+  .some((run) => run.issueId === issueId && run.stageId === stageId);
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -657,43 +664,32 @@ async function buildGenerationContext({ series, canon, world, issue, stageId, op
 }
 
 // Run the stage LLM once and persist the response as the active stage state.
-// The try/catch is the mandatory persist-then-rethrow boundary: without it an
-// LLM throw would leave the stage stuck in `generating` forever. Returns
+// The enclosing generation owns failure recovery. Returns
 // { issue, stage, runId, output }. Each call with a new runId snapshots the
 // prior active state into runHistory (see snapshotRunHistory) — which is how the
 // draft gate's rejected attempts stay recoverable for inspection/restore.
-async function runStageLLMOnce(issueId, stageId, template, ctx, options) {
-  let result;
-  try {
-    result = await runStagedLLM(template, ctx, {
-      providerOverride: options.providerId,
-      // Soft run-level default (Series Autopilot, #1514): unlike providerId it
-      // loses to a per-stage pin and soft-falls-through to active when
-      // unavailable. Route callers pass providerId (hard); autopilot passes
-      // providerIdDefault (soft).
-      providerDefault: options.providerIdDefault,
-      modelOverride: options.model,
-      // Soft run-level model default (Series Autopilot, #1558): loses to a
-      // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
-      // model (hard); autopilot passes modelIdDefault (soft).
-      modelDefault: options.modelIdDefault,
-      // Soft run-level reasoning effort (Series Autopilot, #3641): loses to a
-      // per-stage `effort` pin, and the runner clamps/drops it per provider.
-      effortDefault: options.effortIdDefault,
-      source: 'pipeline-text-stage',
-      onRunCreated: options.onRunCreated,
-      onRunSettled: options.onRunSettled,
-    });
-  } catch (err) {
-    await updateStage(issueId, stageId, {
-      status: 'error',
-      errorMessage: (err?.message || String(err)).slice(0, 4000),
-    });
-    throw err;
-  }
-
+async function runStageLLMOnce(issueId, stageId, template, ctx, options, persist) {
+  const result = await runStagedLLM(template, ctx, {
+    providerOverride: options.providerId,
+    // Soft run-level default (Series Autopilot, #1514): unlike providerId it
+    // loses to a per-stage pin and soft-falls-through to active when
+    // unavailable. Route callers pass providerId (hard); autopilot passes
+    // providerIdDefault (soft).
+    providerDefault: options.providerIdDefault,
+    modelOverride: options.model,
+    // Soft run-level model default (Series Autopilot, #1558): loses to a
+    // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
+    // model (hard); autopilot passes modelIdDefault (soft).
+    modelDefault: options.modelIdDefault,
+    // Soft run-level reasoning effort (Series Autopilot, #3641): loses to a
+    // per-stage `effort` pin, and the runner clamps/drops it per provider.
+    effortDefault: options.effortIdDefault,
+    source: 'pipeline-text-stage',
+    onRunCreated: options.onRunCreated,
+    onRunSettled: options.onRunSettled,
+  });
   const output = (result.content || '').trim();
-  const { issue, stage } = await updateStage(issueId, stageId, {
+  const { issue, stage } = await persist({
     status: output ? 'ready' : 'error',
     output,
     lastRunId: result.runId,
@@ -716,7 +712,7 @@ async function runStageLLMOnce(issueId, stageId, template, ctx, options) {
  * budget exhausted) and keep the best attempt so far. Route callers pass no
  * chargeAction, so a manual regenerate is never cos-billed.
  */
-async function runDraftGate({ issueId, stageId, template, ctx, options, gate, emit = () => {} }) {
+async function runDraftGate({ issueId, stageId, template, ctx, options, gate, persist, emit = () => {} }) {
   // Dynamic import breaks the textStages ↔ pipelineJudge require cycle (the judge
   // imports scopeCharactersForIssue/stageContentOf from here) and keeps the judge
   // out of the module-eval graph for callers that never gate.
@@ -738,7 +734,9 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate, em
     }
     const started = Date.now();
     emit({ type: 'phase', phase: 'generate', label: `Drafting attempt ${i + 1} of ${gate.attempts}`, attempt: i + 1, attempts: gate.attempts });
-    const res = await runStageLLMOnce(issueId, stageId, template, ctx, options);
+    const res = await runStageLLMOnce(issueId, stageId, template, ctx, options, persist);
+    // A newer generation owns the record; don't judge or re-roll its draft.
+    if (res.stage.lastRunId !== res.runId) return res;
     last = res;
     let qualityScore = null;
     let overall = null;
@@ -786,7 +784,7 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate, em
   // 'ready' status. The displaced last attempt is snapshotted back into history.
   if (best && last && best.runId !== last.runId) {
     emit({ type: 'phase', phase: 'restore', label: 'Restoring the best-scoring draft', attempt: attempts.length, attempts: gate.attempts });
-    const restored = await updateStage(issueId, stageId, {
+    const restored = await persist({
       status: best.output ? 'ready' : 'error',
       input: best.input,
       output: best.output,
@@ -815,7 +813,7 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate, em
       rejected: a.runId !== winnerRunId,
     })),
   };
-  const stamped = await updateStage(issueId, stageId, { draftGate }).catch((err) => {
+  const stamped = await persist({ draftGate }).catch((err) => {
     console.warn(`⚠️ Failed to record draft-gate scorecard for issue ${issueId.slice(0, 8)}: ${err.message}`);
     return null;
   });
@@ -839,7 +837,7 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate, em
 // extract usefully. Non-fatal — prose succeeded, and a noisy extract shouldn't
 // roll back the user's accepted draft. An orphan series (no universeId) skips
 // extraction entirely. Returns the stamped { issue, stage } or null (unchanged).
-async function maybeExtractCanon(issueId, stageId, output, series, options, emit = () => {}) {
+async function maybeExtractCanon(issueId, stageId, output, series, options, persist, emit = () => {}) {
   if (stageId !== 'prose' || !output || !series.universeId) return null;
   emit({ type: 'phase', phase: 'canon', label: 'Extracting canon from the draft' });
   // Canon extraction follows whichever provider/model drove this prose stage —
@@ -864,7 +862,7 @@ async function maybeExtractCanon(issueId, stageId, output, series, options, emit
       return summarizeCanonExtraction({ error: err, provider, model });
     },
   );
-  return updateStage(issueId, 'prose', { canonExtraction: marker }).catch((err) => {
+  return persist({ canonExtraction: marker }).catch((err) => {
     console.warn(`⚠️ Failed to record canon-extraction status for issue ${issueId.slice(0, 8)}: ${err.message}`);
     return null;
   });
@@ -890,6 +888,8 @@ export async function generateStage(issueId, stageId, options = {}) {
     throw new Error(`generateStage: unsupported stageId "${stageId}"`);
   }
   // Generation may overlap, but only the first run owns this stream.
+  const generation = { id: randomUUID(), instanceId: null };
+  liveGenerations.set(generation.id, { issueId, stageId });
   const ownsProgress = beginStageProgress(issueId, stageId);
   const emit = (payload) => {
     if (ownsProgress) emitStageProgress(issueId, stageId, payload);
@@ -897,8 +897,12 @@ export async function generateStage(issueId, stageId, options = {}) {
   emit({ type: 'start', issueId, stageId, at: new Date().toISOString() });
   // Settle to an outcome object rather than try/catch so the terminal frame
   // ships on BOTH paths before the error resumes bubbling to the caller.
-  const outcome = await runTextStage(issueId, stageId, options, emit)
+  const outcome = await getInstanceId().then((instanceId) => {
+    generation.instanceId = instanceId;
+    return runTextStage(issueId, stageId, options, emit, generation);
+  })
     .then((result) => ({ result }), (error) => ({ error }));
+  liveGenerations.delete(generation.id);
   if (outcome.error) {
     if (ownsProgress) finishStageProgress(issueId, stageId, {
       type: 'error',
@@ -922,8 +926,8 @@ export async function generateStage(issueId, stageId, options = {}) {
 
 // The generation itself — everything between the `start` and terminal progress
 // frames. Split out of generateStage so the frames wrap the whole run (context
-// build included) without a try/catch around it.
-async function runTextStage(issueId, stageId, options, emit) {
+// build included). Persistence is guarded by the generation identity.
+async function runTextStage(issueId, stageId, options, emit, generation) {
   const template = STAGE_TO_TEMPLATE[stageId];
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId);
@@ -941,29 +945,96 @@ async function runTextStage(issueId, stageId, options, emit) {
   // three rejects.
   assertStageUnlocked(issue, stageId);
 
-  await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
+  await updateStage(issueId, stageId, { status: 'generating', errorMessage: '', generation });
+  const persist = (patch) => updateStageWithLatest(issueId, stageId, (current) =>
+    current.generation?.id === generation.id
+      && current.generation?.instanceId === generation.instanceId ? patch : {});
 
-  emit({ type: 'phase', phase: 'context', label: 'Building the prompt context' });
-  const ctx = await buildGenerationContext({ series, canon, world, issue, stageId, options });
-  const gate = resolveDraftGate(stageId, template, options);
+  try {
+    emit({ type: 'phase', phase: 'context', label: 'Building the prompt context' });
+    const ctx = await buildGenerationContext({ series, canon, world, issue, stageId, options });
+    const gate = resolveDraftGate(stageId, template, options);
 
-  // Draft gate (opt-in, default off) vs the single-shot path. The single-shot
-  // path is byte-for-byte the pre-#2169 behavior so a stage with draftAttempts=1
-  // (the default) is unchanged.
-  let result;
-  if (gate.attempts > 1) {
-    result = await runDraftGate({ issueId, stageId, template, ctx, options, gate, emit });
-  } else {
-    emit({ type: 'phase', phase: 'generate', label: 'Drafting', attempt: 1, attempts: 1 });
-    result = await runStageLLMOnce(issueId, stageId, template, ctx, options);
+    // Draft gate (opt-in, default off) vs the single-shot path. The single-shot
+    // path is byte-for-byte the pre-#2169 behavior so a stage with draftAttempts=1
+    // (the default) is unchanged.
+    let result;
+    if (gate.attempts > 1) {
+      result = await runDraftGate({ issueId, stageId, template, ctx, options, gate, persist, emit });
+    } else {
+      emit({ type: 'phase', phase: 'generate', label: 'Drafting', attempt: 1, attempts: 1 });
+      result = await runStageLLMOnce(issueId, stageId, template, ctx, options, persist);
+    }
+
+    let { issue: updatedIssue, stage } = result;
+    // Prose canon extraction on the FINAL (winning) output — once, not per attempt.
+    const current = await getIssue(issueId);
+    if (current.stages[stageId].generation?.id !== generation.id) return { ...result, issue: current, stage: current.stages[stageId] };
+    const stamped = await maybeExtractCanon(issueId, stageId, result.output, series, options, persist, emit);
+    if (stamped) ({ issue: updatedIssue, stage } = stamped);
+
+    return { issue: updatedIssue, stage, runId: result.runId };
+  } catch (error) {
+    await persist({
+      status: 'error',
+      errorMessage: (error?.message || String(error)).slice(0, 4000),
+    }).catch((persistError) => {
+      console.error(`❌ Pipeline stage error recovery failed: ${persistError.message}`);
+    });
+    throw error;
   }
+}
 
-  let { issue: updatedIssue, stage } = result;
-  // Prose canon extraction on the FINAL (winning) output — once, not per attempt.
-  const stamped = await maybeExtractCanon(issueId, stageId, result.output, series, options, emit);
-  if (stamped) ({ issue: updatedIssue, stage } = stamped);
+const hasUnknownOwner = (stage) => !stage.generation?.instanceId
+  || stage.generation.instanceId === UNKNOWN_INSTANCE_ID;
 
-  return { issue: updatedIssue, stage, runId: result.runId };
+export async function getStageRecovery(issueId, stageId) {
+  const issue = await getIssue(issueId);
+  const stage = issue.stages[stageId];
+  const instanceId = await getInstanceId();
+  const ownership = hasUnknownOwner(stage) ? 'unknown'
+    : (stage.generation.instanceId === instanceId ? 'local' : 'foreign');
+  const live = hasLiveGeneration(issueId, stageId);
+  return { revision: textStageRevision(stage), ownership, live,
+    recoverable: stage.status === 'generating' && ownership === 'unknown' && !live };
+}
+
+export function recoverLegacyStage(issueId, stageId, revision) {
+  return updateStageWithLatest(issueId, stageId, (current) => {
+    if (hasLiveGeneration(issueId, stageId)) {
+      throw codedError('A local generation is active. Wait for it to finish.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    if (textStageRevision(current) !== revision) {
+      throw codedError('The stage changed. Refresh it before taking over.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    if (current.status !== 'generating' || !hasUnknownOwner(current)) {
+      throw codedError('Only generating stages with unknown execution ownership can be taken over.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    // Keep drafts, run history and editorial locks; this does not generate or publish.
+    return { status: 'error', generation: null,
+      errorMessage: 'Operator recovered unknown execution ownership — generate again.' };
+  });
+}
+
+/** Only this install's abandoned generations may be demoted; legacy ownership is unknown. */
+export async function recoverStuckGeneratingStages() {
+  const instanceId = await getInstanceId();
+  if (!instanceId || instanceId === UNKNOWN_INSTANCE_ID) return 0;
+  let recovered = 0;
+  for (const issue of await listIssues({ withHistory: false })) {
+    for (const stageId of TEXT_STAGE_IDS) {
+      const snapshot = issue.stages[stageId];
+      if (snapshot.status !== 'generating' || snapshot.generation?.instanceId !== instanceId) continue;
+      await updateStageWithLatest(issue.id, stageId, (current) => {
+        if (current.status !== 'generating' || current.generation?.instanceId !== instanceId
+          || current.generation?.id !== snapshot.generation.id
+          || current.updatedAt !== snapshot.updatedAt || liveGenerations.has(current.generation.id)) return {};
+        recovered += 1;
+        return { status: 'error', errorMessage: 'Interrupted by a server restart — generate again.' };
+      });
+    }
+  }
+  return recovered;
 }
 
 // Export internals for tests.

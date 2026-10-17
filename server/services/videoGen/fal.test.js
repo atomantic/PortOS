@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, readFile, writeFile } from 'fs/promises';
+import { mkdir, rm, readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, unlink: vi.fn(actual.unlink) };
+});
+const { unlink: realUnlink } = await vi.importActual('fs/promises');
 
 const TEST_ROOT = join(tmpdir(), `portos-fal-video-test-${process.pid}-${Date.now()}`);
 const FAKE_VIDEOS_DIR = join(TEST_ROOT, 'data-videos');
@@ -35,8 +41,9 @@ const fal = await import('./fal.js');
 const ffmpeg = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
+const { maintenance } = await import('../../lib/maintenanceAdmission.js');
 
-  // A returned job is not a settled run.
+// A returned job is not a settled run.
 // Track from 'started', before generateVideo returns, through the terminal
 // event after the real finalization/history tail. Keep mocks and files alive
 // until every started job has reached that boundary, even if a test throws.
@@ -65,6 +72,7 @@ beforeEach(async () => {
   await mkdir(FAKE_DATA_DIR, { recursive: true });
   getSettingsMock.mockReset().mockResolvedValue({});
   vi.restoreAllMocks();
+  unlink.mockReset().mockImplementation(realUnlink);
 });
 
 afterEach(async () => {
@@ -174,10 +182,8 @@ describe('videoGen/fal — generateVideo', () => {
     expect(entry).toMatchObject({ sentPrompt: 'waves roll in', sentNegativePrompt: 'text' });
     expect(entry.promptAdditions).toBeUndefined();
     if (input === 'upload') {
-      await vi.waitFor(async () => {
-        await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });
-        await expect(readFile(endFramePath)).rejects.toMatchObject({ code: 'ENOENT' });
-      });
+      await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(endFramePath)).rejects.toMatchObject({ code: 'ENOENT' });
     } else {
       expect(await readFile(endFramePath)).toEqual(endFrame);
       expect(await readFile(framePath)).toEqual(Buffer.from('89504e470d0a1a0a', 'hex'));
@@ -754,6 +760,114 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
 });
 
 describe('standalone lip-sync take', () => {
+  // A terminal event releases the queue's ownership of staged inputs. Hold the
+  // actual unlink boundary, so the test fails even when the filesystem is fast.
+  it.each(['completed', 'provider failure', 'download failure', 'canceled'])(
+    'settles owned inputs before the %s terminal event and SSE frame', async (outcome) => {
+      const { PATHS } = await import('../../lib/fileUtils.js');
+      await mkdir(PATHS.uploads, { recursive: true });
+      const staged = join(PATHS.uploads, 'voice.wav');
+      const stagedFrame = join(PATHS.uploads, 'end.png');
+      const outside = join(TEST_ROOT, 'original.png');
+      await writeFile(staged, 'voice');
+      await writeFile(stagedFrame, 'end frame');
+      await writeFile(outside, 'original');
+      const cleaning = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      unlink.mockImplementation(async (path) => {
+        if (path === staged) {
+          cleaning.resolve();
+          await release.promise;
+        }
+        return realUnlink(path);
+      });
+      vi.stubGlobal('fetch', vi.fn(async (url) => {
+        if (url === 'https://queue.fal.run/fal-ai/y') return jsonResponse({ request_id: 'staged', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+        if (url === 'https://queue.fal.run/s') return jsonResponse(outcome === 'provider failure' ? { status: 'ERROR', error: 'Provider refused input' } : { status: 'COMPLETED' });
+        if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.example.com/video.mp4' } });
+        if (url === 'https://cdn.example.com/video.mp4') return new Response('mp4', { status: outcome === 'download failure' ? 403 : 200 });
+        throw new Error(`unexpected fetch: ${url}`);
+      }));
+      const job = await fal.generateVideo({
+        apiKey: 'test-key', modelId: 'fal-ai/y', sourceImagePath: outside, audioFilePath: staged,
+        uploadedTempPath: staged, uploadedTempPaths: [stagedFrame, outside],
+      });
+      const client = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: { on: vi.fn() } };
+      fal.attachSseClient(job.jobId, client);
+      if (outcome === 'canceled') expect(fal.cancel(job.jobId)).toBe(true);
+      const frames = () => client.write.mock.calls.map(([msg]) => JSON.parse(msg.replace(/^data: /, '')));
+      try {
+        await cleaning.promise;
+        expect(terminalEvents.get(job.jobId)).toBeNull();
+        expect(frames().some(frame => ['complete', 'error'].includes(frame.type))).toBe(false);
+        expect(fal.getActiveJob()).toMatchObject({ generationId: job.jobId });
+        expect(await readFile(staged, 'utf8')).toBe('voice');
+      } finally {
+        release.resolve();
+        await waitForTerminal(job.jobId);
+      }
+      const succeeded = outcome === 'completed';
+      expect(terminalEvents.get(job.jobId)).toMatchObject({ type: succeeded ? 'completed' : 'failed',
+        ...(!succeeded ? { error: expect.stringMatching(outcome === 'canceled' ? /Canceled/ : outcome === 'provider failure' ? /Provider refused input/ : /403/) } : {}),
+      });
+      expect(frames().at(-1).type).toBe(succeeded ? 'complete' : 'error');
+      expect(fal.getActiveJob()).toBeNull();
+      await expect(readFile(staged)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(stagedFrame)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(outside, 'utf8')).toBe('original');
+      expect(unlink.mock.calls.filter(([path]) => path === staged)).toHaveLength(1);
+      if (succeeded) expect(await readFile(join(FAKE_VIDEOS_DIR, job.filename), 'utf8')).toBe('mp4');
+      else await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each([false, true])('reports uncertain cleanup and retains published video (notification failure: %s)', async (notificationFails) => {
+    const { PATHS } = await import('../../lib/fileUtils.js');
+    await mkdir(PATHS.uploads, { recursive: true });
+    const staged = join(PATHS.uploads, 'locked.wav');
+    const other = join(PATHS.uploads, 'other.png');
+    const missing = join(PATHS.uploads, 'already-removed.png');
+    const frame = join(TEST_ROOT, 'frame.png');
+    await writeFile(staged, 'voice');
+    await writeFile(other, 'png');
+    await writeFile(frame, 'png');
+    unlink.mockImplementation(path => path === staged
+      ? Promise.reject(Object.assign(new Error('Synthetic cleanup refusal'), { code: 'EACCES' }))
+      : realUnlink(path));
+    const currentUnsettled = vi.spyOn(maintenance, 'markCurrentUnsettled').mockImplementation(() => {});
+    const resourceUnsettled = vi.spyOn(maintenance, 'markResourceUnsettled').mockImplementation(() => {});
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === 'https://queue.fal.run/fal-ai/y') return jsonResponse({ request_id: 'staged', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.example.com/video.mp4' } });
+      if (url === 'https://cdn.example.com/video.mp4') return new Response('committed video');
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId: 'fal-ai/y', sourceImagePath: frame, audioFilePath: staged,
+      uploadedTempPaths: [other, missing],
+    });
+    if (notificationFails) {
+      const emit = videoGenEvents.emit.bind(videoGenEvents);
+      vi.spyOn(videoGenEvents, 'emit').mockImplementation((type, ...args) => {
+        if (type === 'completed') throw new Error('Synthetic notification failure');
+        return emit(type, ...args);
+      });
+    }
+    expect(await waitForTerminal(job.jobId)).toMatchObject(notificationFails
+      ? { type: 'failed', error: expect.stringContaining('Synthetic notification failure') }
+      : { type: 'completed' });
+    expect(currentUnsettled).toHaveBeenCalledOnce();
+    expect(resourceUnsettled).toHaveBeenCalledExactlyOnceWith('media', job.jobId);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('staged-input cleanup failed'));
+    expect(await readFile(staged, 'utf8')).toBe('voice');
+    await expect(readFile(other)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(FAKE_VIDEOS_DIR, job.filename), 'utf8')).toBe('committed video');
+    expect((await loadHistory()).filter(item => item.id === job.jobId)).toHaveLength(1);
+    expect(unlink.mock.calls.filter(([path]) => path === staged)).toHaveLength(1);
+  });
+
   it('drops the staged voice clip once the take is published, but never a file outside data/uploads', async () => {
     const { PATHS } = await import('../../lib/fileUtils.js');
     await mkdir(PATHS.uploads, { recursive: true });

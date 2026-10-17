@@ -607,52 +607,62 @@ export async function startHostedListening(sessionId, { io } = {}) {
     throw new ServerError('An episode switch is in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
   }
 
-  const episodeId = session.episodeId;
-  const switchGeneration = session.episodeSwitchGeneration;
-  const loom = await getLoom(session.loomId);
-  if (activeSessions.get(sessionId) !== session || session.status !== 'active') {
-    throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
+  // Reserve admission before the loom read so simultaneous mic/text starts
+  // cannot replace each other's active turn while their gate checks await.
+  if (session.startingListening) {
+    throw new ServerError('A turn is already starting', { status: 409, code: 'TURN_IN_PROGRESS' });
   }
-  if (session.switchingEpisode || session.episodeSwitchGeneration !== switchGeneration || session.episodeId !== episodeId) {
-    throw new ServerError('Session changed while starting the listening turn', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
-  }
+  session.startingListening = true;
+  try {
+    const episodeId = session.episodeId;
+    const switchGeneration = session.episodeSwitchGeneration;
+    const loom = await getLoom(session.loomId);
+    if (activeSessions.get(sessionId) !== session || session.status !== 'active') {
+      throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
+    }
+    if (session.switchingEpisode || session.episodeSwitchGeneration !== switchGeneration || session.episodeId !== episodeId) {
+      throw new ServerError('Session changed while starting the listening turn', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
+    }
 
-  const episode = loom.episodes?.find((e) => e.id === episodeId) || null;
-  const node = episode?.nodes?.find((n) => n.id === session.currentNodeId) || null;
-  const asset = resolvePlaybackPhaseAsset({
-    node,
-    phase: session.playbackPhase,
-    activeHoldIndex: session.activeHoldIndex,
-  });
-
-  const gate = revalidateLiveConversationGate({ session, node, asset });
-  if (!gate.allowed) {
-    throw new ServerError(`Live voice conversation is not permitted: ${gate.reason}`, {
-      status: 409,
-      code: gate.reason,
+    const episode = loom.episodes?.find((e) => e.id === episodeId) || null;
+    const node = episode?.nodes?.find((n) => n.id === session.currentNodeId) || null;
+    const asset = resolvePlaybackPhaseAsset({
+      node,
+      phase: session.playbackPhase,
+      activeHoldIndex: session.activeHoldIndex,
     });
+
+    const gate = revalidateLiveConversationGate({ session, node, asset });
+    if (!gate.allowed) {
+      throw new ServerError(`Live voice conversation is not permitted: ${gate.reason}`, {
+        status: 409,
+        code: gate.reason,
+      });
+    }
+
+    if (session.turnPhase === 'speaking' || session.turnPhase === 'thinking') {
+      throw new ServerError('A turn is already in progress', { status: 409, code: 'TURN_IN_PROGRESS' });
+    }
+
+    const turnId = randomUUID();
+    session.turnPhase = 'listening';
+    session.activeTurn = {
+      id: turnId,
+      abortController: new AbortController(),
+      startedAt: Date.now(),
+    };
+
+    if (io) {
+      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
+        phase: 'listening',
+        turnId,
+      });
+    }
+
+    return { ok: true, turnId };
+  } finally {
+    session.startingListening = false;
   }
-
-  if (session.turnPhase === 'speaking' || session.turnPhase === 'thinking') {
-    throw new ServerError('A turn is already in progress', { status: 409, code: 'TURN_IN_PROGRESS' });
-  }
-
-  const turnId = randomUUID();
-  session.turnPhase = 'listening';
-  session.activeTurn = {
-    id: turnId,
-    abortController: new AbortController(),
-    startedAt: Date.now(),
-  };
-
-  if (io) {
-    io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
-      phase: 'listening',
-      turnId,
-    });
-  }
-
-  return { ok: true, turnId };
 }
 
 /**
@@ -700,10 +710,10 @@ export async function processHostedUtterance(sessionId, {
   emitIfLive('hosted:turn:phase', { phase: 'thinking', turnId: turn.id });
 
   try {
-    let message = (textMessage || '').trim();
+    let message = textMessage || '';
 
     // 1. Transcribe audio if supplied
-    if (audioBuffer && !message) {
+    if (audioBuffer && !message.trim()) {
       let wavPayload = audioBuffer;
       if (audioBuffer instanceof Int16Array || (ArrayBuffer.isView(audioBuffer) && !(audioBuffer instanceof Buffer))) {
         const floatPcm = pcmToFloat(audioBuffer);
@@ -721,7 +731,7 @@ export async function processHostedUtterance(sessionId, {
     }
 
     // Check for echo / empty message
-    if (!message || isEchoOfRecentTts(message, session.recentTts)) {
+    if (!message.trim() || isEchoOfRecentTts(message, session.recentTts)) {
       session.turnPhase = 'listening';
       emitIfLive('hosted:turn:phase', {
         phase: 'listening',
@@ -878,8 +888,13 @@ export async function processHostedUtterance(sessionId, {
       code: err?.code || 'TURN_FAILED',
       message: err?.message || String(err),
     });
+    // Without a phase frame every client stays in `thinking` (mic and text
+    // input disabled) until a reload resyncs.
     session.turnPhase = 'idle';
+    emitIfLive('hosted:turn:phase', { phase: 'idle', turnId: turn.id });
     session.activeTurn = null;
+    // Tells the socket handlers this failure already reached the room.
+    if (err && typeof err === 'object') err.hostedReported = true;
     throw err;
   }
 }

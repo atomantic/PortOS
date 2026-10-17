@@ -1,8 +1,9 @@
-import { StrictMode } from 'react';
+import { StrictMode, useLayoutEffect } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { awaitPageLoaded } from '../test/pageLoadBarrier';
+import { BedAudio } from '../components/media/VideoTimelineLanes';
 
 // The editor's pure rules live in lib/videoTimelineModel.js and its blocks in
 // components/media/VideoTimelineLanes.jsx, both tested there. What only exists
@@ -523,8 +524,23 @@ describe('source-aware playback', () => {
     const bedBlock = () => screen.getAllByText('bed.mp3').map((node) => node.parentElement).find((node) => node.style.width);
     const reportBedLength = (el, seconds) => {
       Object.defineProperty(el, 'duration', { configurable: true, value: seconds });
+      // Real loadedmetadata leaves HAVE_METADATA available to a late listener.
+      Object.defineProperty(el, 'readyState', { configurable: true, value: 1 });
       act(() => { el.dispatchEvent(new Event('loadedmetadata')); });
     };
+
+    it('recovers metadata reported before the bed listener is installed', async () => {
+      const onDuration = vi.fn();
+      const registry = new Map();
+      function EarlyMetadata() {
+        useLayoutEffect(() => {
+          reportBedLength(document.querySelector('audio'), 2);
+        }, []);
+        return <BedAudio trackKey="bed-1" assetId="music/bed.mp3" src="/data/music/bed.mp3" registry={registry} onDuration={onDuration} />;
+      }
+      await act(async () => { render(<EarlyMetadata />); });
+      expect(onDuration).toHaveBeenCalledWith('music/bed.mp3', 2);
+    });
 
     it('plays a short file on the fade envelope the export builds once its length loads', async () => {
       api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });

@@ -6,6 +6,7 @@
 // express. `server/lib/pm2Jlist.js` is the one exception: a pure, zero-import
 // leaf, so importing it costs nothing this package needs to stay light about.
 import { spawn } from 'child_process';
+import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
@@ -20,28 +21,21 @@ const require = createRequire(import.meta.url);
 export const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 
 /** Execute a PM2 CLI command via node (bypasses pm2.cmd) */
-export function execPm2(pm2Args) {
-  return new Promise((resolve, reject) => {
-    // node_modules/pm2 can go stale (e.g. a dangling symlink left by a reaped
-    // worktree install) without require.resolve('pm2/package.json') noticing,
-    // since that only resolves the package dir, not this bin file. Catch it
-    // here with a one-line message instead of spawning node against a missing
-    // path, which surfaces as an opaque multi-line MODULE_NOT_FOUND dump.
-    if (!existsSync(PM2_BIN)) {
-      reject(new Error(`PM2 binary not found at ${PM2_BIN} — run "npm install" in the repo root`));
-      return;
-    }
-    const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
-      resolve({ stdout, stderr });
+export async function execPm2(pm2Args, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
+  // Package resolution can succeed while the PM2 entry point is a dangling link.
+  if (!existsSync(PM2_BIN)) {
+    throw new Error(`PM2 binary not found at ${PM2_BIN} — run "npm install" in the repo root`);
+  }
+  const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const result = await waitForChild(child, { timeoutMs });
+  if (result.timedOut) {
+    throw Object.assign(new Error(`pm2 ${pm2Args.join(' ')} timed out after ${timeoutMs / 1000}s; CLI cleanup ${result.cleanupConfirmed ? 'confirmed' : 'unconfirmed'}, daemon outcome unknown`), {
+      code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed: result.cleanupConfirmed, outcome: 'unknown',
     });
-    child.on('error', reject);
-  });
+  }
+  if (result.error) throw result.error;
+  if (result.code !== 0) throw new Error(result.stderr || `pm2 exited with code ${result.code}`);
+  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -68,7 +62,6 @@ export const APPS_FILE = join(DATA_DIR, 'apps.json');
 export const AUTOFIXER_DIR = join(DATA_DIR, 'autofixer');
 export const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
 
-// Load apps from PortOS
 export async function loadApps() {
   try {
     const parsed = JSON.parse(await readFile(APPS_FILE, 'utf8'));

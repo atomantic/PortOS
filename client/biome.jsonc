@@ -50,33 +50,13 @@
   },
   "linter": {
     "enabled": true,
-    // Lint policy (carried over from eslint.config.js): every rule is either 'error'
-    // (enforced) or absent/'off' (gone). We do not use 'warn' — a warning is a rule
-    // nobody acts on, i.e. noise that hides real errors. Biome defaults many rules to
-    // 'warn', so every rule below sets 'error' explicitly.
-    //
-    // `preset: "none"` + an explicit list ports the ESLint rule set
-    // (js.configs.recommended + 8 @eslint-react rules + react-hooks). Biome's own
-    // `recommended` preset is much broader; adopting it is a separate policy
-    // decision, not part of this migration.
-    //
-    // Accessibility rules are enabled in small, verified stages. Add each rule
-    // only after the current client has a clean baseline for it.
-    // KNOWN PARITY GAPS — this is a near-port, not a total one. Counts below are
-    // measured with `--max-diagnostics=none --reporter=json`, excluding
-    // `suppressions/unused` noise; Biome's default reporter caps at 20, so a bare
-    // `biome lint` undercounts and must not be used to re-derive these.
-    //   * `no-empty` -> `noEmptyBlockStatements`: **705** violations today, nearly all
-    //     `() => {}` test mocks and intentionally-empty catches. Enabling it is a
-    //     lint-policy change, not a port. Left off.
-    //   * `no-cond-assign` -> `noAssignInExpressions`: **22** violations, essentially
-    //     all the idiomatic `while ((m = re.exec(s)))` loop. Small enough to be a
-    //     reasonable follow-up (rewrite the 22 sites, then enable), but it is a source
-    //     change unrelated to a dependency swap, so it is deliberately not bundled here.
-    //   * No Biome equivalent exists for `no-invalid-regexp`, `no-useless-assignment`,
-    //     `no-unexpected-multiline`, `no-delete-var`, or `no-empty-static-block`.
-    //     Most are parse-level or moot in ESM.
-    // Do not upgrade this comment to a claim of full parity without re-measuring.
+    // Accepted rules are errors; rejected rules stay off with rationale.
+    // The explicit preset avoids silently adopting new rules on a tool upgrade.
+    // noEmptyBlockStatements stays off: empty test callbacks and deliberate
+    // catches are valid; swallowed-error contracts have dedicated test guards.
+    // noAssignInExpressions stays off: parenthesized regex iteration assignments
+    // are deliberate. They do not justify banning assignments in all expressions.
+    // Rules without Biome equivalents are not claimed as enforced here.
     "rules": {
       "preset": "none",
       "a11y": {

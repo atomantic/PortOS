@@ -5,9 +5,13 @@
  * "read the whole day, then sort it" shows up as a day scan that a warm index
  * must never perform.
  */
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
+
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
@@ -79,13 +83,22 @@ async function seedBusyDay() {
   for (let i = DAY_SIZE - ON_DISK; i < DAY_SIZE; i += 1) await writeArchive(recordAt(i));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Cancellation/timeouts can settle Vitest's wrapper before the body stops
+  // writing. Finish that work before resetting its shared modules and fixture.
+  await owned.drain();
   io.metadata = 0;
   io.dayScans = 0;
   vi.resetModules();
 });
 
-afterAll(() => rm(fixture, { recursive: true, force: true }));
+afterAll(async () => {
+  try {
+    await owned.drain();
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
 
 describe('bounded paging over a busy archive day (#7968)', () => {
   it('reads one metadata record per returned row and never scans the day', async () => {

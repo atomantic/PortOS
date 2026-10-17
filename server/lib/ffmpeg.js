@@ -47,6 +47,31 @@ export const findFfmpeg = async () => {
   return found;
 };
 
+const vfrSyncProbes = new Map();
+const CURRENT_VFR_ARGS = Object.freeze(['-fps_mode', 'vfr']);
+const LEGACY_VFR_ARGS = Object.freeze(['-vsync', 'vfr']);
+
+// fps_mode replaced the global vsync option in 5.1; 9 removes vsync. Probe
+// capabilities rather than imposing a new version floor on older installs.
+// Like the setparams probe below, an inconclusive result stays uncached.
+export const vfrSyncArgs = async (bin) => {
+  if (vfrSyncProbes.has(bin)) return vfrSyncProbes.get(bin);
+  const probe = execFileAsync(bin, ['-hide_banner', '-h', 'full'], safeChildProcessOptions({
+    timeout: 5000, maxBuffer: 4 * 1024 * 1024,
+  })).then(({ stdout }) => {
+    const listing = String(stdout || '');
+    if (/^\s*-fps_mode(?:\s|\[|$)/m.test(listing)) return CURRENT_VFR_ARGS;
+    if (/^\s*-vsync(?:\s|$)/m.test(listing)) return LEGACY_VFR_ARGS;
+    vfrSyncProbes.delete(bin);
+    return CURRENT_VFR_ARGS;
+  }, () => {
+    vfrSyncProbes.delete(bin);
+    return CURRENT_VFR_ARGS;
+  });
+  vfrSyncProbes.set(bin, probe);
+  return probe;
+};
+
 /**
  * Spawn an ffmpeg child process and resolve with a structured result.
  * Collapses three sibling implementations (audioMux mux, optimizeForStreaming
@@ -475,14 +500,14 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
   // Filter expression: select frames matching any of the target indices.
   // Single-quoting the expression lets ffmpeg's filter parser treat the
   // commas inside `eq(n,X)` as expression args rather than filter-chain
-  // separators. `-vsync vfr` prevents the image2 muxer from padding output
+  // separators. VFR sync prevents the image2 muxer from padding output
   // to maintain input fps (which would re-emit each match repeatedly).
   const selectExpr = frameIndices.map((i) => `eq(n,${i})`).join('+');
   const outPattern = join(PATHS.videoThumbnails, `${jobId}-f%d.jpg`);
 
   const result = await runFfmpegProcess({
     bin: ffmpeg,
-    args: ['-i', videoPath, '-vf', `select='${selectExpr}'`, '-vsync', 'vfr', '-q:v', '5', '-y', outPattern],
+    args: ['-i', videoPath, '-vf', `select='${selectExpr}'`, ...await vfrSyncArgs(ffmpeg), '-q:v', '5', '-y', outPattern],
     stderrTailBytes: 0,
   });
   if (!result.ok && result.reason?.startsWith('spawn failed: ')) {

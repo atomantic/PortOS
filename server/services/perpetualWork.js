@@ -22,7 +22,7 @@
  * full recheck cadence on a blip.
  */
 
-import { spawn } from '../lib/childProcess.js';
+import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
@@ -98,27 +98,9 @@ function redactCliDetail(stderr) {
   return detail.length > CLI_DETAIL_MAX_CHARS ? `${detail.slice(0, CLI_DETAIL_MAX_CHARS)}…` : detail;
 }
 
-/**
- * Best-effort CLI runner mirroring git.js#spawnCli (which isn't exported).
- * Never rejects: a spawn error, non-zero exit, or timeout all resolve to a
- * result object the detectors classify themselves.
- */
+/** Best-effort CLI runner: never rejects or hangs; the detectors classify the result themselves. */
 function runCli(cmd, args, cwd, env) {
-  return new Promise((resolve) => {
-    let stdout = '', stderr = '', settled = false;
-    const child = spawn(cmd, args, { cwd, shell: false, ...(env ? { env } : {}) });
-    const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    // Preserve whatever stderr accumulated before the spawn error / timeout —
-    // the CLI's actual fault (expired token, rate limit, network refused, wrong
-    // repo) lives there, and blanking it left every transient reason a bare
-    // fixed literal with no diagnostic content (#7551).
-    child.on('error', () => done({ code: -1, stdout, stderr }));
-    child.on('close', (code) => done({ code, stdout, stderr }));
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* noop */ } done({ code: -1, stdout, stderr }); }, CLI_TIMEOUT_MS);
-    if (timer.unref) timer.unref();
-  });
+  return runCliBounded(cmd, args, { cwd, env, timeoutMs: CLI_TIMEOUT_MS });
 }
 
 /**

@@ -122,11 +122,20 @@ describe.skipIf(!ffmpeg)('a beat toggle across a cut in the final render', () =>
     showsClipFrame(means, 23, 17);
   });
 
-  it('holds the first frame where the clip has no footage before its in-point', () => {
+  it('plays on from the clip\'s first frame where it has less footage than the window before its in-point', () => {
     const means = render({ sourceSec: 4 });
-    [6, 7, 8].forEach((f) => showsClipFrame(means, f, 0));
+    [6, 7, 8].forEach((f, k) => showsClipFrame(means, f, k));
     showsClipFrame(means, 12, 0);
     showsClipFrame(means, 23, 11);
+    // A quarter second in, half the window's length: still moving from the first frame, never held.
+    const short = render({ inSec: 0.25, outSec: 1.25, sourceSec: 3.75, duration: 1 });
+    [6, 7, 8].forEach((f, k) => showsClipFrame(short, f, k));
+    showsClipFrame(short, 12, 3);
+    // A negative offset holds the shot's first frame, but its flips still move.
+    const late = render({ leadSec: 0.25, outSec: 1, sourceSec: 4.25 });
+    [6, 7, 8].forEach((f, k) => showsClipFrame(late, f, k));
+    showsClipFrame(late, 12, 0);
+    showsClipFrame(late, 15, 0);
   });
 
   it('plays the footage before the in-point at the shot\'s speed', () => {

@@ -28,6 +28,7 @@ import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
+import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 
 const router = Router();
 
@@ -419,6 +420,9 @@ const validateSettingsPatch = async (body) => {
   // schema. Validate that slice when it's present so a malformed Backup-tab
   // save doesn't reach disk (the runtime guards downstream are belt-and-
   // suspenders, but per project convention all inputs are validated).
+  if (body?.filmLookPresets !== undefined) {
+    validateRequest(filmLookSavedPresetsSchema, body.filmLookPresets);
+  }
   if (body?.untrustedContent !== undefined) {
     validateRequest(untrustedContentSettingsSchema, body.untrustedContent);
   }

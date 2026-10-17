@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
+import { createCooperativePlayback, playbackSchema } from './cooperativePlayback.js';
 
 const MAX_SESSIONS = 3;
 const IDLE_MS = 120_000;
@@ -133,6 +134,7 @@ export async function closeSession(sessionId, reason = 'closed') {
   session.closed = true;
   sessions.delete(sessionId);
   clearTimeout(session.idle);
+  session.playback?.close();
   const ids = bySocket.get(session.socket.id);
   if (ids) {
     const next = ids.filter((id) => id !== sessionId);
@@ -143,6 +145,7 @@ export async function closeSession(sessionId, reason = 'closed') {
   try { await session.page?.close(); } catch (error) {
     console.error(`❌ Generated preview browser close failed: ${error.message}`);
   }
+  await session.playback?.settled();
   if (session.scratchRoot) {
     await rm(session.scratchRoot, { recursive: true, force: true }).catch((error) => {
       console.error(`❌ Generated preview scratch cleanup failed: ${error.message}`);
@@ -194,15 +197,20 @@ async function seekPage(session, t, playing = false) {
   })()`);
 }
 
-function emitFrame(session, generation, data) {
+function emitFrame(session, generation, data, playback = null) {
   if (!data || session.closed) return;
   session.socket.emit('generated-preview:frame', {
-    requestId: session.requestId, sessionId: session.id, generation, mime: 'image/jpeg', data,
+    requestId: session.requestId, sessionId: session.id,
+    ...(playback || { generation }), mime: 'image/jpeg', data,
   });
   armIdle(session);
 }
 
 async function runSeek(session, generation, t, playing = false) {
+  if (session.playback) {
+    await session.playback.seek(generation, t, playing).catch(session.playback.terminate);
+    return;
+  }
   if (session.seekTail) {
     session.pendingSeek = { generation, t, playing };
     return;
@@ -279,12 +287,14 @@ function attachEvents(session) {
     if (session.closed) return;
     if (message.method === 'Page.screencastFrame') {
       const params = message.params || {};
+      if (session.playback) { session.playback.onFrame(params); return; }
       emitFrame(session, session.appliedGeneration, params.data);
       session.page?.send('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
       return;
     }
     if (message.method === 'Portos.preview') {
       const params = message.params || {};
+      session.playback?.onEvent(params);
       session.socket.emit('generated-preview:event', {
         requestId: session.requestId, sessionId: session.id, ...params,
       });
@@ -415,6 +425,10 @@ async function startMusicVideo(session, input) {
   });
   session.page = opened.page;
   session.scratchRoot = opened.scratchRoot;
+  if (opened.playback?.version === 1) {
+    session.playback = createCooperativePlayback(session, { seekPage, capture, emitFrame, fail, closeSession,
+      authored: opened.playback.producer === 'authored-v1' });
+  }
   // The first frame is captured after this seek. Apply the live controls first
   // so that frame is already graded and titled.
   await applyJson(opened.page, '__portosFilmLook', input.look ?? null);
@@ -425,6 +439,7 @@ async function startMusicVideo(session, input) {
     width: opened.width, height: opened.height, fps: opened.fps, durationSec: opened.durationSec,
     revision: `${pointer?.directory || ''}|${pointer?.updatedAt || ''}`,
     frame: await capture(opened.page),
+    ...(opened.playback ? { playback: opened.playback } : {}),
   };
 }
 
@@ -554,6 +569,7 @@ async function openGeneratedPreview(socket, data) {
       durationSec: started.durationSec,
       revision: started.revision,
       audio: started.audio || 'none',
+      ...(started.playback ? { playback: started.playback } : {}),
     });
     emitFrame(session, 0, started.frame);
   } catch (error) {
@@ -586,11 +602,18 @@ async function commandGeneratedPreview(socket, data) {
   if (!session || session.socket.id !== socket.id || session.closed) return;
   armIdle(session);
   try {
-    if (parsed.data.action === 'film-look') await applyJson(session.page, '__portosFilmLook', parsed.data.look ?? null);
-    else if (parsed.data.action === 'title-card') await applyJson(session.page, '__portosTitleCard', parsed.data.card ?? null);
-    else if (parsed.data.action === 'record' && parsed.data.message) {
-      await session.page.evaluate(`window.postMessage({ type: ${JSON.stringify(parsed.data.message.type)} }, '*')`);
+    const apply = async () => {
+      if (parsed.data.action === 'film-look') await applyJson(session.page, '__portosFilmLook', parsed.data.look ?? null);
+      else if (parsed.data.action === 'title-card') await applyJson(session.page, '__portosTitleCard', parsed.data.card ?? null);
+      else if (parsed.data.action === 'record' && parsed.data.message) {
+        await session.page.evaluate(`window.postMessage({ type: ${JSON.stringify(parsed.data.message.type)} }, '*')`);
+      }
+    };
+    if (session.playback) {
+      await session.playback.control(apply).catch(session.playback.terminate);
+      return;
     }
+    await apply();
     if (session.kind !== 'code-animation') emitFrame(session, session.appliedGeneration, await capture(session.page));
   } catch (error) {
     console.error(`❌ Generated preview command failed: ${error.message}`);
@@ -598,18 +621,32 @@ async function commandGeneratedPreview(socket, data) {
   }
 }
 
+async function playbackGeneratedPreview(socket, data) {
+  const parsed = playbackSchema.safeParse(data);
+  if (!parsed.success) return;
+  const session = sessions.get(parsed.data.sessionId);
+  if (!session || session.socket.id !== socket.id || session.closed || !session.playback) return;
+  armIdle(session);
+  await session.playback.handle(parsed.data).catch(session.playback.terminate);
+}
+
 function guard(socket, event, fn) {
   socket.on(event, (data) => {
-    Promise.resolve().then(() => fn(socket, data)).catch((error) => {
+    const rejected = (error) => {
       console.error(`❌ Generated preview ${event} failed: ${error.message}`);
-      fail(socket, { message: 'The isolated preview could not continue.' });
-    });
+      fail(socket, { requestId: data?.requestId, sessionId: data?.sessionId, message: 'The isolated preview could not continue.' });
+    };
+    // Intent gates run in the receiving event turn, before another native
+    // frame can be forwarded. The async operation still reports rejections.
+    try { Promise.resolve(fn(socket, data)).catch(rejected); }
+    catch (error) { rejected(error); }
   });
 }
 
 export function registerGeneratedPreviewHandlers(socket) {
   guard(socket, 'generated-preview:open', openGeneratedPreview);
   guard(socket, 'generated-preview:seek', seekGeneratedPreview);
+  guard(socket, 'generated-preview:playback', playbackGeneratedPreview);
   guard(socket, 'generated-preview:command', commandGeneratedPreview);
   guard(socket, 'generated-preview:close', async (current, data) => {
     const parsed = closeSchema.safeParse(data || {});

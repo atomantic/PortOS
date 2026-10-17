@@ -37,12 +37,22 @@
  */
 
 import { spawn } from '../lib/childProcess.js';
-import { readdir, readFile, rename, rm, stat, unlink } from 'fs/promises';
+import { readdir, readFile, rm, stat, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { atomicWrite, ensureDir, PATHS, readJSONFile, shortId, tryReadFile } from '../lib/fileUtils.js';
+import {
+  atomicWrite,
+  copyFileGuarded,
+  ensureDir,
+  PATHS,
+  readJSONFile,
+  renameGuarded,
+  shortId,
+  tryReadFile,
+  unlinkGuarded,
+} from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
@@ -52,7 +62,7 @@ import { attachSseClient as attachSse, broadcastSse, closeJobAfterDelay } from '
 import { vttToPlainText } from '../lib/vttTranscript.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { createSettingsStore } from '../lib/settingsStore.js';
-import { downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
+import { cleanupYtDlpTemp, downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
 import { downloadVideoIntoLibrary } from './videoDownload.js';
 import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
 import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
@@ -462,6 +472,12 @@ export async function startYoutubeIngest({
   (async () => {
     const registerProcess = (proc) => { job.process = proc; };
     const stage = (name, percent) => broadcastSse(job, { type: 'progress', stage: name, ...(percent != null ? { percent } : {}) });
+    const tempPrefix = ingestAudio ? `portos-yt-ingest-${jobId}` : null;
+    // Copy the downloaded bytes to a unique sibling before atomically replacing
+    // the durable name. A failed/partial copy must not truncate audio from a
+    // prior ingest of this video.
+    const audioStagingPath = ingestAudio ? join(INGEST_DIR, `.${jobId}.mp3.part`) : null;
+    let terminalEvent = null;
     // Non-fatal outcomes the user still needs told about (no captions, duplicate
     // task). Broadcast live AND replayed on the terminal frame — a client using
     // the generic single-slot SSE hook only reads the terminal payload, so a
@@ -589,7 +605,6 @@ export async function startYoutubeIngest({
       if (job.canceled) throw new Error('canceled');
       if (ingestAudio) {
         stage('audio', 0);
-        const tempPrefix = `portos-yt-ingest-${jobId}`;
         const result = await downloadAudioToTempMp3({
           url,
           ytDlp,
@@ -605,9 +620,16 @@ export async function startYoutubeIngest({
         // Kept next to the transcript rather than pushed into the music library:
         // a two-hour talk is reference material, not a track.
         const audioPath = join(INGEST_DIR, `${meta.videoId}.mp3`);
-        await rename(result.outPath, audioPath);
+        // Copy to same-filesystem staging before publishing, so cross-device
+        // yt-dlp output and failed copies cannot damage prior audio.
+        await withBackupAssetPublication(async () => {
+          await copyFileGuarded(result.outPath, audioStagingPath);
+          if (job.canceled) throw new Error('canceled');
+          await renameGuarded(audioStagingPath, audioPath);
+        });
         const bytes = await stat(audioPath).then((s) => s.size).catch(() => null);
         landed.audio = { path: audioPath, bytes };
+        await unlinkGuarded(result.outPath).catch(() => {});
       }
 
       // ── Persist the "I consumed and kept this" artifacts ──
@@ -714,7 +736,7 @@ export async function startYoutubeIngest({
       });
 
       console.log(`📺 YouTube ingest ${shortId(jobId)} complete — "${meta.title}"${taskId ? ` → task ${taskId}` : ''}`);
-      broadcastSse(job, { type: 'complete', ingest: record, warnings });
+      terminalEvent = { type: 'complete', ingest: record, warnings };
     } catch (err) {
       const message = err?.message || String(err);
       // Record whatever DID land before the failure. A transcript written (and
@@ -735,15 +757,31 @@ export async function startYoutubeIngest({
       }
       if (message === 'canceled' || job.canceled) {
         console.log(`🛑 YouTube ingest ${shortId(jobId)} cancelled`);
-        broadcastSse(job, { type: 'canceled' });
+        terminalEvent = { type: 'canceled' };
       } else {
         console.error(`❌ YouTube ingest ${shortId(jobId)} failed: ${message}`);
-        broadcastSse(job, { type: 'error', error: message });
+        terminalEvent = { type: 'error', error: message };
       }
     } finally {
       // One rm regardless of outcome — the caption files are scratch, and on
       // cancel/failure yt-dlp may have written some of them.
       if (subsDir) await rm(subsDir, { recursive: true, force: true }).catch(() => {});
+      // These paths are scoped to this job id. Remove only this job's exact
+      // staging file and yt-dlp prefix; durable transcript/audio files are
+      // intentionally left for the index/delete workflow to own.
+      if (audioStagingPath) {
+        await unlinkGuarded(audioStagingPath).catch((error) => {
+          if (error.code !== 'ENOENT') {
+            console.error(`🧹 YouTube ingest staging cleanup failed for ${shortId(jobId)}: ${error.message}`);
+          }
+        });
+      }
+      if (tempPrefix) {
+        await cleanupYtDlpTemp(tempPrefix).catch((error) => {
+          console.error(`🧹 YouTube ingest temp cleanup failed for ${shortId(jobId)}: ${error.message}`);
+        });
+      }
+      if (terminalEvent) broadcastSse(job, terminalEvent);
       closeJobAfterDelay(ingestJobs, jobId);
     }
   })();

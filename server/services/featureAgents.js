@@ -657,15 +657,20 @@ cosEvents.on('agent:completed', async (agentData) => {
   });
 });
 
-// Provider/worktree setup can fail before a CoS agent record exists, so no
-// completion event will clear the temporary task pointer. Release that pointer
-// when the spawn path reports the task-level error.
-cosEvents.on('agent:error', async (agentData) => {
-  if (!agentData?.taskId) return;
+async function releasePendingTask(taskId) {
+  if (!taskId) return;
   const data = await readData().catch(() => null);
-  const agent = data?.agents?.find(candidate => candidate.currentAgentId === agentData.taskId);
+  const agent = data?.agents?.find(candidate => candidate.currentAgentId === taskId);
   if (!agent) return;
-  await clearPendingAgentTask(agent.id, agentData.taskId).catch(err => {
+  await clearPendingAgentTask(agent.id, taskId).catch(err => {
     console.log(`⚠️ Failed to clear feature agent pending task: ${err.message}`);
   });
-});
+}
+
+// Provider/worktree setup can fail before a CoS agent record exists, so no
+// completion event will clear the temporary task pointer. Release that pointer
+// when the spawn path reports the task-level error. A held dispatch
+// (`task:held`) drops the unpersisted task the same way; lastRunAt and backoff
+// stay untouched so the agent is due again on the next dequeue.
+cosEvents.on('agent:error', (agentData) => releasePendingTask(agentData?.taskId));
+cosEvents.on('task:held', (held) => releasePendingTask(held?.taskId));

@@ -64,6 +64,7 @@ vi.mock('../services/apiCatalog', () => ({
   unlinkCatalogIngredientRelation: vi.fn(),
   listCatalogIngredientRevisions: vi.fn(async () => ({ items: [] })),
   restoreCatalogIngredientRevision: vi.fn(),
+  uploadCatalogIngredientMediaFile: vi.fn(),
   listCatalogIngredientMedia: vi.fn(async () => []),
   listCatalogIngredientMissingMedia: vi.fn(async () => ({ missing: [] })),
   attachCatalogIngredientMedia: vi.fn(),
@@ -114,7 +115,8 @@ vi.mock('../components/TagPicker', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
-import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia } from '../services/apiCatalog';
+import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
+import toast from '../components/ui/Toast';
 
 const renderPage = async (path = '/catalog/character/cat-chr-1') => {
   const router = createMemoryRouter([
@@ -131,9 +133,46 @@ beforeEach(() => {
   updateCatalogIngredient.mockReset();
   unlinkCatalogIngredientRelation.mockReset();
   detachCatalogIngredientMedia.mockReset();
+  restoreCatalogIngredientRevision.mockReset();
+  uploadCatalogIngredientMediaFile.mockReset();
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  it('reports a rejected file read and re-enables the upload control', async () => {
+    await renderPage();
+    const fileInput = document.querySelector('input[type="file"][accept="image/*,audio/*,video/*"]');
+    const unreadable = { name: 'example.png', type: 'image/png', arrayBuffer: vi.fn().mockRejectedValue(new Error('File unavailable')) };
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [unreadable] } });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('File unavailable'));
+    await waitFor(() => expect(fileInput).toBeEnabled());
+    expect(uploadCatalogIngredientMediaFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps revision restore confirmation open when restore fails', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      revisions: [
+        { id: 'rev-latest', source: 'save', name: 'Current', createdAt: '2026-10-17T00:00:00Z' },
+        { id: 'rev-old', source: 'save', name: 'Earlier', createdAt: '2026-10-16T00:00:00Z' },
+      ],
+    }));
+    restoreCatalogIngredientRevision.mockRejectedValue(new Error('Restore failed'));
+    await renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore', exact: true }));
+    const confirmation = screen.getByRole('group', { name: 'Confirm restore of Earlier' });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore', exact: true }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Restore failed'));
+    expect(confirmation).toBeInTheDocument();
+    expect(confirmation.querySelector('button')).toHaveTextContent('Restore');
+  });
+
   // The h1 is the ONLY place the ingredient's name appears on this route, and
   // clipped text is neither selectable nor expandable — the tooltip is the sole
   // access path to the rest of a long name on a phone (#5694).

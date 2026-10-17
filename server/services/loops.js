@@ -26,6 +26,12 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 
 const activeLoops = new Map();
 
+// Overdue loops restored at boot catch up once, spaced apart so they do not
+// all start together.
+const CATCHUP_BASE_DELAY_MS = 1000;
+const CATCHUP_STAGGER_MS = 10_000;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 function formatInterval(ms) {
   if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
   if (ms >= 3_600_000) return `${ms / 3_600_000}h`;
@@ -313,17 +319,35 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
   return loop;
 }
 
-function startLoopTimer(loop, runImmediately = false) {
+// setTimeout/setInterval handles share one id space in Node, so a single
+// clear covers whichever of the pending first-fire timeout or the steady
+// interval is stored on the active entry.
+function clearLoopTimer(active) {
+  clearTimeout(active.timer);
+  clearInterval(active.timer);
+}
+
+// firstDelayMs (restore path) delays the first fire past one full interval's
+// worth of waiting: the first tick runs once, then the steady interval takes over.
+function startLoopTimer(loop, runImmediately = false, firstDelayMs = null) {
   const runWithLogging = () => runIteration(loop.id);
-  const timer = setInterval(runWithLogging, loop.intervalMs);
-  activeLoops.set(loop.id, {
-    timer,
+  const active = {
+    timer: null,
     runId: null,
     running: false,
     iterationCount: loop.iterationCount || 0,
     lastResult: null,
     history: []
-  });
+  };
+  if (firstDelayMs === null) {
+    active.timer = setInterval(runWithLogging, loop.intervalMs);
+  } else {
+    active.timer = setTimeout(() => {
+      active.timer = setInterval(runWithLogging, loop.intervalMs);
+      runWithLogging();
+    }, Math.min(Math.max(firstDelayMs, 0), MAX_TIMER_DELAY_MS));
+  }
+  activeLoops.set(loop.id, active);
 
   if (runImmediately) {
     setTimeout(runWithLogging, 100);
@@ -334,7 +358,7 @@ export async function stopLoop(id) {
   const active = activeLoops.get(id);
   if (!active) throw new ServerError(`Loop ${id} is not running`, { status: 409, code: 'INVALID_STATE' });
 
-  clearInterval(active.timer);
+  clearLoopTimer(active);
   activeLoops.delete(id);
 
   await withLoopsTail(async () => {
@@ -376,7 +400,7 @@ export async function resumeLoop(id) {
 export async function deleteLoop(id) {
   if (activeLoops.has(id)) {
     const active = activeLoops.get(id);
-    clearInterval(active.timer);
+    clearLoopTimer(active);
     activeLoops.delete(id);
   }
 
@@ -446,7 +470,7 @@ export async function updateLoop(id, updates) {
 
   if (activeLoops.has(id) && updates.interval) {
     const active = activeLoops.get(id);
-    clearInterval(active.timer);
+    clearLoopTimer(active);
     active.timer = setInterval(() => runIteration(id), updatedRecord.intervalMs);
   }
 
@@ -488,11 +512,20 @@ export async function restoreLoops() {
   await ensureDir(LOOPS_OUTPUT_DIR);
   const loops = await loadLoops();
   let restored = 0;
+  let overdue = 0;
+  const now = Date.now();
   for (const loop of loops) {
-    if (loop.status === 'running') {
-      startLoopTimer(loop, false);
-      restored++;
+    if (loop.status !== 'running') continue;
+    // Honor the persisted lastRun so a restart does not push the next
+    // iteration out by a full interval. An overdue loop gets one staggered
+    // catch-up run, never one per missed interval.
+    let firstDelay = null;
+    if (Number.isFinite(loop.lastRun)) {
+      const remaining = loop.lastRun + loop.intervalMs - now;
+      firstDelay = remaining > 0 ? remaining : CATCHUP_BASE_DELAY_MS + overdue++ * CATCHUP_STAGGER_MS;
     }
+    startLoopTimer(loop, false, firstDelay);
+    restored++;
   }
   if (restored > 0) {
     console.log(`🔄 Restored ${restored} active loop(s)`);

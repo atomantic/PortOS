@@ -263,6 +263,8 @@ export async function pollCall() {
     return publicState();
   }
 
+  // The probe can outlast the interval; the call may have ended meanwhile.
+  if (!publicState().active) return publicState();
   if (observed?.state === 'ended' || observed?.state === 'idle') return endCall('remote-hangup', { disconnectObserved: true });
   if (observed?.state === 'connected' && session.state === 'dialing') setState('listening');
 
@@ -274,10 +276,16 @@ export async function pollCall() {
 
 const startPolling = () => {
   stopPolling();
+  let inFlight = false;
   timer = setInterval(() => {
+    // A probe can take far longer than the interval; skip rather than overlap.
+    if (inFlight) return;
+    inFlight = true;
     // Runs outside the request lifecycle: an unhandled rejection here would
     // take the process down rather than reach error middleware.
-    pollCall().catch((error) => console.error(`❌ voice call: poll failed: ${error.message}`));
+    pollCall()
+      .catch((error) => console.error(`❌ voice call: poll failed: ${error.message}`))
+      .finally(() => { inFlight = false; });
   }, PROBE_INTERVAL_MS);
   timer.unref?.();
 };
@@ -304,8 +312,13 @@ const stopIncomingWatcher = () => {
 
 const startIncomingWatcher = () => {
   stopIncomingWatcher();
+  let inFlight = false;
   incomingTimer = setInterval(() => {
-    pollIncoming().catch((error) => console.error(`❌ voice call: incoming poll failed: ${error.message}`));
+    if (inFlight) return;
+    inFlight = true;
+    pollIncoming()
+      .catch((error) => console.error(`❌ voice call: incoming poll failed: ${error.message}`))
+      .finally(() => { inFlight = false; });
   }, PROBE_INTERVAL_MS);
   incomingTimer.unref?.();
 };
@@ -505,8 +518,18 @@ const MIND_TRANSCRIPT_MAX_CHARS = 6_000;
  * The journal append is best-effort: a failed write must not leave the session
  * stuck `connected`, because the state is what gates placing the next call.
  */
-export async function endCall(reason = 'ended', { disconnectObserved = false } = {}) {
-  if (session.state === 'idle') return publicState();
+export function endCall(reason = 'ended', options = {}) {
+  // Overlapping triggers (slow probes, a user hangup racing a poll rule) join
+  // the teardown already running instead of repeating hangup/journal/handoff.
+  if (endingCall) return endingCall;
+  if (session.state === 'idle') return Promise.resolve(publicState());
+  endingCall = runEndCall(reason, options).finally(() => { endingCall = null; });
+  return endingCall;
+}
+
+let endingCall = null;
+
+async function runEndCall(reason, { disconnectObserved = false }) {
   stopPolling();
   const transcript = session.transcript;
   const origin = session.origin;

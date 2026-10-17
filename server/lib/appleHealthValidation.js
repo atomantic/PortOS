@@ -49,3 +49,8 @@ export const healthIngestSchema = z.object({
     workouts: z.array(z.unknown()).default([])
   }).passthrough()
 });
+
+// Repeated keys (?metrics=a&metrics=b) parse to an array; z.string() refuses them with a 400.
+export const appleHealthLatestMetricsQuerySchema = z.object({
+  metrics: z.string().max(2000).optional()
+});

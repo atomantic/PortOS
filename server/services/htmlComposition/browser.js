@@ -105,6 +105,8 @@ const PREVIEW_BRIDGE_SCRIPT = `(() => {
     const payload = JSON.stringify({
       type: typeof data.type === 'string' ? data.type.slice(0, 80) : '',
       t: typeof data.t === 'number' && Number.isFinite(data.t) ? data.t : null,
+      epoch: Number.isSafeInteger(data.epoch) && data.epoch >= 0 ? data.epoch : null,
+      sequence: Number.isSafeInteger(data.sequence) && data.sequence >= 0 ? data.sequence : null,
       message: typeof data.message === 'string' ? data.message.slice(0, 300) : '',
       hasBlob: data.blob instanceof Blob,
       meta,

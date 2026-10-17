@@ -57,3 +57,11 @@ export const epigeneticUpdateInterventionSchema = z.object({
   notes: z.string().max(5000).optional(),
   active: z.boolean().optional()
 });
+
+export const epigeneticRecommendationsQuerySchema = z.object({
+  categories: z.string().max(1000).optional()
+});
+
+export const epigeneticComplianceQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(3650).default(30)
+});

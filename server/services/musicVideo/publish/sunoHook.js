@@ -81,9 +81,15 @@ async function setWindowStart(page, startSec) {
   if (Math.abs(at - target) <= READBACK_TOLERANCE_SEC) return at;
   const box = await page.locator(WAVEFORM).first().boundingBox();
   if (!box) throw new Error('no waveform to set the window on');
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  const reach = Math.max(20, box.width / 2 - 16); // a drag from the middle stays on the waveform
+  const viewport = page.viewportSize() ?? await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  // The strip may be thousands of pixels wide and translated offscreen. Its
+  // bounding-box midpoint is then outside the browser, where dragging does nothing.
+  const left = Math.max(0, box.x), right = Math.min(viewport.width, box.x + box.width);
+  const top = Math.max(0, box.y), bottom = Math.min(viewport.height, box.y + box.height);
+  if (right - left <= 32 || bottom <= top) throw new Error('no visible waveform area to drag');
+  const x = (left + right) / 2;
+  const y = (top + bottom) / 2;
+  const reach = (right - left) / 2 - 16;
   let pxPerSec = WAVEFORM_PX_PER_SEC;
   let direction = 1; // +1: dragging right moves the window earlier
   let still = 0;
@@ -110,6 +116,41 @@ async function setWindowStart(page, startSec) {
   return at;
 }
 
+async function setShowLyrics(page, wanted) {
+  const named = page.getByRole('switch', { name: /^Show Lyrics$/i })
+    .or(page.getByRole('checkbox', { name: /^Show Lyrics$/i }));
+  let control = named;
+  const count = await named.count();
+  if (count > 1) throw new Error('multiple Show Lyrics controls');
+  if (!count) {
+    // Older UI labels an adjacent control rather than giving it an accessible
+    // name. Locator traversal also works inside open shadow roots.
+    let row = page.getByText('Show Lyrics', { exact: true });
+    if (await row.count() !== 1) throw new Error('no unambiguous Show Lyrics label');
+    for (let depth = 0; depth < 8; depth += 1) {
+      row = row.locator('..');
+      control = row.locator('[role=switch],input[type=checkbox]');
+      const matches = await control.count();
+      if (matches > 1) throw new Error('multiple controls beside Show Lyrics');
+      if (matches === 1) break;
+    }
+    if (await control.count() !== 1) throw new Error('no Show Lyrics switch');
+  }
+  const read = () => control.evaluate(el => {
+    const aria = el.getAttribute('aria-checked');
+    return aria === 'true' ? true : aria === 'false' ? false : typeof el.checked === 'boolean' ? el.checked : null;
+  });
+  const before = await read();
+  if (before === null) throw new Error('cannot read Show Lyrics state');
+  if (before !== wanted) await control.click({ timeout: T });
+  await page.waitForFunction(({ element, wanted }) => {
+    const aria = element.getAttribute('aria-checked');
+    const state = aria === 'true' ? true : aria === 'false' ? false : typeof element.checked === 'boolean' ? element.checked : null;
+    return state === wanted;
+  }, { element: await control.elementHandle(), wanted }, { timeout: T });
+  return wanted;
+}
+
 export const sunoHookAdapter = {
   label,
   async prepare(page, payload) {
@@ -127,25 +168,7 @@ export const sunoHookAdapter = {
       await page.locator('textarea[placeholder="Add a caption..."]').first().waitFor({ timeout: T });
     });
     if (payload.caption) await step(label, 'write the caption', () => page.locator('textarea[placeholder="Add a caption..."]').first().fill(payload.caption));
-    // Show Lyrics is on by default; a cut that carries its own lyric text would show them twice.
-    const lyrics = payload.showLyrics ? true : await step(label, 'turn off Show Lyrics', async () => {
-      const state = await page.evaluate(() => {
-        const text = [...document.querySelectorAll('span,div,label')].find((e) => e.children.length === 0 && e.textContent.trim() === 'Show Lyrics');
-        let node = text;
-        for (let i = 0; i < 8 && node; i += 1) {
-          node = node.parentElement;
-          const sw = node?.querySelector('[role=switch],input[type=checkbox]');
-          if (sw) {
-            const on = sw.getAttribute('aria-checked') === 'true' || sw.checked === true;
-            if (on) sw.click();
-            return true;
-          }
-        }
-        return null;
-      });
-      if (state === null) throw new Error('no Show Lyrics switch');
-      return false;
-    });
+    const lyrics = await step(label, 'set Show Lyrics', () => setShowLyrics(page, payload.showLyrics === true));
     return {
       songUrl: payload.songUrl, windowStart, caption: payload.caption, showLyrics: lyrics,
       ...(payload.cutLayout === 'fit' ? { cut: 'Fitted: the 16:9 frame over a blurred fill, so it reads as a square' } : {}),

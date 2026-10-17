@@ -20,7 +20,7 @@ vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
 vi.mock('../lib/cliProviderRun.js', () => ({
   pickCliProvider: vi.fn(), runCliProviderPrompt: vi.fn(),
 }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn() }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';

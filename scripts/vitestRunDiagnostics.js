@@ -10,15 +10,18 @@ function errorDiagnostic(error, depth = 0) {
   return lines.filter(Boolean).join('\n').slice(0, 8000);
 }
 
+const moduleStates = new Set(['queued', 'pending', 'passed', 'failed', 'skipped']);
+
 export default function vitestRunDiagnostics() {
   let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [], completedCount: 0 };
   const activeModules = new Set();
   const completedModules = [];
+  const moduleResults = [];
   const persist = () => {
     const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
     if (!path) return;
     persistTestDiagnostic(path, { ...diagnostics, activeModules: [...activeModules].slice(0, 100),
-      completedModules, exitCode: process.exitCode ?? null });
+      completedModules, moduleResults, exitCode: process.exitCode ?? null });
   };
   return {
     onInit(vitest) {
@@ -35,6 +38,9 @@ export default function vitestRunDiagnostics() {
       activeModules.delete(file);
       completedModules.push(file);
       if (completedModules.length > 100) completedModules.shift();
+      const state = module.state?.();
+      moduleResults.push({ file, state: moduleStates.has(state) ? state : 'unavailable' });
+      if (moduleResults.length > 100) moduleResults.shift();
       diagnostics.completedCount += 1;
       persist();
     },

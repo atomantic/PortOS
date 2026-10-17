@@ -30,8 +30,6 @@ const cos = await import('./cos.js');
 const {
   noteFallbackHandled,
   initAutoFixer,
-  getPendingAutoFixTasks,
-  clearPendingAutoFixTasks,
   _resetAutoFixerForTests,
   classifyFixTier,
   buildFixDiagnostics,
@@ -43,6 +41,11 @@ const { errorEvents } = await import('../lib/errorHandler.js');
 // initAutoFixer is idempotent — it must run once for the error-event
 // listener to be attached, regardless of which test file boots first.
 initAutoFixer();
+
+// Tasks handed to the durable store (addTask's first argument).
+function filedTasks() {
+  return cos.addTask.mock.calls.map(([task]) => task);
+}
 
 function emitProviderFailure({ provider = 'Primary CLI', model = 'm-1', runId = 'run-1' } = {}) {
   errorEvents.emit('error', {
@@ -266,18 +269,20 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 
-  it('queues to pendingAutoFixTasks when CoS is not running', async () => {
-    clearPendingAutoFixTasks();
+  it('files a durable investigation task when CoS is not running', async () => {
     cos.isRunning.mockReturnValue(false);
 
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
-    expect(cos.addTask).not.toHaveBeenCalled();
-    const pending = getPendingAutoFixTasks();
-    expect(pending).toHaveLength(1);
-    expect(pending[0].description).toBe('Investigate AI provider failure: Primary CLI (m-1)');
-    clearPendingAutoFixTasks();
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(filedTasks()[0].description).toContain('Investigate AI provider failure: Primary CLI (m-1)');
+    expect(filedTasks()[0].isInvestigation).toBe(true);
+
+    // A repeat inside the dedupe window files nothing new.
+    emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'run-2' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 
   // The body built by buildAIProviderErrorContext has always fallen back to
@@ -285,7 +290,6 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
   // no attribution filed a task literally called
   // "Investigate AI provider failure: undefined (undefined)".
   it('never titles a task with a literal undefined provider or model', async () => {
-    clearPendingAutoFixTasks();
     cos.isRunning.mockReturnValue(false);
 
     // Emitted raw, not through emitProviderFailure — that helper defaults
@@ -300,10 +304,9 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     });
     await vi.advanceTimersByTimeAsync(5500);
 
-    const pending = getPendingAutoFixTasks();
+    const pending = filedTasks();
     expect(pending).toHaveLength(1);
     expect(pending[0].description).not.toMatch(/undefined/);
-    clearPendingAutoFixTasks();
   });
 
   it('clears the dedupe entry when deferred task creation fails so future failures can still raise tasks', async () => {
@@ -702,20 +705,18 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
     }
   });
 
-  it('attaches diagnostics to the pending record when CoS is not running', async () => {
-    clearPendingAutoFixTasks();
+  it('attaches diagnostics to the filed task when CoS is not running', async () => {
     cos.isRunning.mockReturnValue(false);
     emitProviderFailure({ provider: 'LM Studio', model: 'qwen', runId: 'p-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
-    const pending = getPendingAutoFixTasks();
+    const pending = filedTasks();
     expect(pending).toHaveLength(1);
     expect(pending[0].diagnostics).toMatchObject({
       triggerEvent: 'AI_PROVIDER_EXECUTION_FAILED',
       target: 'LM Studio (qwen)',
       tier: FIX_TIERS.ESCALATE, // no errorAnalysis category → unknown → escalate
     });
-    clearPendingAutoFixTasks();
   });
 
   it('attaches diagnostics to the generic critical-error fix task', async () => {
@@ -843,13 +844,11 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
     installState.getBootCommit.mockReturnValue(null);
     installState.getInstallState.mockClear();
     installState.getInstallState.mockResolvedValue(null);
-    clearPendingAutoFixTasks();
     _resetAutoFixerForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    clearPendingAutoFixTasks();
     _resetAutoFixerForTests();
   });
 
@@ -864,7 +863,7 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
     emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
-    const { context } = getPendingAutoFixTasks()[0];
+    const { context } = filedTasks()[0];
     expect(context).toContain('## Deployed Build: STALE');
     expect(context).toContain('git log aaaaaaa..bbbbbbb');
     expect(context).toContain('1. Rule out the stale deployed build');
@@ -884,7 +883,7 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
     emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
-    const { context } = getPendingAutoFixTasks()[0];
+    const { context } = filedTasks()[0];
     expect(context).not.toContain('Deployed Build');
     expect(context).toContain('1. Check if the AI provider is configured correctly');
   });
@@ -899,6 +898,6 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
     await vi.advanceTimersByTimeAsync(5500);
 
     expect(installState.getInstallState).not.toHaveBeenCalled();
-    expect(getPendingAutoFixTasks()[0].context).not.toContain('Deployed Build');
+    expect(filedTasks()[0].context).not.toContain('Deployed Build');
   });
 });

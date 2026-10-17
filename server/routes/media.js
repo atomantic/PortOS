@@ -5,6 +5,9 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 
 const router = express.Router();
+const MAX_JPEG_FRAME_BYTES = 8 * 1024 * 1024;
+const JPEG_START = Buffer.from([0xFF, 0xD8]);
+const JPEG_END = Buffer.from([0xFF, 0xD9]);
 
 // Validation schemas
 const startMediaSchema = z.object({
@@ -78,19 +81,33 @@ router.get('/video', (req, res) => {
   const onData = (chunk) => {
     frameBuffer = Buffer.concat([frameBuffer, chunk]);
 
-    // Look for JPEG markers
-    let start = frameBuffer.indexOf(Buffer.from([0xFF, 0xD8])); // JPEG start
-    let end = frameBuffer.indexOf(Buffer.from([0xFF, 0xD9]), start + 2); // JPEG end
-
-    while (start !== -1 && end !== -1) {
-      const frame = frameBuffer.slice(start, end + 2);
-      res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
-      res.write(frame);
-      res.write('\r\n');
-
-      frameBuffer = frameBuffer.slice(end + 2);
-      start = frameBuffer.indexOf(Buffer.from([0xFF, 0xD8]));
-      end = frameBuffer.indexOf(Buffer.from([0xFF, 0xD9]), start + 2);
+    while (frameBuffer.length) {
+      const start = frameBuffer.indexOf(JPEG_START);
+      if (start === -1) {
+        // A marker can straddle chunks; retain only its possible first byte.
+        frameBuffer = frameBuffer.at(-1) === 0xFF ? Buffer.from([0xFF]) : Buffer.alloc(0);
+        break;
+      }
+      frameBuffer = frameBuffer.subarray(start);
+      const end = frameBuffer.indexOf(JPEG_END, 2);
+      const nextStart = frameBuffer.indexOf(JPEG_START, 2);
+      if (nextStart !== -1 && (end === -1 || nextStart < end)) {
+        frameBuffer = frameBuffer.subarray(nextStart);
+        continue;
+      }
+      if (end === -1) {
+        if (frameBuffer.length > MAX_JPEG_FRAME_BYTES) {
+          frameBuffer = frameBuffer.at(-1) === 0xFF ? Buffer.from([0xFF]) : Buffer.alloc(0);
+        }
+        break;
+      }
+      if (end + 2 <= MAX_JPEG_FRAME_BYTES) {
+        const frame = frameBuffer.subarray(0, end + 2);
+        res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+        res.write(frame);
+        res.write('\r\n');
+      }
+      frameBuffer = frameBuffer.subarray(end + 2);
     }
   };
 

@@ -101,7 +101,6 @@ async function buildInitialMeta() {
     });
   }
 
-  // Sort by priority
   meta.documents.sort((a, b) => a.priority - b.priority);
 
   return meta;

@@ -25,7 +25,10 @@ vi.mock('../services/messageAccounts.js', () => ({
 vi.mock('../services/messageSync.js', () => ({
   getMessage: async (accountId, id) => doubles.original?.id === id && doubles.original.accountId === accountId ? doubles.original : null
 }));
-vi.mock('../services/googleAuth.js', () => ({ getAuthenticatedClient: async () => doubles.auth }));
+vi.mock('../services/googleAuth.js', () => ({
+  GOOGLE_API_TIMEOUT_MS: 30_000,
+  getAuthenticatedClient: async () => doubles.auth
+}));
 vi.mock('@googleapis/gmail', () => ({ gmail: () => ({ users: { messages: { get: doubles.metadata, send: doubles.submit } } }) }));
 vi.mock('../services/messagePlaywrightSync.js', () => ({ getSelectors: vi.fn(), updateSelectors: vi.fn(), testSelectors: vi.fn(), launchProvider: vi.fn() }));
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));

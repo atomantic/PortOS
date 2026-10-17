@@ -317,13 +317,10 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
   }
 
-  // Parse ecosystem config from the app's repo path
   const { processes, pm2Home } = await parseEcosystemFromPath(app.repoPath);
 
-  // Update app with new process data
   const updates = {};
 
-  // Detect buildCommand from package.json if not already set
   if (!app.buildCommand) {
     const pkgPath = join(app.repoPath, 'package.json');
     const pkgContent = await tryReadFile(pkgPath);
@@ -333,7 +330,6 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     }
   }
 
-  // Update pm2Home if detected and different from current
   if (pm2Home && pm2Home !== app.pm2Home) {
     updates.pm2Home = pm2Home;
   }

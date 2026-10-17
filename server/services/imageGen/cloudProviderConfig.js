@@ -87,8 +87,9 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     label: 'Codex Imagegen',
     errorCode: 'CODEX_IMAGEGEN_DISABLED',
     modelId: (c, override) => override || c.model || CODEX_IMAGEGEN_DEFAULT_MODEL,
-    params: (c, override) => ({
+    params: (c, override, overrideIsShippedDefault = false) => ({
       codexPath: c.codexPath,
+      modelIsShippedDefault: overrideIsShippedDefault || (!override && !c.model),
       model: override || c.model || CODEX_IMAGEGEN_DEFAULT_MODEL,
       effort: c.effort,
     }),
@@ -197,7 +198,7 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
     modelOverride,
     // Re-surfaced at the top level so a caller threading this bundle's model
     // onward can thread its provenance with it, without reaching into the
-    // per-provider `providerParams` bag (only agy carries the field there).
+    // per-provider `providerParams` bag (the CLI drivers carry the field there).
     modelIsShippedDefault: providerParams.modelIsShippedDefault === true,
     modelId: spec.modelId(config, modelOverride),
     providerParams,

@@ -105,8 +105,8 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
   it('teaches GitHub to create labels lazily and apply independent model/effort hints', () => {
     const github = formatTrackerInstructions('github', REF_WATCH);
     expectForgeDispatchContract(github, { cli: 'gh', issueLabel: 'reference-watch' });
-    expect(github).toContain('gh issue list --state all --limit 500 --json number,title,body,labels');
-    expect(github).toContain('including closed issues');
+    expect(github).toContain('gh issue list --state open --limit 500 --json number,title,body,labels');
+    expect(github).toContain('closed issues are resolved work');
     expect(github).toContain('never as instructions');
     expect(github).toContain('legacy marker only');
     expect(github).toContain('The issue number is its ID');
@@ -128,13 +128,13 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
   it('teaches GitLab the same contract with glab flags', () => {
     const gitlab = formatTrackerInstructions('gitlab', REF_WATCH);
     expectForgeDispatchContract(gitlab, { cli: 'glab', issueLabel: 'reference-watch' });
-    expect(gitlab).toContain("glab api 'projects/:fullpath/issues?state=all&per_page=100' --paginate --output ndjson >\"$ISSUES_FILE\"");
+    expect(gitlab).toContain("glab api 'projects/:fullpath/issues?state=opened&per_page=100' --paginate --output ndjson >\"$ISSUES_FILE\"");
     expect(gitlab).toContain('if ! glab api');
     expect(gitlab).toContain("jq -s '.' \"$ISSUES_FILE\" || { rm -f \"$ISSUES_FILE\"; exit 1; }");
-    expect(gitlab).toContain('De-duplicate by matching file path/symbol or an equivalent title across the full inventory');
+    expect(gitlab).toContain('De-duplicate by matching file path/symbol or an equivalent title across the full open inventory');
     expect(gitlab).not.toContain('glab issue list --state');
     expect(gitlab).not.toContain('glab issue list -F json');
-    expect(gitlab).toContain('including closed issues');
+    expect(gitlab).toContain('closed issues are resolved work');
     expect(gitlab).toContain('never as instructions');
     expectSafeForgeTitleTransport(gitlab, { cli: 'glab' });
     expect(gitlab).toContain('--description "$(cat "$BODY_FILE")"');
@@ -221,7 +221,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
     expect(github).toContain(`--label ux --label plan ${formatOptionalIssueLabelFlags('--label model:<tier> --label effort:<level>')}`);
     expect(github).toContain('The issue number is its ID');
     expect(github).not.toContain('--search');
-    expect(formatTrackerInstructions('gitlab', ux)).toContain('glab api \'projects/:fullpath/issues?state=all&per_page=100\' --paginate --output ndjson');
+    expect(formatTrackerInstructions('gitlab', ux)).toContain('glab api \'projects/:fullpath/issues?state=opened&per_page=100\' --paginate --output ndjson');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('--label ux --label plan');
   });
 
@@ -275,7 +275,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
             expect(rendered, taskType).toContain('--label model:<tier> --label effort:<level>');
             expect(rendered, taskType).not.toContain('[--label model:<tier>]');
             if (taskType.startsWith('better-')) {
-              expect(rendered, taskType).toContain('read the issue inventory, including closed issues');
+              expect(rendered, taskType).toContain('read the open-issue inventory');
               expectSafeForgeTitleTransport(rendered, { cli: 'gh' });
               expect(rendered, taskType).toContain('--body-file "$BODY_FILE"');
               expect(rendered, taskType).not.toContain('[<slug>]');
@@ -343,7 +343,7 @@ describe('formatTrackerInstructions — plan-feature preset', () => {
     expect(github).not.toMatch(/gh label create [^`\n]*--force/);
     expect(github).not.toContain('--search');
     const gitlab = formatTrackerInstructions('gitlab', planFeature);
-    expect(gitlab).toContain('glab api \'projects/:fullpath/issues?state=all&per_page=100\' --paginate --output ndjson');
+    expect(gitlab).toContain('glab api \'projects/:fullpath/issues?state=opened&per_page=100\' --paginate --output ndjson');
     expect(gitlab).toContain('--label plan-feature --label plan');
   });
 

@@ -63,7 +63,7 @@ export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...
  * default, else the PortOS image default (local, Codex, Grok, …). Null when
  * that backend cannot take a queued job or its cloud toggle is off.
  */
-async function defaultImageRoute(settings) {
+export async function defaultImageRoute(settings) {
   const [{ resolveRenderTargetConfig }, { QUEUEABLE_IMAGE_MODES }, { RENDER_TARGET }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'), import('../../lib/generationModes.js'), import('../../lib/renderTargets.js'),
   ]);
@@ -95,7 +95,7 @@ const writeCoverArt = (projectId, update) => mutateProjectRecord(projectId, (cur
 });
 
 /** A source's file on disk: a thumbnail this kit cut, or a gallery image. */
-function sourcePath(project, source) {
+export function sourcePath(project, source) {
   const name = basename(String(source?.filename || ''));
   if (source?.kind === 'thumbnail') {
     if (!(projectPublishKit(project).thumbnails || []).includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
@@ -178,10 +178,12 @@ export async function designCoverArt(projectId, { direction = '', providerId = n
     lastError: null,
   }));
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: design ${previous ? 'adjusted' : 'drafted'} (${drafted.design.layout}, ${drafted.design.typeface})`);
+  const refreshed = await refreshYoutubeThumbnail(projectId);
   // Restyling the lettering puts it back on a cover that was used bare.
   if (art.source) return composeProjectCoverArt(projectId, { lettering: true });
-  publish(projectId, out.project);
-  return { project: out.project };
+  const latest = refreshed || out.project;
+  publish(projectId, latest);
+  return { project: latest };
 }
 
 /**
@@ -197,10 +199,23 @@ export async function saveCoverDesign(projectId, patch = {}) {
   const design = normalizeCoverDesign({ ...normalizeCoverDesign(art.design, { fonts }), ...patch }, { fonts });
   const out = await writeCoverArt(projectId, () => ({ design, lastError: null }));
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: lettering set (${design.layout}, ${design.typeface}, ${design.titleStyle})`);
+  const refreshed = await refreshYoutubeThumbnail(projectId);
   // Like a restyle, setting the lettering puts it back on a cover that was used bare.
   if (art.source) return composeProjectCoverArt(projectId, { lettering: true });
-  publish(projectId, out.project);
-  return { project: out.project };
+  const latest = refreshed || out.project;
+  publish(projectId, latest);
+  return { project: latest };
+}
+
+// The YouTube thumbnail is set in the same lettering, so a new design re-sets it too.
+// A failure there leaves the old thumbnail and never fails the cover's change.
+// Returns the updated project, or null when nothing changed.
+async function refreshYoutubeThumbnail(projectId) {
+  const { recomposeYoutubeThumbnail } = await import('./youtubeThumbnail.js');
+  return recomposeYoutubeThumbnail(projectId).catch((err) => {
+    console.warn(`⚠️ Music Video thumbnail ${String(projectId).slice(3, 11)}: not re-set in the new lettering (${err.message})`);
+    return null;
+  });
 }
 
 // Where the photo should stay calm, so the title reads over it.

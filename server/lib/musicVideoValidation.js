@@ -93,6 +93,8 @@ export const MUSIC_VIDEO_MODES = ['director', 'autonomous'];
 export const MUSIC_VIDEO_STATUSES = ['draft', 'analyzed', 'ready', 'rendering', 'complete', 'failed'];
 
 // Re-read a project's song style from its Suno song link.
+// The rendered-so-far player: `light` asks for the lighter phone copy.
+export const musicVideoRenderPreviewSchema = z.object({ light: z.boolean().optional() }).strict();
 export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });
 
 // Optional global visual direction for the whole video.
@@ -875,6 +877,20 @@ export const musicVideoCoverArtComposeSchema = z.object({
   // false = a finished cover from elsewhere: squared and sized, no title or tag set on it.
   lettering: z.boolean().optional(),
 }).strict();
+// The YouTube thumbnail: a source composed 16:9 with the title in the cover's lettering.
+export const musicVideoYoutubeThumbnailComposeSchema = z.object({
+  source: coverArtSourceSchema.optional(),
+  title: z.string().max(60).optional(),
+  focusX: z.number().min(0).max(1).optional(),
+  focusY: z.number().min(0).max(1).optional(),
+  lettering: z.boolean().optional(),
+}).strict();
+// "Paint the title": the image model restyles a frame with the title drawn in. Preview takes no source.
+export const musicVideoYoutubeThumbnailPaintPreviewSchema = z.object({
+  title: z.string().trim().min(1).max(60),
+  notes: z.string().max(1500).optional(),
+}).strict();
+export const musicVideoYoutubeThumbnailPaintSchema = musicVideoYoutubeThumbnailPaintPreviewSchema.extend({ source: coverArtSourceSchema }).strict();
 export const musicVideoCoverArtDesignSchema = z.object({
   direction: z.string().max(1500).optional(),
   providerId: z.string().min(1).max(200).optional(),

@@ -1,13 +1,19 @@
-import { appendFileSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { appendFileSync, lstatSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { channel } from 'node:diagnostics_channel';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { observeOwnedBrowsers } from '../server/test/ownedBrowserDiagnostics.js';
+import { cleanupTempDataRoots, lazyTempDataRoot } from '../server/lib/mockPathsDataRoot.js';
+import { describeStageFixtureRoot, observeOwnedBrowsers, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { teardown } from './vitestTempRootSetup.js';
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstatSync: vi.fn(actual.lstatSync) };
+});
 
 describe('vitestTempRootSetup teardown', () => {
   const originalRoot = process.env.PORTOS_TEST_TEMP_ROOT;
@@ -127,6 +133,102 @@ describe('vitestTempRootSetup teardown', () => {
     expect(report).toContain('removal=resolved presentAfterRemoval=false presentAtGlobalGuard=true observer=ended');
     expect(report).toContain('exitObserved=false closeObserved=false exitCode=0 signalCode=none');
     expect(report).not.toContain('Abc123');
+  });
+
+  it('distinguishes a removed stage root recreated by a writer from a later lazy allocation', () => {
+    const leaked = runTeardown(root => {
+      const tempKeys = ['TMPDIR', 'TMP', 'TEMP'];
+      const prior = Object.fromEntries(tempKeys.map(key => [key, process.env[key]]));
+      for (const key of tempKeys) process.env[key] = root;
+      const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+      try {
+        const first = lazyTempDataRoot('portos-code-animation-stages-');
+        const child = new EventEmitter();
+        child.exitCode = null;
+        child.signalCode = null;
+        channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: first, child });
+        child.exitCode = 0;
+        child.emit('exit'); // Inherited stderr can remain open; do not fabricate close.
+        cleanupTempDataRoots();
+        expect(existsSync(first)).toBe(false);
+        mkdirSync(join(first, 'chrome-test-profile'), { recursive: true });
+        writeFileSync(join(first, 'chrome-test-profile', 'private-profile-sentinel'), 'private content');
+        const second = lazyTempDataRoot('portos-code-animation-stages-');
+        mkdirSync(join(second, 'code-animations'));
+        writeFileSync(join(second, 'code-animations', 'private-project-sentinel'), 'private content');
+        dispose();
+      } finally {
+        dispose();
+        for (const key of tempKeys) {
+          if (prior[key] === undefined) delete process.env[key];
+          else process.env[key] = prior[key];
+        }
+      }
+    });
+    cleanupTempDataRoots();
+    expect(leaked.exitCode).toBe(1);
+    const reports = leaked.warnings.filter(line => line.startsWith('⚠️ stage fixture'));
+    expect(reports).toHaveLength(2);
+    const first = reports.find(line => line.includes('generation=1'));
+    expect(first).toContain('exitObserved=true closeObserved=false exitCode=0');
+    expect(first).toContain('removal=resolved presentAfterRemoval=false presentAtGlobalGuard=true');
+    expect(first).toContain('profileEntries=2 applicationEntries=0');
+    const second = reports.find(line => line.includes('generation=2'));
+    expect(second).toContain('removal=not-started');
+    expect(second).toContain('profileEntries=0 applicationEntries=2');
+    expect(reports.join('\n')).not.toContain('private-');
+    expect(reports.join('\n')).not.toContain('private content');
+  });
+
+  it('retains exact large filesystem identities through observation and rejects rounded or malformed records', async () => {
+    const actual = await vi.importActual('node:fs');
+    const root = mkdtempSync(join(tmpdir(), 'pvt-large-identity-'));
+    process.env.PORTOS_TEST_TEMP_ROOT = root;
+    const name = 'portos-code-animation-stages-Abc123';
+    const profile = join(root, name);
+    mkdirSync(profile);
+    let ino = 18014398509481984n;
+    let dev = 18446744073709551615n;
+    lstatSync.mockImplementation((path, options) => {
+      const stat = actual.lstatSync(path, options);
+      if (path === profile) {
+        expect(options).toEqual({ bigint: true });
+        stat.ino = ino;
+        stat.dev = dev;
+      }
+      return stat;
+    });
+    const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+    try {
+      channel('portos.composition-browser.lifecycle').publish({ event: 'allocated', profile });
+      dispose();
+      const sidecar = join(root, '.leak-owners');
+      const row = readFileSync(sidecar, 'utf8').trim().split('\n').at(-1).split('\t');
+      const recorded = JSON.parse(row[2]);
+      expect(recorded).toMatchObject({ generation: 1, dev: dev.toString(), ino: ino.toString() });
+      const project = () => {
+        const { observations, state } = readOwnedBrowserObservations(root);
+        return describeStageFixtureRoot(profile, observations.get(name), state);
+      };
+      expect(project()).toContain('generation=1 rootIdentity=matches');
+      ino += 1n; // These adjacent IDs collapse to the same floating-point Number.
+      expect(Number(ino)).toBe(Number(recorded.ino));
+      expect(project()).toContain('generation=1 rootIdentity=changed');
+      const replace = identity => writeFileSync(sidecar, `${row[0]}\t${row[1]}\t${JSON.stringify({ ...recorded, ...identity })}\n`);
+      ino = 1n; dev = 2n;
+      replace({ ino: 1, dev: 2 });
+      expect(project()).toContain('generation=1 rootIdentity=matches');
+      for (const invalid of [18014398509481984, -1, '01', '-1', '1e3', '18446744073709551616', '9'.repeat(21)]) {
+        for (const field of ['ino', 'dev']) {
+          replace({ [field]: invalid });
+          expect(project()).toContain('generation=unavailable rootIdentity=unavailable');
+        }
+      }
+    } finally {
+      dispose();
+      lstatSync.mockImplementation(actual.lstatSync);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('caps records, event history and public projection without copying private child or error values', () => {

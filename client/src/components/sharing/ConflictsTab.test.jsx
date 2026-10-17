@@ -32,6 +32,32 @@ beforeEach(() => {
 });
 
 describe('ConflictsTab', () => {
+  it('shows a retryable load failure and does not claim the queue is empty', async () => {
+    api.listConflicts.mockRejectedValueOnce(new Error('journal unavailable'));
+    const user = userEvent.setup();
+    render(<ConflictsTab />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load pending conflicts.');
+    expect(screen.queryByText(/No pending conflicts/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/2 field\(s\)/)).toBeInTheDocument();
+    expect(api.listConflicts).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the existing empty copy after a successful empty response', async () => {
+    api.listConflicts.mockResolvedValue({ conflicts: [] });
+    render(<ConflictsTab />);
+    expect(await screen.findByText(/No pending conflicts/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('treats a malformed successful payload as a load failure', async () => {
+    api.listConflicts.mockResolvedValue({});
+    render(<ConflictsTab />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load pending conflicts.');
+    expect(screen.queryByText(/No pending conflicts/)).not.toBeInTheDocument();
+  });
+
   it('shows the degraded-detection banner when the base-hash store is latched (#7260)', async () => {
     api.listConflicts.mockResolvedValue({
       conflicts: [],

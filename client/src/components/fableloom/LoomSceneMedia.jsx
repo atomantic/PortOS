@@ -88,9 +88,13 @@ export default function LoomSceneMedia({
   const showStill = !showFinalVideo && !liveFrame && Boolean(node.image);
   const showSpinner = !showFinalVideo && !liveFrame && !showStill && Boolean(activeJob);
 
+  // Scene cards are too narrow for three worded chips ("Regen…", "Gener…"),
+  // so compact actions are icon buttons; the label stays as the accessible
+  // name and the `title` tooltip explains the action.
+  const labelClass = compact ? 'sr-only' : 'truncate';
   const stopNodeActivation = (event) => event.stopPropagation();
   const buttonClass = compact
-    ? 'inline-flex min-w-0 items-center justify-center gap-1 rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
+    ? 'inline-flex min-h-[26px] min-w-0 items-center justify-center rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
     : 'inline-flex items-center justify-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45';
   // Compact media still lives inside an SVG foreignObject. Keep its overlapping
   // preview/status layers in one grid cell: WebKit handles that more reliably
@@ -172,8 +176,8 @@ export default function LoomSceneMedia({
           title={generationDisabledReason || (node.image ? 'Regenerate scene image' : 'Generate scene image')}
           className={buttonClass}
         >
-          {imageActive ? <Loader2 size={compact ? 10 : 12} className="animate-spin" /> : <ImagePlus size={compact ? 10 : 12} />}
-          <span className="truncate">{imageActive ? 'Generating image' : node.image ? 'Regenerate image' : 'Generate image'}</span>
+          {imageActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <ImagePlus size={compact ? 13 : 12} />}
+          <span className={labelClass}>{imageActive ? 'Generating image' : node.image ? 'Regenerate image' : 'Generate image'}</span>
         </button>
         <button
           type="button"
@@ -182,8 +186,8 @@ export default function LoomSceneMedia({
           title={generationDisabledReason || (node.videoHistoryId ? 'Regenerate scene video' : 'Generate scene video')}
           className={buttonClass}
         >
-          {videoActive ? <Loader2 size={compact ? 10 : 12} className="animate-spin" /> : <Video size={compact ? 10 : 12} />}
-          <span className="truncate">{videoActive ? 'Generating video' : node.videoHistoryId ? 'Regenerate video' : 'Generate video'}</span>
+          {videoActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <Video size={compact ? 13 : 12} />}
+          <span className={labelClass}>{videoActive ? 'Generating video' : node.videoHistoryId ? 'Regenerate video' : 'Generate video'}</span>
         </button>
         <button
           type="button"
@@ -193,9 +197,9 @@ export default function LoomSceneMedia({
           className={buttonClass}
         >
           {falActive
-            ? <Loader2 size={compact ? 10 : 12} className="animate-spin" aria-hidden="true" />
-            : <Sparkles size={compact ? 10 : 12} aria-hidden="true" />}
-          <span className="truncate">{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
+            ? <Loader2 size={compact ? 13 : 12} className="animate-spin" aria-hidden="true" />
+            : <Sparkles size={compact ? 13 : 12} aria-hidden="true" />}
+          <span className={labelClass}>{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
         </button>
         {!compact && (
           <button

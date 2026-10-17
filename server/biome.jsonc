@@ -10,7 +10,7 @@
       "preset": "none",
       "correctness": {
         "noUndeclaredVariables": "error",
-        "noUnusedVariables": "warn"
+        "noUnusedVariables": "error"
       }
     }
   }

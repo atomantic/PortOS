@@ -35,9 +35,10 @@
  * than copying `humanActivity.js`'s DB-only `ensureReady()` shape, which would
  * force every instrumented route's tests onto Postgres.
  *
- * Writes are AWAITED by their callers (same posture as `history.logAction`), so
- * a route's response implies the row landed and a test can assert it. No
- * fire-and-forget layer.
+ * Callers await writes; this recorder rejects on failure. Hooks that run after
+ * a task mutation has committed catch and log that rejection so a successful
+ * task response does not imply that its diagnostic ledger row also landed.
+ * No fire-and-forget layer.
  */
 
 import { join } from 'path';

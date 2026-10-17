@@ -2,7 +2,7 @@ import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/
 import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
-import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 /**
  * Music Video — render a project's composition document over the song.
@@ -271,6 +271,10 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
     lyrics,
     lyricMarkers: Array.isArray(project?.lyricMarkers) ? project.lyricMarkers : [],
     scenes,
+    // Where and when the title card shows, so the lyric type keeps its default zones off it.
+    titleCard: titleCardVisible(project?.titleCard)
+      ? { position: project.titleCard.position || 'lower-left', windows: titleCardWindows(project.titleCard) }
+      : null,
     textCues: (composition.textCues || []).filter((cue) => cue?.text && cue.startSec != null && cue.endSec != null),
     composition: {
       mode: composition.mode || 'concat',
@@ -355,9 +359,22 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   });
   let staged;
   let page;
+  let playbackAdapter;
+  let authoredDeclaration;
   try {
+    const { adaptStagedDocumentPreview } = await import('./documentPreviewPlayback.js');
+    const { readAuthoredPreviewDeclaration, bindAuthoredPreviewPlayback } = await import('./authoredPreviewPlayback.js');
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
-      prepare: (dir) => stageDocumentData(dir, data, media, signal),
+      prepare: async (dir) => {
+        authoredDeclaration = await readAuthoredPreviewDeclaration(dir, { scenes: data.scenes });
+        await stageDocumentData(dir, data, media, signal);
+        signal?.throwIfAborted();
+        // A declared producer owns its implementation. Never rewrite it through
+        // the canonical recognizer, including an unknown future declaration.
+        playbackAdapter = authoredDeclaration.declared
+          ? { adapted: false, producer: 'authored-v1', ...authoredDeclaration }
+          : await adaptStagedDocumentPreview(dir, { scenes: data.scenes });
+      },
     });
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, {
@@ -370,8 +387,36 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
       width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
     });
     signal?.throwIfAborted();
+    let playbackAvailable = false;
+    if (playbackAdapter?.adapted || authoredDeclaration.supported) {
+      let captureProtocolSupported = false;
+      try {
+        const version = await page.send('Browser.getVersion', {}, null);
+        const match = typeof version?.product === 'string' && /^(?:HeadlessChrome|Chrome)\/(\d+)\.\d+\.\d+\.\d+$/.exec(version.product);
+        const major = match ? Number(match[1]) : NaN;
+        // 155 is our verified cap=1 capture-lifetime baseline, not the first
+        // Chromium release to declare these optional screencast parameters.
+        captureProtocolSupported = Number.isSafeInteger(major) && major >= 155;
+      } catch { /* Unknown protocol support keeps the existing exact path. */ }
+      signal?.throwIfAborted();
+      const runtimeSupported = captureProtocolSupported && await page.evaluate(
+        `typeof HTMLVideoElement.prototype.requestVideoFrameCallback === 'function' && typeof HTMLVideoElement.prototype.cancelVideoFrameCallback === 'function'`,
+      );
+      signal?.throwIfAborted();
+      playbackAvailable = captureProtocolSupported && runtimeSupported;
+      playbackAdapter = { ...playbackAdapter, runtimeSupported, captureProtocolSupported,
+        ...(!captureProtocolSupported ? { reason: 'unsupported-capture-protocol' }
+          : !runtimeSupported ? { reason: 'unsupported-frame-callbacks' } : {}) };
+      if (playbackAvailable && authoredDeclaration.supported) {
+        const bound = await bindAuthoredPreviewPlayback(page);
+        signal?.throwIfAborted();
+        playbackAvailable = bound.supported;
+        playbackAdapter = { ...playbackAdapter, ...bound };
+      }
+    }
     return {
-      page, scratchRoot: staged.scratchRoot,
+      page, scratchRoot: staged.scratchRoot, playbackAdapter,
+      ...(playbackAvailable ? { playback: { ...playbackAdapter, version: 1 } } : {}),
       width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
     };
   } catch (error) {

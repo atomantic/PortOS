@@ -18,7 +18,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: JSON.parse
 }));
 vi.mock('./messageAccounts.js', () => ({ getAccount: doubles.getAccount, listAccounts: async () => [] }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => doubles.auth }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => doubles.auth, GOOGLE_API_TIMEOUT_MS: 30_000 }));
 
 import { sendDraft } from './messageSender.js';
 import { getDraft, approveDraft, updateDraft, deleteDraft, reconcileDraftSend } from './messageDrafts.js';

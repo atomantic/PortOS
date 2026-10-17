@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const handlers = new Map();
+const savedLooks = vi.hoisted(() => []);
+vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: savedLooks, loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn((event, fn) => handlers.set(event, fn)), off: vi.fn((event) => handlers.delete(event)) },
 }));
@@ -13,6 +15,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 }));
 
 import ShotFinalRender from './ShotFinalRender.jsx';
+import { filmLookPreset } from '../../lib/filmLook.js';
 import { getMusicVideoShotRenders, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 
 const project = { id: 'mv-1', composition: { mode: 'composed' }, filmLook: { preset: 'vhs' }, scenes: [{ sceneId: 'a' }, { sceneId: 'b' }] };
@@ -21,6 +24,7 @@ const shot = (sceneId, state, files = []) => ({ sceneId, state, rendering: false
 
 beforeEach(() => {
   vi.clearAllMocks();
+  savedLooks.length = 0;
   handlers.clear();
 });
 
@@ -53,6 +57,36 @@ describe('ShotFinalRender', () => {
     expect(screen.getByLabelText('Film look').value).toBe('polaroid');
     fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
     expect(onChange).toHaveBeenLastCalledWith({ filmLook: null });
+  });
+
+  it('offers the saved looks, sets one on the shot, and shows it as picked', async () => {
+    savedLooks.push({ id: 'dusk-1', label: 'Dusk', look: { preset: 'custom', warmth: 0.4, grain: 0.2 } });
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
+    const onChange = vi.fn();
+    const { rerender } = render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={onChange} fieldId={fieldId} />);
+    fireEvent.change(await screen.findByLabelText('Film look'), { target: { value: 'saved:dusk-1' } });
+    const look = onChange.mock.calls[0][0].filmLook;
+    expect(look).toMatchObject({ preset: 'custom', warmth: 0.4, grain: 0.2 });
+    rerender(<ShotFinalRender project={project} scene={{ sceneId: 'a', filmLook: look }} onChange={onChange} fieldId={fieldId} />);
+    expect(screen.getByLabelText('Film look').value).toBe('saved:dusk-1');
+  });
+
+  it("tunes this shot's own look from the video's look, down to a lighter strength", async () => {
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
+    const onChange = vi.fn();
+    render(<ShotFinalRender project={{ ...project, filmLook: filmLookPreset('vhs') }} scene={{ sceneId: 'a', referenceImageId: 'a.png' }} onChange={onChange} fieldId={fieldId} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Tune' }));
+    expect(screen.getByTestId('film-look-image')).toHaveAttribute('src', '/data/images/a.png');
+    const strength = screen.getByLabelText(/Strength/);
+    fireEvent.change(strength, { target: { value: '0.2' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.pointerUp(strength);
+    const look = onChange.mock.calls[0][0].filmLook;
+    // VHS at a fifth: effects scale down, the shaping values stay.
+    expect(look).toMatchObject({ preset: 'custom', bleed: 0.16, tapeNoise: 0.1, grainSize: 0.2, grainColor: true });
+    fireEvent.change(strength, { target: { value: '1' } });
+    fireEvent.pointerUp(strength);
+    expect(onChange.mock.calls[1][0].filmLook).toMatchObject({ preset: 'vhs', bleed: 0.8 });
   });
 
   it('names the refusal when the cut cannot be planned, and stays away from other render styles', async () => {

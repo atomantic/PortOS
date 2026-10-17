@@ -1,7 +1,7 @@
 /**
  * Publish stage panel (#9281): the kit builds only from a final render, the
  * copy draft carries the director's notes and valid links, an edited field
- * saves on blur (tags as a list), and the thumbnail choice goes to the server.
+ * saves on blur (tags as a list), and a tapped image makes the YouTube thumbnail.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
@@ -18,7 +18,7 @@ const expandAll = () => { for (let b = screen.queryAllByRole('button', { expande
 
 const hook = (over = {}) => ({
   building: false, progress: 0, build: vi.fn(), drafting: false, saving: false,
-  draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null),
+  draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), composingThumbnail: false, composeThumbnail: vi.fn(async () => null), clearThumbnail: vi.fn(async () => null),
   composing: false, composeCover: vi.fn(async () => null), designing: false, designCover: vi.fn(async () => null), generateCover: vi.fn(async () => null), ...over,
 });
 const built = {
@@ -123,9 +123,9 @@ describe('PublishKitPanel (#9281)', () => {
     await act(async () => {}); // let the field saves settle
   });
 
-  it('shows the built kit, saves an edited field on blur and picks a thumbnail', async () => {
+  it('shows the built kit, saves an edited field on blur and makes a thumbnail from a frame', async () => {
     const k = hook();
-    render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
+    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
     expandAll();
     expect(screen.getByText('X / social 1080p (12 Mbps)')).toBeTruthy();
     expect(screen.getByText(/0:00 Opening line/)).toBeTruthy();
@@ -133,8 +133,8 @@ describe('PublishKitPanel (#9281)', () => {
     fireEvent.change(tags, { target: { value: 'music, ai video ,claude' } });
     fireEvent.blur(tags);
     expect(k.saveCopy).toHaveBeenCalledWith({ youtube: { tags: ['music', 'ai video', 'claude'] } });
-    fireEvent.click(screen.getByRole('button', { name: 'Use thumbnail t2.jpg' }));
-    expect(k.selectThumbnail).toHaveBeenCalledWith('t2.jpg');
+    fireEvent.click(screen.getByRole('button', { name: 'Make the thumbnail from Video frame 2' }));
+    expect(k.composeThumbnail).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'thumbnail', filename: 't2.jpg' }, lettering: true }));
     await act(async () => {}); // let the field saves settle
   });
 

@@ -276,7 +276,8 @@ export const listVideoHistory = (options = {}) => request('/video-gen/history', 
 // pulling the whole list to find one row is what this replaces. 404s (throwing an
 // Error with `.status === 404`) when the entry is gone; pass `{ silent: true }`
 // when the caller owns the not-found UI.
-export const getVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, options);
+// `geometry: true` resolves missing source dimensions/cadence without modifying history.
+export const getVideoHistoryItem = (id, { geometry = false, ...options } = {}) => request(`/video-gen/history/${encodeURIComponent(id)}${geometry ? '?geometry=true' : ''}`, options);
 // Upload a video into the shared gallery (#4188) — lands under /data/videos/
 // with a video-history entry (peer-syncable), unlike the /api/uploads scratch
 // dir. Returns the history entry; feed it through normalizeVideo to display.

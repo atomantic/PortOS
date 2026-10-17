@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
@@ -157,14 +158,14 @@ describe('persisted render failure chip (#10154)', () => {
 });
 
 describe('planned camera move (#10589)', () => {
-  function Harness({ initial, onSave }) {
+  function Harness({ initial, onSave, documentComposition = false }) {
     const [scene, setScene] = useState(initial);
-    return <SceneCard scene={scene} index={0} layered onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    return <SceneCard scene={scene} index={0} layered documentComposition={documentComposition} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
   }
 
   it('picks a catalog move, its speed and beat, and clears it', () => {
     const onSave = vi.fn();
-    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} />);
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} documentComposition />);
     const select = screen.getByLabelText('Camera');
     expect(select.value).toBe('');
     expect(screen.getByLabelText('Move').disabled).toBe(false);
@@ -176,6 +177,13 @@ describe('planned camera move (#10589)', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: { move: 'whip-pan', speed: 'fast', onBeat: true } });
     fireEvent.change(select, { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: null });
+  });
+
+  // Uniquely catches a composed render's still Move locked behind a planned camera it no longer follows.
+  it('keeps a composed still\'s Move in the director\'s hands with a camera planned', () => {
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', stillMove: 'hold', startSec: 0, endSec: 5, takes: [], camera: { move: 'handheld' } }} onSave={vi.fn()} />);
+    expect(screen.getByLabelText('Move').disabled).toBe(false);
+    expect(screen.getByLabelText('Move').value).toBe('hold');
   });
 
   it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
@@ -264,6 +272,25 @@ describe('Merge with next (#10810)', () => {
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+  });
+});
+
+// Uniquely catches Merge over previous showing on the first shot, past the backend limit, or calling with the wrong shot.
+describe('Merge over previous', () => {
+  const scene = { sceneId: 's2', startSec: 4, endSec: 8, takes: [] };
+  const props = { index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
+
+  it('merges this shot over the previous one, and hides when first, in a document composition, or past the backend limit', () => {
+    const onMergePrevious = vi.fn();
+    const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge over previous' }));
+    expect(onMergePrevious).toHaveBeenCalledWith('s2', 'grok');
+    rerender(<SceneCard scene={{ ...scene, endSec: 19 }} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} index={0} onMergePrevious={onMergePrevious} prevStartSec={0} />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
   });
 });
 

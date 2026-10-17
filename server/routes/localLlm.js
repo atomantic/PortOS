@@ -572,7 +572,10 @@ router.post('/install', asyncHandler(async (req, res) => {
 router.post('/upgrade-backend', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(localLlmInstallBackendSchema, req.body)
   const emit = emitter(req)
-  const result = await upgradeBackend(backend, ({ event, message }) => emit(event, message))
+  // Abort an in-flight download when the client goes away before we respond.
+  const ac = new AbortController()
+  res.on('close', () => { if (!res.writableFinished) ac.abort() })
+  const result = await upgradeBackend(backend, ({ event, message }) => emit(event, message), ac.signal)
     .catch((err) => {
       emit('error', `Upgrade failed: ${err.message}`)
       throw err

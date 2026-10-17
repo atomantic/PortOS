@@ -882,7 +882,7 @@ describe('perpetualWork', () => {
       expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/repo');
       const ghCalls = spawn.mock.calls.filter(([cmd]) => cmd === 'gh');
       expect(ghCalls.length).toBeGreaterThan(0);
-      expect(ghCalls.every(([, , options]) => !options.env)).toBe(true);
+      expect(ghCalls.every(([, , options]) => options.env?.GH_TOKEN === process.env.GH_TOKEN)).toBe(true);
     });
   });
 
@@ -899,7 +899,7 @@ describe('perpetualWork', () => {
       });
       await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
       expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
-      expect(spawn.mock.calls.filter(([cmd]) => cmd === 'glab').every(([, , options]) => !options.env)).toBe(true);
+      expect(spawn.mock.calls.filter(([cmd]) => cmd === 'glab').every(([, , options]) => options.env?.GH_TOKEN === process.env.GH_TOKEN)).toBe(true);
     });
 
     it('normalizes iid + string labels and excludes MR-in-flight issues', async () => {

@@ -1,7 +1,7 @@
 import { calendar } from '@googleapis/calendar';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { getAuthenticatedClient, needsScopeUpgrade, getTokens } from './googleAuth.js';
+import { getAuthenticatedClient, needsScopeUpgrade, getTokens, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
 
 const TIME_SLOT_HOURS = {
@@ -22,6 +22,32 @@ function resolveTimeSlotHour(timeSlot) {
 function resolveTimeSlotMinute(timeSlot) {
   if (TIME_SLOT_HOURS[timeSlot] !== undefined) return 0;
   return parseInt(timeSlot.split(':')[1], 10) || 0;
+}
+
+const eventKey = evt => `${evt.calendarId || 'primary'}:${evt.googleEventId}`;
+
+async function deleteCalendarEvents(cal, events) {
+  const results = await Promise.allSettled(events.map(async evt =>
+    cal.events.delete({ calendarId: evt.calendarId || 'primary', eventId: evt.googleEventId })
+  ));
+  return events.filter((evt, index) => results[index].status === 'rejected'
+    && results[index].reason?.code !== 404 && results[index].reason?.code !== 410);
+}
+
+async function retainScheduledEvents(goalId, events) {
+  let found = false;
+  await mutateGoals(freshGoals => {
+    const freshGoal = freshGoals.goals.find(g => g.id === goalId);
+    if (!freshGoal) return freshGoals;
+    found = true;
+    const existing = freshGoal.scheduledEvents || [];
+    const existingIds = new Set(existing.map(eventKey));
+    freshGoal.scheduledEvents = [...existing, ...events.filter(evt => !existingIds.has(eventKey(evt)))];
+    freshGoal.updatedAt = new Date().toISOString();
+    freshGoals.updatedAt = new Date().toISOString();
+    return freshGoals;
+  });
+  return found;
 }
 
 export async function scheduleTimeBlocks(goalId) {
@@ -46,7 +72,7 @@ export async function scheduleTimeBlocks(goalId) {
   const milestones = [...(goal.milestones || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   if (!milestones.length) throw new ServerError('No milestones/phases to schedule', { status: 400, code: 'NO_MILESTONES' });
 
-  const cal = calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const { preferredDays, timeSlot, sessionDurationMinutes, subcalendarId } = goal.timeBlockConfig;
   const calendarId = subcalendarId || 'primary';
   const preferredDayNums = new Set(preferredDays.map(d => DAY_MAP[d]));
@@ -89,53 +115,57 @@ export async function scheduleTimeBlocks(goalId) {
     }
   }
 
-  // Create events in parallel batches of 10 to avoid rate limiting
+  // Settle the whole batch so a rejection cannot hide successful sibling inserts.
   const BATCH_SIZE = 10;
   const scheduledEvents = [];
+  let failure;
   for (let i = 0; i < eventDefs.length; i += BATCH_SIZE) {
     const batch = eventDefs.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map(def =>
+    const results = await Promise.allSettled(batch.map(async def =>
       cal.events.insert({ calendarId, requestBody: def.requestBody })
     ));
     for (let j = 0; j < results.length; j++) {
+      if (results[j].status === 'rejected') continue;
       scheduledEvents.push({
         id: `sched-${uuidv4()}`,
-        googleEventId: results[j].data.id,
+        googleEventId: results[j].value.data.id,
         calendarId,
         milestoneId: batch[j].milestoneId,
         date: batch[j].date,
         createdAt: new Date().toISOString()
       });
     }
+    const rejected = results.find(result => result.status === 'rejected');
+    if (rejected) {
+      failure = new ServerError(`Calendar event insertion failed: ${rejected.reason?.message || 'request rejected'}`, { code: 'CALENDAR_INSERT_FAILED' });
+      break;
+    }
   }
 
-  // Apply to a freshly re-read goal by id rather than the snapshot captured
-  // before the calendar batch above — see the note on the initial read.
-  let goalDeleted = false;
-  await mutateGoals(freshGoals => {
-    const freshGoal = freshGoals.goals.find(g => g.id === goalId);
-    if (!freshGoal) {
-      goalDeleted = true;
-      return freshGoals;
-    }
-    freshGoal.scheduledEvents = scheduledEvents;
-    freshGoal.updatedAt = new Date().toISOString();
-    freshGoals.updatedAt = new Date().toISOString();
-    return freshGoals;
-  });
+  if (!failure) {
+    // Re-read under the store lock, preserving concurrent edits and older events.
+    await retainScheduledEvents(goalId, scheduledEvents).then(found => {
+      if (!found) failure = new ServerError('Goal was deleted during scheduling', { status: 404, code: 'NOT_FOUND' });
+    }, error => {
+      failure = new ServerError(`Could not save scheduled calendar events: ${error.message}`, { code: 'CALENDAR_SAVE_FAILED' });
+    });
+  }
 
-  if (goalDeleted) {
-    // The deleted goal cannot retain event IDs for later removal. Compensate
-    // every event created by this batch before reporting the lost target.
-    const cleanup = await Promise.allSettled(scheduledEvents.map(evt =>
-      cal.events.delete({ calendarId: evt.calendarId, eventId: evt.googleEventId })
-    ));
-    const failed = cleanup.filter(result => result.status === 'rejected'
-      && result.reason?.code !== 404 && result.reason?.code !== 410);
-    if (failed.length) {
-      throw new ServerError(`Goal was deleted during scheduling; ${failed.length} calendar events could not be removed. Remove the remaining time blocks in Google Calendar.`, { code: 'CALENDAR_CLEANUP_FAILED' });
+  if (failure) {
+    const survivors = await deleteCalendarEvents(cal, scheduledEvents);
+    if (!survivors.length) {
+      throw new ServerError(`${failure.message}. All ${scheduledEvents.length} created calendar events were removed.`, { status: failure.status, code: failure.code });
     }
-    throw new ServerError('Goal was deleted during scheduling. Created calendar events were removed.', { status: 404, code: 'NOT_FOUND' });
+    let retained = false;
+    let persistenceError;
+    await retainScheduledEvents(goalId, survivors).then(found => { retained = found; }, error => { persistenceError = error.message; });
+    const recovery = retained
+      ? 'Remaining time blocks were saved to the goal for later removal.'
+      : 'Remaining time blocks could not be saved. Remove them in Google Calendar using the event IDs in the error details.';
+    throw new ServerError(`${failure.message}; ${survivors.length} calendar events could not be removed. ${recovery}`, {
+      code: 'CALENDAR_CLEANUP_FAILED',
+      context: { remainingEvents: survivors, ...(persistenceError && { persistenceError }) }
+    });
   }
 
   console.log(`📅 Scheduled ${scheduledEvents.length} time blocks for goal "${goal.title}"`);
@@ -152,28 +182,42 @@ export async function removeScheduledEvents(goalId) {
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
 
-  const cal = calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const events = goal.scheduledEvents || [];
 
-  // Delete events in parallel
-  await Promise.all(events.map(evt =>
-    cal.events.delete({
-      calendarId: evt.calendarId || 'primary',
-      eventId: evt.googleEventId
-    }).catch(err => {
-      if (err.code !== 410 && err.code !== 404) console.log(`📅 Failed to delete event ${evt.googleEventId}: ${err.message}`);
-    })
-  ));
-
+  const survivors = await deleteCalendarEvents(cal, events);
+  const removedIds = new Set(events.filter(evt => !survivors.includes(evt)).map(eventKey));
+  let goalFound = false;
+  let persistenceError;
   await mutateGoals(freshGoals => {
     const freshGoal = freshGoals.goals.find(g => g.id === goalId);
     if (freshGoal) {
-      freshGoal.scheduledEvents = [];
+      goalFound = true;
+      freshGoal.scheduledEvents = (freshGoal.scheduledEvents || []).filter(evt => !removedIds.has(eventKey(evt)));
       freshGoal.updatedAt = new Date().toISOString();
     }
     freshGoals.updatedAt = new Date().toISOString();
     return freshGoals;
-  });
+  }).catch(error => { persistenceError = error; });
+  if (survivors.length || persistenceError) {
+    const recovery = persistenceError
+      ? `Could not save the cleanup result: ${persistenceError.message}.`
+      : goalFound
+        ? 'Remaining time blocks were retained for later removal.'
+        : 'The goal was deleted during cleanup; remaining time blocks could not be retained.';
+    const manualCleanup = survivors.length && (!goalFound || persistenceError)
+      ? ' Remove the remaining time blocks in Google Calendar using the event IDs in the error details.'
+      : '';
+    const outcome = survivors.length
+      ? `${survivors.length} calendar events could not be removed.`
+      : `All ${events.length} calendar events were removed.`;
+    const error = new ServerError(`${outcome} ${recovery}${manualCleanup}`, {
+      code: survivors.length ? 'CALENDAR_CLEANUP_FAILED' : 'CALENDAR_SAVE_FAILED',
+      context: { remainingEvents: survivors, ...(persistenceError && { persistenceError: persistenceError.message }) }
+    });
+    if (persistenceError) error.cause = persistenceError;
+    throw error;
+  }
 
   console.log(`📅 Removed ${events.length} scheduled events for goal "${goal.title}"`);
   return { deleted: events.length };

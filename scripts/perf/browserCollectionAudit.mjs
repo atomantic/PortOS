@@ -18,6 +18,62 @@ process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
 const report = { version: 1, synthetic: true, idleTargetMs: 60000, scenarios: [], failures: [] };
 
+async function mediaWindow(page, cdp, rows, result) {
+  const samples = result.windowSamples = [];
+  const sample = async label => {
+    const geometry = await page.evaluate(() => {
+      const grid = document.querySelector('[data-media-history-grid]') || document.querySelector('main .grid.gap-3');
+      const wrappers = [...document.querySelectorAll('[data-media-key]')];
+      const cards = wrappers.length ? wrappers : [...document.querySelectorAll('button[aria-label^="synthetic-"]')].map(button => button.parentElement.parentElement);
+      const mounted = cards.length || document.querySelectorAll('button[aria-label^="synthetic-"]').length;
+      let main = grid.parentElement;
+      while (main && !/(auto|scroll)/.test(getComputedStyle(main).overflowY)) main = main.parentElement;
+      return { loaded: Number(grid?.dataset.loadedItems) || mounted, mounted,
+        visible: cards.filter(card => { const r = card.getBoundingClientRect(); const m = main.getBoundingClientRect(); return r.bottom > m.top && r.top < m.bottom; }).length,
+        scrollTop: Math.round(main.scrollTop), scrollHeight: main.scrollHeight,
+        columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 5 };
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const dom = await cdp.send('Memory.getDOMCounters');
+    samples.push({ label, ...geometry, domNodes: dom.nodes });
+    // Two overscan rows each side, partially visible rows, and a pinned focused
+    // row with its keyboard neighbors. The fixture viewport fits at most 3 rows.
+    if (geometry.mounted > geometry.columns * 12 || geometry.visible === 0) throw new Error('Unbounded or blank media window');
+    return geometry;
+  };
+  await rows.first().focus();
+  const focusedLabel = await rows.first().getAttribute('aria-label');
+  await sample('60');
+  for (const target of [600, 1200]) {
+    for (let attempts = 0; attempts < 30; attempts++) {
+      const loaded = await page.evaluate(() => Number(document.querySelector('[data-media-history-grid]')?.dataset.loadedItems)
+        || document.querySelectorAll('button[aria-label^="synthetic-"]').length);
+      if (loaded >= target) break;
+      const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/image-gen/gallery' && response.status() === 200);
+      await page.getByRole('button', { name: /^Show more/ }).evaluate(button => button.click());
+      await response;
+      await page.waitForFunction(previous => (Number(document.querySelector('[data-media-history-grid]')?.dataset.loadedItems)
+        || document.querySelectorAll('button[aria-label^="synthetic-"]').length) > previous, loaded);
+    }
+    await page.evaluate(() => { let main = document.querySelector('[data-media-history-grid]')?.parentElement || document.querySelector('main .grid.gap-3')?.parentElement; while (main && !/(auto|scroll)/.test(getComputedStyle(main).overflowY)) main = main.parentElement; main.scrollTop = Math.max(0, main.scrollHeight - main.clientHeight * 1.5); });
+    await delay(250);
+    const geometry = await sample(String(target));
+    if (await page.evaluate(() => document.activeElement?.getAttribute('aria-label')) !== focusedLabel) throw new Error('Keyboard focus lost while scrolling');
+    if (geometry.loaded < target) throw new Error('Insufficient extended browsing');
+  }
+  await page.setViewportSize({ width: 640, height: 800 });
+  await delay(250);
+  await sample('resize-mid-scroll');
+  if (await page.evaluate(() => document.activeElement?.getAttribute('aria-label')) !== focusedLabel) throw new Error('Keyboard focus lost while resizing');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await delay(250);
+  await page.evaluate(() => { let main = document.querySelector('[data-media-history-grid]')?.parentElement || document.querySelector('main .grid.gap-3')?.parentElement; while (main && !/(auto|scroll)/.test(getComputedStyle(main).overflowY)) main = main.parentElement; main.scrollTop = 0; });
+  await delay(250);
+  await sample('return-top');
+  await rows.first().waitFor({ state: 'visible' });
+  return samples;
+}
+
 async function scenario(route) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
   const page = await context.newPage();
@@ -93,6 +149,8 @@ async function scenario(route) {
     const dismiss = page.getByRole('button', { name: 'Dismiss and don’t show again', exact: true });
     if (await dismiss.isVisible()) await dismiss.click();
     if (media) {
+      advance('extended');
+      result.windowSamples = await mediaWindow(page, cdp, rows, result);
       advance('detail');
       await rows.first().click();
       await delay(1000, undefined, { signal: abort.signal });
@@ -143,7 +201,7 @@ async function scenario(route) {
 }
 
 try {
-  fixture = await startCollectionFixture();
+  fixture = await startCollectionFixture({ clientDist: process.env.COLLECTION_AUDIT_CLIENT_DIST });
   report.startup = fixture.startup;
   report.cardinalities = fixture.cardinalities;
   browser = await chromium.launch({ headless: true, ...(process.env.COLLECTION_AUDIT_BROWSER

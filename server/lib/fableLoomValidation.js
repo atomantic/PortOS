@@ -378,9 +378,11 @@ export const reviewSchema = z.object({ ...aiRunFields });
 // A turn is EITHER a reader's free text (matched to a path by the play stage)
 // or a path the reader took outright — a tapped choice needs no intent
 // mapping, so it carries the transition id and no LLM call happens at all.
+const playMessageSchema = z.string().min(1).max(1000);
+
 export const playTurnSchema = z.object({
   nodeId: nodeIdStr,
-  message: z.string().min(1).max(1000).optional(),
+  message: playMessageSchema.optional(),
   transitionId: z.string().min(1).max(80).optional(),
   transcript: z.array(z.object({
     role: z.enum(['reader', 'narrator']),
@@ -391,6 +393,8 @@ export const playTurnSchema = z.object({
   message: 'A play turn needs either a message or a transitionId',
   path: ['message'],
 });
+
+export const hostedTextTurnSchema = z.object({ text: playMessageSchema });
 
 export const reformatSchema = z.object({
   format,
@@ -444,6 +448,12 @@ export const hostedSessionPatchSchema = z.object({
   currentNodeId: nodeIdStr.optional(),
   playbackPhase: z.enum(['entry', 'hold', 'exit', 'ended']).optional(),
   activeHoldIndex: z.number().int().min(0).max(10).optional(),
+});
+
+export const hostedPlaybackUpdateSchema = z.object({
+  nodeId: hostedSessionPatchSchema.shape.currentNodeId,
+  phase: hostedSessionPatchSchema.shape.playbackPhase,
+  activeHoldIndex: hostedSessionPatchSchema.shape.activeHoldIndex,
 });
 
 export const productionPlanSchema = z.object({

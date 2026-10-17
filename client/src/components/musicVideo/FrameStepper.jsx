@@ -40,8 +40,8 @@ const inputCls = 'min-h-[44px] rounded border border-port-border bg-port-bg px-1
  * Frame-by-frame controls for a preview player: step back or forward by a
  * chosen number of frames, type a song frame number to jump to it, and read its
  * timecode. `onSeek(songSec)` must pause the player and move it. With
- * `capture` (an async function giving the frame on screen as an image blob),
- * Save frame puts that picture in the image gallery. `keys` binds "," and "."
+ * `capture` (an async function returning a blob or `{ blob, time, fps, label }`),
+ * Save frame puts that picture in the image gallery. Metadata identifies the frozen frame. `keys` binds "," and "."
  * on the page to the step buttons.
  */
 export default function FrameStepper({ time, onSeek, fps = PREVIEW_FPS, maxSec = null, disabled = false, keys = false, capture = null, label = '', className = '' }) {
@@ -73,12 +73,15 @@ export default function FrameStepper({ time, onSeek, fps = PREVIEW_FPS, maxSec =
   }, [keys]);
   const save = async () => {
     setSaving(true);
-    const blob = await capture().catch(() => null);
+    let captureError = null;
+    const captured = await capture().catch((error) => { captureError = error; return null; });
+    const blob = captured?.blob ?? captured;
     const saved = blob ? await uploadGalleryImage(blob, { silent: true }).catch(() => null) : null;
     setSaving(false);
-    const name = [label, `frame ${frame}`].filter(Boolean).join(' · ');
+    const capturedFrame = Number.isFinite(captured?.time) ? frameAt(captured.time, captured.fps || fps) : frame;
+    const name = [captured?.label ?? label, `frame ${capturedFrame}`].filter(Boolean).join(' · ');
     if (saved?.filename) toast.success(`Saved ${name} to the image gallery`);
-    else toast.error(`Couldn't save ${name}`);
+    else toast.error(`Couldn't save ${name}${captureError?.message ? `: ${captureError.message}` : ''}`);
   };
   return (
     <div className={`flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-port-text-muted ${className}`}>

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -113,6 +113,57 @@ beforeEach(() => {
     forge: 'github',
     fullName: 'example-org/example-app',
     repoSpec: 'github.com/example-org/example-app',
+  });
+});
+
+describe('CoS task collection selectors', () => {
+  it.each([
+    ['post', '/api/cos/tasks', { description: 'Example task', type: 'cos' }],
+    ['put', '/api/cos/tasks/sys-example', { description: 'Changed task', type: 'cos' }],
+    ['delete', '/api/cos/tasks/sys-example?type=cos', undefined],
+    ['delete', '/api/cos/tasks/sys-example?type=user&type=internal', undefined],
+  ])('rejects an invalid selector on %s %s before mutation', async (method, url, body) => {
+    const res = await request(buildApp())[method](url).send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(cos.updateTask).not.toHaveBeenCalled();
+    expect(cos.deleteTask).not.toHaveBeenCalled();
+    expect(cos.getTaskById).not.toHaveBeenCalled();
+    expect(await listUserActions()).toEqual([]);
+  });
+
+  it('deletes from the explicitly selected internal collection', async () => {
+    cos.getTaskById.mockResolvedValue({ id: 'sys-example', description: 'Example task' });
+    cos.deleteTask.mockResolvedValue({ success: true, taskId: 'sys-example' });
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/sys-example?type=internal');
+
+    expect(res.status).toBe(200);
+    expect(cos.deleteTask).toHaveBeenCalledWith('sys-example', 'internal');
+  });
+});
+
+describe('CoS task responses after action-ledger failures', () => {
+  it.each(['post', 'delete'])('keeps a committed %s successful when the ledger cannot write', async (method) => {
+    const ledgerPath = join(tempRoot, 'user-action-events.json');
+    mkdirSync(ledgerPath);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    cos.getTaskById.mockResolvedValue({ id: 'task-1', description: 'Example task' });
+    cos.deleteTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+    try {
+      const url = method === 'post' ? '/api/cos/tasks' : '/api/cos/tasks/task-1';
+      const res = await request(buildApp())[method](url).send(method === 'post' ? { description: 'Example task' } : undefined);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(method === 'post' ? { id: 'task-1', description: 'Example task' } : { success: true, taskId: 'task-1' });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`Failed to record cos.task.${method === 'post' ? 'create' : 'delete'}`));
+    } finally {
+      rmSync(ledgerPath, { recursive: true, force: true });
+      log.mockRestore();
+    }
   });
 });
 

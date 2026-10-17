@@ -6,10 +6,18 @@ import { Lock, LockOpen } from 'lucide-react';
  * lock — `locked`, `changed` (locked, then edited) or `open`; `clips` maps a
  * video shot to its clip's lock the same way (null for a shot with no video
  * step: a still, card or code shot locks once). `toggle(sceneId, lock, stage)`
- * locks or unlocks one shot's `still` or `video`. Null outside a project, or
- * for a document storyboard, which has no per-shot locks.
+ * locks or unlocks one shot's `still` or `video`; `lockAll(stills, videos)` locks
+ * many at once. `unlocked` is `unlockedShots`
+ * (the shots the Shots checklist counts as not locked yet). Null outside a
+ * project, or for a document storyboard, which has no per-shot locks.
  */
 export const ShotLockContext = createContext(null);
+
+/** `'still'` or `'video'` when the Shots checklist counts this shot's still or video as not locked yet, else null. */
+export function shotUnlocked(value, sceneId) {
+  if (value?.unlocked?.stills?.includes(sceneId)) return 'still';
+  return value?.unlocked?.videos?.includes(sceneId) ? 'video' : null;
+}
 
 export const SHOT_LOCK_LABELS = Object.freeze({ locked: 'Locked', still: 'Still locked, video not locked yet', changed: 'Changed since locked', open: 'Not locked' });
 
@@ -30,7 +38,7 @@ export function useShotLock(sceneId) {
   const still = sceneId && value?.locks ? value.locks[sceneId] : null;
   if (!still) return null;
   const clip = value.clips?.[sceneId] ?? null;
-  return { state: overallShotLock(still, clip), still, clip, toggle: (lock, stage = 'still') => value.toggle(sceneId, lock, stage), busy: !!value.busy };
+  return { state: overallShotLock(still, clip), still, clip, unlocked: shotUnlocked(value, sceneId), toggle: (lock, stage = 'still') => value.toggle(sceneId, lock, stage), busy: !!value.busy };
 }
 
 const baseCls = 'inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 rounded border px-2 text-xs disabled:opacity-50 sm:min-h-[28px]';

@@ -119,17 +119,27 @@ export default function ToolsTab({ agentId, agent }) {
   const handleBrowseFeed = async () => {
     if (!selectedAccountId) return;
     setFeedLoading(true);
-    const feed = await api.getAgentFeed({ accountId: selectedAccountId, sort: feedSort, limit: 25 });
-    setFeedPosts(feed.posts || feed || []);
-    setFeedLoading(false);
+    try {
+      const feed = await api.getAgentFeed({ accountId: selectedAccountId, sort: feedSort, limit: 25 });
+      setFeedPosts(feed.posts || feed || []);
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setFeedLoading(false);
+    }
   };
 
   const handleFindRelevant = async () => {
     if (!agentId || !selectedAccountId) return;
     setFeedLoading(true);
-    const posts = await api.getAgentRelevantPosts({ agentId, accountId: selectedAccountId, maxResults: 10 });
-    setFeedPosts(posts);
-    setFeedLoading(false);
+    try {
+      const posts = await api.getAgentRelevantPosts({ agentId, accountId: selectedAccountId, maxResults: 10 });
+      setFeedPosts(posts);
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setFeedLoading(false);
+    }
   };
 
   const handleViewPost = async (post) => {
@@ -271,11 +281,16 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setEngaging(true);
     setEngageResult(null);
-    const result = await api.engageAgent({ agentId, accountId: selectedAccountId, maxComments: 1, maxVotes: 3 });
-    setEngageResult(result);
-    setEngaging(false);
-    toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    try {
+      const result = await api.engageAgent({ agentId, accountId: selectedAccountId, maxComments: 1, maxVotes: 3 });
+      setEngageResult(result);
+      toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
+      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setEngaging(false);
+    }
   };
 
   // Check Posts (Monitor)

@@ -141,6 +141,11 @@ export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
   });
+// Merge a scene over the previous one: it starts where that one did, which is removed → { project, scene }.
+export const mergeMusicVideoPreviousScene = (id, sceneId, backend, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-previous`, {
+    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+  });
 // Move a shot's start; the shot before ends there too → { project, scene, previous }.
 export const moveMusicVideoSceneStart = (id, sceneId, startSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/start`, {
@@ -291,6 +296,16 @@ export const cancelMusicVideoShotRender = (id, sceneId, options = {}) =>
 // A rendered shot's silent segment, to play.
 export const musicVideoShotRenderUrl = (id, name) =>
   `/api/music-video/${encodeURIComponent(id)}/shot-renders/${encodeURIComponent(name)}`;
+// The shots rendered so far stitched in order with the song (`light`: a phone copy):
+// { name, light, durationSec, shots, totalShots, complete }. Play it at musicVideoShotRenderUrl(id, name).
+export const buildMusicVideoRenderPreview = (id, { light = false } = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shot-renders/preview`, { method: 'POST', body: JSON.stringify({ light }), ...options });
+// The video-wide film looks cached over the current takes:
+// { available, error?, total, looks: [{ id, look, current, rendered, bytes }] }.
+export const getMusicVideoFilmLooks = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/film-looks`, options);
+export const deleteMusicVideoFilmLook = (id, lookId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/film-looks/${encodeURIComponent(lookId)}`, { method: 'DELETE', ...options });
 
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>
@@ -334,8 +349,22 @@ export const planMusicVideoPromotion = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/promotion-plan`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
-export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+// The YouTube thumbnail: a source cropped 16:9 with the title in the cover's lettering; DELETE goes back to the best video frame.
+export const composeMusicVideoYoutubeThumbnail = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const clearMusicVideoYoutubeThumbnail = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail`, { method: 'DELETE', ...options });
+// "Paint the title" with the image model: the exact prompt and its additions, then the queued job
+// (the result arrives over the `music-video:cover-art` socket event).
+export const previewMusicVideoThumbnailPaint = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/paint/preview`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const paintMusicVideoYoutubeThumbnail = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/paint`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+// Variants kept for YouTube's Test & Compare (up to three).
+export const addMusicVideoThumbnailTest = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/tests`, { method: 'POST', ...options });
+export const removeMusicVideoThumbnailTest = (id, filename, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/tests/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
 // Release cover art: compose from a source image, or queue a fresh source
 // (the result arrives over the `music-video:cover-art` socket event).
 export const composeMusicVideoCoverArt = (id, body, options = {}) =>

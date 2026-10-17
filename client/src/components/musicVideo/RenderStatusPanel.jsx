@@ -72,7 +72,7 @@ export default function RenderStatusPanel({
             controls
             playsInline
             preload="metadata"
-            className="w-full aspect-video max-h-[65vh] object-contain rounded bg-black border border-port-border"
+            className="mx-auto block w-full aspect-video max-w-[calc(65vh*16/9)] object-contain rounded bg-black border border-port-border"
             aria-label="Play final music video"
           />
           <button
@@ -105,6 +105,10 @@ function refusalFix(failure) {
     return ids.length ? { ids, patch: { shotMode: 'cutaway' }, label: `Switch ${plural(ids, 'it', `these ${ids.length}`)} to Cutaway`,
       done: `Switched ${ids.length} shot${plural(ids, '', 's')} to Cutaway` } : null;
   }
+  if (failure?.code === 'STALE_CLIP_DEPENDENCIES') {
+    const ids = failure.context?.sceneIds || [];
+    return ids.length ? { ids, render: true, label: plural(ids, 'Render a new clip', `Render ${ids.length} new clips`) } : null;
+  }
   if (failure?.code === 'INSUFFICIENT_CLIP_COVERAGE') {
     const ids = (failure.context?.shortfalls || []).map((entry) => entry.sceneId);
     return ids.length ? { ids, patch: { holdLastFrame: true }, label: `Hold the last frame on ${plural(ids, 'it', `these ${ids.length}`)}`,
@@ -115,18 +119,21 @@ function refusalFix(failure) {
 
 /**
  * Persisted failures survive reload; kickoff/SSE failures stay bound to their project.
- * A refusal with a one-tap fix offers it: `onPatchShots(sceneIds, patch, doneMessage)`.
+ * A refusal with a one-tap fix offers it: `onPatchShots(sceneIds, patch, doneMessage)`,
+ * or for clips made from since-changed frames `onRenderClips(sceneIds)`, which renders
+ * each shot's clip again from its current frames and the video settings.
  */
-export function RenderFailure({ project, renderJob, onPatchShots }) {
+export function RenderFailure({ project, renderJob, onPatchShots, onRenderClips }) {
   const [fixing, setFixing] = useState(false);
   if (renderJob?.active && renderJob.context === project.id) return null;
   const failure = renderJob?.failure?.projectId === project.id ? renderJob.failure : null;
   const error = failure ? failure.message : project.status === 'failed' ? project.renderError : null;
   if (!error) return null;
-  const fix = onPatchShots ? refusalFix(failure) : null;
+  const offered = refusalFix(failure);
+  const fix = offered && (offered.render ? onRenderClips : onPatchShots) ? offered : null;
   const apply = () => {
     setFixing(true);
-    Promise.resolve(onPatchShots(fix.ids, fix.patch, fix.done)).finally(() => setFixing(false));
+    Promise.resolve(fix.render ? onRenderClips(fix.ids) : onPatchShots(fix.ids, fix.patch, fix.done)).finally(() => setFixing(false));
   };
   return (
     <Banner tone="error" title="Render failed" className="break-words">
@@ -134,7 +141,7 @@ export function RenderFailure({ project, renderJob, onPatchShots }) {
       {fix && (
         <button type="button" onClick={apply} disabled={fixing}
           className="mt-2 block min-h-[44px] sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
-          {fixing ? 'Saving…' : fix.label}
+          {fixing ? (fix.render ? 'Starting…' : 'Saving…') : fix.label}
         </button>
       )}
     </Banner>

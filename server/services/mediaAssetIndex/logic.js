@@ -101,7 +101,10 @@ export function compactSource(data) {
   if (!data || typeof data !== 'object') return data;
   const source = {};
   for (const field of COMPACT_SOURCE_FIELDS) if (data[field] !== undefined) source[field] = data[field];
-  const prompt = nonBlank(data.prompt) || nonBlank(data.metadata?.prompt);
+  // Re-projecting a cached source must preserve whitespace-only prefixes: the
+  // original nonblank text may lie beyond the preview boundary.
+  const prompt = nonBlank(data.prompt) || nonBlank(data.metadata?.prompt)
+    || (typeof data[COMPACT_PREVIEW_KEY] === 'string' ? data[COMPACT_PREVIEW_KEY] : null);
   if (prompt) source[COMPACT_PREVIEW_KEY] = prompt.slice(0, COMPACT_PROMPT_CHARS + 1);
   return source;
 }

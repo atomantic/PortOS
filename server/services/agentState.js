@@ -114,12 +114,21 @@ export const getSpawnedAgent = (pid) => spawnedAgentCommands.get(pid);
 export let useRunner = false;
 export const setUseRunner = (val) => { useRunner = val; };
 
-// Active agent IDs (direct-mode + runner-mode), for zombie/orphan detection.
+// Agents between worktree creation and `registerAgent` (Set<agentId>). The tree
+// exists seconds before any record names an owner, and a fresh agent branch sits
+// at the default branch's HEAD, so a reaper reads it as clean and merged. Listing
+// the id in `getActiveAgentIds()` hands every reaper that already consults it the
+// protection, without reordering branch-reconcile's MERGED-before-owner check.
+const dispatchingAgentIds = new Set();
+export const markAgentDispatching = (agentId) => { dispatchingAgentIds.add(agentId); };
+export const clearAgentDispatching = (agentId) => { dispatchingAgentIds.delete(agentId); };
+
+// Active agent IDs (direct-mode + runner-mode + mid-dispatch), for zombie/orphan detection.
 // Lives here in the side-effect-free state module so callers (cleanup jobs,
 // zombie sweeps) can read it without importing the heavier `subAgentSpawner.js`
 // orchestrator (which re-exports the whole agent-lifecycle module graph).
 // `subAgentSpawner` re-exports it for backward compatibility.
-export const getActiveAgentIds = () => [...activeAgents.keys(), ...runnerAgents.keys()];
+export const getActiveAgentIds = () => [...activeAgents.keys(), ...runnerAgents.keys(), ...dispatchingAgentIds];
 
 /**
  * Agent ids whose worktree must not be taken out from under them, from an

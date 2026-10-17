@@ -38,6 +38,7 @@ let proc;
 let browser;
 let artifacts;
 let browserSession;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 
 // The delayed paint is intentional test input: a screenshot before the seek
 // promise settles MUST see the previous position, even on a fast machine.
@@ -58,7 +59,7 @@ async function composition(html = fixture(), directory = `compositions/${randomU
 describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     artifacts = _createTestArtifactsRoot();
@@ -82,7 +83,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     }
   });
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots }));
+  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, detachedProcessGroupId: detachedChromeProcessGroupId() }), 25000);
 
   it('awaits every seek, encodes exactly 12 frames, disposes its private target and registers a thumbnail', async () => {
     const input = await composition();

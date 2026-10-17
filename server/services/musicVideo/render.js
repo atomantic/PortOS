@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis, shotLocks } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -43,12 +43,11 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
-import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
-import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { statsOutroSeconds } from '../../lib/musicVideoStatsOutro.js';
@@ -98,7 +97,9 @@ export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || re
 
 // Every terminal project write clears the in-flight mark's stamp and the
 // partial-output pointer alongside the status.
-const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
+// A settled render carries no error unless `extra` names one: a finished render
+// never keeps the message of an earlier attempt.
+const settledRender = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 // Tell listeners (the autonomous run waiting on its final render) that a render
 // job reached a terminal state. Emitted after the project record's terminal
@@ -264,13 +265,13 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       }
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
       if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
-      // A planned camera move (#10589) picks the nearest composed still move.
+      // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
       // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
       // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
       const effect = sceneImageEffect(scene, { layered });
       const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
       const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
-      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold',
+      clips.push({ ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
         ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) });
       continue;
     }
@@ -437,9 +438,6 @@ function footageFrameFit(scene) {
 
 // The frame for a composed render with no footage to take dimensions from.
 const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
-// A still's push-in ends this much closer; a pan crosses this much extra width.
-const STILL_PUSH_ZOOM = 0.12;
-const STILL_PAN_TRAVEL = 0.15;
 const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 
 // One section's video chain (without its output label). A footage clip is
@@ -549,7 +547,9 @@ function buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, g
     '-y',
     outputPath,
   ];
-  return { args, sceneId: c.sceneId, layer: c.layer || 'footage', frames: outFrames, startFrame, startSec, endSec: (startFrame + outFrames) / fps, canonW, canonH, fps, sections: plan.length };
+  // `shotId` is the shot whose span this section plays in: an intercut partner
+  // piece or a hook card belongs to the shot it cuts into.
+  return { args, sceneId: c.sceneId, shotId: c.intercutOf || c.cardOf || c.sceneId, layer: c.layer || 'footage', frames: outFrames, startFrame, startSec, endSec: (startFrame + outFrames) / fps, canonW, canonH, fps, sections: plan.length };
 }
 
 // Pure: build the ffmpeg args for the master-bed render. Concats the clips
@@ -645,15 +645,17 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const prerolls = cutEffects.filter((t) => t.incoming).map((t) => {
     const { c } = plan[t.index + 1];
     // The footage just before the incoming shot's in-point, on the output timebase
-    // its speed and offset already set; any part before the clip starts holds its first frame.
+    // its speed and offset already set. With less footage than the window before
+    // the in-point it plays on from the clip's first frame instead: the flips
+    // always show moving footage, never a held frame.
     const windowSec = t.windowFrames / fps;
-    const shortSec = Math.max(0, windowSec - c.inSec);
+    const { leadSec = 0, ...shot } = c;
+    const inSec = Math.max(0, c.inSec - windowSec);
     const clip = c.layer ? { ...c, outSec: c.inSec + windowSec } : {
-      ...c,
-      inSec: Math.max(0, c.inSec - windowSec),
-      outSec: c.inSec + shortSec,
-      sourceSec: (c.sourceSec ?? c.duration) + windowSec,
-      ...(shortSec > 0 ? { leadSec: round3((c.leadSec || 0) + shortSec) } : {}),
+      ...shot,
+      inSec,
+      outSec: inSec + windowSec,
+      sourceSec: (c.sourceSec ?? c.duration) - leadSec + (c.inSec - inSec),
     };
     return { ...t, clip };
   });
@@ -823,6 +825,15 @@ export function assertCurrentClipDependencies(project) {
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
 }
 
+// Shots approved as they play: a locked clip, or a locked shot with no clip
+// step (a still). The intercut pass leaves these whole.
+function lockedShotIds(project) {
+  const shots = shotLocks(project);
+  if (!shots) return [];
+  const clips = clipLocks(project, shots) || {};
+  return Object.keys(shots).filter((id) => (clips[id] ?? shots[id]) === 'locked');
+}
+
 export async function planMusicVideoRender(project, { draft = false } = {}) {
   assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
@@ -863,6 +874,7 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
       lyricCues: project.lyricCues,
       graphicCards: composed,
       accentColor: project.composition?.style?.accentColor,
+      lockedSceneIds: lockedShotIds(project),
     })
     : snapped;
   const soundBed = await resolveSoundBedPath(project);
@@ -1023,6 +1035,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
 // missing, then join by stream copy with the song laid under them once.
 async function renderFromShotSegments(projectId, project, handOff, options) {
   const { planShotSegments, renderMissingSegments, stitchSegments, pruneSegments } = await import('./shotSegments.js');
+  const startedAtMs = Date.now();
   const plan = await planShotSegments(project);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -1078,12 +1091,12 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
         width: plan.width, height: plan.height, numFrames: Math.round(durationSec * plan.fps), fps: plan.fps,
         filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
       });
-      await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) }), 'complete');
+      await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project)}), 'complete');
       return poster;
     });
     finish('complete');
     // Older takes of each shot are dropped once the new cut is published.
-    const pruned = await pruneSegments(plan).catch(() => 0);
+    const pruned = await pruneSegments(plan, { startedAtMs }).catch(() => 0);
     console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
   }).catch(async (err) => {
@@ -1155,20 +1168,12 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect });
-    // #8984: a composed project lays its timed text cues over the cut, and a
-    // title card's text (#8985) joins them over its own section, and without
-    // subtitle cues the sung lyrics are drawn in the shared lyric type, as the
-    // storyboard animatic shows them. Nothing to draw (plain mode, or nothing
-    // timed) skips the overlay capture entirely.
-    const { cues, style } = projectTypographyPlan(project, clips, sections, totalDuration);
-    const lyricWindows = composedLyricWindows(project, totalDuration);
-    const composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
+    const { args, totalDuration, canonW, canonH, fps } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect });
 
     await assertCurrentRenderApproval(projectId, project, options);
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
     const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
-    const plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, args, graphPath);
+    const plainEncode = await filterGraphViaFile(ffmpeg, args, graphPath);
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
@@ -1188,16 +1193,10 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 
-    console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} cues=${cues.length} duration=${totalDuration.toFixed(2)}s`);
+    console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} duration=${totalDuration.toFixed(2)}s`);
 
-    const releaseScratch = () => (composition ? removeCompositionScratch(jobId).catch((err) => {
-      maintenance.markCurrentUnsettled();
-      console.warn(`⚠️ Music-video render [${jobId.slice(0, 8)}] could not remove its overlay scratch: ${err.message}`);
-    }) : null);
-
-    // Terminal failure or cancel, one path for the overlay capture, the encode
-    // and the film look pass. A cancel is a user action (stdout); a failure is
-    // an error (#7945).
+    // Terminal failure or cancel across the encode and film look pass. A
+    // cancel is a user action (stdout); a failure is an error (#7945).
     const settleFailure = async (canceled, reason) => {
       job.status = canceled ? 'canceled' : 'error';
       job.lastError = reason;
@@ -1209,12 +1208,11 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       // A cancel restores the pre-render status (so a cancelled re-render of a
       // 'complete' project stays 'complete'); a real failure marks it 'failed'.
       const targetStatus = canceled ? priorStatus : 'failed';
-      await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
+      await updateProject(projectId, settledRender(targetStatus, { renderError: canceled ? null : reason.slice(0, 2000) })).catch((updateErr) => {
         maintenance.markCurrentUnsettled();
         console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
       });
       emitRenderSettled(projectId, job);
-      await releaseScratch();
       closeJobAfterDelay(jobs, jobId);
       permit.finish();
     };
@@ -1225,11 +1223,9 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const finishing = filmLookFinishNeeded(project);
     // Seconds the outro scene adds after the song (0 when it is off).
     const outroSec = statsOutroSeconds(project.statsOutro);
-    // A composed render first captures its overlay (progress 0–50%), then
-    // encodes (50–100%); a plain render encodes across the whole bar.
-    const startEncode = (encode, progressBase = 0) => {
-      const encodeTop = finishing ? progressBase + (1 - progressBase) / 2 : 1;
-      const encodeProgress = (fraction) => progressBase + (encodeTop - progressBase) * fraction;
+    const startEncode = (encode) => {
+      const encodeTop = finishing ? 0.5 : 1;
+      const encodeProgress = (fraction) => encodeTop * fraction;
       const dropGraphFile = () => (encode.file ? unlink(encode.file).catch(() => {}) : null);
       const proc = spawn(ffmpeg, encode.args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
       job.process = proc;
@@ -1279,12 +1275,11 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: reason });
           projectRenders.delete(projectId);
-          await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
+          await updateProject(projectId, settledRender('failed', { renderError: reason.slice(0, 2000) })).catch((updateErr) => {
             maintenance.markCurrentUnsettled();
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
           });
           emitRenderSettled(projectId, job);
-          await releaseScratch();
           closeJobAfterDelay(jobs, jobId);
           permit.finish();
         },
@@ -1370,14 +1365,13 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
             broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
-            await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
+            await updateProject(projectId, settledRender('failed', { renderError: job.lastError.slice(0, 2000) })).catch((updateErr) => {
               maintenance.markCurrentUnsettled();
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
             });
             emitRenderSettled(projectId, job);
           } finally {
             projectRenders.delete(projectId);
-            await releaseScratch();
             closeJobAfterDelay(jobs, jobId);
             permit.finish();
           }
@@ -1385,33 +1379,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       });
     };
 
-    if (!composition) {
-      startEncode(plainEncode);
-      return { jobId };
-    }
-
-    // Composed: capture the overlay in the background (the route returns the
-    // jobId at once; progress/cancel flow through the job like the encode's).
-    // A capture failure or cancel is terminal here, since no ffmpeg exists yet
-    // for the render guard to finalize.
-    job.overlayAbort = new AbortController();
-    const { signal } = job.overlayAbort;
-    renderTypographyOverlays({
-      jobId, cues, style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
-      lyrics: lyricWindows.length > 0 ? { project, windows: lyricWindows } : null,
-      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
-    }).then(async (overlays) => {
-      await assertCurrentRenderApproval(projectId, project, options);
-      signal.throwIfAborted();
-      // Capture is over: from here a cancel kills the encode (job.process).
-      job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed, grade: project.composition?.grade, beats: project.audioAnalysis?.beats });
-      startEncode(await filterGraphViaFile(ffmpeg, layered.args, graphPath), 0.5);
-    }).catch(async (err) => {
-      const canceled = signal.aborted;
-      await settleFailure(canceled, canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`);
-    });
-
+    startEncode(plainEncode);
     return { jobId };
   } finally {
     // Prep threw (or we never handed off to the job lifecycle) — release the
@@ -1502,6 +1470,11 @@ function scheduleRenderResumes(resumes) {
         const { jobId } = await renderMusicVideo(projectId, { resumable: true, resumeAttempt: attempt });
         console.log(`🎬 Music Video boot recovery: resumed the final render of ${projectId.slice(0, 8)} [${jobId.slice(0, 8)}] from its cached shots`);
       } catch (err) {
+        // Someone started it again in the meantime: that render resumes from the same cache.
+        if (err?.code === 'RENDER_IN_PROGRESS') {
+          console.log(`🎬 Music Video boot recovery: the final render of ${projectId.slice(0, 8)} was already started again`);
+          continue;
+        }
         console.error(`❌ Music Video boot recovery: could not resume the final render of ${projectId.slice(0, 8)}: ${err.message}`);
         await updateProject(projectId, { renderError: `Interrupted by a server restart and could not restart: ${err.message}`.slice(0, 2000) }).catch(() => {});
       }

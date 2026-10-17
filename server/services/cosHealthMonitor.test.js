@@ -38,14 +38,8 @@ vi.mock('./cosState.js', () => ({
   isDaemonRunning: () => mock.daemonRunning
 }));
 
-// The process READ now goes through the strict, mapped-shape reader
-// (`listProcessesStrict` — issue #8164) instead of raw `execPm2(['jlist'])` +
-// private parsing; `execPm2` remains only for the auto-restart call. Restarts
-// deliberately do NOT go through execFile('pm2', …, { shell: true }) — that
-// resolves to pm2.cmd on Windows and flashes a console window
-// (docs/WINDOWS_CONSOLE.md).
 vi.mock('./pm2.js', () => ({
-  execPm2: vi.fn(async (args) => { mock.restartIssued = true; return mock.restartImpl(args); }),
+  restartApp: vi.fn(async (name) => { mock.restartIssued = true; return mock.restartImpl(name); }),
   clearJlistCache: vi.fn(() => { mock.cacheClears += 1; }),
   listProcessesStrict: vi.fn(async () => {
     if (!mock.restartIssued) return mock.pm2Processes;
@@ -68,11 +62,9 @@ import { runHealthCheck, getHealthStatus, RESTART_VERIFY } from './cosHealthMoni
 
 const recoverAll = (procs) => procs.map(p => (p.status === 'errored' ? { ...p, status: 'online' } : p));
 
-// The restart assertions differ only in what they record off the pm2 argv —
-// the whole argv, or just the process name.
-const recordRestarts = (sink, pick = (args) => args) => async (args) => {
-  sink.push(pick(args));
-  return { stdout: 'restarted', stderr: '' };
+const recordRestarts = sink => async name => {
+  sink.push(name);
+  return { success: true };
 };
 
 const baseState = () => ({
@@ -96,7 +88,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
     // default restart success
-    mock.restartImpl = async () => ({ stdout: 'restarted', stderr: '' });
+    mock.restartImpl = async () => ({ success: true });
   });
 
   it('short-circuits when the daemon is not running', async () => {
@@ -221,6 +213,16 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     });
   });
 
+  it('keeps an unknown restart outcome actionable without claiming the mutation failed', async () => {
+    mock.pm2Processes = [{ name: 'example-worker', status: 'errored' }];
+    mock.restartImpl = async () => { throw Object.assign(new Error('CLI cleanup unconfirmed'), { outcome: 'unknown' }); };
+    const { issues } = await runHealthCheck();
+    expect(issues).toEqual([expect.objectContaining({ message: expect.stringMatching(/outcome unknown.*example-worker/) })]);
+    expect(mock.events.some(event => event.name === 'health:critical')).toBe(true);
+    expect(emitLog).not.toHaveBeenCalledWith('success', expect.anything());
+    expect(mock.savedState.stats.healthIssues).toEqual(issues);
+  });
+
   it('records an error issue and emits health:critical when a restart fails', async () => {
     mock.pm2Processes = [{ name: 'boom', status: 'errored' }];
     mock.restartImpl = async () => { throw new Error('restart failed'); };
@@ -289,7 +291,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
         { name: 'web', status: 'errored' }
       ];
       const restarted = [];
-      mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
+      mock.restartImpl = recordRestarts(restarted);
 
       const { metrics, issues } = await runHealthCheck();
 
@@ -304,7 +306,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       mock.pm2Processes = [{ name: 'web', status: 'errored' }];
       mock.postRestart = (p) => p; // keep the pre-restart counts under test
       const restarted = [];
-      mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
+      mock.restartImpl = recordRestarts(restarted);
 
       const { metrics } = await runHealthCheck();
 

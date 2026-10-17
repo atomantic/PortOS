@@ -24,8 +24,9 @@
  */
 
 import { spawn } from 'child_process';
-import { writeFile, rm, mkdir } from 'fs/promises';
-import { join, isAbsolute, normalize } from 'path';
+import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
+import { writeFile, rm, mkdir, readdir } from 'fs/promises';
+import { join, isAbsolute, normalize, resolve, dirname } from 'path';
 import { randomBytes } from 'crypto';
 
 // ---------------------------------------------------------------------------
@@ -347,25 +348,25 @@ export function validateProposedDiff(diff, opts = {}) {
  * request lifecycle a thrown spawn error would crash the process, so we resolve
  * an error shape instead.
  */
-export function execGit(gitArgs, cwd) {
-  return new Promise((resolve, reject) => {
-    // A missing cwd makes `spawn` fall back to `process.cwd()` — which for the
-    // autofixer suite is the PortOS checkout itself, so a fixture that lost its
-    // temp dir would `git init` / `git config` the developer's real repo.
-    // This is a caller bug, not a git failure, so it rejects rather than
-    // resolving with the `{ code: -1 }` shape reserved for spawn errors (#4554).
-    if (typeof cwd !== 'string' || cwd.trim() === '') {
-      reject(new Error(`execGit requires a working directory: git ${gitArgs.join(' ')}`));
-      return;
-    }
-    const child = spawn('git', gitArgs, { cwd, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', (err) => resolve({ code: -1, stdout, stderr: err.message }));
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
-  });
+export async function execGit(gitArgs, cwd, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
+  // Reject caller bugs before git can fall back to the autofixer checkout.
+  if (typeof cwd !== 'string' || cwd.trim() === '') {
+    throw new Error(`execGit requires a working directory: git ${gitArgs.join(' ')}`);
+  }
+  let child;
+  try {
+    child = spawn('git', gitArgs, {
+      cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+  } catch (error) {
+    return { code: -1, stdout: '', stderr: error.message };
+  }
+  const result = await waitForChild(child, { timeoutMs });
+  const failure = result.timedOut
+    ? `git timed out after ${timeoutMs / 1000}s; CLI cleanup ${result.cleanupConfirmed ? 'confirmed' : 'unconfirmed'}, command outcome unknown`
+    : result.error?.message;
+  return { code: result.code, stdout: result.stdout, stderr: failure ? [result.stderr, failure].filter(Boolean).join('\n') : result.stderr };
 }
 
 /** True when repoPath is inside a git work tree. A missing path is a definite
@@ -411,6 +412,29 @@ export async function removeWorktree(repoPath, worktreePath) {
   await execGit(['worktree', 'remove', '--force', worktreePath], repoPath);
   await execGit(['worktree', 'prune'], repoPath);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+}
+
+/**
+ * Remove every worktree left in `parentDir` by a repair a restart interrupted.
+ * The daemon runs one repair at a time, so at startup nothing there is in use.
+ * Each entry is unregistered from the repository that owns it (found via its
+ * git common dir) before the directory is deleted. Returns the swept ids.
+ */
+export async function sweepStaleWorktrees(parentDir) {
+  const entries = await readdir(parentDir).catch(() => []);
+  const swept = [];
+  for (const id of entries) {
+    const entry = join(parentDir, id);
+    const { code, stdout } = await execGit(['rev-parse', '--git-common-dir'], entry);
+    if (code === 0 && stdout.trim()) {
+      const repoPath = dirname(resolve(entry, stdout.trim()));
+      await execGit(['worktree', 'remove', '--force', entry], repoPath);
+      await execGit(['worktree', 'prune'], repoPath);
+    }
+    await rm(entry, { recursive: true, force: true }).catch(() => {});
+    swept.push(id);
+  }
+  return swept;
 }
 
 /**

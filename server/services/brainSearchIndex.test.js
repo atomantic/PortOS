@@ -94,7 +94,7 @@ describe('brainSearchIndex', () => {
     expect(song.content).toBeUndefined()
   })
 
-  it('projects a journal entry as a body predicate, never the body', async () => {
+  it('projects journal presence and a bounded summary, never the body', async () => {
     getAll.mockResolvedValue([
       { id: '2026-01-01', content: 'x'.repeat(500), segments: [{ text: 'x' }] },
       { id: '2026-01-02', content: '', segments: [] },
@@ -102,9 +102,9 @@ describe('brainSearchIndex', () => {
     ])
 
     expect(await getBrainProjections('journals')).toEqual([
-      { id: '2026-01-01', date: undefined, hasBody: true },
-      { id: '2026-01-02', date: undefined, hasBody: false },
-      { id: '2026-01-03', date: undefined, hasBody: true }
+      { id: '2026-01-01', date: undefined, hasBody: true, summary: 'x'.repeat(120) },
+      { id: '2026-01-02', date: undefined, hasBody: false, summary: '' },
+      { id: '2026-01-03', date: undefined, hasBody: true, summary: '' }
     ])
   })
 

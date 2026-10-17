@@ -66,12 +66,15 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
   return { socket, listeners, audio, FakeAudioContext };
 });
 
-const audioRecorderStub = vi.hoisted(() => ({ blobToWav16k: null }));
+const audioRecorderStub = vi.hoisted(() => ({ blobToWav16k: null, float32ToWav16k: null }));
 
 vi.mock('../lib/audioRecorder.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    float32ToWav16k: (...args) => audioRecorderStub.float32ToWav16k
+      ? audioRecorderStub.float32ToWav16k(...args)
+      : actual.float32ToWav16k(...args),
     blobToWav16k: (...args) => audioRecorderStub.blobToWav16k
       ? audioRecorderStub.blobToWav16k(...args)
       : actual.blobToWav16k(...args),
@@ -164,6 +167,7 @@ describe('voice playback cancellation', () => {
     audio.sources.length = 0;
     socket.emit.mockClear();
     audioRecorderStub.blobToWav16k = null;
+    audioRecorderStub.float32ToWav16k = null;
     voiceClient.disposeCaptureOwner();
   });
 
@@ -403,6 +407,56 @@ describe('voice playback cancellation', () => {
     });
   });
 
+  it('sends capped screenshots and resolves oversized captures as unavailable', async () => {
+    const { MAX_VOICE_AUDIO_BYTES } = await import('../lib/audioRecorder.js');
+    const prefix = 'data:image/jpeg;base64,';
+    const capped = prefix + 'A'.repeat(MAX_VOICE_AUDIO_BYTES - prefix.length);
+    voiceClient.sendScreenshotResult('example-capture', capped);
+    expect(socket.emit).toHaveBeenLastCalledWith('voice:screenshot:result', { requestId: 'example-capture', dataUrl: capped });
+    voiceClient.sendScreenshotResult('example-capture', capped + 'A');
+    expect(socket.emit).toHaveBeenLastCalledWith('voice:screenshot:result', { requestId: 'example-capture', dataUrl: null });
+  });
+
+  it('refuses an over-cap WAV locally through the voice error subscription and accepts the cap', async () => {
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+    const previousRecorder = window.MediaRecorder;
+    window.MediaRecorder = FakeMediaRecorder;
+    const onError = vi.fn();
+    const unsubscribe = voiceClient.onVoiceEvent('voice:error', onError);
+    try {
+      const { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } = await import('../lib/audioRecorder.js');
+      for (const size of [MAX_VOICE_AUDIO_BYTES + 1, MAX_VOICE_AUDIO_BYTES]) {
+        audioRecorderStub.blobToWav16k = vi.fn(async () => ({ wav: new ArrayBuffer(size), peak: 0.5 }));
+        await voiceClient.startCapture();
+        FakeMediaRecorder.last.dispatch('dataavailable', { data: new Blob(['x'.repeat(1000)]) });
+        const result = await voiceClient.stopCapture();
+        if (size > MAX_VOICE_AUDIO_BYTES) {
+          expect(result).toBeNull();
+          expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+          expect(onError).toHaveBeenCalledWith({ stage: 'turn', message: RECORDING_TOO_LONG_MESSAGE });
+        } else {
+          expect(result.size).toBe(size);
+          expect(socket.emit).toHaveBeenCalledWith('voice:turn', expect.objectContaining({ audio: expect.any(ArrayBuffer) }));
+        }
+      }
+      expect(track.stop).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+      window.MediaRecorder = previousRecorder;
+      if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+      else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
+  });
+
   it('does not emit captured audio when the owner is disposed during WAV conversion', async () => {
     const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
     const track = { stop: vi.fn() };
@@ -484,6 +538,37 @@ describe('voice playback cancellation', () => {
       window.MediaRecorder = previousRecorder;
       if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
       else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
+  });
+
+  it('settles a continuous turn locally when its converted WAV exceeds the cap', async () => {
+    const { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } = await import('../lib/audioRecorder.js');
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+    });
+    let now = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    audioRecorderStub.float32ToWav16k = vi.fn(async () => ({ wav: new ArrayBuffer(MAX_VOICE_AUDIO_BYTES + 1), peak: 0.5 }));
+    const onError = vi.fn();
+    const onSubmit = vi.fn();
+    const unsubscribe = voiceClient.onVoiceEvent('voice:error', onError);
+    try {
+      await voiceClient.startContinuous({ onSubmit });
+      const frame = FakeAudioWorkletNode.last.port.onmessage;
+      now = 1700;
+      frame({ data: new Float32Array(128) });
+      for (let i = 0; i < 40; i++) frame({ data: new Float32Array(128).fill(0.5) });
+      now = 18000;
+      frame({ data: new Float32Array(128).fill(0.5) });
+      await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ submitted: false, peak: 0.5 }));
+      expect(onError).toHaveBeenCalledWith({ stage: 'turn', message: RECORDING_TOO_LONG_MESSAGE });
+      expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+    } finally {
+      unsubscribe();
       if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
       else delete navigator.mediaDevices;
     }

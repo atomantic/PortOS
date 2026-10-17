@@ -11,7 +11,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { processAncestors, readTestProcesses, testProcessRoot } from './testOwnedProcesses.js';
 import { killWithEscalation } from '../../server/lib/killWithEscalation.js';
 
 export const OWNER_FILE = '.owner.pid';
@@ -63,110 +64,108 @@ export function isOwnerAlive({ pid, startMs }) {
 function readOwner(path) {
   try {
     const [pid, startMs] = readFileSync(join(path, OWNER_FILE), 'utf8').trim().split(/\s+/).map(Number);
-    return Number.isInteger(pid) && pid > 0 ? { pid, startMs } : null;
+    return Number.isSafeInteger(pid) && pid > 0 && Number.isFinite(startMs) && startMs >= 0 ? { pid, startMs } : null;
   } catch {
     return null;
   }
 }
 
-/**
- * `[{ pid, profile }]` for every running process started with a
- * `--user-data-dir` (a test Chrome and its helpers). Empty on win32 or when
- * `ps` is unavailable: the sweep is best-effort and never fails a run.
- */
-export function listProfileProcesses() {
-  if (process.platform === 'win32') return [];
-  let out;
+function rootIsOrphaned(root, probe, now) {
   try {
-    out = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,args='], {
-      encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
-    });
-  } catch {
-    return [];
-  }
-  const found = [];
-  for (const line of out.split('\n')) {
-    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
-    const profile = match && /(?:^|\s)--user-data-dir=(\S+)/.exec(match[2])?.[1];
-    if (profile && Number(match[1]) !== process.pid) found.push({ pid: Number(match[1]), profile });
-  }
-  return found;
+    const stat = lstatSync(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const owner = readOwner(root);
+    const alive = owner ? probe(owner) : null;
+    return alive === false || (alive === null && now - stat.mtimeMs > STALE_ROOT_AGE_MS);
+  } catch (error) { return error.code === 'ENOENT'; }
 }
 
-const isPidAlive = pid => {
-  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
-};
-
-// SIGTERM now, SIGKILL after a grace window if the pid is still there.
-export function terminatePid(pid) {
-  killWithEscalation({ exitCode: null, signalCode: null, kill: signal => { try { return process.kill(pid, signal); } catch { return false; } } },
-    { label: 'Orphaned test browser', stillRunning: () => isPidAlive(pid), delayMs: 2000 });
+function ownedSnapshot(parent, prefix, read) {
+  const records = read();
+  if (!Array.isArray(records)) return null;
+  const ancestors = processAncestors(records);
+  if (!ancestors) return null;
+  const owned = records.flatMap(record => {
+    if (!Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
+    const root = testProcessRoot(record, parent, prefix);
+    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root }] : [];
+  });
+  return { ancestors, owned };
 }
 
-// First path segment of `path` below `root`, or null when it is not inside.
-function segmentUnder(root, path) {
-  const rel = relative(root, path);
-  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  return rel.split(sep)[0];
+function stillOwned(record, snapshot, parent, prefix, read) {
+  const current = read([...snapshot.ancestors, record.pid]);
+  if (!Array.isArray(current)) return false;
+  const ancestors = processAncestors(current);
+  const live = current.find(item => item.pid === record.pid);
+  return ancestors && !ancestors.has(record.pid) && live?.start === record.start
+    && testProcessRoot(live, parent, prefix) === record.root;
 }
 
-/**
- * Kill every process whose browser profile lives under `root` (a run's own
- * temp root, at run exit). Synchronous SIGKILL by default, so it is safe in
- * an `exit` handler. Returns the number of processes signalled.
- */
-export function killTestBrowsersUnder(root, { listProcesses = listProfileProcesses, kill = pid => process.kill(pid, 'SIGKILL') } = {}) {
-  let killed = 0;
-  for (const { pid, profile } of listProcesses()) {
-    if (segmentUnder(root, profile) === null) continue;
-    try { kill(pid); killed++; } catch { /* already gone */ }
-  }
-  return killed;
-}
-
-/**
- * A test Chrome outlives an interrupted run (#10840): its profile sits in a
- * run root whose owner is gone (or was removed with it), and the browser keeps
- * burning a core. Kill every process whose `--user-data-dir` is under such a
- * `<prefix>` root in `tmpRoot`. A live owner keeps its browsers; an unknown
- * owner keeps them until the root is old enough to sweep.
- */
-export function sweepOrphanedTestBrowsers(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive, listProcesses = listProfileProcesses, terminate = terminatePid } = {}) {
-  const verdicts = new Map();
-  const orphaned = name => {
-    if (verdicts.has(name)) return verdicts.get(name);
-    const path = join(tmpRoot, name);
-    let verdict;
-    try {
-      const stat = lstatSync(path);
-      const owner = readOwner(path);
-      const alive = owner ? probe(owner) : null;
-      verdict = alive === false || (alive === null && now - stat.mtimeMs > STALE_ROOT_AGE_MS);
-    } catch (err) {
-      // The root was removed while its browser kept running.
-      verdict = err?.code === 'ENOENT';
-    }
-    verdicts.set(name, verdict);
-    return verdict;
+export function terminatePid(record, { valid, kill = (pid, signal) => process.kill(pid, signal) }) {
+  const signal = kind => {
+    if (!valid()) return false;
+    try { kill(record.pid, kind); return true; } catch { return false; }
   };
-  let killed = 0;
-  for (const { pid, profile } of listProcesses()) {
-    const name = segmentUnder(tmpRoot, profile);
-    if (!name?.startsWith(prefix) || !orphaned(name)) continue;
-    try { terminate(pid); killed++; } catch { /* already gone */ }
+  return killWithEscalation({ exitCode: null, signalCode: null, kill: signal },
+    { label: 'Orphaned test process', stillRunning: valid, delayMs: 2000 });
+}
+
+/** Only individually proven processes are signalled; an unowned group member is never collateral cleanup. */
+export function killTestProcessesUnder(root, { read = readTestProcesses, probe = isOwnerAlive,
+  kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+  let rootExists = true;
+  try { if (!lstatSync(root).isDirectory()) return 0; } catch (error) {
+    if (error.code !== 'ENOENT') return 0;
+    rootExists = false;
   }
-  if (killed) console.warn(`🧹 Stopped ${killed} test browser process${killed === 1 ? '' : 'es'} left running by an interrupted test run`);
+  const parent = dirname(root);
+  const prefix = basename(root);
+  const snapshot = ownedSnapshot(parent, prefix, read);
+  if (!snapshot) return 0;
+  const owner = readOwner(root);
+  if (rootExists && !owner) return 0;
+  if (owner) {
+    const startMs = snapshot.ancestors.has(owner.pid) ? readProcessStartMs(owner.pid) : null;
+    const verifiedOwner = startMs !== null && Number.isFinite(owner.startMs)
+      && Math.abs(startMs - owner.startMs) <= START_TOLERANCE_MS;
+    if (!verifiedOwner && probe(owner) !== false) return 0;
+  }
+  let killed = 0;
+  for (const record of snapshot.owned) {
+    if (record.root !== root || !stillOwned(record, snapshot, parent, prefix, read)) continue;
+    try { kill(record.pid, 'SIGKILL'); killed++; } catch { /* already gone */ }
+  }
   return killed;
 }
 
-export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive, listProcesses = listProfileProcesses, terminate = terminatePid } = {}) {
+export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive,
+  read = readTestProcesses, terminate = terminatePid } = {}) {
+  const snapshot = ownedSnapshot(tmpRoot, prefix, read);
+  if (!snapshot) return { killed: 0, inspected: false, preserved: new Set() };
+  const preserved = new Set();
+  let killed = 0;
+  for (const record of snapshot.owned) {
+    const valid = () => stillOwned(record, snapshot, tmpRoot, prefix, read)
+      && rootIsOrphaned(record.root, probe, Date.now());
+    if (!rootIsOrphaned(record.root, probe, now) || !valid()) { preserved.add(record.root); continue; }
+    try { terminate(record, { valid }); killed++; } catch { /* already gone */ }
+  }
+  if (killed) console.warn(`🧹 Stopped ${killed} test process${killed === 1 ? '' : 'es'} left running by an interrupted test run`);
+  return { killed, inspected: true, preserved };
+}
+
+// Retain the established import boundary while callers adopt the broader name.
+export const killTestBrowsersUnder = killTestProcessesUnder;
+
+export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive, read = readTestProcesses, terminate = terminatePid } = {}) {
   // Require an exact directory-name prefix, never a path or an empty match.
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // Browsers first: a root swept below no longer names its owner.
-  sweepOrphanedTestBrowsers(tmpRoot, { prefix, now, probe, listProcesses, terminate });
+  // Keep ownership evidence when the platform cannot inspect processes.
+  const { inspected, preserved } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
+  if (!inspected && process.platform !== 'win32') return;
   let names;
   try {
     names = readdirSync(tmpRoot);
@@ -176,9 +175,10 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   for (const name of names) {
     if (!name.startsWith(prefix)) continue;
     const path = join(tmpRoot, name);
+    if (preserved.has(path)) continue;
     try {
       const stat = lstatSync(path);
-      if (!stat.isDirectory()) continue;
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       const owner = readOwner(path);
       const alive = owner ? probe(owner) : null;
       if (alive === true) continue;

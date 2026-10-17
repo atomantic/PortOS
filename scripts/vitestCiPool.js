@@ -39,9 +39,15 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
 export const EXCLUSIVE_CAPTURE_TESTS = [
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
+  'lib/filmLookGpu.browser.test.js',
+  'lib/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
+  'services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
   'services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
+  'services/musicVideo/overlayTextService.browser.test.js',
+  'services/musicVideo/publish/sunoHook.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
   'routes/musicVideoRichAuthoring.browser.test.js',
 ];
@@ -63,6 +69,7 @@ const EXCLUSIVE_TESTS = [
   'scripts/run-local-code-review.test.js',
   'lib/workTracker.trackerInstructions.test.js',
   '../scripts/ci-test-plan.test.js',
+  '../scripts/persistentMindProcessAuditCleanup.test.js',
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
 

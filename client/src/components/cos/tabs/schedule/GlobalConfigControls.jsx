@@ -62,8 +62,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     config.description || '',
     async (next) => {
       setUpdating(true);
-      await onUpdate(taskType, { description: next.trim() || null }).catch(() => {});
-      setUpdating(false);
+      try {
+        await onUpdate(taskType, { description: next.trim() || null });
+      } catch {
+        // The field draft owns its error state; keep the editor usable.
+      } finally {
+        setUpdating(false);
+      }
     },
   );
   // Comma-separated free text, committed to taskMetadata.issueExcludeLabels
@@ -75,10 +80,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     (config.taskMetadata?.issueExcludeLabels || []).join(', '),
     async (next) => {
       setUpdating(true);
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), issueExcludeLabels: next.split(',').map((s) => s.trim()).filter(Boolean) }
-      });
-      setUpdating(false);
+      try {
+        await onUpdate(taskType, {
+          taskMetadata: { ...(config.taskMetadata || {}), issueExcludeLabels: next.split(',').map((s) => s.trim()).filter(Boolean) }
+        });
+      } finally {
+        setUpdating(false);
+      }
     }
   );
   // Provider/model/effort pins are shared with the schedule card's quick
@@ -119,10 +127,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     setCronEditing(false);
     setUpdating(true);
     setSelectedType(newType);
-    await onUpdate(taskType, { type: newType, cronExpression: null, autoStart: false }).catch(() => {
-      setSelectedType(config.type);
-    });
-    setUpdating(false);
+    try {
+      const ok = await onUpdate(taskType, { type: newType, cronExpression: null, autoStart: false }).catch(() => false);
+      if (ok === false) setSelectedType(config.type);
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // Perpetual is orthogonal to the cadence — toggling it never touches `type`,
@@ -131,68 +141,90 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // handleToggleEnabled rather than attaching its own rejection handler.
   const handlePerpetualToggle = async () => {
     setUpdating(true);
-    await onUpdate(taskType, { perpetual: !config.perpetual, ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}) });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, { perpetual: !config.perpetual, ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}) });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleCronSave = async (expr) => {
     setUpdating(true);
-    await onUpdate(taskType, { type: 'cron', cronExpression: expr }).catch(() => {
-      setSelectedType(config.type);
-    });
-    setCronEditing(false);
-    setUpdating(false);
+    try {
+      const ok = await onUpdate(taskType, { type: 'cron', cronExpression: expr }).catch(() => false);
+      if (ok !== false) setCronEditing(false);
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleRecheckCronSave = async (expr) => {
     setUpdating(true);
-    await onUpdate(taskType, { recheckCron: expr }).catch(() => {});
-    setRecheckEditing(false);
-    setUpdating(false);
+    try {
+      const ok = await onUpdate(taskType, { recheckCron: expr }).catch(() => false);
+      if (ok !== false) setRecheckEditing(false);
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const isPaused = !config.enabled;
 
   const handleToggleEnabled = async () => {
     setUpdating(true);
-    await onUpdate(taskType, { enabled: isPaused });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, { enabled: isPaused });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleIssueAuthorFilterChange = async (value) => {
     setUpdating(true);
-    await onUpdate(taskType, {
-      taskMetadata: { ...(config.taskMetadata || {}), issueAuthorFilter: value }
-    });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), issueAuthorFilter: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleSwarmCountChange = async (value) => {
     setUpdating(true);
     // 0 = off, 2..12 = swarm size (server keeps both; 1/out-of-range are dropped).
     // taskMetadata is replaced wholesale server-side, so spread the existing keys.
-    await onUpdate(taskType, {
-      taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
-    });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // Release options are ON unless explicitly false, so the toggle writes an
   // explicit boolean either way.
   const handleReleaseOptionToggle = async (field) => {
     setUpdating(true);
-    await onUpdate(taskType, {
-      taskMetadata: { ...(config.taskMetadata || {}), [field]: config.taskMetadata?.[field] === false }
-    });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), [field]: config.taskMetadata?.[field] === false }
+      });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleBranchesPerAgentChange = async (value) => {
     setUpdating(true);
-    await onUpdate(taskType, {
-      taskMetadata: { ...(config.taskMetadata || {}), branchesPerAgent: value }
-    });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), branchesPerAgent: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // '' drops the key so the task inherits its app's `defaultPrCompletion` —
@@ -203,10 +235,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const handlePrCompletionChange = async (value) => {
     setUpdating(true);
     const { prCompletion: _pinned, reviewLoop: _legacy, ...rest } = config.taskMetadata || {};
-    await onUpdate(taskType, {
-      taskMetadata: value ? { ...rest, prCompletion: value } : rest
-    });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: value ? { ...rest, prCompletion: value } : rest
+      });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleResetReviewConfig = async () => {
@@ -215,18 +250,22 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     const taskMetadata = Object.fromEntries(
       Object.entries(metadata).filter(([key]) => !REVIEW_CONFIG_KEYS.includes(key))
     );
-    await onUpdate(taskType, { taskMetadata });
-    setUpdating(false);
+    try {
+      await onUpdate(taskType, { taskMetadata });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleSavePrompt = async () => {
     setUpdating(true);
     const prompt = promptValue.trim() === '' ? null : promptValue;
-    await onUpdate(taskType, { prompt }).catch(() => {
-      setPromptValue(config.prompt || '');
-    });
-    setEditingPrompt(false);
-    setUpdating(false);
+    try {
+      const ok = await onUpdate(taskType, { prompt }).catch(() => false);
+      if (ok !== false) setEditingPrompt(false);
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const claimFlow = !!config.taskMetadata?.claimFlow || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType);
@@ -648,8 +687,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         disabled={updating}
         onChange={async (dataInputs) => {
           setUpdating(true);
-          await onUpdate(taskType, { dataInputs });
-          setUpdating(false);
+          try {
+            await onUpdate(taskType, { dataInputs });
+          } finally {
+            setUpdating(false);
+          }
         }}
       />
 
@@ -662,14 +704,17 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
           onClick={async () => {
             setUpdating(true);
-            await onUpdate(taskType, {
-              taskMetadata: toggleFileIssuesMetadata(
-                config.taskMetadata,
-                !fileIssuesEffective(config),
-                config.doWorkRequiresWorktree,
-              )
-            });
-            setUpdating(false);
+            try {
+              await onUpdate(taskType, {
+                taskMetadata: toggleFileIssuesMetadata(
+                  config.taskMetadata,
+                  !fileIssuesEffective(config),
+                  config.doWorkRequiresWorktree,
+                )
+              });
+            } finally {
+              setUpdating(false);
+            }
           }}
         >
           <div className="min-w-0 flex-1">

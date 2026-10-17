@@ -28,7 +28,7 @@ import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
 import { securityScanGrantFromArgs } from '../lib/securityScanEvidence.js';
 import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
-import { useRunner } from './agentState.js';
+import { clearAgentDispatching, markAgentDispatching, useRunner } from './agentState.js';
 import { cloudSwarmThreadCapacity, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
 import { describeLocalPromptBudget, planLocalPromptBudget } from '../lib/localPromptBudget.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
@@ -39,7 +39,21 @@ import { cosEvents, emitLog } from './cosEvents.js';
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 
-export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
+// The agent's worktree is created inside this call but nothing records its owner
+// until `registerAgent`, and the spawn helpers add it to the process maps later
+// still. Holding the id as "dispatching" for the whole call (released on every
+// return and throw, including blockAndBail) keeps reapers off a tree that is
+// clean and at the default branch's HEAD — i.e. indistinguishable from merged.
+export async function dispatchAgentRun(context, opts) {
+  markAgentDispatching(context.agentId);
+  try {
+    return await runAgentDispatch(context, opts);
+  } finally {
+    clearAgentDispatching(context.agentId);
+  }
+}
+
+async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   const { task, agentId, laneName, toolExecution, instanceId } = context;
   const config = await getConfig();
   const resolution = await resolveAgentProviderAndModel(task);

@@ -15,7 +15,8 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload } from '../lib/multipart.js';
 import {
-  validateRequest, videoCancelBodySchema, videoModelTermsSchema,
+  validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -695,81 +696,87 @@ router.get('/model-context', asyncHandler(async (_req, res) => {
   res.json(await videoModelContext());
 }));
 
+const sharedTextEncoderCacheStatus = async () => {
+  const repo = getTextEncoderRepo();
+  if (!isHfRepoId(repo)) return { repo, cached: true, sizeBytes: 0, integrity: null };
+  return { repo, ...await repoCacheStatus(repo) };
+};
+
+const textEncoderCacheStatus = async (entry, target = textEncoderDownloadTarget(entry)) => {
+  // Through the shared target verifier, so the badge, the integrity scan
+  // and the repair route can't drift on how a pinned single-file target is
+  // checked.
+  const verify = await verifyDownloadTarget(target);
+  const cached = verify.status === 'ok';
+  return {
+    ...publicTextEncoderOption(entry),
+    estimatedBytes: entry.sizeBytes,
+    cached,
+    sizeBytes: verify.sizeBytes || 0,
+    // Same rule as repoCacheStatus: a not-yet-downloaded file gets the
+    // Download badge, not a Repair banner.
+    integrity: cached ? summarizeVerify(verify) : null,
+  };
+};
+
+const icLoraCacheStatus = async (spec) => {
+  // A spec that must be located by its exact file can't use the repo-wide
+  // verdict. Two reasons, both fatal to it: a mirrored spec (Ingredients)
+  // has a 708 GB aggregate mirror that reports `cached` off any unrelated
+  // weight, and a revision-pinned spec would accept a DIFFERENT commit's
+  // snapshot. Probe the ONE file across the candidates instead, and skip the
+  // integrity walk (which would stat/hash every sibling weight in a mirror).
+  if (icLoraProbesExactFile(spec)) {
+    const found = await findCachedIcLoraWeight(spec);
+    return {
+      id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
+      baseModel: spec.baseModel, revision: spec.revision || null,
+      requiresPreDownload: !!spec.requiresPreDownload,
+      estimatedBytes: spec.sizeBytes,
+      gated: !!spec.gated, mirrorRepo: spec.mirrorRepo || null,
+      cached: !!found,
+      resolvedRepo: found?.repo || null,
+      // The badge falls back to `estimatedBytes` when sizeBytes is 0, and the
+      // real number would cost a stat on a path we already proved resident —
+      // so report 0 and let the estimate speak.
+      sizeBytes: 0,
+      integrity: null,
+    };
+  }
+  return {
+    id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
+    baseModel: spec.baseModel, revision: spec.revision || null,
+    requiresPreDownload: !!spec.requiresPreDownload,
+    estimatedBytes: spec.sizeBytes,
+    gated: !!spec.gated,
+    ...await repoCacheStatus(spec.repo),
+  };
+};
+
 router.get('/models/status', asyncHandler(async (_req, res) => {
   // Text encoder is shared across all video renders. A registry entry with
   // `localPath` (e.g. an LM Studio install) trumps the HF cache check, so
   // surface both the repo-cache status and the resolved local path so the UI
   // can distinguish "not downloaded" from "served from LM Studio".
-  const encoderRepo = getTextEncoderRepo();
   const verifyCache = new Map();
   const [models, textEncoder, textEncoderOptions, icLoras] = await Promise.all([
     Promise.all(listVideoModels().map(async (m) => {
       return { id: m.id, ...await modelCacheStatus(m, verifyCache) };
     })),
-    (async () => {
-      if (!isHfRepoId(encoderRepo)) return { repo: encoderRepo, cached: true, sizeBytes: 0, integrity: null };
-      return { repo: encoderRepo, ...await repoCacheStatus(encoderRepo) };
-    })(),
+    sharedTextEncoderCacheStatus(),
     // Substitutable prompt conditioners (lib/videoTextEncoders.js) — the same
     // `{ id, repo, cached, sizeBytes, integrity }` badge shape as the models and
     // the IC weights, so the video form renders their Download button and
     // Repair banner with the existing components. Scoped to the ONE pinned file
     // (never the repo) for the reason in textEncoderDownloadTargets.
-    Promise.all(textEncoderDownloadTargets().map(async ({ entry, target }) => {
-      // Through the shared target verifier, so the badge, the integrity scan
-      // and the repair route can't drift on how a pinned single-file target is
-      // checked.
-      const verify = await verifyDownloadTarget(target);
-      const cached = verify.status === 'ok';
-      return {
-        ...publicTextEncoderOption(entry),
-        estimatedBytes: entry.sizeBytes,
-        cached,
-        sizeBytes: verify.sizeBytes || 0,
-        // Same rule as repoCacheStatus: a not-yet-downloaded file gets the
-        // Download badge, not a Repair banner.
-        integrity: cached ? summarizeVerify(verify) : null,
-      };
-    })),
+    Promise.all(textEncoderDownloadTargets().map(({ entry, target }) => textEncoderCacheStatus(entry, target))),
     // IC-LoRA weights (issue #3100). Each is a separate several-hundred-MB pull,
     // so they get the same cached/size/integrity shape as the models — that's
     // what lets the mode panel render a Download badge and a Repair banner with
     // the existing components. This is the PROVISIONING list, so it spans weights
     // that are not remix modes (the LTX-2.5 upscale adapter, #6502) and reports
     // each by its `icLoraWeightKey` rather than assuming a `mode` value exists.
-    Promise.all(listIcLoraWeights().map(async (spec) => {
-      // A spec that must be located by its exact file can't use the repo-wide
-      // verdict. Two reasons, both fatal to it: a mirrored spec (Ingredients)
-      // has a 708 GB aggregate mirror that reports `cached` off any unrelated
-      // weight, and a revision-pinned spec would accept a DIFFERENT commit's
-      // snapshot. Probe the ONE file across the candidates instead, and skip the
-      // integrity walk (which would stat/hash every sibling weight in a mirror).
-      if (icLoraProbesExactFile(spec)) {
-        const found = await findCachedIcLoraWeight(spec);
-        return {
-          id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
-          baseModel: spec.baseModel, revision: spec.revision || null,
-          requiresPreDownload: !!spec.requiresPreDownload,
-          estimatedBytes: spec.sizeBytes,
-          gated: !!spec.gated, mirrorRepo: spec.mirrorRepo || null,
-          cached: !!found,
-          resolvedRepo: found?.repo || null,
-          // The badge falls back to `estimatedBytes` when sizeBytes is 0, and the
-          // real number would cost a stat on a path we already proved resident —
-          // so report 0 and let the estimate speak.
-          sizeBytes: 0,
-          integrity: null,
-        };
-      }
-      return {
-        id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
-        baseModel: spec.baseModel, revision: spec.revision || null,
-        requiresPreDownload: !!spec.requiresPreDownload,
-        estimatedBytes: spec.sizeBytes,
-        gated: !!spec.gated,
-        ...await repoCacheStatus(spec.repo),
-      };
-    })),
+    Promise.all(listIcLoraWeights().map(icLoraCacheStatus)),
   ]);
   res.json({ models, textEncoder, textEncoderOptions, icLoras });
 }));
@@ -815,8 +822,18 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
 }));
 
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const model = listVideoModels().find((m) => m.id === req.params.modelId);
-  if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404 });
+  validateRequest(modelDownloadQuerySchema, req.query);
+  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
+  const model = listVideoModels().find((m) => m.id === modelId);
+  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  res.json({ id: model.id, ...await modelCacheStatus(model) });
+}));
+
+router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
+  const model = listVideoModels().find((m) => m.id === modelId);
+  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
   const repos = modelDownloadTargets(model);
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
@@ -824,7 +841,7 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
     && await isByovRuntimeReady(model.runtime)
     ? runtimeInfo.venvPython
     : null;
-  await startHfDownloadStream({ req, res, repos, pythonPath, force: req.query.force === '1' });
+  await startHfDownloadStream({ req, res, repos, pythonPath, force });
 }));
 
 // IC-LoRA remix weights (issue #3100) get their own download/repair pair for
@@ -846,8 +863,15 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
 // candidate: a gated failure surfaces with its actionable "accept the license"
 // message rather than being downgraded on the way to a fallback that isn't there.
 router.get('/ic-loras/:mode/download', asyncHandler(async (req, res) => {
-  const spec = icLoraSpecFromParam(req.params.mode);
-  const force = req.query.force === '1';
+  validateRequest(modelDownloadQuerySchema, req.query);
+  const { mode } = validateRequest(icLoraDownloadParamsSchema, req.params);
+  res.json(await icLoraCacheStatus(icLoraSpecFromParam(mode)));
+}));
+
+router.post('/ic-loras/:mode/download', asyncHandler(async (req, res) => {
+  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const { mode } = validateRequest(icLoraDownloadParamsSchema, req.params);
+  const spec = icLoraSpecFromParam(mode);
   if (!icLoraProbesExactFile(spec)) {
     await startHfDownloadStream({ req, res, repo: spec.repo, force });
     return;
@@ -899,12 +923,20 @@ router.post('/ic-loras/:mode/repair', asyncHandler(async (req, res) => {
 // in an upstream checkpoint — so a repo-wide pull would cost ~130 GB for ~48 GB
 // of usable weights.
 router.get('/text-encoders/:id/download', asyncHandler(async (req, res) => {
-  const entry = textEncoderFromParam(req.params.id);
+  validateRequest(modelDownloadQuerySchema, req.query);
+  const { id } = validateRequest(textEncoderDownloadParamsSchema, req.params);
+  res.json(await textEncoderCacheStatus(textEncoderFromParam(id)));
+}));
+
+router.post('/text-encoders/:id/download', asyncHandler(async (req, res) => {
+  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const { id } = validateRequest(textEncoderDownloadParamsSchema, req.params);
+  const entry = textEncoderFromParam(id);
   await startHfDownloadStream({
     req,
     res,
     repos: [textEncoderDownloadTarget(entry)],
-    force: req.query.force === '1',
+    force,
   });
 }));
 
@@ -943,6 +975,12 @@ router.post('/text-encoder/repair', asyncHandler(async (req, res) => {
 // Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
 // the video model itself, so it gets its own button on the video form.
 router.get('/text-encoder/download', asyncHandler(async (req, res) => {
+  validateRequest(modelDownloadQuerySchema, req.query);
+  res.json(await sharedTextEncoderCacheStatus());
+}));
+
+router.post('/text-encoder/download', asyncHandler(async (req, res) => {
+  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
   const repo = getTextEncoderRepo();
   // Local-path encoders (LM Studio) are not downloadable — they're served
   // off disk and the status endpoint already reports cached: true for them.
@@ -952,7 +990,7 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   // `?force=1` (sent by the repair-initiated re-download) re-fetches even when
   // the repo still looks cached — a deleted shard from a multi-file encoder
   // would otherwise be skipped.
-  await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
+  await startHfDownloadStream({ req, res, repo, force });
 }));
 
 // What Generate would send to the model, built by the render's own code (#11317).

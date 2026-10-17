@@ -17,6 +17,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 // the only thing standing between a hostile id and an unlink loop.
 export const historyRecordIdSchema = z.string().trim().min(1).max(200)
   .regex(/^[A-Za-z0-9._-]+$/, 'invalid history id');
+const historyReadQuerySchema = z.object({ geometry: z.enum(['true', 'false']).optional() });
 
 // One history entry by id (#4165). A history id is NOT the filename stem — the
 // timeline renderer mints `timeline-<project>-<ts>.mp4` beside an independent
@@ -27,8 +28,20 @@ export function createVideoHistoryItemRead(getHistoryItem = async (id) => (await
   return asyncHandler(async (req, res) => {
     const parsed = historyRecordIdSchema.safeParse(req.params.id);
     if (!parsed.success) failValidation(parsed);
+    const query = historyReadQuerySchema.safeParse(req.query);
+    if (!query.success) failValidation(query);
     const entry = await getHistoryItem(parsed.data);
     if (!entry) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    // Hosted clips may omit geometry. Opt-in playback callers measure the same source the render measures.
+    if (query.data.geometry === 'true' && !(entry.numFrames && entry.fps && entry.width && entry.height)) {
+      const { probeVideoGeometry, safeUnder } = await import('../lib/ffmpeg.js');
+      const { PATHS } = await import('../lib/fileUtils.js');
+      const path = safeUnder(PATHS.videos, entry.filename);
+      const geometry = path ? await probeVideoGeometry(path) : null;
+      if (!geometry) throw new ServerError('Video geometry unavailable', { status: 422, code: 'VIDEO_GEOMETRY_UNAVAILABLE' });
+      res.json({ ...entry, ...geometry });
+      return;
+    }
     res.json(entry);
   });
 }

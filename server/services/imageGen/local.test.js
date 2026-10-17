@@ -20,7 +20,16 @@ const mockSpawn = vi.fn();
 vi.mock('../../lib/childProcess.js', async (original) => ({ ...await original(), spawn: (...args) => mockSpawn(...args) }));
 const releaseClaim = vi.fn(async () => {});
 vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: async () => ({ ok: true, release: releaseClaim }) }));
-vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalMemory: async () => ({ blockers: [], unloaded: [] }) }));
+// A test sets `hold` to a pending promise to park generateImage inside memory preparation.
+const memoryGate = vi.hoisted(() => ({ hold: undefined, entered: undefined }));
+vi.mock('../localMemory.js', () => ({
+  gpuBlockersMessage: vi.fn(),
+  prepareLocalMemory: async () => {
+    memoryGate.entered?.();
+    await memoryGate.hold;
+    return { blockers: [], unloaded: [] };
+  },
+}));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
@@ -1089,6 +1098,39 @@ describe('imageGen local.generateImage runtime pre-flight', () => {
     claimSpy.mockRestore();
     rmSpy.mockRestore();
   });
+
+  it('cancel() during memory preparation answers pending and aborts before spawn', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    mockSpawn.mockClear();
+    releaseClaim.mockClear();
+    const { cancel } = await import('./local.js');
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const terminal = vi.fn();
+    for (const event of ['started', 'completed', 'failed']) imageGenEvents.on(event, terminal);
+    let release;
+    memoryGate.hold = new Promise((resolve) => { release = resolve; });
+    const entered = new Promise((resolve) => { memoryGate.entered = resolve; });
+    try {
+      const rendering = generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox', jobId: 'test-cancel-while-preparing' });
+      const refused = expect(rendering).rejects.toMatchObject({ code: 'IMAGE_GEN_CANCELED' });
+      await entered;
+      expect(cancel()).toBe('pending');
+      release();
+      await refused;
+    } finally {
+      memoryGate.hold = undefined;
+      memoryGate.entered = undefined;
+      for (const event of ['started', 'completed', 'failed']) imageGenEvents.off(event, terminal);
+    }
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledTimes(1);
+    // The rejection is the one terminal signal (the queue maps it to canceled);
+    // no render ever started, so nothing else may be emitted.
+    expect(terminal).not.toHaveBeenCalled();
+    // Once the job unwound there is nothing left to cancel.
+    expect(cancel()).toBe(false);
+  });
 });
 
 // Regression: SSE had the Python diagnosis, but the queue and status snapshot
@@ -1327,4 +1369,35 @@ it('settles a refused close-event publication and releases the process and heavy
     vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
     expect(attachSseClient(jobId, response)).toBe(false);
   } finally { admissionFault.error = null; vi.useRealTimers(); }
+});
+
+it('drives a child that dies during the heavy-claim handoff to a terminal state and releases the claim (#11761)', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  child.pid = 4242;
+  mockSpawn.mockReturnValue(child);
+  const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+  // The handoff awaits real file I/O in production; here the child's stderr and
+  // `close` land inside that window, before any real listener is attached.
+  const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+    ok: true,
+    release: releaseClaim,
+    handoffTo: async () => {
+      child.stderr.emit('data', Buffer.from('Traceback: venv aborted on import\n'));
+      child.emit('close', 1, null);
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  const { getActiveJob } = await import('./local.js');
+  const releasedBefore = releaseClaim.mock.calls.length;
+  const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+  try {
+    await generateImage({ modelId: 'qwen-image-2.1', prompt: 'dies at startup' });
+    expect((await failed).error).toContain('Traceback: venv aborted on import');
+    expect(getActiveJob()).toBeNull();
+    expect(releaseClaim.mock.calls.length).toBe(releasedBefore + 1);
+  } finally { claimSpy.mockRestore(); }
 });

@@ -315,7 +315,6 @@ export function usePostSession() {
     const newResults = [...drillResults, result];
     setDrillResults(newResults);
 
-    // Check if there are more drills
     if (currentDrillIndex + 1 < drills.length) {
       setState(STATES.BETWEEN_DRILLS);
     } else {
@@ -382,7 +381,6 @@ export function usePostSession() {
       return;
     }
 
-    // Check if drill is complete
     if (currentQuestionIndex + 1 >= (currentDrill.questions?.length ?? 0)) {
       finishDrillRef.current(newAnswers);
     } else {

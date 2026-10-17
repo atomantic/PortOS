@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
+import { uuidv4 } from '../../lib/uuid.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import { Captions, Film, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
@@ -13,11 +14,13 @@ import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.j
 import { normalizeStatsOutro, statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
 import StatsOutroCanvas from './StatsOutroCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
-import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
+import FrameStepper from './FrameStepper.jsx';
+import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
+import PreviewVideo from './PreviewVideo.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
 
@@ -54,6 +57,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   const [preview, setPreview] = useState(null);
   const [failed, setFailed] = useState(false);
   const iframeRef = useRef(null);
+  const captureRef = useRef(null);
   const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
   const version = enabled ? playthroughVersion(project) : null;
   // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
@@ -66,6 +70,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
 
   useEffect(() => {
     let active = true;
+    captureRef.current?.reject(new Error('Lyric preview changed'));
     setPreview(null);
     setFailed(false);
     seekState.current = { inFlight: false, pending: null, ready: false, sentAt: 0 };
@@ -73,7 +78,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     getMusicVideoLyricOverlayPreview(project.id, { silent: true })
       .then((next) => { if (active) setPreview(next); })
       .catch(() => { if (active) setFailed(true); });
-    return () => { active = false; };
+    return () => { active = false; captureRef.current?.reject(new Error('Lyric preview changed')); };
   }, [project.id, version]);
 
   const postSeek = useCallback((t) => {
@@ -103,7 +108,17 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
       } else if (message.type === 'portos-mv:seeked') {
         state.inFlight = false;
         if (state.pending != null) { const next = state.pending; state.pending = null; postSeek(next); }
+        else if (captureRef.current?.t === message.t) {
+          const capture = captureRef.current;
+          event.source.postMessage({ type: 'portos-mv:capture-lyrics', id: capture.id, t: capture.t }, '*');
+        }
+      } else if (message.type === 'portos-mv:captured-lyrics') {
+        const capture = captureRef.current;
+        if (!capture || message.id !== capture.id || message.t !== capture.t) return;
+        if (message.error || typeof message.png !== 'string' || message.png.length > 24000000 || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(message.png)) capture.reject(new Error('Lyric frame unavailable'));
+        else capture.resolve(message.png);
       } else if (message.type === 'portos-mv:error') {
+        captureRef.current?.reject(new Error('Lyric frame unavailable'));
         setFailed(true);
       }
     };
@@ -136,15 +151,26 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     };
   }, [preview, postSeek, audioRef]);
 
-  if (!preview?.html || failed) return { overlay: null, failed };
+  const capture = (t) => new Promise((resolve, reject) => {
+    if (!seekState.current.ready || failed || !iframeRef.current) { reject(new Error('Lyric frame unavailable')); return; }
+    const id = uuidv4();
+    const finish = (done, result) => { clearTimeout(timer); captureRef.current = null; done(result); };
+    const timer = setTimeout(() => finish(reject, new Error('Lyric capture timed out')), 5000);
+    captureRef.current = { id, t, resolve: (png) => finish(resolve, png), reject: (error) => finish(reject, error) };
+    // The existing serialized seek bridge finishes the requested song time first.
+    seekState.current.pending = null;
+    postSeek(t);
+  });
+  if (!preview?.html || failed) return { overlay: null, failed, capture };
   return {
     failed,
+    capture,
     overlay: (
       <iframe
         ref={iframeRef}
         title="Lyrics over the storyboard animatic"
         sandbox="allow-scripts"
-        srcDoc={preview.html}
+        srcDoc={`${preview.html}<script>(${lyricFrameCaptureBridge.toString()})();</script>`}
         // `color-scheme: normal` keeps the frame transparent under a dark parent page.
         style={{ colorScheme: 'normal' }}
         className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-transparent"
@@ -190,15 +216,20 @@ function releaseVideo(video) {
  * clip's start holds its first frame that long, and the speed runs the clip faster
  * or slower, looping round the whole file as the render's looped input does.
  * `early` follows the song's clock before the shot starts too (a beat toggle
- * into it), reading the footage before its in-point back to the clip's start.
+ * into it, whose window opens at `fromSec`), reading the footage before its
+ * in-point; with less footage than that it plays on from the clip's first
+ * frame, as the render does, rather than holding it.
  */
-export function clipTimeAt(scene, t, clipSec = null, { early = false } = {}) {
+export function clipTimeAt(scene, t, clipSec = null, { early = false, fromSec = null } = {}) {
   const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
   const local = early ? t - (scene.startSec || 0) : Math.max(0, t - (scene.startSec || 0));
   const rate = clipSpeedRate(scene);
   const start = inSec + clipOffsetSec(scene);
   // A negative offset holds the first frame before the clip runs; otherwise it runs from `start`.
-  const at = start >= 0 ? Math.max(0, start + local * rate) : Math.max(0, local + start) * rate;
+  const position = (l) => (start >= 0 ? Math.max(0, start + l * rate) : Math.max(0, l + start) * rate);
+  const at = early && local < 0 && fromSec != null && fromSec <= t
+    ? position(fromSec - (scene.startSec || 0)) + (t - fromSec) * rate
+    : position(local);
   if (clipReversed(scene)) {
     // Backwards from the file's end, as the render reads it once: past its start it holds the first frame shown last.
     if (!(clipSec > 0)) return 0;
@@ -316,9 +347,11 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   // The final render's frame fit: zoomed to fill, or whole over the still, the VHS edge or black bars.
   const fit = sceneFrameFit(scene);
   return (
-    <video
-      key={reload}
-      ref={videoRef}
+    <PreviewVideo
+      key={`${src}:${reload}`}
+      videoRef={videoRef}
+      audioRef={audioRef}
+      active={current}
       src={src}
       muted
       playsInline
@@ -337,7 +370,7 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   );
 }
 
-// Runs `apply(songTime)` on every animation frame while the song plays, and once more when it pauses:
+// Runs `apply(songTime)` on every animation frame while the song plays, and once more when it stops:
 // the song's timeupdate is far too coarse for a beat flip or a smooth fade.
 function useSongFrames(audioRef, apply) {
   useEffect(() => {
@@ -352,21 +385,43 @@ function useSongFrames(audioRef, apply) {
     const stop = () => { cancelAnimationFrame(handle); apply(audio.currentTime || 0); };
     audio.addEventListener('play', start);
     audio.addEventListener('pause', stop);
+    audio.addEventListener('ended', stop);
     if (!audio.paused) start();
     return () => {
       cancelAnimationFrame(handle);
       audio.removeEventListener('play', start);
       audio.removeEventListener('pause', stop);
+      audio.removeEventListener('ended', stop);
     };
   }, [audioRef, apply]);
 }
 
+function StillShot({ scene, audioRef, time, effect = null, fps, startSec = scene.startSec, endSec = scene.endSec }) {
+  const ref = useRef(null);
+  const getTime = useCallback(() => audioRef.current?.currentTime || 0, [audioRef]);
+  const apply = useCallback((t) => {
+    if (ref.current) ref.current.style.transform = stillFrameTransform(scene, t, { fps, startSec, endSec });
+  }, [scene, fps, startSec, endSec]);
+  useEffect(() => { apply(time); }, [time, apply]);
+  useSongFrames(audioRef, apply);
+  return (
+    <div className="h-full w-full overflow-hidden">
+      <div ref={ref} data-testid="animatic-still" className="h-full w-full">
+        {effect ? <ImageEffectStill src={`/data/images/${scene.referenceImageId}`} effect={effect}
+          endSrc={scene.endImageId ? `/data/images/${scene.endImageId}` : null}
+          startSec={startSec} time={time} playing={!!audioRef.current && !audioRef.current.paused} getTime={getTime} fps={fps} />
+          : <img src={`/data/images/${scene.referenceImageId}`} alt="" className="h-full w-full object-cover" />}
+      </div>
+    </div>
+  );
+}
+
 // How much of the incoming clip shows at song time `t`: on a toggle's flips, or a
 // dissolve's ramp, which reaches full on the cut as the render's alpha fade does.
-const incomingOpacity = (effect, t) => {
+const incomingOpacity = (effect, t, fps) => {
   if (effect.style !== 'dissolve') return effect.incoming.some(([a, b]) => t >= a && t < b) ? 1 : 0;
   if (t < effect.windowStartSec || t >= effect.cutSec) return 0;
-  return Math.min(1, (t - effect.windowStartSec) / (effect.cutSec - effect.windowStartSec + 1 / ANIMATIC_FPS));
+  return Math.min(1, (t - effect.windowStartSec) / (effect.cutSec - effect.windowStartSec + 1 / fps));
 };
 
 /**
@@ -375,24 +430,26 @@ const incomingOpacity = (effect, t) => {
  * before its in-point, and shows on the toggle's frames or fades in over the
  * dissolve's, as the final render overlays it. A shot without a clip shows its still.
  */
-function ToggleClip({ scene, toggle, audioRef, time }) {
+function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
   const mediaRef = useRef(null);
-  const file = useVideoFileSrc(scene.videoHistoryId || null);
-  const src = scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
+  const still = sceneVisualLayer(scene, { layered }) === 'still';
+  const file = useVideoFileSrc(!still ? scene.videoHistoryId || null : null);
+  const src = !still && scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
   const apply = useCallback((t) => {
     const el = mediaRef.current;
     const audio = audioRef.current;
     if (!el) return;
-    el.style.opacity = String(incomingOpacity(toggle, t));
+    const surface = el.tagName === 'VIDEO' ? el.parentElement : el;
+    surface.style.opacity = String(incomingOpacity(toggle, t, fps));
     if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
     const duration = Number.isFinite(el.duration) ? el.duration : null;
-    const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true });
+    const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true, fromSec: toggle.windowStartSec });
     const tolerance = audio?.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((el.currentTime || 0) - target) > tolerance) el.currentTime = target;
     const running = !!audio && !audio.paused && t >= toggle.windowStartSec && t < toggle.cutSec;
     if (!running) el.pause?.();
     else if (el.paused) el.play?.()?.catch?.(() => {});
-  }, [toggle, scene, audioRef]);
+  }, [toggle, scene, audioRef, fps]);
   useEffect(() => { apply(time); }, [time, apply]);
   useEffect(() => {
     const el = mediaRef.current;
@@ -402,10 +459,14 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
   const fit = sceneFrameFit(scene);
   const className = `pointer-events-none absolute inset-0 h-full w-full ${src && fit !== 'fill' ? 'object-contain' : 'object-cover'} ${fit === 'black' ? 'bg-black' : ''}`;
   if (src) {
-    return <video ref={mediaRef} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
+    return <PreviewVideo key={src} videoRef={mediaRef} audioRef={audioRef} active={time >= toggle.windowStartSec && time < toggle.cutSec} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
       data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
   }
   if (!scene.referenceImageId) return null;
+  if (layered) return <div ref={mediaRef} data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className}>
+    <StillShot scene={scene} audioRef={audioRef} time={time} fps={fps} effect={sceneImageEffect(scene, { layered })}
+      startSec={toggle.windowStartSec} endSec={toggle.cutSec} />
+  </div>;
   return <img ref={mediaRef} src={`/data/images/${scene.referenceImageId}`} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
 }
 
@@ -445,12 +506,18 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const [lookOn, setLookOn] = useState(() => safeReadStorage(ANIMATIC_LOOK_KEY) !== 'off');
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
+  const captureBasis = useRef(null);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
-  const songTime = useCallback(() => audioRef.current?.currentTime || 0, []);
   const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   const scenes = project.scenes || [];
+  const layered = isLayeredComposition(project);
+  // The first footage source sets the composed render's frame rate, even when the current shot is a still.
+  const lead = scenes.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .find((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
+  const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
+  const stillFps = leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = hasTimedLyrics(project);
-  const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
+  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });
   const outroLook = useMemo(() => normalizeStatsOutro(project.statsOutro), [project.statsOutro]);
@@ -475,18 +542,63 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   }, [seekTo]);
   // Edit shot pauses the song so the shot stays on screen while its card opens.
   const editShot = onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null;
-  // Save frame keeps the shot's picture: its clip's frame once that shows, else its still.
-  const captureFrame = () => {
-    const figure = figureRef.current;
-    const media = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])') || figure?.querySelector('img');
-    return captureMediaFrame(media);
+  captureBasis.current = { project, lyricsOn, lookOn, outro: outro.active, outroTime: outro.t, outroStats: outro.stats };
+  const captureFrame = async () => {
+    const basis = captureBasis.current;
+    const audio = audioRef.current;
+    audio?.pause();
+    outro.pause();
+    const at = audio?.currentTime || 0;
+    setTime(at);
+    setPlaying(false);
+    // Pause swaps the live film look for its exact filter and catches the shot up
+    // to the audio clock. Effects/clip seeks then get a paint before freezing.
+    await new Promise((resolve, reject) => {
+      let handle;
+      const timer = setTimeout(() => { cancelAnimationFrame(handle); reject(new Error('Preview did not settle')); }, 2000);
+      let paints = 0;
+      const settle = () => {
+        const clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
+          .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0);
+        const failedClip = clips.find((video) => video.dataset.previewError);
+        if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
+        if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {
+          clearTimeout(timer); resolve(); return;
+        }
+        handle = requestAnimationFrame(settle);
+      };
+      handle = requestAnimationFrame(settle);
+    });
+    const unchanged = () => {
+      const current = captureBasis.current;
+      return current.project === basis.project && current.lyricsOn === basis.lyricsOn && current.lookOn === basis.lookOn
+        && current.outro === basis.outro && current.outroTime === basis.outroTime && current.outroStats === basis.outroStats
+        && audio?.paused && audio.currentTime === at;
+    };
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const selected = shotAt(scenes, at);
+    if (!basis.outro && selected?.videoHistoryId && sceneVisualLayer(selected, { layered }) === 'footage') {
+      const figure = figureRef.current;
+      const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
+      const fallback = [...(figure?.querySelectorAll('img') || [])].find((image) => image.getAttribute('src') === `/data/images/${selected.referenceImageId}` && image.complete && image.naturalWidth > 0);
+      if (!clip && !fallback) throw new Error('Video frame is still loading');
+    }
+    if (lyricsAvailable && lyricsOn && !overlay) throw new Error('Lyric frame unavailable');
+    const iframeImages = new Map();
+    const iframe = figureRef.current?.querySelector('iframe');
+    if (iframe) iframeImages.set(iframe, await captureLyrics(at));
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages });
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const shotLabel = basis.outro ? 'Ending' : `Shot ${timedShots(scenes).indexOf(selected) + 1}`;
+    return { blob, time: at, fps: ANIMATIC_FPS, label: [project.name, shotLabel].filter(Boolean).join(' · ') };
   };
   // Cut effects (beat toggles, dissolves, fades through black), on the frames the final
   // render paints them (lib/musicVideoCutEffects.js), storyboard-planned ones included.
   const beats = project.audioAnalysis?.beats;
   const storyboardRows = project.productionReview?.draft?.storyboard;
   const planned = useMemo(() => plannedTransitions(storyboardRows), [storyboardRows]);
-  const cutEffects = useMemo(() => sceneCutEffects(scenes, { fps: ANIMATIC_FPS, beats, endSec: songEndSec || null, planned }), [scenes, beats, songEndSec, planned]);
+  const cutEffects = useMemo(() => sceneCutEffects(scenes, { fps: stillFps, beats, endSec: songEndSec || null, planned }), [scenes, stillFps, beats, songEndSec, planned]);
   // A toggle or dissolve mounts its incoming clip a little ahead, so it has loaded when it starts showing.
   const nearToggles = cutEffects.filter((t) => t.incoming && time >= t.windowStartSec - 3 && time < t.cutSec);
   const nearFades = cutEffects.filter((t) => t.style === 'fade-black' && time >= t.outStartSec - 1 && time < t.inEndSec + 1);
@@ -494,12 +606,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
   // A still shot with an image effect plays the effect over its still, as the composed render does, not its clip.
-  const layered = isLayeredComposition(project);
   const shotEffect = shot ? sceneImageEffect(shot, { layered }) : null;
+  const stillShot = shot && layered && (sceneVisualLayer(shot, { layered }) === 'still' || !shot.videoHistoryId);
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
   const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS)
-    .filter((scene) => scene.videoHistoryId && !sceneImageEffect(scene, { layered }));
+    .filter((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
@@ -512,11 +624,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : time) * ANIMATIC_FPS)}
-          playing={playing || (outro.active && outro.t < outro.seconds)} className="h-full w-full">
-        {shot?.referenceImageId && shotEffect ? (
-          <ImageEffectStill key={shot.sceneId} src={`/data/images/${shot.referenceImageId}`} effect={shotEffect}
-            endSrc={shot.endImageId ? `/data/images/${shot.endImageId}` : null}
-            startSec={shot.startSec} time={time} playing={playing} getTime={songTime} fps={ANIMATIC_FPS} />
+          playing={playing || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
+        {shot?.referenceImageId && stillShot ? (
+          <StillShot key={shot.sceneId} scene={shot} audioRef={audioRef} time={time} fps={stillFps} effect={shotEffect} />
         ) : shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
@@ -533,7 +643,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         ))}
         {nearToggles.map((toggle) => {
           const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);
-          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} /> : null;
+          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} /> : null;
         })}
         {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}

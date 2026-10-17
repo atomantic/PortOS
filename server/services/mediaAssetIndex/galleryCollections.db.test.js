@@ -9,7 +9,10 @@ import { compactGalleryRecord } from './logic.js';
 const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn() }));
 vi.mock('../../lib/runtimeEnv.js', () => ({ isTestRunner: () => state.file }));
 vi.mock('../../lib/db.js', () => ({ query: (...args) => state.query(...args) }));
-vi.mock('../videoGen/history.js', () => ({ loadHistory: async () => state.videos }));
+vi.mock('../videoGen/history.js', async () => {
+  const { compactSource } = await import('./logic.js');
+  return { loadHistory: async () => state.videos, loadCompactHistory: async () => state.videos.map(compactSource) };
+});
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.collections,
   getCollection: async id => state.collections.find(collection => collection.id === id) }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => state.annotations }));
@@ -28,7 +31,14 @@ beforeAll(async () => {
   // A session-private table shadows the index, including for EXPLAIN: no live rows.
   const ddl = mediaDdl.filter(sql => /(?:TABLE IF NOT EXISTS media_assets|INDEX IF NOT EXISTS idx_media_assets_)/.test(sql));
   for (const sql of ddl) await client.query(sql.replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE'));
-  state.query.mockImplementation((...args) => client.query(...args));
+  // Production uses a pool; this fixture shares one session for its temp table.
+  // Serialize that session rather than relying on pg's deprecated query queue.
+  let queryTail = Promise.resolve();
+  state.query.mockImplementation((...args) => {
+    const result = queryTail.then(() => client.query(...args));
+    queryTail = result.catch(() => {});
+    return result;
+  });
   available = true;
 });
 afterAll(async () => { await client?.end(); vi.unstubAllEnvs(); });

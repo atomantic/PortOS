@@ -59,6 +59,7 @@ import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { normalizeComposition } from './composition.js';
 import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
+import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 
 const TREATMENT_VERSION = 1;
 
@@ -639,7 +640,8 @@ function renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed = 
     : '';
   if (line) return { visualLayer: 'card', ...(isNonBlankStr(scene.cardText) ? {} : { cardText: line }) };
   if (!imagesAllowed) return { visualLayer: 'code' };
-  return { visualLayer: 'still', ...((scene.stillMove ?? 'hold') === 'hold' ? { stillMove: 'push' } : {}) };
+  // A held still takes the nearest move to its planned camera (#10589), else a push.
+  return { visualLayer: 'still', ...((scene.stillMove ?? 'hold') === 'hold' ? { stillMove: stillMoveForCamera(scene.camera) || 'push' } : {}) };
 }
 
 /** Code-first Apply never reinterprets layers, but a lip-sync performance footage shot must carry the Performance shot mode preflight demands. */

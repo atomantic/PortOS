@@ -46,6 +46,7 @@ import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunne
 import { getActiveProvider, listSelectableProviders } from './providers.js';
 import {
   createLoop,
+  restoreLoops,
   stopLoop,
   triggerLoop,
   updateLoop,
@@ -584,6 +585,66 @@ describe('loops.js', () => {
 
       // The new 60s handle fires on its own schedule.
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('restoreLoops honors the persisted lastRun', () => {
+    const HOUR = 3_600_000;
+    const rec = (id, lastRun, intervalMs = 24 * HOUR) => ({
+      id, name: id, prompt: 'p', intervalMs, status: 'running', lastRun, iterationCount: 1
+    });
+    const stubDisk = (loops) => {
+      tryReadFile.mockImplementation(async (path) =>
+        String(path).endsWith('loops.json') ? JSON.stringify(loops) : null
+      );
+      createdLoopIds.push(...loops.map(l => l.id));
+    };
+
+    it('fires at lastRun + interval, then every interval', async () => {
+      stubDisk([rec('l1', Date.now() - 23 * HOUR)]);
+      await restoreLoops();
+
+      await vi.advanceTimersByTimeAsync(HOUR - 1000);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(24 * HOUR);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(2);
+    });
+
+    it('runs one staggered catch-up per overdue loop, then resumes the interval', async () => {
+      stubDisk([rec('o1', Date.now() - 100 * HOUR, HOUR), rec('o2', Date.now() - 100 * HOUR, HOUR)]);
+      await restoreLoops();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(2);
+
+      // No further catch-ups for the missed intervals; next runs are an interval later.
+      await vi.advanceTimersByTimeAsync(HOUR - 12_000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(4);
+    });
+
+    it('stopLoop before the first fire cancels it', async () => {
+      stubDisk([rec('s1', Date.now() - 100 * HOUR, HOUR)]);
+      await restoreLoops();
+      await stopLoop('s1');
+      await vi.advanceTimersByTimeAsync(2 * HOUR);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
+    });
+
+    it('keeps the full interval for a loop that never completed an iteration', async () => {
+      stubDisk([rec('n1', null, HOUR)]);
+      await restoreLoops();
+      await vi.advanceTimersByTimeAsync(HOUR - 1000);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
       expect(mockRunPrompt).toHaveBeenCalledTimes(1);
     });
   });

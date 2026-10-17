@@ -6,6 +6,8 @@ import StageSection from '../StageSection.jsx';
 import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
 import ReviewDraftPanel from '../ReviewDraftPanel.jsx';
+import RenderedSoFarPlayer from '../RenderedSoFarPlayer.jsx';
+import FilmLookVersions from '../FilmLookVersions.jsx';
 
 /**
  * Final render: the full render and its player, and the draft excerpts and
@@ -19,6 +21,11 @@ export default function ReviewStage({ board }) {
   const {
     project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia,
   } = board;
+  // A cached look goes back on the video; the final render then only stitches it.
+  const applyCachedLook = (filmLook) => {
+    board.editProjectLocal({ filmLook });
+    board.saveProjectFields({ filmLook });
+  };
   const finalRender = (
     <section id="mv-final-video" aria-label="Final render" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
       <div className="flex justify-end">
@@ -32,6 +39,8 @@ export default function ReviewStage({ board }) {
         finalVideo={finalVideo}
         onOpenPreview={board.openPreview}
       />
+      <RenderedSoFarPlayer project={project} />
+      <FilmLookVersions project={project} onUse={applyCachedLook} />
       {project.renderHistoryId && <SharingCopyPanel key={`${project.id}:${project.renderHistoryId}`} projectId={project.id} />}
     </section>
   );
@@ -63,7 +72,7 @@ export default function ReviewStage({ board }) {
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       {!project.renderHistoryId && <ReviewDraftPanel project={project} onOpen={board.openArtifact} draftState={board.reviewDraftState} />}
-      <RenderFailure project={project} renderJob={renderJob} onPatchShots={board.onPatchShots} />
+      <RenderFailure project={project} renderJob={renderJob} onPatchShots={board.onPatchShots} onRenderClips={board.onRenderClips} />
       {project.renderHistoryId ? <>{finalRender}{drafts}</> : <>{drafts}{finalRender}</>}
       <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
     </fieldset>

@@ -146,6 +146,12 @@ const releaseCover = (kit) => {
   return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
 };
 
+// The thumbnail made under YouTube thumbnail when there is one, else the video frame picked (the best one, by default).
+const youtubeThumbnailFile = (kit) => {
+  if (kit.youtubeThumbnail?.filename) return { dir: 'videoThumbnails', name: kit.youtubeThumbnail.filename, made: true };
+  return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
+};
+
 /** The 1080p encode a native video post (LinkedIn, Facebook) uploads. */
 function nativeVideo(project, kit, platform) {
   const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
@@ -178,7 +184,7 @@ const BUILDERS = {
       title: requireTitle('youtube', text(kit.copy?.youtube?.title)),
       ...youtubeDescription(kit, options),
       tags: (kit.copy?.youtube?.tags || []).map(text).filter(Boolean),
-      thumbnail: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null,
+      thumbnail: youtubeThumbnailFile(kit),
       captions: kit.captionsFilename ? { dir: 'videos', name: kit.captionsFilename } : null,
     };
   },
@@ -303,11 +309,17 @@ const BUILDERS = {
     const cut = pickVerticalCut(project, options);
     const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
     const duration = Number(project?.audioAnalysis?.durationSec);
+    if (!Number.isFinite(duration) || duration <= 0) throw missing('Analyze the song audio first so the Suno Hook window can be checked against its duration');
+    const startSec = Math.max(0, Number(cut.startSec) || 0);
+    const latestStart = Math.max(0, duration - 60);
+    // Keep the rendered video and its audio together. A 60-second window must
+    // fit; for shorter songs, only zero is eligible. Never shift only the audio.
+    if (startSec > latestStart) throw missing(`This cut starts at ${clock(startSec)}, after the latest Suno Hook window start ${clock(latestStart)}. Choose or render an earlier 9:16 cut`);
     return {
       video: { dir: 'videos', name: cut.filename }, songUrl: song, songId, title: text(project?.name),
-      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      durationSec: duration,
       // The audio window opens where the cut's own audio does.
-      startSec: Math.max(0, Number(cut.startSec) || 0),
+      startSec,
       cutLayout: cut.layout,
       caption, showLyrics: options.showLyrics === true,
     };
@@ -395,7 +407,7 @@ export function publishPreviewParts(platform, project, payload) {
       add('Video', 'The final render');
       add('Title', p.title); add('Description', p.description);
       add('Tags', p.tags?.length ? p.tags.join(', ') : 'None');
-      add('Thumbnail', p.thumbnail ? 'The one picked under Release assets' : 'None');
+      add('Thumbnail', p.thumbnail ? (p.thumbnail.made ? 'The one made under YouTube thumbnail' : 'The video frame picked under YouTube thumbnail') : 'None');
       add('Captions', p.captions ? 'Lyric captions (SRT)' : 'None');
       break;
     case 'shorts':

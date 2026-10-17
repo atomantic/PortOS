@@ -561,13 +561,17 @@ export function parseAgyUsage(text, { now = Date.now() } = {}) {
   let group = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const g = line.match(/^([A-Z][A-Z0-9 &/+-]*?MODELS)$/);
+    const g = line.match(/^([A-Z][A-Z0-9 &/+-]*?MODELS|GEMINI \d+ ARGON)$/);
     if (g) { group = agyGroupLabel(g[1]); groups.add(group); continue; }
     if (!group) continue;
     // Optional " Remaining" suffix: agy 1.1.x renamed "Weekly Limit" →
     // "Weekly Limit Remaining" (and same for Five Hour). Capture stops at
     // "Limit" so agyWindowLabel stays agnostic of the suffix.
-    const w = line.match(/^([A-Z][A-Za-z ]{0,24}?Limit)(?:\s+Remaining)?$/);
+    // Argon's separate bucket repeats its group name in the window heading.
+    const windowLine = line.toLowerCase().startsWith(`${group.toLowerCase()} `)
+      ? line.slice(group.length).trim()
+      : line;
+    const w = windowLine.match(/^([A-Z][A-Za-z ]{0,24}?Limit)(?:\s+Remaining)?$/);
     if (!w) continue;
     // Look ahead a few lines for the bar percentage + reset/quota-available.
     let remaining = null;

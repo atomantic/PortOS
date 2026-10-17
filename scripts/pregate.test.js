@@ -23,12 +23,16 @@ import {
 import {
   collectPregateChangedFiles,
   resolvePlanStages,
+  describeBrowserSelection,
   downgradeFullPlan,
   parseArgs,
   pregateWorkerEnv,
   UNCOVERED_SUITES,
   unmergedIndexPaths,
 } from './pregate.js';
+
+import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -120,7 +124,8 @@ describe('pregate hidden-content invocation', () => {
     for (const path of [
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+      'scripts/lib/browserSuites.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
     ]) {
@@ -303,12 +308,24 @@ describe('downgradeFullPlan', () => {
 describe('parseArgs', () => {
   it('reads --base as a value, not a boolean', () => {
     expect(parseArgs(['--base', 'origin/release', '--full'])).toEqual({
-      base: 'origin/release', full: true, skipLint: false, planOnly: false,
+      base: 'origin/release', full: true, skipLint: false, planOnly: false, help: false,
     });
   });
 
+  it('keeps the first --base when the option is repeated', () => {
+    expect(parseArgs(['--base', 'origin/release', '--base', 'origin/main']).base).toBe('origin/release');
+  });
+
   it('defaults to a null base so the caller resolves the remote default branch', () => {
-    expect(parseArgs([])).toEqual({ base: null, full: false, skipLint: false, planOnly: false });
+    expect(parseArgs([])).toEqual({ base: null, full: false, skipLint: false, planOnly: false, help: false });
+  });
+
+  it('recognizes both help flags and rejects unknown flags or a missing base value', () => {
+    expect(parseArgs(['--help']).help).toBe(true);
+    expect(parseArgs(['-h']).help).toBe(true);
+    expect(() => parseArgs(['--unexpected'])).toThrow('Unknown option: --unexpected.');
+    expect(() => parseArgs(['--base'])).toThrow('--base requires a value.');
+    expect(() => parseArgs(['--base', '--full'])).toThrow('--base requires a value.');
   });
 });
 
@@ -340,6 +357,37 @@ describe('UNCOVERED_SUITES', () => {
 });
 
 describe('the gate end to end', () => {
+  it.each([
+    { args: ['--help'], status: 0, expected: 'Usage: node scripts/pregate.js', stderr: false },
+    { args: ['-h'], status: 0, expected: 'Usage: node scripts/pregate.js', stderr: false },
+    { args: ['--unknown'], status: 2, expected: 'Unknown option: --unknown.', stderr: true },
+    { args: ['--base'], status: 2, expected: '--base requires a value.', stderr: true },
+    { args: ['--base', '--full'], status: 2, expected: '--base requires a value.', stderr: true },
+  ])('handles $args before starting any subprocess', ({ args, status, expected, stderr }) => {
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const unexpectedSubprocess = () => { throw new Error('Subprocess started before argument validation'); };
+      childProcess.spawn = unexpectedSubprocess;
+      childProcess.exec = unexpectedSubprocess;
+      childProcess.execFile = unexpectedSubprocess;
+      childProcess.fork = unexpectedSubprocess;
+      childProcess.execSync = unexpectedSubprocess;
+      childProcess.spawnSync = unexpectedSubprocess;
+      childProcess.execFileSync = unexpectedSubprocess;
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+      join(REPO_ROOT, 'scripts', 'pregate.js'), ...args,
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(status);
+    expect(stderr ? result.stderr : result.stdout).toContain(expected);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('Usage: node scripts/pregate.js');
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('Subprocess started before argument validation');
+    expect(result.stdout).not.toContain('Planning against');
+  });
+
   // This catches validation deferred until after Git/planning, even when no
   // expensive check would run (plan-only). Every subprocess is a tripwire.
   it.each([{ flags: [] }, { flags: ['--full'] }, { flags: ['--plan-only'] }])('rejects unsupported Node before any subprocess with flags $flags', ({ flags }) => {
@@ -438,7 +486,8 @@ describe('the gate end to end', () => {
       for (const path of [
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+        'scripts/lib/browserSuites.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
       ]) {
@@ -477,5 +526,31 @@ describe('the gate end to end', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('describeBrowserSelection', () => {
+  const selected = BROWSER_SUITES.slice(0, 10);
+  const fidelity = BROWSER_FIDELITY_FILES[0];
+
+  it('distinguishes no selection from a selection that needs a receipt', () => {
+    const none = describeBrowserSelection([]).join('\n');
+    expect(none).toContain('none selected');
+    expect(none).toContain('no native browser-fidelity receipt required');
+    const some = describeBrowserSelection([fidelity, ...selected]).join('\n');
+    expect(some).toContain('selected');
+    expect(some).toContain('receipt: required');
+  });
+
+  it('reports absent and valid receipt state', () => {
+    expect(describeBrowserSelection([fidelity], 'absent').join('\n')).toContain('ABSENT');
+    expect(describeBrowserSelection([fidelity], 'valid').join('\n')).toContain('present and valid');
+  });
+
+  it('shows the selection in --plan-only output', () => {
+    const out = execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--skip-lint', '--base', 'HEAD'], {
+      cwd: REPO_ROOT, encoding: 'utf8',
+    });
+    expect(out).toContain('Browser suites:');
   });
 });

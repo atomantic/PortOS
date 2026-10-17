@@ -36,7 +36,7 @@ const STUB_SCRIPTS = [
  */
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
-  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null
+  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
@@ -129,7 +129,20 @@ if (${stallDelete} && args.startsWith('delete')) {
   execFileSync('git', ['add', '.'], { cwd: repo });
   execFileSync('git', ['commit', '-m', 'fixture'], { cwd: repo, stdio: 'ignore' });
 
-  return { scratch, repo, bin, calls, forceClean, releaseFile, nodeOptions };
+  // Leave the upstream one commit ahead of the checkout, so the update has a real
+  // pull to perform and a refusal can be shown to have left HEAD where it was.
+  let aheadSha = null;
+  if (originAhead) {
+    writeFileSync(join(repo, 'ahead.txt'), 'ahead\n');
+    execFileSync('git', ['add', 'ahead.txt'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'ahead'], { cwd: repo, stdio: 'ignore' });
+    aheadSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: repo, stdio: 'ignore' });
+    execFileSync('git', ['reset', '--hard', 'HEAD~1'], { cwd: repo, stdio: 'ignore' });
+  }
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+
+  return { scratch, repo, bin, calls, forceClean, releaseFile, nodeOptions, headSha, aheadSha, peerTarget };
 }
 
 // The three runs share no state, so they go out concurrently rather than
@@ -139,6 +152,10 @@ function runUpdate(sandbox, { onStart } = {}) {
     const env = { ...process.env, PATH: `${sandbox.bin}:${process.env.PATH}` };
     if (sandbox.forceClean) env.PORTOS_FORCE_CLEAN_WORKSPACES = '.';
     if (sandbox.nodeOptions) env.NODE_OPTIONS = sandbox.nodeOptions;
+    if (sandbox.peerTarget) {
+      env.PORTOS_PEER_UPDATE_TARGET_SHA = sandbox.aheadSha;
+      env.PORTOS_PEER_UPDATE_EXPECTED_SHA = sandbox.headSha;
+    }
     const child = spawn('bash', [join(sandbox.repo, 'update.sh')], { cwd: sandbox.repo, env });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -177,6 +194,11 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       unhealthy: { healthy: false },
       // A target whose Node requirement the installed runtime no longer meets.
       oldNode: { nodeVersion: '22.12.0' },
+      // Same, with a pull pending: the refusal must come before HEAD moves, on
+      // both the upstream and the peer-target (ff-only merge) paths.
+      oldNodeAhead: { nodeVersion: '22.12.0', origin: true, originAhead: true },
+      oldNodePeer: { nodeVersion: '22.12.0', origin: true, originAhead: true, peerTarget: true },
+      cleanAhead: { nodeVersion: null, failAfterDelete: false, origin: true, originAhead: true },
       // The failure the guard's own comment names: both npm installs fail, and
       // safe_install wiped root node_modules — pm2 included — on the way.
       pm2Wiped: { npmShim: 'fail', forceClean: true, pm2OnPath: true }
@@ -268,6 +290,25 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(pm2Calls(sandboxes.oldNode)).toEqual([]);
   });
 
+  it.each(['oldNodeAhead', 'oldNodePeer'])('refuses an unsupported runtime before the checkout moves (%s)', (name) => {
+    const { status, stdout } = results[name];
+    const head = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sandboxes[name].repo, encoding: 'utf8' }).trim();
+    expect(status).toBe(1);
+    expect(stdout).toContain('STEP:runtime-preflight:failed:');
+    expect(stdout).toContain('Node.js ^22.22.2');
+    expect(stdout).not.toContain('STEP:git-pull:done:');
+    expect(stdout).not.toContain('STEP:submodules:');
+    expect(head()).toBe(sandboxes[name].headSha);
+    expect(existsSync(join(sandboxes[name].repo, 'ahead.txt'))).toBe(false);
+    expect(pm2Calls(sandboxes[name])).toEqual([]);
+  });
+
+  it('still pulls and updates when the target supports the runtime', () => {
+    const { repo, aheadSha } = sandboxes.cleanAhead;
+    expect(results.cleanAhead.status, results.cleanAhead.stdout).toBe(0);
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(aheadSha);
+  });
+
   it('passes the runtime preflight on a supported runtime without changing the flow', () => {
     expect(results.clean.stdout).toContain('STEP:runtime-preflight:done:');
     expect(results.clean.stdout.indexOf('STEP:runtime-preflight:done:'))
@@ -327,14 +368,23 @@ describe('update.ps1 headless-install guard', () => {
   });
 
   it('runs the target Node gate before the PM2 delete and any install', () => {
-    const gate = lineOf('node scripts/checkNodeVersion.js');
+    const gate = lineOf('if (Test-Path "scripts/checkNodeVersion.js")');
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(lineOf('pm2 delete ecosystem.config.cjs --silent'));
     expect(gate).toBeLessThan(lineOf('Safe-Install -Dir "."'));
     expect(ps1.slice(gate, gate + 8).join('\n')).toContain('Stop-UpdateScript 1');
   });
 
-  it('arms the latch before the delete, not after', () => {
+  it('evaluates the target Node gate from git archive before HEAD moves', () => {
+    const archive = lineOf('git archive --output=$gateArchive $preflightTarget');
+    expect(archive).toBeGreaterThan(-1);
+    expect(archive).toBeLessThan(lineOf('Invoke-Logged git merge --ff-only'));
+    expect(archive).toBeLessThan(lineOf('Invoke-Logged git pull --rebase'));
+    expect(archive).toBeLessThan(lineOf('Step "submodules" "running"'));
+    expect(ps1.slice(archive, archive + 25).join('\n')).toContain('Stop-UpdateScript 1');
+  });
+
+    it('arms the latch before the delete, not after', () => {
     const armed = lineOf('$script:Pm2AppsDown = $true');
     const deleted = lineOf('pm2 delete ecosystem.config.cjs --silent');
     expect(armed).toBeGreaterThan(-1);

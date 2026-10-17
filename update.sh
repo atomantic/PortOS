@@ -182,6 +182,36 @@ if ! repair_stale_submodules; then
   step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
   exit 1
 fi
+# Runtime pre-check: the target revision owns its Node support range, and a
+# refusal AFTER the checkout advances leaves the running (old) code over a new
+# working tree and old node_modules — any later single-process restart then
+# boots an unsupported, partly installed revision. So evaluate the target's own
+# gate from `git archive` BEFORE HEAD, submodules or apps change. The package.json
+# rides along because its `"type": "module"` is what lets the ESM gate load.
+# An unresolvable target (fetch failed, no upstream) or a target that predates
+# the gate skips this; the pull below then fails or the post-pull gate decides.
+preflight_target_sha=""
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  preflight_target_sha="$PORTOS_PEER_UPDATE_TARGET_SHA"
+else
+  run git fetch || true
+  preflight_target_sha=$(git rev-parse -q --verify '@{upstream}^{commit}' 2>/dev/null || echo "")
+fi
+if [ -n "$preflight_target_sha" ] && git cat-file -e "${preflight_target_sha}:scripts/checkNodeVersion.js" 2>/dev/null; then
+  gate_dir=$(mktemp -d)
+  gate_paths=(scripts/checkNodeVersion.js)
+  git cat-file -e "${preflight_target_sha}:package.json" 2>/dev/null && gate_paths+=(package.json)
+  git cat-file -e "${preflight_target_sha}:scripts/lib" 2>/dev/null && gate_paths+=(scripts/lib)
+  if git archive "$preflight_target_sha" "${gate_paths[@]}" 2>/dev/null | tar -x -C "$gate_dir" 2>/dev/null \
+    && ! node_gate_output=$(cd "$gate_dir" && node scripts/checkNodeVersion.js 2>&1); then
+    rm -rf "$gate_dir"
+    log "$node_gate_output"
+    log "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged."
+    step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
+    exit 1
+  fi
+  rm -rf "$gate_dir"
+fi
 # Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
 # the installed node_modules was built from (main, which the rest of this script
 # installs/builds), not a feature branch we just left. Diffing this against
@@ -221,7 +251,8 @@ log ""
 # just been raised), and npm's engines field only warns. Ask the target's own
 # gate — the same one `npm start`/`npm run setup` run — BEFORE deleting any app
 # or touching dependencies, so an unsupported runtime refuses while PortOS is
-# still up instead of mid-downtime. The checkout stays on the pulled revision.
+# still up instead of mid-downtime. The pre-check above already refused an
+# unsupported runtime before HEAD moved, so this is the second line of defence.
 step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
   log "$node_gate_output"

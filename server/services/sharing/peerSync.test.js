@@ -1425,8 +1425,11 @@ describe('peerSync', () => {
       // (the lastPushedHash short-circuit inside pushRecordToPeer is what
       // skips the actual HTTP call for unchanged records). This is the
       // mechanism that lets out-of-band file edits (e.g., a cleanup script
-      // that wrote tombstones directly to disk + a server restart)
-      // re-propagate via peer:online without needing a per-record edit.
+      // that wrote tombstones directly to disk) re-propagate via peer:online
+      // without needing a per-record edit. A server restart reaches this path
+      // too: instances.js emits peer:online on the first probe of each peer per
+      // process even when the persisted status was already online (#11750; see
+      // the boot-convergence test below).
       vi.mocked(peerFetch).mockClear();
       const second = await retryPendingPushesForPeer('peer-a');
       expect(second.walked).toBe(1); // walked, not skipped by the helper
@@ -1434,6 +1437,40 @@ describe('peerSync', () => {
       // The hash short-circuit inside pushRecordToPeer prevents the actual
       // HTTP call because the record content is unchanged since the first push.
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
+    });
+
+    it('boot convergence: the first peer:online after a restart pushes an edit stranded by the restart exactly once, a converged peer costs zero HTTP calls (#11750)', async () => {
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      installPeerSyncListener();
+      const peer = {
+        id: 'local-a', instanceId: 'peer-a', enabled: true, syncEnabled: true, status: 'online',
+        directions: ['outbound'], syncCategories: { universe: true },
+      };
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await __drainForTests();
+
+      // Converged peer: the boot-time event walks the sub but sends nothing.
+      vi.mocked(peerFetch).mockClear();
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
+
+      // The record changed after the last push but the debounce never fired
+      // (the process restarted); the first boot event delivers it once.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Edited just before restart' });
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      const pushCalls = () => vi.mocked(peerFetch).mock.calls.length;
+      expect(pushCalls()).toBeGreaterThan(0);
+
+      // A repeat event with the record unchanged since that push sends nothing.
+      const afterFirst = pushCalls();
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      expect(pushCalls()).toBe(afterFirst);
     });
 
     it('returns {walked: 0, pushed: 0} when the peer has no subscriptions', async () => {
@@ -2146,6 +2183,33 @@ describe('peerSync', () => {
       expect(result.pushed).toBe(false);
       const afterFail = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(afterFail.lastConfirmedPushedAt).toBe(stamped); // unchanged
+    });
+
+    it('stamps lastConfirmedPushedAt at payload-snapshot time, so a live push answered after the delete stays below deletedAt (#11772)', async () => {
+      // A push that read the record while live and whose response lands after
+      // the user deleted it only proves the peer holds the LIVE state. Stamping
+      // the floor at response time would lift it past the tombstone and let
+      // tombstoneGc prune a deletion the peer never received.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      let releaseFetch;
+      vi.mocked(peerFetch).mockImplementation(() => new Promise((resolve) => {
+        releaseFetch = () => resolve({ ok: true, json: async () => ({ missingAssets: [] }) });
+      }));
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      const inFlight = pushRecordToPeer(sub);
+      await vi.waitFor(() => expect(releaseFetch).toBeTypeOf('function'));
+      await new Promise((r) => setTimeout(r, 5));
+      const deletedAt = Date.now();
+      await new Promise((r) => setTimeout(r, 5));
+      releaseFetch();
+      expect((await inFlight).pushed).toBe(true);
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(refreshed.lastConfirmedPushedAt).toBeLessThan(deletedAt);
+      // The human-facing "last pushed" time still reports the response.
+      expect(Date.parse(refreshed.lastPushedAt)).toBeGreaterThan(deletedAt);
     });
 
     it('handles a network-level failure without throwing (returns pushed:false)', async () => {
@@ -4059,17 +4123,17 @@ describe('peerSync', () => {
 
     describe('receiver — applyIncomingPush', () => {
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
-        // Local code is at universes:12 (see server/lib/schemaVersions.js).
-        // A push from a sender on universes:13 must NOT touch local state.
+        // Local code is at universes:13 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:14 must NOT touch local state.
         const rejection = await applyIncomingPush({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 13 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 14 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 13, receiverV: 12 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 14, receiverV: 13 }]);
         expect(rejection.details.senderPortosVersion).toBe('99.0.0');
         // Receiver MUST stamp its OWN PortOS version so the sender can show
         // the user "peer X is on PortOS vY" — without this, the sender would
@@ -4152,7 +4216,7 @@ describe('peerSync', () => {
           record: { id: 'ser-1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
         });
         expect(mergeSeriesFromSync).toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
@@ -4167,10 +4231,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 4, receiverV: 3 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 5, receiverV: 4 }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
@@ -4265,10 +4329,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 4, receiverV: 3 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 5, receiverV: 4 }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
@@ -4362,7 +4426,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(12);
+        expect(body.portosMeta.schemaVersions.universes).toBe(13);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 

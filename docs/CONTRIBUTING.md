@@ -34,6 +34,17 @@ For DB-backed tests, provision the separate test database first (`npm run setup:
 
 ## Code Guidelines
 
+### Findings and lint
+
+Resolve every accepted finding, including warnings and nits; severity only sets
+work order. Both lint trees fail on warnings. Enable useful rules as errors and
+invest effort in high-quality fixes. Difficulty alone is not an exemption.
+Previously accepted rules can be reassessed: retire rules that are no longer
+useful or have no current solution worth pursuing, recording a concise rationale.
+Retired rules stay off, never at warning level. Do not weaken tests or suppress useful
+checks to obtain a green result. Follow [the accepted-findings policy](../AGENTS.md#resolve-every-accepted-finding)
+for genuine blockers and tracked deferrals.
+
 ### General
 
 - Favor functional programming over classes
@@ -78,6 +89,12 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate proves only the stages it runs; it does not replace required CI or resource-dependent checks. A full-suite plan runs only the always-run guards unless `--full` is supplied; DB suites, Windows, client build, and boot smoke are reported but not run by pregate.
 
+Rendering PRs that select fidelity cases also run
+`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head.
+The command runs the cases and publishes exact-head evidence using existing GitHub
+authentication; missing or stale evidence blocks CI Gate. See
+[Browser fidelity evidence](GITHUB_ACTIONS.md#browser-fidelity-evidence).
+
 ### Checkout-owned development caches
 
 Vite dev mode stores reusable dependency data in `client/.cache/vite`. Vitest
@@ -87,6 +104,15 @@ to the config file, including the server's derived capture projects, so shared
 `node_modules` links and a different invocation directory do not share writers.
 They are reused across runs and removed with their checkout; temporary test
 roots retain their separate teardown lifecycle. CI caches the same owned paths.
+
+Interrupted test runs reclaim individually identified processes under their run
+roots, including non-browser fixtures. Linux reads same-user `/proc` records;
+macOS uses the existing `/usr/bin/python3` with standard-library `ctypes` to read
+NUL-delimited arguments and selected test environment fields. No Python install
+is performed. If that optional reader is unavailable, macOS retains the legacy
+browser-profile cleanup only. Process identity, caller ancestry and run-owner
+liveness are rechecked before termination and escalation; unrelated process
+groups are never signalled. Unknown ownership is left alone.
 
 The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
 use `--configLoader runner` to load ESM configs without writing bundles into shared

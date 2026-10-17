@@ -201,6 +201,9 @@ describe('startReferenceGeneration', () => {
             mode, designPrompt, correctionPrompt: '  repair the hem  ',
           });
           const job = enqueueJob.mock.calls[0][0];
+          if (mode === 'codex') {
+            expect(job.params.modelIsShippedDefault).toBe(false);
+          }
           // Normalize native paths BEFORE JSON escapes Windows backslashes.
           // Only fixture-rooted paths change; prompts and other payload bytes
           // retain their exact snapshot contract.
@@ -244,23 +247,23 @@ describe('startReferenceGeneration', () => {
         },
         "codex/ambient-main": {
           "manifestWrites": 1,
-          "payloadSHA256": "1a3056e9172577fb5fc052d701753a657682a40c33106841fe720a18acd6ab16",
+          "payloadSHA256": "eb5a0e7f9cb43a944944ec4bad178b9fa0b503829cb3466b02bf9b1346ff079a",
         },
         "codex/east": {
           "manifestWrites": 0,
-          "payloadSHA256": "1c4b040e9ef9687cfbbf3e879addd15e0a71a905a3b5cc8ae68f10f1a1e145da",
+          "payloadSHA256": "9e27f6c9f891a54c48966b603319a3f762efab7ef2dab26106015f4f6bc796c4",
         },
         "codex/main": {
           "manifestWrites": 1,
-          "payloadSHA256": "a7836b97b8c12d00cbc57abd1934d0d31b0009f1c662c06d99603a5d27f30a6e",
+          "payloadSHA256": "831738c9a5253ac4cb70d51bf48abaf93e4a1d4c60104182c4cd82c54387b744",
         },
         "codex/main-reroll": {
           "manifestWrites": 0,
-          "payloadSHA256": "c852aac43df1f7cb288081e1c3df3e74a56226ffd64f669149dd92bf499e2633",
+          "payloadSHA256": "80c1772f7fdabe48107d938a60875b91f5d90b74e42de68bac462d6dcd619a7e",
         },
         "codex/turnaround": {
           "manifestWrites": 1,
-          "payloadSHA256": "2191d6e8863245b323ba4ba3bc88b22f7d902449e37f77a1f4906e9ff1f5ac47",
+          "payloadSHA256": "cf90b056abeae15d14a0cd9da60c654b1d4b4810b75989c6c0183232e038f840",
         },
         "grok/ambient-main": {
           "manifestWrites": 1,

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import VideoUpscaleDrawer from './VideoUpscaleDrawer';
-import { upscaleVideo, getUpscalePlan } from '../../services/apiImageVideo';
+import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl } from '../../services/apiImageVideo';
 
 vi.mock('../../services/apiImageVideo', () => ({
   upscaleVideo: vi.fn(),
@@ -70,7 +70,56 @@ beforeEach(() => {
   upscaleVideo.mockResolvedValue({ ok: true, video: { id: 'video-2', upscaledFrom: 'video-1' } });
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe('VideoUpscaleDrawer', () => {
+  it('downloads the adapter through POST and allows an explicit retry after a dropped stream', async () => {
+    getUpscalePlan.mockResolvedValue({ plan: missingAdapterPlan() });
+    upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({ start(controller) { controller.close(); } })));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(await screen.findByText(/^Download adapter/));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await screen.findByText(/^Download adapter/);
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    fireEvent.click(screen.getByText(/^Download adapter/));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await screen.findByText(/^Download adapter/);
+  });
+  it('closing the mounted drawer aborts its download and does not restart for another item', async () => {
+    getUpscalePlan.mockResolvedValue({ plan: missingAdapterPlan() });
+    upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({ start() {} })));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(await screen.findByText(/^Download adapter/));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    view.rerender(<VideoUpscaleDrawer item={null} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+    view.rerender(<VideoUpscaleDrawer item={{ id: 'video-other' }} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await screen.findByText(/^Download adapter/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('ignores an old download completion plan response after the item changes', async () => {
+    let finishOldPlan;
+    getUpscalePlan.mockResolvedValueOnce({ plan: missingAdapterPlan() })
+      .mockImplementationOnce(() => new Promise(resolve => { finishOldPlan = resolve; }))
+      .mockResolvedValueOnce({ plan: READY_PLAN });
+    upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('data: {"type":"complete"}\n\n')));
+    const view = render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(await screen.findByText(/^Download adapter/));
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalledTimes(2));
+    view.rerender(<VideoUpscaleDrawer item={{ id: 'video-other' }} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    const radio = screen.getByRole('radio', { name: /LTX-2.5 generative/ });
+    await waitFor(() => expect(radio).not.toBeDisabled());
+    await act(async () => finishOldPlan({ plan: missingAdapterPlan() }));
+    expect(radio).not.toBeDisabled();
+    expect(screen.queryByText(/^Download adapter/)).toBeNull();
+  });
+
   it('opening the drawer fetches the plan but queues no mutation', async () => {
     render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
 

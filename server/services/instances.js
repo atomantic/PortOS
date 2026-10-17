@@ -786,6 +786,30 @@ async function pairPeerSyncSecretNow(id) {
   return updated;
 }
 
+/**
+ * Set (gap object) or clear (null) one category's schema gap on the peer with
+ * the given remote instanceId. The read-modify-write runs inside the serialized
+ * withData write so parallel category syncs cannot overwrite each other's gaps
+ * (updatePeer replaces the whole map). An empty map is stored as no key.
+ */
+export async function setPeerSchemaGap(instanceId, category, gapOrNull) {
+  return withData(async (data) => {
+    const peer = data.peers.find((p) => p.instanceId === instanceId);
+    if (!peer) return null;
+    const gaps = peer.schemaGaps && typeof peer.schemaGaps === 'object' && !Array.isArray(peer.schemaGaps) ? { ...peer.schemaGaps } : {};
+    if (gapOrNull === null) {
+      if (!(category in gaps)) return peer;
+      delete gaps[category];
+    } else {
+      gaps[category] = gapOrNull;
+    }
+    if (Object.keys(gaps).length > 0) peer.schemaGaps = gaps;
+    else delete peer.schemaGaps;
+    instanceEvents.emit('peers:updated', data.peers);
+    return peer;
+  });
+}
+
 /** Save a pair secret only for the already-registered peer named by its identity header. */
 export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
   let changed = false;
@@ -846,6 +870,25 @@ export function enqueueReciprocalSync(peerId) {
 }
 
 // --- Probing ---
+
+// Peers observed online in THIS process. The persisted `status` survives a
+// restart, so a peer that was online before the restart would never produce a
+// status transition and `peer:online` listeners (push retry, sync) would not
+// run for edits stranded by the restart (#11750). The first online sighting
+// per process emits regardless of the persisted status; later sightings keep
+// the transition-only rule.
+const peersSeenOnlineThisProcess = new Set();
+
+/** Test-only: forget which peers were seen online so a test can simulate a fresh boot. */
+export function __resetPeersSeenOnlineForTests() {
+  peersSeenOnlineThisProcess.clear();
+}
+
+function isFirstOnlineSighting(peerId) {
+  if (peersSeenOnlineThisProcess.has(peerId)) return false;
+  peersSeenOnlineThisProcess.add(peerId);
+  return true;
+}
 
 export async function probePeer(peer) {
   const baseUrl = peerBaseUrl(peer);
@@ -1009,10 +1052,12 @@ export async function probePeer(peer) {
   }
 
   // Announce ourselves only when peer transitions to online (not every poll cycle)
-  if (status === 'online' && previousStatus !== 'online') {
+  if (status === 'online') {
+    const firstSighting = isFirstOnlineSighting(peer.id);
+    const transitioned = previousStatus !== 'online';
     if (stored) {
-      announceSelf(stored);
-      instanceEvents.emit('peer:online', stored);
+      if (transitioned) announceSelf(stored);
+      if (transitioned || firstSighting) instanceEvents.emit('peer:online', stored);
     }
   }
 
@@ -1085,6 +1130,9 @@ export async function queryPeer(id, apiPath) {
 // --- Announce (Bidirectional Registration) ---
 
 export async function handleAnnounce({ address, port, instanceId, name, host }) {
+  // Set only when this announce marked the peer online (not the forged-address
+  // branch, which records a sighting without trusting it).
+  let markedOnlinePeer = null;
   const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
@@ -1123,6 +1171,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
       existing.status = 'online';
+      markedOnlinePeer = existing;
       existing.instanceId = instanceId;
       // A managed forward uses local coordinates, not the remote listen port.
       if (existing.transport !== 'tailcat') existing.port = port;
@@ -1178,6 +1227,12 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     instanceEvents.emit('peers:updated', data.peers);
     return { created: true, peer };
   });
+
+  // The announce path sets status = 'online' without a probe, so it needs the
+  // same once-per-process convergence trigger as probePeer.
+  if (markedOnlinePeer && isFirstOnlineSighting(markedOnlinePeer.id)) {
+    instanceEvents.emit('peer:online', markedOnlinePeer);
+  }
 
   // Immediately probe newly announced peers to populate health data
   if (result.created) {

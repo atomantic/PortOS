@@ -51,6 +51,8 @@ This banner OVERRIDES any later instruction to edit source, commit, open a PR, c
 
 Your deliverable is tracker items, not code. The run must end with the same \`git status\` and the same branch it started on.
 
+Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
+
 ## Where to record findings
 
 {trackerInstructions}
@@ -61,7 +63,7 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 2. **Complete a substantive review before filing.** Spend most of the available run budget investigating and validating candidates, reserving time for de-duplication, filing, and the final report. Within the bounded slice, inventory at least three distinct relevant paths or components (or all of them if fewer exist), then inspect their callers, consumers, tests, and relevant history. Finding or filing the first issue is NOT a stopping condition: continue through the remaining inventory, including when the first candidate is a duplicate or rejected. Stop when the inventory is reviewed, the configured run budget is nearly exhausted, or a concrete blocker prevents further review; do not idle to fill time or exceed the run budget.
 3. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
 4. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
-5. **File the highest-value surviving findings as separate items after the review.** One root cause per item — never split one problem to inflate the count. Cap yourself at 5 (or a lower mission-specific cap); this is a filing ceiling, not a review limit or a quota. Zero or one issue is valid after a substantive review. Bodies must be decision-complete:
+5. **File every accepted finding in the reviewed slice as a separate item after the review.** One root cause per item — never split one problem to inflate the count. Bound the investigation, not the severity of findings you retain. Zero or one issue is valid when the reviewed evidence supports it. Bodies must be decision-complete:
    - **Problem** — what is wrong, with file:line references.
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
@@ -73,7 +75,7 @@ Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering
 
 export const DO_WORK_MODE_CONTRACT = `## Mode: audit and fix, track every deferred finding
 
-This banner OVERRIDES any later instruction to stop after one fix, forbid deferred issues, leave source unchanged, or skip commits. Implement worthwhile verified fixes in coherent, reviewable slices. Keep investigation bounded; this is not exhaustive file-by-file certification.
+This banner OVERRIDES any later instruction to stop after one fix, forbid deferred issues, leave source unchanged, or skip commits. Implement all accepted fixes in coherent, reviewable slices. Keep investigation bounded; this is not exhaustive file-by-file certification.
 
 1. **Scan broadly, rank candidates, then pick a bounded slice** containing the highest-impact actionable finding. Follow the discovery contract below before choosing.
 2. **Read the actual code** and the project's \`AGENTS.md\` / conventions. Honor documented non-issues.
@@ -81,7 +83,9 @@ This banner OVERRIDES any later instruction to stop after one fix, forbid deferr
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 
-Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If nothing is worth changing, report that evidence without a drive-by refactor.
+Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
+
+Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
 
 ## Where to track deferred findings
 
@@ -413,7 +417,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   'better-cognitive-load': {
     quotaBurnId: null,
     label: 'Cognitive load & readability',
-    description: 'Reader-cost audit — configurable: file issues (default) or implement one refactor',
+    description: 'Reader-cost and excessive code-comment audit — configurable: file issues (default) or implement one refactor',
     defaultFileIssues: true,
     doWorkRequiresWorktree: true,
     filing: filing({

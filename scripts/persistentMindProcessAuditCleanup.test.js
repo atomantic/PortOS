@@ -19,7 +19,7 @@ it('drains process-audit fixture writes after another worker triggers fail-fast'
     const sourcePath = fileURLToPath(new URL('../server/services/persistentMindProcessAudit.test.js', import.meta.url));
     const header = "it('holds an ambiguous create durably instead of publishing twice', async () => {";
     const source = readFileSync(sourcePath, 'utf8')
-      .replace(/(['"])(\.\.?\/[^'"]+)\1/g, (_, quote, specifier) => JSON.stringify(resolve(dirname(sourcePath), specifier)))
+      .replace(/(['"])(\.\.?\/[^'"]+)\1/g, (_, _quote, specifier) => JSON.stringify(resolve(dirname(sourcePath), specifier)))
       .replace(header, `${header.replace('async () =>', 'async ({ signal }) =>')}
         const { writeFileSync } = await import('node:fs');
         const cancelled = new Promise(resolve => signal.addEventListener('abort', () => setImmediate(resolve), { once: true }));
@@ -37,11 +37,18 @@ it('drains process-audit fixture writes after another worker triggers fail-fast'
     args.push('--bail=1');
     const result = spawnSync(process.execPath, args, options);
     const output = `${result.stdout}\n${result.stderr}`;
-    expect(result.error).toBeUndefined();
-    expect(result.status, output).toBe(1);
-    expect(output).toContain('controlled sibling failure');
-    expect(existsSync(finished), output).toBe(true);
-    expect(output).not.toMatch(/ENOTEMPTY|ENOENT|Unhandled|test temp leak:/);
+    const diagnostics = [
+      `Child error: ${result.error?.stack ?? 'none'}; code: ${result.error?.code ?? 'none'}`,
+      `Child status: ${result.status}; signal: ${result.signal}`,
+      `Fixture ready: ${existsSync(ready)}; finished: ${existsSync(finished)}`,
+      `stdout:\n${result.stdout ?? ''}`,
+      `stderr:\n${result.stderr ?? ''}`,
+    ].join('\n');
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.status, diagnostics).toBe(1);
+    expect(output, diagnostics).toContain('controlled sibling failure');
+    expect(existsSync(finished), diagnostics).toBe(true);
+    expect(output, diagnostics).not.toMatch(/ENOTEMPTY|ENOENT|Unhandled|test temp leak:/);
   } finally {
     rmSync(host, { recursive: true, force: true });
   }

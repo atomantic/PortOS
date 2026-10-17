@@ -277,4 +277,145 @@ describe('fableLoomContinuity', () => {
     expect(review.findings.map((finding) => finding.code))
       .toContain(CONTINUITY_CODES.PROTAGONIST_BINDING_MISMATCH);
   });
+  describe('graph, wardrobe, anchor, and interaction continuity', () => {
+    const graphUniverse = {
+      characters: [{
+        id: 'char-elena',
+        name: 'Elena Vance',
+        wardrobes: [{ id: 'wardrobe-explorer' }, { id: 'wardrobe-gala' }],
+      }],
+      places: [{ id: 'place-temple', name: 'Sunken Temple' }],
+      objects: [],
+    };
+    const edge = (id, targetNodeId) => ({ id, targetNodeId, intent: 'Go' });
+
+    it('flags unreachable scenes and ambiguous convergence by explicit-source validity', () => {
+      const build = (continuitySourceNodeId) => analyzeEpisodeContinuity({
+        episode: {
+          id: 'ep-1',
+          startNodeId: 'a',
+          nodes: [
+            { id: 'a', title: 'A', transitions: [edge('t1', 'b'), edge('t2', 'c')] },
+            { id: 'b', title: 'B', transitions: [edge('t3', 'd')] },
+            { id: 'c', title: 'C', transitions: [edge('t4', 'd')] },
+            { id: 'd', title: 'D', visualCanon: { continuitySourceNodeId }, transitions: [] },
+            { id: 'orphan', title: 'Orphan', transitions: [] },
+          ],
+        },
+        universe: graphUniverse,
+      });
+
+      const missing = build(undefined);
+      expect(missing.findings.map((f) => [f.code, f.severity, f.nodeId])).toEqual([
+        [CONTINUITY_CODES.UNREACHABLE_SCENE_CONTINUITY, 'warning', 'orphan'],
+        [CONTINUITY_CODES.AMBIGUOUS_CONVERGENCE, 'info', 'd'],
+      ]);
+      expect(missing.passed).toBe(true);
+
+      const invalid = build('orphan');
+      const ambiguous = invalid.findings.find((f) => f.code === CONTINUITY_CODES.AMBIGUOUS_CONVERGENCE);
+      expect(ambiguous.severity).toBe('error');
+      expect(ambiguous.message).toContain('is not one of its 2 incoming paths');
+      expect(invalid.passed).toBe(false);
+
+      expect(build('b').findings.map((f) => f.code))
+        .not.toContain(CONTINUITY_CODES.AMBIGUOUS_CONVERGENCE);
+    });
+
+    it('reports canonical protagonist resolution and identity-pack readiness', () => {
+      const episode = { id: 'ep-1', startNodeId: 'a', nodes: [{ id: 'a', title: 'A', transitions: [] }] };
+      const codesFor = (loom, universe) => analyzeEpisodeContinuity({ loom, episode, universe })
+        .findings.map((f) => f.code);
+
+      expect(codesFor({ protagonistCharacterId: 'char-elena' }, null))
+        .toEqual([CONTINUITY_CODES.CANONICAL_PROTAGONIST_UNRESOLVED]);
+      expect(codesFor({ protagonistCharacterId: 'char-nobody' }, graphUniverse))
+        .toEqual([CONTINUITY_CODES.CANONICAL_PROTAGONIST_UNRESOLVED]);
+      expect(codesFor(
+        { protagonistCharacterId: 'char-elena', protagonistWardrobeId: 'wardrobe-missing' },
+        graphUniverse,
+      )).toEqual([
+        CONTINUITY_CODES.CANONICAL_WARDROBE_UNRESOLVED,
+        CONTINUITY_CODES.CANONICAL_IDENTITY_PACK_NOT_READY,
+      ]);
+    });
+
+    it('keeps finding order, ids, and category counts stable across domains', () => {
+      const review = analyzeEpisodeContinuity({
+        loom: { participationMode: 'helper', protagonistCharacterId: 'char-elena' },
+        localVoiceProfiles: [{
+          id: 'vp-elena', version: 3, engine: 'piper', modelRevision: 'model-z',
+          binding: { characterId: 'char-other' },
+        }],
+        universe: graphUniverse,
+        episode: {
+          id: 'ep-1',
+          startNodeId: 'a',
+          nodes: [
+            {
+              id: 'a',
+              title: 'Temple gate',
+              prose: 'They reach the Sunken Temple.',
+              visualCanon: {
+                characterAppearances: [{ characterId: 'char-elena', wardrobeId: 'wardrobe-explorer' }],
+              },
+              playbackAssets: {
+                provenance: { characters: [{
+                  characterId: 'char-elena',
+                  voice: { profileId: 'vp-elena', profileVersion: 1, engine: 'kokoro', modelRevision: 'model-a' },
+                }] },
+              },
+              transitions: [edge('t1', 'b')],
+            },
+            {
+              id: 'b',
+              title: 'Temple depths',
+              isEnding: true,
+              audienceConnection: 'disconnected',
+              interactionWindow: { enabled: true, protagonistCharacterId: 'char-elena' },
+              visualCanon: {
+                characterAppearances: [{ characterId: 'char-elena', wardrobeId: 'wardrobe-gala' }],
+              },
+              playbackAssets: {
+                provenance: { characters: [{
+                  characterId: 'char-elena',
+                  voice: { profileId: 'vp-elena', profileVersion: 2, engine: 'piper', modelRevision: 'model-b' },
+                }] },
+              },
+              transitions: [],
+            },
+          ],
+        },
+      });
+
+      expect(review.findings.map((f) => [f.id, f.category, f.severity, f.code, f.nodeId ?? null])).toEqual([
+        ['finding-1', 'visual', 'warning', 'CANONICAL_IDENTITY_PACK_NOT_READY', null],
+        ['finding-2', 'voice', 'error', 'VOICE_PROFILE_BINDING_MISMATCH', 'a'],
+        ['finding-3', 'voice', 'warning', 'VOICE_PROFILE_REVISION_DRIFT', 'a'],
+        ['finding-4', 'voice', 'warning', 'VOICE_ENGINE_DRIFT', 'a'],
+        ['finding-5', 'voice', 'warning', 'VOICE_MODEL_REVISION_DRIFT', 'a'],
+        ['finding-6', 'voice', 'info', 'MISSING_PRONUNCIATION_ANCHOR', 'a'],
+        ['finding-7', 'visual', 'info', 'WARDROBE_DRIFT', 'b'],
+        ['finding-8', 'voice', 'error', 'VOICE_PROFILE_BINDING_MISMATCH', 'b'],
+        ['finding-9', 'voice', 'warning', 'VOICE_PROFILE_REVISION_DRIFT', 'b'],
+        ['finding-10', 'voice', 'warning', 'VOICE_MODEL_REVISION_DRIFT', 'b'],
+        ['finding-11', 'voice', 'warning', 'NO_APPROVED_VOICE_PROFILE', 'b'],
+        ['finding-12', 'playback', 'error', 'INTERACTION_ON_ENDING_OR_CUT', 'b'],
+        ['finding-13', 'playback', 'error', 'DISCONNECTED_INTERACTION_CHANNEL', 'b'],
+        ['finding-14', 'voice', 'warning', 'VOICE_PROFILE_REVISION_DRIFT', null],
+        ['finding-15', 'voice', 'warning', 'VOICE_ENGINE_DRIFT', null],
+        ['finding-16', 'voice', 'warning', 'VOICE_MODEL_REVISION_DRIFT', null],
+      ]);
+      expect(review.summary).toEqual({
+        totalFindings: 16, errors: 4, warnings: 10, info: 2,
+        categoryCounts: { visual: 2, voice: 12, playback: 2, graph: 0 },
+      });
+      const episodeDrift = review.findings.slice(-3);
+      expect(episodeDrift.map((f) => f.message)).toEqual([
+        'Character "char-elena" has assets rendered with different voice profile revisions across scenes (vp-elena@v1 (kokoro:model-a), vp-elena@v2 (piper:model-b)).',
+        'Character "char-elena" has assets rendered with different voice engines across scenes (kokoro, piper).',
+        'Character "char-elena" has assets rendered with different voice model revisions across scenes (model-a, model-b).',
+      ]);
+    });
+  });
 });

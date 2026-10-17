@@ -1,9 +1,9 @@
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ActiveProcessingWidget from './ActiveProcessingWidget';
-import { sameProcessingSnapshot, __resetSystemActivityForTests } from '../../hooks/useSystemActivity';
+import { __resetSystemActivityForTests } from '../../hooks/useSystemActivity';
 
 const handlers = new Map();
 vi.mock('../../services/socket', () => ({
@@ -130,8 +130,6 @@ describe('ActiveProcessingWidget', () => {
     expect(screen.getByText('2:05')).toBeInTheDocument();
     expect(screen.getByText('LLM')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Ollama loaded · example:7b/ })).toHaveTextContent('1 GB · GPU');
-    // Replacing one active run with another must repaint even when count stays 1.
-    expect(sameProcessingSnapshot({ llm: { active: 1, runs: [{ runId: 'a' }] } }, { llm: { active: 1, runs: [{ runId: 'b' }] } })).toBe(false);
   });
 
   it('shows external Ollama loads from telemetry even when PortOS is idle', async () => {
@@ -162,10 +160,30 @@ describe('ActiveProcessingWidget', () => {
     expect(mockGetSystemActivity).toHaveBeenCalled();
   });
 
-  it('recognizes queue movement while ignoring server timestamps', () => {
-    const base = { updatedAt: '2026-01-01T00:00:00Z', jobs: [{ id: 'job-1', status: 'queued', position: 2 }], agents: {}, gpu: {}, extras: {} };
-    expect(sameProcessingSnapshot(base, { ...base, updatedAt: '2026-01-01T00:00:03Z' })).toBe(true);
-    expect(sameProcessingSnapshot(base, { ...base, jobs: [{ ...base.jobs[0], position: 1 }] })).toBe(false);
-    expect(sameProcessingSnapshot(undefined, base)).toBe(false);
+  it('replaces rows when app operations and the mind lifecycle change between reads', async () => {
+    const initial = {
+      ...idle,
+      appOperations: [{ appId: 'example', appName: 'Old App', type: 'update' }],
+      mind: { thinking: true, thinkingSince: new Date(Date.now() - 600_000).toISOString() },
+      activity: { idle: false, activeCount: 1, queuedCount: 0, blockers: [] },
+    };
+    mockGetSystemActivity.mockResolvedValueOnce(initial);
+    renderWidget();
+
+    expect(await screen.findByRole('link', { name: /Old App · update/ })).toBeInTheDocument();
+    const originalMindText = screen.getByRole('link', { name: /Persistent Mind is thinking/ }).textContent;
+
+    mockGetSystemActivity.mockResolvedValueOnce({
+      ...initial,
+      appOperations: [{ appId: 'example', appName: 'New App', type: 'update' }],
+      mind: { ...initial.mind, thinkingSince: new Date(Date.now() - 50_000).toISOString() },
+    });
+    act(() => handlers.get('system:activity')());
+
+    expect(await screen.findByRole('link', { name: /New App · update/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Old App · update/ })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /Persistent Mind is thinking/ }).textContent).not.toBe(originalMindText);
+    });
   });
 });

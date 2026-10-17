@@ -1872,8 +1872,11 @@ input[type="color"],
      and GPU compositing layer up front ensures the ancestor backing store never retains
      stale button pixels.
      Uses :where() to keep specificity at (0,0,0) so author transform utilities
-     (e.g., hover:scale-105, active:scale-95) continue to win cleanly. */
-  :where(button, [role="button"]) {
+     (e.g., hover:scale-105, active:scale-95) continue to win cleanly.
+     SVG descendants are excluded: a CSS `transform` replaces an SVG element's
+     `transform` attribute, so a `<g role="button" transform="translate(…)">`
+     (FableLoom scene cards, graph nodes) collapsed onto the origin. */
+  :where(button, [role="button"]:not(svg *)) {
     isolation: isolate;
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;

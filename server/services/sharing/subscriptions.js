@@ -25,6 +25,8 @@ import { existsSync } from 'fs';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getBucket } from './buckets.js';
+import { getSeries } from '../pipeline/series.js';
+import { getUniverse } from '../universeBuilder.js';
 import { exportSeries, exportUniverse } from './exporter.js';
 import {
   recordEvents,
@@ -156,15 +158,38 @@ export async function subscribe({ bucketId, recordKind, recordId }) {
     return live;
   });
 
-  // Export outside the state queue, then stamp only a still-live row.
-  const exp = await runExport({ bucketId, recordKind, recordId });
-  if (exp) return stampExport(sub, exp);
-  return sub;
+  // Export outside the state queue (serialized per subscription), then stamp
+  // only a still-live row.
+  return enqueueExport(id, async () => {
+    const exp = await runExport(sub);
+    return exp ? stampExport(sub, exp) : sub;
+  });
+}
+
+// subId → tail of that subscription's export chain. Exports of one
+// subscription run strictly one after another so the last manifest written
+// is always the newest content, and unsubscribe can wait out a running one.
+const inFlightExports = new Map();
+
+function enqueueExport(id, task) {
+  const prev = inFlightExports.get(id) || Promise.resolve();
+  const run = prev.then(task);
+  const tail = run.catch(() => {});
+  inFlightExports.set(id, tail);
+  tail.then(() => {
+    if (inFlightExports.get(id) === tail) inFlightExports.delete(id);
+  });
+  return run;
+}
+
+async function isSubscriptionLive(id) {
+  const { subscriptions } = await queueStateWrite(readState);
+  return subscriptions.some((s) => s.id === id);
 }
 
 /** Internal: dispatch to the right exporter based on recordKind. */
-async function runExport({ bucketId, recordKind, recordId }) {
-  const opts = { subscription: { recordKind, recordId } };
+async function runExport({ id, bucketId, recordKind, recordId }) {
+  const opts = { subscription: { recordKind, recordId }, isLive: () => isSubscriptionLive(id) };
   if (recordKind === 'series') return exportSeries(recordId, bucketId, opts);
   if (recordKind === 'universe') return exportUniverse(recordId, bucketId, opts);
   return null;
@@ -190,6 +215,11 @@ export async function unsubscribe(id) {
     clearTimeout(pending);
     pendingTimers.delete(sub.id);
   }
+
+  // An export already running would otherwise write its manifest after the
+  // delete below and resurrect the share. Its liveness check now fails, but
+  // wait for it (and any queued follow-ups) so the delete always lands last.
+  await inFlightExports.get(sub.id);
 
   // Delete the deterministic file from the bucket. Best-effort: the bucket
   // path may be unmounted; the subscription record removal still wins so the
@@ -256,13 +286,14 @@ export async function unsubscribeAllForRecord(recordKind, recordId) {
 const DEBOUNCE_MS = 3000;
 const pendingTimers = new Map(); // subId → Timeout
 
-async function reexportNow(sub) {
-  const exp = await runExport(sub).catch((err) => {
-    console.log(`⚠️ sharing.subscriptions: re-export failed for ${sub.id}: ${err.message}`);
-    return null;
+function reexportNow(sub) {
+  return enqueueExport(sub.id, async () => {
+    const exp = await runExport(sub).catch((err) => {
+      console.log(`⚠️ sharing.subscriptions: re-export failed for ${sub.id}: ${err.message}`);
+      return null;
+    });
+    if (exp) await stampExport(sub, exp);
   });
-  if (!exp) return;
-  await stampExport(sub, exp);
 }
 
 function stampExport(sub, exp) {
@@ -292,6 +323,41 @@ export async function reexportSubscribedRecord(recordKind, recordId) {
     if (typeof t.unref === 'function') t.unref();
     pendingTimers.set(sub.id, t);
   }
+}
+
+async function loadRecordUpdatedAt(recordKind, recordId) {
+  const record = recordKind === 'series' ? await getSeries(recordId)
+    : recordKind === 'universe' ? await getUniverse(recordId)
+      : null;
+  return isStr(record?.updatedAt) ? record.updatedAt : null;
+}
+
+/**
+ * Boot convergence for share buckets. The 3 s re-export debounce lives only in
+ * memory, so an edit made just before a restart/crash never reaches the bucket.
+ * Re-export every subscription whose record changed after its last export (or
+ * was never exported) through the same runExport + stampExport path the
+ * debounce uses. A subscription adopted from an import has no export yet; its
+ * baseline is the adoption time so an unedited imported record is not written
+ * straight back to the bucket it came from.
+ */
+export async function reconcileSubscriptionsOnBoot() {
+  const subscriptions = await listSubscriptions();
+  let reexported = 0;
+  for (const sub of subscriptions) {
+    const baseline = sub.lastExportedAt || (sub.adoptedFromImport ? sub.updatedAt : null);
+    const recordUpdatedAt = await loadRecordUpdatedAt(sub.recordKind, sub.recordId).catch(() => undefined);
+    // undefined = record missing/unreadable (nothing to export); null = no timestamp.
+    if (recordUpdatedAt === undefined) continue;
+    const stale = baseline
+      ? recordUpdatedAt !== null && recordUpdatedAt > baseline
+      : true;
+    if (!stale) continue;
+    await reexportNow(sub);
+    reexported += 1;
+  }
+  if (reexported > 0) console.log(`🔄 sharing.subscriptions: boot reconcile re-exported ${reexported} stale share${reexported === 1 ? '' : 's'}`);
+  return { checked: subscriptions.length, reexported };
 }
 
 // Track the listener handles we install so __resetForTests can remove just

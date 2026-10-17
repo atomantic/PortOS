@@ -26,6 +26,69 @@ function recordPlayback() {
   fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: NOTE } });
 }
 
+describe('Production proof render controls', () => {
+  it('leads with the first render and submits the edited chorus interval', () => {
+    const review = { ...reviewFixture(), renderProof: vi.fn() };
+    const missing = { ...project, productionReview: { ...project.productionReview, proof: null } };
+    render(<ProductionReviewPanel project={missing} review={review} stage="proof" />);
+    const start = screen.getByLabelText('Chorus start (s)');
+    const end = screen.getByLabelText('End (s)');
+    expect(start.id).toBe('mv-review-example-project-proof-proof-start');
+    expect(end.id).toBe('mv-review-example-project-proof-proof-end');
+    expect(start.value).toBe('0');
+    expect(end.value).toBe('20');
+    const button = screen.getByRole('button', { name: 'Render animated proof' });
+    expect(button.disabled).toBe(false);
+    expect(button.compareDocumentPosition(screen.getByRole('button', { name: 'Request changes' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.change(start, { target: { value: '12.25' } });
+    fireEvent.change(end, { target: { value: '32.75' } });
+    fireEvent.click(button);
+    expect(review.renderProof).toHaveBeenCalledExactlyOnceWith({ startSec: 12.25, endSec: 32.75 });
+  });
+
+  it('offers a replacement below saved choreography using the persisted interval', () => {
+    const review = { ...reviewFixture(), renderProof: vi.fn() };
+    const ranged = { ...project, productionReview: { ...project.productionReview,
+      proof: { ...project.productionReview.proof, startSec: 8.5, endSec: 24.5 } } };
+    render(<ProductionReviewPanel project={ranged} review={review} stage="proof" />);
+    const button = screen.getByRole('button', { name: 'Render a new proof' });
+    expect(button.disabled).toBe(false);
+    expect(screen.getByLabelText('Saved choreography for proof comparison').compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.compareDocumentPosition(screen.getByLabelText('Animated proof with master audio')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(button);
+    expect(review.renderProof).toHaveBeenCalledExactlyOnceWith({ startSec: 8.5, endSec: 24.5 });
+  });
+
+  it('blocks rendering until stills are locked and while another project occupies the renderer', () => {
+    const review = { ...reviewFixture(), renderProof: vi.fn() };
+    review.readiness.storyboard.approved = false;
+    const view = render(<ProductionReviewPanel project={project} review={review} stage="proof" />);
+    const button = screen.getByRole('button', { name: 'Render a new proof' });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(review.renderProof).not.toHaveBeenCalled();
+    review.readiness.storyboard.approved = true;
+    view.rerender(<ProductionReviewPanel project={project} review={{ ...review, proof: { occupied: true, active: false } }} stage="proof" />);
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Review evidence is rendering in another project. Wait for it to finish before starting another.').getAttribute('role')).toBe('status');
+    fireEvent.click(button);
+    expect(review.renderProof).not.toHaveBeenCalled();
+  });
+
+  it('blocks duplicate rendering and reports connection and percent progress', () => {
+    const review = { ...reviewFixture(), renderProof: vi.fn(), proof: { active: true, connected: false } };
+    const view = render(<ProductionReviewPanel project={project} review={review} stage="proof" />);
+    const button = screen.getByRole('button', { name: 'Render a new proof' });
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Connecting to review render… Production approvals are separate.').getAttribute('role')).toBe('status');
+    fireEvent.click(button);
+    expect(review.renderProof).not.toHaveBeenCalled();
+    view.rerender(<ProductionReviewPanel project={project} review={{ ...review, proof: { active: true, connected: true, percent: 37 } }} stage="proof" />);
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Rendering review evidence — 37%. Production approvals are separate.').getAttribute('role')).toBe('status');
+  });
+});
+
 describe('Production proof playback evidence', () => {
   it('approves a played proof straight away; notes are optional and no checkbox attests', () => {
     const review = reviewFixture();

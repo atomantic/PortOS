@@ -12,6 +12,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/gmail.modify'
 ];
+export const GOOGLE_API_TIMEOUT_MS = 30_000;
 export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || PORTS.API}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;
@@ -70,11 +71,14 @@ export async function clearAuth() {
 }
 
 function createOAuth2Client(credentials) {
-  return new OAuth2Client(
-    credentials.clientId,
-    credentials.clientSecret,
-    credentials.redirectUri || OAUTH_REDIRECT_URI
-  );
+  return new OAuth2Client({
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+    redirectUri: credentials.redirectUri || OAUTH_REDIRECT_URI,
+    // Token exchange/refresh uses its own transport, before an API request's
+    // deadline applies. Keep the SDK's retries and per-request overrides.
+    transporterOptions: { timeout: GOOGLE_API_TIMEOUT_MS }
+  });
 }
 
 export async function getAuthUrl(returnTo = 'calendar') {

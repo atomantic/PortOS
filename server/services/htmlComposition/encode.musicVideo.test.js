@@ -108,7 +108,10 @@ describe('encodeComposition song-time windows', () => {
     spawned.length = 0;
     const { page: windowPage, seeks } = recording();
     await encodeComposition(windowPage, contract(0.5), '/tmp/window.mp4', { offsetSec: 61.25 });
-    expect(seeks).toEqual([61.25, 61.333333, 61.416667, 61.5, 61.583333, 61.666667]);
+    expect(seeks.map((t) => +t.toFixed(6))).toEqual([61.25, 61.333333, 61.416667, 61.5, 61.583333, 61.666667]);
+    // Each seek selects its own frame under the pages' floor(t × fps + 1e-6):
+    // a time rounded to the microsecond selected the previous one every few frames.
+    expect(seeks.map((t) => Math.floor(t * 12 + 1e-6))).toEqual([735, 736, 737, 738, 739, 740]);
     expect(spawned[0].args.join(' ')).toContain('-frames:v 6');
   });
 

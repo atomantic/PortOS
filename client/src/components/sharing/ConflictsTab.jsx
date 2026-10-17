@@ -10,6 +10,7 @@ import { Loader2, GitMerge, RotateCcw, Trash2, ChevronDown, ChevronRight } from 
 import toast from '../ui/Toast';
 import InlineDiff from '../ui/InlineDiff';
 import { listConflicts, resolveConflict, deleteConflict } from '../../services/api';
+import LoadFailedState from '../ui/LoadFailedState';
 
 const asText = (v) => {
   if (v === null || v === undefined) return '';
@@ -18,7 +19,7 @@ const asText = (v) => {
 
 export default function ConflictsTab() {
   const [loading, setLoading] = useState(true);
-  const [conflicts, setConflicts] = useState([]);
+  const [conflicts, setConflicts] = useState(null);
   // #7260 — when the server reports the sync base-hash store as unreadable,
   // detection is running fail-closed (every overwrite journals) but nothing
   // persists. Show it so an empty list can't read as "no conflicts".
@@ -26,9 +27,11 @@ export default function ConflictsTab() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await listConflicts('pending', { silent: true }).catch(() => ({ conflicts: [] }));
-    setConflicts(res.conflicts || []);
-    setDegraded(res.conflictDetection?.degraded ? res.conflictDetection : null);
+    const result = await listConflicts('pending', { silent: true })
+      .then((res) => ({ res: Array.isArray(res?.conflicts) ? res : null }))
+      .catch(() => ({ res: null }));
+    setConflicts(result.res?.conflicts ?? null);
+    setDegraded(result.res?.conflictDetection?.degraded ? result.res.conflictDetection : null);
     setLoading(false);
   }, []);
 
@@ -40,6 +43,7 @@ export default function ConflictsTab() {
 
   return (
     <div className="space-y-4">
+      {conflicts === null && <LoadFailedState title="Could not load pending conflicts." hint="Retry to try again." onRetry={load} />}
       {degraded && (
         <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
           ⚠️ Conflict detection is degraded — {degraded.reason || 'the sync base-hash store is unreadable'}. Overwrites are still archived here fail-closed.
@@ -49,10 +53,10 @@ export default function ConflictsTab() {
         When two machines edited the same record, sync keeps the newest by timestamp — but the overwritten version is
         archived here so nothing is lost. Restore yours, merge back specific fields, or discard.
       </p>
-      {conflicts.length === 0 ? (
+      {conflicts?.length === 0 ? (
         <div className="text-sm text-gray-500 py-8 text-center border border-port-border rounded-lg">✓ No pending conflicts.</div>
       ) : (
-        conflicts.map((c) => <ConflictEntry key={c.id} entry={c} onResolved={load} />)
+        conflicts?.map((c) => <ConflictEntry key={c.id} entry={c} onResolved={load} />)
       )}
     </div>
   );

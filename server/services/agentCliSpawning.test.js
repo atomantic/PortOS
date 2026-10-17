@@ -129,6 +129,18 @@ vi.mock('./providers.js', () => ({
 vi.mock('../lib/privateSecuritySandbox.js', () => ({
   preparePrivateSecuritySpawn: vi.fn(),
 }));
+// Real publication admission fsyncs a directory on every flush. A byte-volume
+// test with hundreds of flushes opts out so disk latency under load cannot eat
+// its timeout; the admission contract keeps its own real-boundary test.
+const publicationAdmission = vi.hoisted(() => ({ bypass: false }));
+vi.mock('../lib/backupSnapshotBoundary.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    ...actual,
+    withBackupAssetPublication: (work, options) =>
+      publicationAdmission.bypass ? work() : actual.withBackupAssetPublication(work, options),
+  };
+});
 
 import { buildCliSpawnConfig, spawnDirectly } from './agentCliSpawning.js';
 import { promptOpensOwnPr } from './promptSections/completion.js';
@@ -933,6 +945,7 @@ describe('stream error containment', () => {
       writeFileGuarded.mockImplementation((path, bytes, options) => fs.writeFile(path, bytes, options));
     });
     afterEach(async () => {
+      publicationAdmission.bypass = false;
       writeFileGuarded.mockResolvedValue(undefined);
       await fs.rm(dir, { recursive: true, force: true });
     });
@@ -946,17 +959,21 @@ describe('stream error containment', () => {
     };
 
     it('writes a growing transcript once per byte plus the terminal rewrite, preserving mixed UTF-8 output', async () => {
-      // 240 flushes model one minute at the 250ms batch cadence without sleeps.
-      // Before the stderr suffix, full-prefix writes submitted 238,878,720
-      // bytes for 1,966,080 bytes of output; deltas plus final rewrite need 3,932,160.
+      // Each flush is a real file write, so wall time scales with the flush count and
+      // timed out at 240 under loaded pregate workers. The once-per-byte contract does
+      // not depend on cadence: full-prefix writes would submit O(n^2) bytes here
+      // (~9.6M for 393,216 bytes of output) versus the 786,432 that deltas plus the
+      // final rewrite need.
+      publicationAdmission.bypass = true;
       await fs.writeFile(join(dir, 'output.txt'), 'stale previous transcript');
       await spawnDirectly({ ...minimalArgs, agentDir: dir,
         cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' } });
+      const FLUSHES = 48;
       const chunk = `é${'x'.repeat(8189)}\n`;
-      for (let i = 0; i < 240; i++) await emitTextAndFlush(chunk);
+      for (let i = 0; i < FLUSHES; i++) await emitTextAndFlush(chunk);
       fakeProcess.stderr.emit('data', Buffer.from('尾\n'));
       await activeAgents.get('agent-test').flushOutput();
-      const expected = `${chunk.repeat(240)}[stderr] 尾\n`;
+      const expected = `${chunk.repeat(FLUSHES)}[stderr] 尾\n`;
       expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe(expected);
       await finish();
       expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe(expected);

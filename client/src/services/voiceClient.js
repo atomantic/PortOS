@@ -9,7 +9,7 @@ import socket from './socket';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
-import { blobToWav16k, float32ToWav16k } from '../lib/audioRecorder.js';
+import { blobToWav16k, float32ToWav16k, MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
 import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
@@ -530,6 +530,10 @@ export const stopCapture = async ({ submit = true } = {}) => {
 
   const { wav, peak } = await blobToWav16k(blob);
   if (!isOwnerCurrent(ownerGeneration) || recorderGeneration !== stoppedGeneration) return null;
+  if (wav.byteLength > MAX_VOICE_AUDIO_BYTES) {
+    refuseLongRecording();
+    return null;
+  }
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
   return { mimeType: 'audio/wav', size: wav.byteLength, sourceSize: blob.size, peak };
 };
@@ -587,13 +591,22 @@ export const resetConversation = () => {
 
 export const isCapturing = () => recorder !== null;
 
+const localVoiceErrorHandlers = new Set();
+const refuseLongRecording = () => {
+  for (const handler of localVoiceErrorHandlers) handler({ stage: 'turn', message: RECORDING_TOO_LONG_MESSAGE });
+};
+
 /**
  * Subscribe to voice events. Returns an unsubscribe function.
  * Events: voice:transcript, voice:llm:delta, voice:llm:done, voice:error, voice:idle
  */
 export const onVoiceEvent = (event, handler) => {
   socket.on(event, handler);
-  return () => socket.off(event, handler);
+  if (event === 'voice:error') localVoiceErrorHandlers.add(handler);
+  return () => {
+    socket.off(event, handler);
+    if (event === 'voice:error') localVoiceErrorHandlers.delete(handler);
+  };
 };
 
 // Persistent, user-authorized screen-capture stream for the voice agent's
@@ -684,7 +697,7 @@ export const captureScreenForVision = async () => {
   video.pause();
   if (!cctx) return null;
   cctx.drawImage(video, 0, 0, w, h);
-  // JPEG @ 0.8 keeps the payload well under the server's 16 MB cap even at 4K.
+  // JPEG @ 0.8 keeps normal tab captures below the encoded 8 MiB cap.
   return canvas.toDataURL('image/jpeg', 0.8);
 };
 
@@ -693,7 +706,7 @@ export const captureScreenForVision = async () => {
 // requestId so the server resolves the matching waiter and a late reply can't
 // satisfy a newer capture.
 export const sendScreenshotResult = (requestId, dataUrl) => {
-  socket.emit('voice:screenshot:result', { requestId, dataUrl: dataUrl || null });
+  socket.emit('voice:screenshot:result', { requestId, dataUrl: typeof dataUrl === 'string' && dataUrl.length <= MAX_VOICE_AUDIO_BYTES ? dataUrl : null });
 };
 
 const playPreviewAudio = (arrayBuffer) => enqueuePlay(arrayBuffer);
@@ -866,6 +879,11 @@ const submitUtterance = async (capture) => {
   const { wav, peak } = await float32ToWav16k(samples, rate);
   if (!isCurrentContinuousAttempt(capture)) return;
   if (!wav || wav.byteLength < 800) {
+    capture.callbacks?.onSubmit?.({ submitted: false, peak });
+    return;
+  }
+  if (wav.byteLength > MAX_VOICE_AUDIO_BYTES) {
+    refuseLongRecording();
     capture.callbacks?.onSubmit?.({ submitted: false, peak });
     return;
   }

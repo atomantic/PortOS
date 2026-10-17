@@ -113,7 +113,6 @@ router.get('/', asyncHandler(async (req, res) => {
     };
   }));
 
-  // Sort by creation date, newest first
   uploads.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   res.json({

@@ -1,5 +1,5 @@
 /**
- * Music Video cover art image attach hook.
+ * Music Video cover art (and painted YouTube thumbnail) image attach hook.
  *
  * "Make a cover image" (musicVideo/coverArt.js) queues one image on the normal
  * image queue with a `musicVideo: { projectId, coverArt: { requestId } }` tag.
@@ -14,24 +14,30 @@
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
 
-const settle = async (payload) => (await import('./musicVideo/coverArt.js')).onCoverArtImageSettled(payload);
+// A cover image and a painted YouTube thumbnail share this hook; the tag says which.
+const settle = async ({ kind, ...payload }) => (kind === 'youtubeThumbnail'
+  ? (await import('./musicVideo/youtubeThumbnail.js')).onThumbnailImageSettled(payload)
+  : (await import('./musicVideo/coverArt.js')).onCoverArtImageSettled(payload));
 
 const hook = createMediaJobImageHook({
   label: 'music-video cover art image',
   initLog: '🖼️ Music Video cover art image hook initialized',
   tagKey: 'musicVideo',
-  identify: (tag) => (tag?.projectId && typeof tag.coverArt?.requestId === 'string'
-    ? { projectId: tag.projectId, requestId: tag.coverArt.requestId }
-    : null),
+  identify: (tag) => {
+    if (!tag?.projectId) return null;
+    if (typeof tag.coverArt?.requestId === 'string') return { projectId: tag.projectId, requestId: tag.coverArt.requestId, kind: 'coverArt' };
+    if (typeof tag.youtubeThumbnail?.requestId === 'string') return { projectId: tag.projectId, requestId: tag.youtubeThumbnail.requestId, kind: 'youtubeThumbnail' };
+    return null;
+  },
   serializeKey: ({ projectId }) => projectId,
   describe: ({ projectId, requestId }) => `${projectId}/${requestId}`,
-  attach: ({ projectId, requestId, filename }) => settle({ projectId, requestId, filename })
+  attach: ({ projectId, requestId, kind, filename }) => settle({ projectId, requestId, kind, filename })
     .then((changed) => (changed ? { filename } : null)),
   onAttached: ({ projectId, filename }) => {
     console.log(`🖼️ music-video cover art ${projectId.slice(0, 11)} ← ${filename}`);
   },
-  onTerminal: ({ projectId, requestId, job }, status) => settle({
-    projectId, requestId, status, error: job?.error || `The render was ${status}`,
+  onTerminal: ({ projectId, requestId, kind, job }, status) => settle({
+    projectId, requestId, kind, status, error: job?.error || `The render was ${status}`,
   }),
 });
 

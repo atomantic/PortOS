@@ -39,9 +39,9 @@ export function installDatabaseStubs(root) {
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
   const R = quote(dir);
-  const logInvocation = name => `{ echo "${name} $*"; env | grep '^PG' | sort | sed 's/^/env /'; } >> "$R/calls.log"`;
+  const logInvocation = name => `{ echo "${name} $*"; env | grep '^PG' | sort | sed 's/^/env /'; echo "tmpdir \${TMPDIR:-}"; } >> "$R/calls.log"`;
   const phase = (kind, event) => `echo "$$ ${kind} ${event} $(date +%s)" >> "$R/phases.log"`;
-  const pause = kind => `: > "$R/${kind}-started"; while [ ! -e "$R/${kind}-release" ]; do sleep 0.05; done`;
+  const pause = kind => `: > "$R/${kind}-started"; while [ ! -e "$R/${kind}-release" ]; do [ -d "$R" ] || exit 1; sleep 0.05; done`;
   writeStub(join(bin, 'uname'), '#!/bin/sh\necho Linux\n');
   writeStub(join(bin, 'pg_dump'), `#!/bin/sh
 R=${R}
@@ -141,6 +141,9 @@ echo "import-commit" >> "$R/events.log"
     // PG* variable names each stub received
     receivedVariables: () => [...new Set(read('calls.log').split('\n')
       .filter(line => line.startsWith('env ')).map(line => line.slice(4).split('=')[0]))].sort(),
+    // TMPDIR each stub inherited through db.sh (empty string when none reached it)
+    receivedTmpdirs: () => [...new Set(read('calls.log').split('\n')
+      .filter(line => line.startsWith('tmpdir ')).map(line => line.slice(7)))],
     writerPid: pid => writeFileSync(join(dir, 'writer.pid'), String(pid)),
     timed,
     report,

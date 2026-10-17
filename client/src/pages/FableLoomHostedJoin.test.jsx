@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import FableLoomHostedJoin from './FableLoomHostedJoin';
 
 // Mock socket.io-client
@@ -68,7 +69,7 @@ describe('FableLoomHostedJoin', () => {
     render(<FableLoomHostedJoin />);
 
     const input = screen.getByPlaceholderText('Or type a message…');
-    fireEvent.change(input, { target: { value: 'Look around the room' } });
+    fireEvent.change(input, { target: { value: '  Look around the room  ' } });
 
     const sendButton = screen.getByRole('button', { name: 'Send message' });
     expect(sendButton).toBeInTheDocument();
@@ -81,7 +82,45 @@ describe('FableLoomHostedJoin', () => {
     );
     fireEvent.submit(input.closest('form'));
 
-    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: 'Look around the room' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: '  Look around the room  ' });
+  });
+
+  it('preserves an over-limit paste, refuses to send, and lets the guest shorten the message', async () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const user = userEvent.setup();
+    render(<FableLoomHostedJoin />);
+    const input = screen.getByRole('textbox', { name: 'Message protagonist' });
+    expect(input).not.toHaveAttribute('maxlength');
+    expect(input).toHaveAccessibleDescription('0 / 1,000 characters');
+    await user.click(input);
+    await user.paste('x'.repeat(1001));
+    expect(input).toHaveValue('x'.repeat(1001));
+    expect(input).toHaveAccessibleDescription('1,001 / 1,000 characters Message exceeds 1,000 characters. Shorten it before sending.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Shorten it before sending.');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    fireEvent.submit(input.closest('form'));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+
+    input.setSelectionRange(1000, 1001);
+    await user.keyboard('{Backspace}');
+    expect(input).toHaveValue('x'.repeat(1000));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(input).toHaveAccessibleDescription('1,000 / 1,000 characters');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: 'x'.repeat(1000) });
+    expect(input).toHaveAccessibleDescription('0 / 1,000 characters');
+  });
+
+  it('refuses over-limit typed input without cutting or clearing it', () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    render(<FableLoomHostedJoin />);
+    const input = screen.getByRole('textbox', { name: 'Message protagonist' });
+    const text = 'x'.repeat(1001);
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.submit(input.closest('form'));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+    expect(input).toHaveValue(text);
+    expect(input).toHaveAccessibleDescription('1,001 / 1,000 characters Message exceeds 1,000 characters. Shorten it before sending.');
   });
 
   it('releases a mic opened after push-to-talk was released', async () => {
@@ -158,6 +197,73 @@ describe('FableLoomHostedJoin', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows an over-cap recording refusal, aborts the turn, and keeps the guest connected', async () => {
+    const { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } = await import('../lib/audioRecorder.js');
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    let recorder;
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.onstop?.(); }
+    });
+    try {
+      render(<FableLoomHostedJoin />);
+      const button = screen.getByRole('button', { name: /hold talk/i });
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorder?.state).toBe('recording'));
+      recorder.ondataavailable({ data: new Blob([new Uint8Array(MAX_VOICE_AUDIO_BYTES + 1)]) });
+      fireEvent.pointerUp(button);
+      expect(screen.getByRole('alert')).toHaveTextContent(RECORDING_TOO_LONG_MESSAGE);
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:mic:stop', expect.anything());
+      expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:abort');
+      expect(mockSocket.disconnect).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('ignores an old oversized stop callback after a newer recording starts', async () => {
+    const { MAX_VOICE_AUDIO_BYTES } = await import('../lib/audioRecorder.js');
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+    });
+    const recorders = [];
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorders.push(this); }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; }
+    });
+    try {
+      render(<FableLoomHostedJoin />);
+      const button = screen.getByRole('button', { name: /hold talk/i });
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorders).toHaveLength(1));
+      recorders[0].ondataavailable({ data: new Blob([new Uint8Array(MAX_VOICE_AUDIO_BYTES + 1)]) });
+      fireEvent.pointerUp(button);
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorders).toHaveLength(2));
+      act(() => recorders[0].onstop());
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:turn:abort');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      recorders[1].ondataavailable({ data: new Blob(['new recording']) });
+      fireEvent.pointerUp(button);
+      act(() => recorders[1].onstop());
+      await waitFor(() => expect(mockSocket.emit).toHaveBeenCalledWith('hosted:mic:stop', expect.any(Uint8Array)));
+      const bytes = mockSocket.emit.mock.calls.find(([event]) => event === 'hosted:mic:stop')[1];
+      expect(new TextDecoder().decode(bytes)).toBe('new recording');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps audio chunks separate across two press and release cycles', async () => {
     window.location.hash = '#session=sess-123&token=tok-abc';
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
@@ -198,5 +304,55 @@ describe('FableLoomHostedJoin', () => {
     expect(payloads).toEqual(['first', 'second']);
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     vi.unstubAllGlobals();
+  });
+
+  const socketHandler = (event) => mockSocket.on.mock.calls.find(([name]) => name === event)?.[1];
+
+  it('discards an in-progress recording and shows the mapped message when the mic is refused', async () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    let recorder;
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; queueMicrotask(() => this.onstop?.()); }
+    });
+
+    render(<FableLoomHostedJoin />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: /hold talk/i }));
+    await waitFor(() => expect(recorder?.state).toBe('recording'));
+    expect(screen.getByText(/release when done/i)).toBeInTheDocument();
+
+    act(() => { socketHandler('hosted:error')({ code: 'PROTAGONIST_ONSCREEN', message: 'raw server text' }); });
+
+    expect(recorder.state).toBe('inactive');
+    expect(track.stop).toHaveBeenCalled();
+    expect(screen.queryByText(/release when done/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/protagonist is on screen/i);
+    await act(async () => { await Promise.resolve(); });
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:mic:stop', expect.anything());
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the server message and re-enables input after a failed turn returns to idle', () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    render(<FableLoomHostedJoin />);
+
+    act(() => { socketHandler('hosted:turn:phase')({ phase: 'thinking' }); });
+    expect(screen.getByRole('button', { name: /hold talk/i })).toBeDisabled();
+    expect(screen.getByPlaceholderText('Or type a message…')).toBeDisabled();
+
+    act(() => {
+      socketHandler('hosted:error')({ code: 'TURN_FAILED', message: 'loom read failed' });
+      socketHandler('hosted:turn:phase')({ phase: 'idle' });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('loom read failed');
+    expect(screen.getByRole('button', { name: /hold talk/i })).not.toBeDisabled();
+    expect(screen.getByPlaceholderText('Or type a message…')).not.toBeDisabled();
   });
 });

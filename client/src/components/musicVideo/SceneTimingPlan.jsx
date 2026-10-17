@@ -37,10 +37,10 @@ function SplitAt({ sceneId, startSec, endSec, onSplit }) {
 }
 
 /** Stateless provider plan and scene split/merge controls, without wrapper DOM. `span` (the shot's start and end) offers a manual split. */
-export default function SceneTimingPlan({ timing, sceneId, lipSyncBackend, onSplit, onMergeNext, span = null }) {
+export default function SceneTimingPlan({ timing, sceneId, lipSyncBackend, onSplit, onMergeNext, onMergePrevious = null, span = null }) {
   const {
     performance, performanceBlocked, capability, plan, performanceCost,
-    falTake, falCost, grokPlan, timedSpan, canSplit, splitLimit, canMerge,
+    falTake, falCost, grokPlan, timedSpan, canSplit, splitLimit, canMerge, canMergePrevious,
   } = timing;
   return (
     <>
@@ -77,6 +77,13 @@ export default function SceneTimingPlan({ timing, sceneId, lipSyncBackend, onSpl
       )}
       {onSplit && span && span.endSec - span.startSec >= 2 * MIN_PIECE_SEC + 0.1 && (
         <SplitAt key={`${span.startSec}-${span.endSec}`} sceneId={sceneId} startSec={span.startSec} endSec={span.endSec} onSplit={onSplit} />
+      )}
+      {canMergePrevious && onMergePrevious && (
+        <button type="button" onClick={() => onMergePrevious(sceneId, lipSyncBackend || null)}
+          className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+          title="Remove the previous shot and start this one where it started">
+          <Merge size={13} /> Merge over previous
+        </button>
       )}
       {canMerge && (
         <button type="button" onClick={() => onMergeNext(sceneId, lipSyncBackend || null)}

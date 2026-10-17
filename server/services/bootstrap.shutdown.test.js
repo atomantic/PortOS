@@ -100,6 +100,30 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
   });
 });
 
+// Issue #11756: the IdeaLoom export debounce is in memory, so shutdown must
+// flush it — after the servers close (nothing can schedule another export),
+// bounded by a grace, overlapping the DB close, and awaited before exit.
+describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('flushes auto-sync under a bounded grace after the servers close and awaits it before exit', () => {
+    const flushAt = code.indexOf('flushIdeaLoomAutoSync()');
+    expect(flushAt, 'flushAutoSync() is not called in shutdown()').toBeGreaterThan(-1);
+    expect(code).toMatch(/const ideaLoomFlushed = withGrace\('IdeaLoom auto-sync flush', \d+,/);
+    expect(flushAt).toBeGreaterThan(code.indexOf('closeServer('));
+    expect(flushAt).toBeLessThan(code.indexOf("withGrace('DB pool'"));
+    const awaitAt = code.indexOf('await ideaLoomFlushed');
+    expect(awaitAt).toBeGreaterThan(code.indexOf("withGrace('DB pool'"));
+    expect(awaitAt).toBeLessThan(code.indexOf('process.exit(0)'));
+  });
+
+  it('keeps the flush grace within the DB close grace so the ceiling is unchanged', () => {
+    const flushGrace = Number(code.match(/withGrace\('IdeaLoom auto-sync flush', (\d+)/)?.[1]);
+    const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
+    expect(flushGrace).toBeLessThanOrEqual(dbGrace);
+  });
+});
+
 // Execute only the close boundary; importing bootstrap loads the live service
 // graph. Fake time pins the shutdown deadline without production sleeps.
 describe('bounded server shutdown', () => {

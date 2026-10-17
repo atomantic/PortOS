@@ -120,12 +120,14 @@ import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
 import { startTribePurge } from './tribePurge.js';
 import { startScreenshotsGc } from './screenshotsGc.js';
-import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
+import { initBridge as initBrainMemoryBridge, replayPersistedResync as replayBrainMemoryResync } from './brainMemoryBridge.js';
+import { flushAutoSync as flushIdeaLoomAutoSync } from './idealoomAutoSync.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
 import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
+import { recoverStuckGeneratingStages } from './pipeline/textStages.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
@@ -463,6 +465,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // after the log's currentSeq is loaded, or they'd write low/duplicate sequence
   // numbers and corrupt peer cursors.
   recoverStuckAnalyses().catch(err => logBootstrapFailure('❌ Writers Room recovery failed', err));
+  recoverStuckGeneratingStages().catch(err => logBootstrapFailure('❌ Pipeline text-stage recovery failed', err));
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
   recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
@@ -481,8 +484,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // QR play sessions and tears down the ones past their TTL, making no AI
   // provider call, so it is safe under AGENTS.md's "No cold-bootstrap LLM calls".
   startHostedSessionSweep({ io });
-  // Initialize brain scheduler for daily digests and weekly reviews
-  startBrainScheduler();
   // Initialize activity-digest scheduler — OFF by default; drafts daily-log
   // auto-summaries from the Human Activity timeline only when the user enables it
   // (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
@@ -985,6 +986,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
 
     runDatabasePhase: async () => {
       await runDatabaseBootPhase();
+      // Brain→memory resyncs a previous process queued but never finished. Runs
+      // after initSyncLog and the DB phase (the memory index needs both), in the
+      // background so a large backlog can't delay accepting requests.
+      replayBrainMemoryResync().catch((err) => logBootstrapFailure('❌ Brain memory resync replay failed', err));
       const { bindPeerExecutionIo, initializePeerExecution } = await import('./peerExecutionRuntime.js');
       bindPeerExecutionIo(io);
       await initializePeerExecution().catch(err => console.error(`❌ Peer execution recovery remains held: ${err.message}`));
@@ -1019,7 +1024,11 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ restoreServe }) => restoreServe())
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
-      initSyncOrchestrator
+      initSyncOrchestrator,
+      // Brain digests/reviews call an AI provider, so the scheduler arms only
+      // once the server is listening and only acts when the user opted in
+      // (`scheduledReviewsEnabled`).
+      startBrainScheduler
     }, 'postListen', isSmokeBoot())))
   }, 'postRoute', isSmokeBoot()));
 
@@ -1218,6 +1227,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       closeServer(localHttpServer, 'Local HTTP mirror')
     ]);
 
+    // An IdeaLoom vault export still inside its 5s debounce would otherwise be
+    // lost. A local file write, so it overlaps the DB close below inside that
+    // close's budget rather than adding to the shutdown ceiling; no request can
+    // schedule another export now that the servers are closed.
+    const ideaLoomFlushed = withGrace('IdeaLoom auto-sync flush', 2500, ({ finish, finishWithError }) =>
+      flushIdeaLoomAutoSync().then(() => finish('✅ IdeaLoom auto-sync flushed'), (err) => finishWithError('⚠️ IdeaLoom auto-sync flush failed', err)));
+
     // Flush the media-job queue now that no request can admit another job
     // (#8325): terminal transitions and the latest progress reach the snapshot a
     // restart restores from. The file write is independent of Postgres, so it
@@ -1241,6 +1257,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
 
     await markerWritten;
     await mediaQueueFlushed;
+    await ideaLoomFlushed;
     clearTimeout(forceExitTimer);
     process.exit(0);
   };

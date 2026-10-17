@@ -10,7 +10,6 @@ const rootDir = join(__dirname, '..');
 const home = homedir();
 const isMac = platform() === 'darwin';
 
-// Check if Ghostty is installed
 const ghosttyInstalled = (() => {
   const paths = [
     '/Applications/Ghostty.app',

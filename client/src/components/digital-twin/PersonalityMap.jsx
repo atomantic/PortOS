@@ -59,7 +59,6 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
   const bigFive = traits?.bigFive;
   const hasTraits = bigFive && Object.keys(bigFive).length > 0;
 
-  // Get dimension confidence from confidence object
   const getDimensionConfidence = (trait) => {
     const dimensionMap = {
       O: 'openness',

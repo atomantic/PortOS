@@ -11,6 +11,7 @@ vi.mock('../hooks/useMediaPreviewActions', () => ({ default: () => ({}) }));
 vi.mock('../components/media/VideoUpscaleDrawer', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}{preview.detailError && ' [details unavailable]'}</div> : null }));
 vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview }) => <div><button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
+vi.mock('../components/media/MediaHistoryGrid', () => ({ default: ({ items, children }) => <div>{items.map(children)}</div> }));
 import MediaHistory from './MediaHistory';
 
 let rows;

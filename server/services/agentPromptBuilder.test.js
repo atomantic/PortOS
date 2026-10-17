@@ -1,17 +1,4 @@
-/**
- * Tests for the light-vs-full context split in buildAgentPrompt.
- *
- * The split is by `provider.type`:
- *   - `tui` / `cli` → light prompt (Claude Code, Codex, Antigravity — agentic
- *     CLIs with native filesystem tools and agent-instruction loading)
- *   - `api`         → full prompt (LM Studio, raw OpenAI/Anthropic — no
- *     native filesystem access, so we paste in memory/AGENTS.md/etc.)
- *
- * The light path is the focus here because it's the new code. The full
- * path is exercised by a single negative assertion that confirms the
- * obsolete "# Chief of Staff Agent Briefing" header and "You are an
- * autonomous agent…" preamble are gone from BOTH paths.
- */
+// Exercise both native-file-tool and API prompt assembly paths.
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
@@ -21,15 +8,8 @@ import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
 
-// #3475 — The builder reads ~/.claude/CLAUDE.md off the real filesystem and splices
-// it into the prompt, so without this every `not.toMatch` assertion below is decided
-// by the contributor's personal global config: it false-fails when their file happens
-// to contain the string, and false-passes on a machine that has no such file at all
-// (CI), where the suppression being asserted is never actually exercised. Pointing
-// homedir() at a path that cannot exist makes the global section deterministically
-// empty. `homeStub` stays mutable so the one test that needs a REAL global CLAUDE.md
-// (a fixture that deliberately contains the suppressed string) can swap it in and
-// prove the suppression positively — see the #3475 describe block further down.
+// Isolate personal instructions so contributor config cannot decide assertions.
+// Tests of global-instruction loading override this with a fixture home (#3475).
 const homeStub = vi.hoisted(() => ({ dir: '/nonexistent-home-for-tests' }));
 vi.mock('os', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -233,6 +213,26 @@ describe('composable skill template routing', () => {
       .resolves.toBe('Security lifecycle guidance');
     expect(loadTemplate).toHaveBeenNthCalledWith(1, 'security-audit');
     expect(loadTemplate).toHaveBeenNthCalledWith(2, 'threejs-visual');
+  });
+
+  it.each([true, false])('preserves comment maintenance in API/native prompts with fileIssues=%s', async (fileIssues) => {
+    const { modeContractFor } = await import('../lib/auditCatalog.js');
+    const mode = modeContractFor(fileIssues);
+    const description = DEFAULT_TASK_PROMPTS['better-cognitive-load']
+      .replaceAll('{appName}', 'Example App')
+      .replaceAll('{repoPath}', '/workspace/example-app')
+      .replace('{modeInstructions}', mode);
+    const task = makeTask({ description, metadata: {
+      analysisType: 'better-cognitive-load', noCodeOutput: fileIssues,
+    } });
+    for (const providerType of ['api', 'tui', 'cli']) {
+      const prompt = await buildAgentPrompt(task, {}, '/workspace/example-app', null, { providerType });
+      expect(prompt).toContain('Excessive code comments');
+      expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
+      expect(prompt).toContain('review the diff for behavior preservation');
+      expect(prompt).not.toContain('{modeInstructions}');
+      expect(prompt).not.toMatch(/add (?:clear |helpful )?comments/i);
+    }
   });
 
   it('keeps the final module-hygiene mission generic across API and TUI/CLI paths', async () => {
@@ -1407,7 +1407,7 @@ describe('buildLightContextPrompt', () => {
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain('All local reviewers are optional, so missing/inconclusive results');
-      expect(prompt).toContain('Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive');
+      expect(prompt).toContain('Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped with all accepted findings resolved, or optional inconclusive with no unresolved accepted findings');
       expect(prompt).toContain('missing/malformed/no-verdict result from one of them is non-blocking');
       expect(prompt).toContain('`codex` still run and their findings must still be fixed');
       expect(prompt).not.toContain('a missing, timed-out, malformed, or inconclusive local review is UNSATISFIED');
@@ -3529,16 +3529,17 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     expect(out).toMatch(/codex/);
   });
 
-  it('keeps review rounds focused on material findings and diminishing returns', () => {
+  it('keeps review scope focused while requiring every accepted finding to be resolved', () => {
     const out = buildReviewLoopFollowUpSection(
       { ...baseMeta, reviewLoopReviewers: ['claude'] },
       { verbose: false, localAgentLoopBody: null }
     );
     expect(out).toContain('directly affected contracts only');
-    expect(out).toContain('concrete wrong outcome');
-    expect(out).toContain('only substantive fixes do');
-    expect(out).toContain('skip repository-wide audits');
-    expect(out).toContain('This affects looping only, not clean/partial verdicts');
+    expect(out).toContain('verified defects and established-convention violations with concrete evidence');
+    expect(out).toContain('including nits and warnings');
+    expect(out).toContain('Resolve every accepted finding; severity only determines sequencing');
+    expect(out).toContain('Do not broaden into an unrelated repository-wide audit');
+    expect(out).toContain('A round cap never makes unresolved accepted findings clean');
   });
 });
 

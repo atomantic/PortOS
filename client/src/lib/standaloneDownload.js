@@ -30,10 +30,44 @@ export function assetDownloadUrl(href) {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export async function prepareDownload({ url, filename }, signal) {
+// The share sheet needs the whole file in the browser's memory first. A phone
+// cannot hold a full-length final render (hundreds of MB), so anything larger
+// is refused here and the user is pointed at the native download instead.
+export const SHARE_SHEET_MAX_BYTES = 100 * 1024 * 1024;
+
+const tooLarge = (bytes) => Object.assign(new Error('Too large for the share sheet'), { code: 'DOWNLOAD_TOO_LARGE', bytes });
+
+export async function prepareDownload({ url, filename }, signal, onProgress) {
   const res = await fetch(url, { credentials: 'same-origin', signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const blob = await res.blob();
+  const total = Number(res.headers?.get?.('content-length')) || null;
+  if (total > SHARE_SHEET_MAX_BYTES) {
+    res.body?.cancel?.().catch(() => {});
+    throw tooLarge(total);
+  }
+  let blob;
+  const reader = res.body?.getReader?.();
+  if (reader) {
+    const chunks = [];
+    let received = 0;
+    onProgress?.({ received, total });
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.byteLength;
+      // No Content-Length (chunked): stop as soon as the file proves too big.
+      // Its real size is unknown, so report none rather than the bytes read.
+      if (received > SHARE_SHEET_MAX_BYTES) {
+        reader.cancel().catch(() => {});
+        throw tooLarge(total);
+      }
+      onProgress?.({ received, total });
+    }
+    blob = new Blob(chunks, { type: res.headers?.get?.('content-type') || '' });
+  } else {
+    blob = await res.blob();
+  }
   const ext = filename.split('.').pop()?.toLowerCase();
   const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : (MIME_BY_EXT[ext] || blob.type);
   const file = new File([blob], filename, { type });

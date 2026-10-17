@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -49,6 +49,9 @@ import {
   musicVideoPromotionPlanSchema,
   musicVideoPublishThumbnailSchema,
   musicVideoCoverArtComposeSchema,
+  musicVideoYoutubeThumbnailComposeSchema,
+  musicVideoYoutubeThumbnailPaintSchema,
+  musicVideoYoutubeThumbnailPaintPreviewSchema,
   musicVideoCoverArtGenerateSchema,
   musicVideoCoverDesignSaveSchema,
   musicVideoArtistStyleSaveSchema,
@@ -112,6 +115,7 @@ import {
   reorderProjectScenes,
   splitProjectScene,
   mergeProjectNextScene,
+  mergeProjectPreviousScene,
   moveProjectSceneStart,
   setProjectMidiTranscription,
   appendSceneTakes,
@@ -733,6 +737,21 @@ router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) =
   const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
   res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
 }));
+// The shots rendered so far, stitched in order with the song (a seam check
+// while the rest renders), and the film looks cached over the current takes.
+router.post('/:id/shot-renders/preview', asyncHandler(async (req, res) => {
+  const { light } = validateRequest(musicVideoRenderPreviewSchema, req.body ?? {});
+  const { buildRenderPreview } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await buildRenderPreview(req.params.id, { light: light === true }));
+}));
+router.get('/:id/film-looks', asyncHandler(async (req, res) => {
+  const { listFilmLooks } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await listFilmLooks(req.params.id));
+}));
+router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
+  const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await deleteFilmLook(req.params.id, req.params.lookId));
+}));
 router.get('/:id/shot-renders/:name', asyncHandler(async (req, res) => {
   const { shotSegmentFile } = await import('../services/musicVideo/shotSegments.js');
   const path = shotSegmentFile(req.params.id, req.params.name);
@@ -1059,6 +1078,49 @@ router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
 router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
   const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
+}));
+
+// The YouTube thumbnail: a source cropped 16:9 with the title set in the
+// cover's lettering. DELETE goes back to the picked video frame.
+router.post('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailComposeSchema, req.body ?? {});
+  const { composeProjectYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await composeProjectYoutubeThumbnail(req.params.id, input);
+  res.json({ project });
+}));
+
+router.delete('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) => {
+  const { clearProjectYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await clearProjectYoutubeThumbnail(req.params.id);
+  res.json({ project });
+}));
+
+// "Paint the title": what the image model would receive, then the queued job
+// (its completion hook makes the result the thumbnail).
+router.post('/:id/publish-kit/youtube-thumbnail/paint/preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailPaintPreviewSchema, req.body ?? {});
+  const { buildThumbnailPaintPrompt } = await import('../services/musicVideo/youtubeThumbnail.js');
+  res.json(buildThumbnailPaintPrompt(input));
+}));
+
+router.post('/:id/publish-kit/youtube-thumbnail/paint', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailPaintSchema, req.body ?? {});
+  const { paintYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await paintYoutubeThumbnail(req.params.id, input);
+  res.json({ project });
+}));
+
+// Variants kept for YouTube's Test & Compare (up to three): add the made thumbnail, or drop one.
+router.post('/:id/publish-kit/youtube-thumbnail/tests', asyncHandler(async (req, res) => {
+  const { addYoutubeThumbnailTest } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await addYoutubeThumbnailTest(req.params.id);
+  res.json({ project });
+}));
+
+router.delete('/:id/publish-kit/youtube-thumbnail/tests/:filename', asyncHandler(async (req, res) => {
+  const { removeYoutubeThumbnailTest } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await removeYoutubeThumbnailTest(req.params.id, req.params.filename);
   res.json({ project });
 }));
 
@@ -1533,6 +1595,12 @@ router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// Merge a scene over the previous one: it starts where the previous one did, which is removed.
+router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await mergeProjectPreviousScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
 // Move a shot's start; the shot before it ends at the same time, so the cut between them moves.

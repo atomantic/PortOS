@@ -16,14 +16,16 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission: () => {} }));
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
-// The publishing kit's encodes and thumbnails are written as placeholders; the
-// final render's poster is a fixed name.
+// Video encodes stay placeholders; thumbnails reach the REAL image scorer, so
+// their bytes are a valid 2x2 RGB PNG. The final render's poster is a fixed name.
+const thumbnailPng = vi.hoisted(() => Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWPQqDihUXGCAUIBACTuBaFpkxOkAAAAAElFTkSuQmCC', 'base64'));
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   findFfmpeg: vi.fn(async () => 'ffmpeg'),
   runFfmpegProcess: vi.fn(async ({ args }) => {
-    await writeFile(args.at(-1), 'synthetic encode');
+    const output = args.at(-1);
+    await writeFile(output, output.endsWith('.jpg') ? thumbnailPng : 'synthetic encode');
     return { ok: true };
   }),
 }));
@@ -44,6 +46,7 @@ const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { startPublishKitBuild } = await import('./publishKit.js');
+const { thumbnailCandidates } = await import('./thumbnailFrames.js');
 const { encodeDocumentComposition } = await import('./documentRender.js');
 const { runFfmpegProcess } = await import('../../lib/ffmpeg.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
@@ -169,17 +172,27 @@ describe('publishing kit build', () => {
     runFfmpegProcess.mockClear();
     const release = await acquireBackupSnapshotCut();
     try {
+      const frames = thumbnailCandidates(await projects.getProject(id), 12.5).length;
       await startPublishKitBuild(id);
-      // Thumbnails are the build's last ffmpeg step.
-      await waitFor(async () => expect((await readdir(PATHS.videoThumbnails)).some(name => name.endsWith('-thumb-6.jpg'))).toBe(true));
+      // Thumbnail frames are the build's last ffmpeg step; unpicked ones are deleted, so watch the calls.
+      const lastFrame = `-thumb-${frames}.jpg`;
+      await waitFor(() => expect(runFfmpegProcess.mock.calls.some(([{ args }]) => args.at(-1).endsWith(lastFrame))).toBe(true));
       await settleSeveral();
       const encoded = runFfmpegProcess.mock.calls.length;
-      expect(encoded).toBeGreaterThan(6);
+      expect(encoded).toBeGreaterThan(frames);
       expect((await projects.getProject(id)).publishKit?.exports).toBeUndefined();
+      expect((await projects.getProject(id)).publishKit?.thumbnails).toBeUndefined();
       release();
-      await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - 6));
-      for (const { filename } of (await projects.getProject(id)).publishKit.exports) {
+      await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - frames));
+      const { publishKit } = await projects.getProject(id);
+      for (const { filename } of publishKit.exports) {
         expect(existsSync(join(PATHS.videos, filename))).toBe(true);
+      }
+      // The real scorer drops undecodable frames: a nonempty published list
+      // proves these synthetic bytes passed its decoder instead of becoming NaN.
+      expect(publishKit.thumbnails.length).toBeGreaterThan(0);
+      for (const filename of publishKit.thumbnails) {
+        expect(existsSync(join(PATHS.videoThumbnails, filename))).toBe(true);
       }
     } finally {
       release();

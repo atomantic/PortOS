@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Activity, Film, Play, Square, X } from 'lucide-react';
+import { Activity, Film, Play, SlidersHorizontal, Square, X } from 'lucide-react';
+import FilmLookControls from '../media/FilmLookControls.jsx';
+import FilmLookPreview from '../media/FilmLookPreview.jsx';
 import { cancelMusicVideoShotRender, musicVideoShotRenderUrl, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
-import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
+import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
+import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook } from '../../lib/filmLook.js';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-0';
 const presetLabel = (look) => (isFilmLookNeutral(look) ? 'Clean' : FILM_LOOK_PRESETS.find((p) => p.id === look?.preset)?.label || 'Custom');
@@ -20,8 +23,11 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   const live = liveByShot[sceneId] || null;
   const [playing, setPlaying] = useState(false);
   const [starting, setStarting] = useState(false);
+  const saved = useFilmLookPresets();
+  const savedLooks = saved.presets;
+  const [tuning, setTuning] = useState(null); // the look being tuned, or null when closed
 
-  useEffect(() => { setPlaying(false); }, [sceneId]);
+  useEffect(() => { setPlaying(false); setTuning(null); }, [sceneId]);
 
   if (!status?.available) return null;
   const shot = status.shots.find((entry) => entry.sceneId === sceneId);
@@ -30,7 +36,9 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   const file = rendered ? shot.files[shot.files.length - 1] : null;
   const ownLook = scene.filmLook ? normalizeFilmLook(scene.filmLook) : null;
   const videoLook = normalizeFilmLook(project.filmLook);
-  const lookValue = ownLook ? (FILM_LOOK_PRESETS.some((p) => p.id === ownLook.preset) ? ownLook.preset : 'own') : 'video';
+  const savedMatch = ownLook && !FILM_LOOK_PRESETS.some((p) => p.id === ownLook.preset)
+    ? savedLooks.find((preset) => sameFilmLook(preset.look, ownLook)) : null;
+  const lookValue = ownLook ? (FILM_LOOK_PRESETS.some((p) => p.id === ownLook.preset) ? ownLook.preset : savedMatch ? `saved:${savedMatch.id}` : 'own') : 'video';
 
   const start = () => {
     setStarting(true);
@@ -42,9 +50,13 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   };
   const pickLook = (value) => {
     setPlaying(false);
+    setTuning(null);
     if (value === 'video') onChange({ filmLook: null });
     else if (value === 'keep') onChange({ filmLook: videoLook || filmLookPreset('none') });
-    else if (value !== 'own') onChange({ filmLook: filmLookPreset(value) });
+    else if (value.startsWith('saved:')) {
+      const preset = savedLooks.find((entry) => `saved:${entry.id}` === value);
+      if (preset) onChange({ filmLook: normalizeFilmLook({ ...preset.look, preset: 'custom' }) });
+    } else if (value !== 'own') onChange({ filmLook: filmLookPreset(value) });
   };
 
   const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : shot ? 'Not rendered' : 'Not in the cut';
@@ -88,8 +100,30 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
           {!ownLook && <option value="keep">Keep the video&apos;s look on this shot</option>}
           {lookValue === 'own' && <option value="own">This shot&apos;s look ({presetLabel(ownLook)})</option>}
           {FILM_LOOK_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          {savedLooks.length > 0 && (
+            <optgroup label="Your looks">
+              {savedLooks.map((preset) => <option key={preset.id} value={`saved:${preset.id}`}>{preset.label}</option>)}
+            </optgroup>
+          )}
         </select>
+        <button type="button" className={BUTTON} aria-expanded={!!tuning}
+          onClick={() => setTuning((open) => (open ? null : ownLook || videoLook || filmLookPreset('none')))}>
+          <SlidersHorizontal size={12} aria-hidden="true" /> {tuning ? 'Done' : 'Tune'}
+        </button>
       </div>
+      {tuning && (
+        // This shot's own look, slider by slider, on its still: subtle fixes
+        // (a little haze on one clean shot) without a whole preset.
+        <div className="space-y-2" aria-label="Tune this shot's look" role="group">
+          {scene.referenceImageId && (
+            <FilmLookPreview src={`/data/images/${scene.referenceImageId}`} alt="This shot" look={tuning}
+              className="flex items-center justify-center overflow-hidden rounded bg-black [&_img]:max-h-[30dvh]" />
+          )}
+          <FilmLookControls look={tuning} compact saved={saved}
+            onChange={setTuning}
+            onCommit={(look) => { setTuning(look); onChange({ filmLook: look }); }} />
+        </div>
+      )}
     </section>
   );
 }

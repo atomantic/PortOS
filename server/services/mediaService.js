@@ -7,6 +7,8 @@ let audioProcess = null;
 let videoStream = null;
 let audioStream = null;
 let devices = { video: [], audio: [] };
+const DEVICE_PROBE_TIMEOUT_MS = 10_000;
+const MAX_DEVICE_OUTPUT_BYTES = 1024 * 1024;
 
 async function listDevices() {
   return new Promise((resolve, reject) => {
@@ -14,15 +16,34 @@ async function listDevices() {
       '-f', 'avfoundation',
       '-list_devices', 'true',
       '-i', ''
-    ], safeChildProcessOptions());
+    ], { ...safeChildProcessOptions(), stdio: ['ignore', 'ignore', 'pipe'] });
 
     let output = '';
-
-    ffmpeg.stderr.on('data', (data) => {
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      ffmpeg.stderr.off('data', onData);
+      if (err) reject(err);
+      return true;
+    };
+    const onData = (data) => {
+      if (Buffer.byteLength(output) + data.length > MAX_DEVICE_OUTPUT_BYTES) {
+        finish(new Error('Media device probe output exceeded limit'));
+        ffmpeg.kill('SIGKILL');
+        return;
+      }
       output += data.toString();
-    });
+    };
+    const timer = setTimeout(() => {
+      finish(new Error('Media device probe timed out'));
+      ffmpeg.kill('SIGKILL');
+    }, DEVICE_PROBE_TIMEOUT_MS);
+    ffmpeg.stderr.on('data', onData);
 
-    ffmpeg.on('close', () => {
+    ffmpeg.once('close', () => {
+      if (!finish()) return;
       const videoDevices = [];
       const audioDevices = [];
 
@@ -57,7 +78,7 @@ async function listDevices() {
       resolve(devices);
     });
 
-    ffmpeg.on('error', reject);
+    ffmpeg.once('error', err => finish(err));
   });
 }
 
@@ -93,6 +114,9 @@ function startVideoStream(deviceId = '0') {
 
   child.on('error', (err) => {
     console.error(`❌ Video stream error: ${err.message}`);
+    stream.end();
+    if (videoProcess === child) videoProcess = null;
+    if (videoStream === stream) videoStream = null;
   });
 
   child.on('close', () => {
@@ -137,6 +161,9 @@ function startAudioStream(deviceId = '0') {
 
   child.on('error', (err) => {
     console.error(`❌ Audio stream error: ${err.message}`);
+    stream.end();
+    if (audioProcess === child) audioProcess = null;
+    if (audioStream === stream) audioStream = null;
   });
 
   child.on('close', () => {
@@ -151,6 +178,7 @@ function startAudioStream(deviceId = '0') {
 function stopVideoStream() {
   if (videoProcess) {
     videoProcess.kill('SIGTERM');
+    videoStream?.end();
     videoProcess = null;
     videoStream = null;
   }
@@ -159,6 +187,7 @@ function stopVideoStream() {
 function stopAudioStream() {
   if (audioProcess) {
     audioProcess.kill('SIGTERM');
+    audioStream?.end();
     audioProcess = null;
     audioStream = null;
   }

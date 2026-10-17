@@ -8,7 +8,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
 import useMounted from '../hooks/useMounted.js';
+import { formatCount } from '../utils/formatters.js';
 import {
   AlertCircle,
   Loader2,
@@ -17,6 +19,17 @@ import {
   Smartphone,
   Volume2,
 } from 'lucide-react';
+
+// Guest-facing wording for the live-conversation gates; any other code falls
+// back to the server's own message.
+const HOSTED_ERROR_MESSAGES = {
+  PLAYBACK_NOT_IN_HOLD_PHASE: 'The scene is still playing — wait for it to pause, then try again.',
+  PROTAGONIST_ONSCREEN: 'The protagonist is on screen right now — wait until they finish.',
+  HOLD_ASSET_OCCUPIED_BY_DIALOGUE: 'The protagonist is mid-line — wait until they finish.',
+  TURN_IN_PROGRESS: 'A reply is already in progress — wait a moment, then try again.',
+  EPISODE_SWITCH_IN_PROGRESS: 'The host is switching episodes — try again in a moment.',
+};
+const MAX_TEXT_CHARACTERS = 1000;
 
 export default function FableLoomHostedJoin() {
   const [sessionId, setSessionId] = useState(null);
@@ -28,13 +41,19 @@ export default function FableLoomHostedJoin() {
   const [transcript, setTranscript] = useState([]);
   const [textInput, setTextInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const pressedRef = useRef(false);
   const startGenRef = useRef(0);
+  // Release preserves final recorder callbacks; a newer press retires them.
+  const recordingGenRef = useRef(0);
   const mountedRef = useMounted();
   const transcriptScrollRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  // The socket effect closes over its first render; this ref keeps its
+  // `hosted:error` handler pointed at the current recorder state.
+  const discardRecordingRef = useRef(null);
 
   // 1. Parse session and token from URL fragment (#session=...&token=...)
   useEffect(() => {
@@ -87,6 +106,13 @@ export default function FableLoomHostedJoin() {
       }
     });
 
+    // The server refuses or fails a turn with this frame; without it a refused
+    // mic keeps "recording" into a turn the server already dropped.
+    s.on('hosted:error', (data) => {
+      discardRecordingRef.current?.();
+      setRecordingError(HOSTED_ERROR_MESSAGES[data?.code] || data?.message || 'Something went wrong. Please try again.');
+    });
+
     s.on('hosted:turn:transcript', (item) => {
       setTranscript((prev) => [...prev, item]);
     });
@@ -128,8 +154,10 @@ export default function FableLoomHostedJoin() {
   // Microphone recording controls
   const startRecording = async () => {
     if (pressedRef.current || mediaRecorderRef.current || turnPhase === 'thinking' || turnPhase === 'speaking' || turnPhase === 'ended') return;
+    setRecordingError(null);
     pressedRef.current = true;
     const generation = ++startGenRef.current;
+    const recordingGeneration = ++recordingGenRef.current;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -155,13 +183,21 @@ export default function FableLoomHostedJoin() {
       };
 
       recorder.onstop = () => {
+        stopTracks();
+        if (!mountedRef.current || recordingGeneration !== recordingGenRef.current) return;
         const audioBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (audioBlob.size > MAX_VOICE_AUDIO_BYTES) {
+          if (mountedRef.current) {
+            setRecordingError(RECORDING_TOO_LONG_MESSAGE);
+            socket?.emit('hosted:turn:abort');
+          }
+          return;
+        }
         audioBlob.arrayBuffer().then((buf) => {
-          if (mountedRef.current && socket) {
+          if (mountedRef.current && recordingGeneration === recordingGenRef.current && socket) {
             socket.emit('hosted:mic:stop', new Uint8Array(buf));
           }
         });
-        stopTracks();
       };
 
       recorder.start(100);
@@ -189,7 +225,23 @@ export default function FableLoomHostedJoin() {
     }
   };
 
+  // Retire the generation first so the recorder's onstop never ships the
+  // audio of a turn the server already refused.
+  discardRecordingRef.current = () => {
+    pressedRef.current = false;
+    ++startGenRef.current;
+    ++recordingGenRef.current;
+    const active = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (active) {
+      if (active.recorder.state !== 'inactive') active.recorder.stop();
+      active.stopTracks();
+    }
+    setIsRecording(false);
+  };
+
   useEffect(() => () => {
+    ++recordingGenRef.current;
     pressedRef.current = false;
     ++startGenRef.current;
     const active = mediaRecorderRef.current;
@@ -203,8 +255,8 @@ export default function FableLoomHostedJoin() {
 
   const handleSendText = (e) => {
     e?.preventDefault();
-    if (!textInput.trim() || !socket) return;
-    socket.emit('hosted:turn:text', { text: textInput.trim() });
+    if (!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || !socket) return;
+    socket.emit('hosted:turn:text', { text: textInput });
     setTextInput('');
   };
 
@@ -222,6 +274,7 @@ export default function FableLoomHostedJoin() {
 
   return (
     <main className="h-dvh-screen bg-slate-950 text-white flex flex-col justify-between max-w-md mx-auto relative overflow-y-auto shadow-2xl">
+      {recordingError && <p role="alert" className="px-4 text-sm text-red-400">{recordingError}</p>}
       <audio ref={audioPlayerRef} className="hidden" />
 
       {/* Header */}
@@ -336,18 +389,28 @@ export default function FableLoomHostedJoin() {
             onChange={(e) => setTextInput(e.target.value)}
             placeholder="Or type a message…"
             aria-label="Message protagonist"
+            aria-describedby={textInput.length > MAX_TEXT_CHARACTERS ? 'hosted-text-count hosted-text-limit-error' : 'hosted-text-count'}
+            aria-invalid={textInput.length > MAX_TEXT_CHARACTERS}
             disabled={turnPhase === 'thinking' || turnPhase === 'speaking'}
             className="flex-1 bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
           <button
             type="submit"
             aria-label="Send message"
-            disabled={!textInput.trim() || turnPhase === 'thinking' || turnPhase === 'speaking'}
+            disabled={!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || turnPhase === 'thinking' || turnPhase === 'speaking'}
             className="min-w-[44px] min-h-[44px] p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center justify-center"
           >
             <Send className="w-4 h-4" />
           </button>
         </form>
+        <p id="hosted-text-count" className="mt-1 text-right text-[11px] text-slate-400">
+          {formatCount(textInput.length)} / {formatCount(MAX_TEXT_CHARACTERS)} characters
+        </p>
+        {textInput.length > MAX_TEXT_CHARACTERS && (
+          <p id="hosted-text-limit-error" role="alert" className="text-xs text-red-400">
+            Message exceeds {formatCount(MAX_TEXT_CHARACTERS)} characters. Shorten it before sending.
+          </p>
+        )}
       </div>
     </main>
   );

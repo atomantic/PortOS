@@ -7,11 +7,12 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: mocks.spawn,
 }));
-import { restartApp } from './pm2.js';
+import { execPm2, restartApp } from './pm2.js';
 
 function child() {
   return Object.assign(new EventEmitter(), {
-    stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn(),
+    stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+    stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }), kill: vi.fn(), unref: vi.fn(),
   });
 }
 
@@ -45,14 +46,36 @@ describe('PM2 restart lifecycle', () => {
     }
   });
 
-  it('rejects a stalled restart within a minute even when the child never closes', async () => {
+  it('bounds a stalled restart and reports unconfirmed cleanup when the child never closes', async () => {
     vi.useFakeTimers();
     const stalled = child();
     mocks.spawn.mockReturnValue(stalled);
-    const result = expect(restartApp('worker')).rejects.toThrow('pm2 restart worker timed out after 60s');
-    await vi.advanceTimersByTimeAsync(60_000);
+    const result = expect(restartApp('worker')).rejects.toMatchObject({
+      code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed: false, outcome: 'unknown',
+    });
+    await vi.advanceTimersByTimeAsync(62_000);
     await result;
-    expect(stalled.kill).toHaveBeenCalled();
+    expect(stalled.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(stalled.stdout.destroy).toHaveBeenCalled();
+    expect(stalled.stderr.destroy).toHaveBeenCalled();
+    expect(stalled.unref).toHaveBeenCalled();
+    expect(stalled.listenerCount('close')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('honors a caller deadline and confirms CLI teardown without claiming the daemon mutation failed', async () => {
+    vi.useFakeTimers();
+    const owned = child();
+    owned.kill.mockImplementation(signal => owned.emit('close', null, signal));
+    mocks.spawn.mockReturnValue(owned);
+    const result = expect(execPm2(['restart', 'example-worker'], { timeoutMs: 100 })).rejects.toMatchObject({
+      code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed: true, outcome: 'unknown',
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await result;
+    expect(owned.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(owned.stdout.listenerCount('data')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('preserves daemon error details on a failed restart', async () => {

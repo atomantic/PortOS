@@ -157,3 +157,30 @@ describe('taskWatcher change detection', () => {
     ]);
   });
 });
+
+describe('taskWatcher start/stop lifecycle', () => {
+  it('coalesces overlapping starts into one watcher that one stop closes', async () => {
+    const watcher = new FakeWatcher();
+    mocks.watch.mockReturnValue(watcher);
+    const results = await Promise.all([startWatching(), startWatching()]);
+    expect(results).toEqual([{ success: true }, { success: true }]);
+    expect(mocks.watch).toHaveBeenCalledTimes(1);
+    expect(await startWatching()).toEqual({ success: false, error: 'Already watching' });
+    expect(await stopWatching()).toEqual({ success: true });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop issued during start waits for it and closes the created watcher', async () => {
+    const watcher = new FakeWatcher();
+    const gate = deferred();
+    mocks.watch.mockReturnValue(watcher);
+    mocks.getUserTasks.mockImplementationOnce(async () => { await gate.promise; return { tasks: [] }; });
+    const starting = startWatching();
+    const stopping = stopWatching();
+    gate.resolve();
+    await starting;
+    expect(await stopping).toEqual({ success: true });
+    expect(getWatcherStatus().watching).toBe(false);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+});

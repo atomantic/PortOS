@@ -3,7 +3,8 @@ import { writeFile, readdir, stat, rm } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { exec, spawn } from '../lib/childProcess.js';
+import { exec } from '../lib/childProcess.js';
+import { runCliBounded } from '../lib/runCliBounded.js';
 import { promisify } from 'util';
 import { platform } from 'os';
 import { createApp, getReservedPorts, notifyAppsChanged } from '../services/apps.js';
@@ -474,7 +475,18 @@ module.exports = {
   }
 
   // Initialize git
-  await execAsync('git init', { cwd: repoPath });
+  const runGit = async (args) => {
+    const result = await runCliBounded('git', args, {
+      cwd: repoPath,
+      timeoutMs: 30_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    if (result.code !== 0) {
+      throw new Error(`git ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim() || `exited with code ${result.code}`}`);
+    }
+  };
+  await runGit(['init']);
 
   // Create .gitignore
   let gitignoreContent;
@@ -535,16 +547,8 @@ Thumbs.db
   }
 
   await writeFile(join(repoPath, '.gitignore'), gitignoreContent);
-  // Use spawn with shell:false to avoid shell injection
-  const spawnGit = (args) => new Promise((resolve, reject) => {
-    const proc = spawn('git', args, { cwd: repoPath, shell: false });
-    let stderr = '';
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git ${args[0]} failed: ${stderr.trim()}`)));
-    proc.on('error', reject);
-  });
-  await spawnGit(['add', '-A']);
-  await spawnGit(['commit', '-m', 'Initial commit']);
+  await runGit(['add', '-A']);
+  await runGit(['commit', '-m', 'Initial commit']);
   addStep('Initialize git', 'done');
 
   // Create GitHub repo if requested
@@ -553,16 +557,15 @@ Thumbs.db
     const repoName = githubOrg ? `${githubOrg}/${dirName}` : dirName;
     const ghArgs = ['repo', 'create', repoName, '--source=.', '--push', '--private'];
 
-    const { stderr: ghErr } = await new Promise((resolve) => {
-      const child = spawn('gh', ghArgs, { cwd: repoPath, shell: false });
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
-      child.on('close', () => resolve({ stderr }));
-      child.on('error', (err) => resolve({ stderr: err.message }));
+    const result = await runCliBounded('gh', ghArgs, {
+      cwd: repoPath,
+      timeoutMs: 60_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
     });
 
-    if (ghErr && !ghErr.includes('Created repository')) {
-      addStep('Create GitHub repo', 'error', ghErr);
+    if (result.code !== 0) {
+      addStep('Create GitHub repo', 'error', result.stderr.trim() || result.stdout.trim() || `gh repo create exited with code ${result.code}`);
     } else {
       addStep('Create GitHub repo', 'done');
     }

@@ -8,6 +8,7 @@
  * renumber/bulk write that rewrites the same issue — one mutex per series.
  */
 
+import { createHash } from 'node:crypto';
 import { isPlainObject } from '../../lib/objects.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -21,6 +22,11 @@ import {
 } from './issuesShared.js';
 import { isStr } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
+
+// Hash the complete sanitized stage, including content and history: timestamps alone
+// miss same-tick edits and issue-level PATCHes that retain the stage timestamp.
+export const textStageRevision = (stage) => createHash('sha256')
+  .update(JSON.stringify(sanitizeTextStage(stage))).digest('hex');
 
 /**
  * Partial update to a single stage on an issue. Use this from generators so
