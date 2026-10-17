@@ -31,6 +31,7 @@ import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/buffe
 import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, isAbsolute, resolve, sep } from 'path';
+import { tmpdir } from 'os';
 import { codexHomeDir } from '../../lib/codexUserConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -327,8 +328,15 @@ export async function generateImage({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
-  await ensureDir(PATHS.tmp);
-  const scratchDir = await mkdtemp(join(PATHS.tmp, 'codex-image-'));
+  // Per-render scratch cwd for the child (#11734). Rooted at the OS temp dir —
+  // the same pattern every other ephemeral PortOS workspace uses, including the
+  // sibling Codex text turn in `services/codexAppServer.js`. Deliberately NOT a
+  // `PATHS` entry: `PATHS` names durable, documented directories under the
+  // install root that backup and federation reason about, and this one is
+  // created per render and removed when the job settles. An earlier revision
+  // read `PATHS.tmp`, which has never existed on the object — `ensureDir`
+  // received `undefined` and every Codex render died here before spawning.
+  const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   try {
     jobs.set(jobId, job);
