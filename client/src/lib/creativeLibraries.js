@@ -23,15 +23,15 @@ export function ingredientPath(ingredient) {
   return lib ? `${lib.path}/${id}` : `/catalog/${encodeURIComponent(ingredient?.type || 'idea')}/${id}`;
 }
 
-// Cover image for a card. Attached catalog media (gallery keys under
-// /data/images) wins; canon-mirrored rows fall back to the universe's starred
-// or first image, which lives under /data/image-refs.
+// Cover image for a card. Attached catalog media wins; canon-mirrored rows fall
+// back to the universe's starred or first render. Both are gallery files under
+// /data/images (only canon reference sheets live under /data/image-refs).
 export function ingredientCoverUrl(ingredient) {
-  if (ingredient?.thumbnailKey) return `/data/images/${ingredient.thumbnailKey}`;
   const payload = ingredient?.payload && typeof ingredient.payload === 'object' ? ingredient.payload : {};
-  const ref = (typeof payload.primaryImageRef === 'string' && payload.primaryImageRef)
+  const key = ingredient?.thumbnailKey
+    || (typeof payload.primaryImageRef === 'string' && payload.primaryImageRef)
     || (Array.isArray(payload.imageRefs) ? payload.imageRefs.find((r) => typeof r === 'string' && r) : null);
-  return ref ? `/data/image-refs/${ref}` : null;
+  return key ? `/data/images/${key}` : null;
 }
 
 const USAGE_LABELS = [

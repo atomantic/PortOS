@@ -48,7 +48,7 @@ describe('CreativeLibrary', () => {
 
     const ada = await screen.findByRole('link', { name: /Ada/ });
     expect(ada).toHaveAttribute('href', '/casting/cat-chr-1');
-    expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/image-refs/ada.png');
+    expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/images/ada.png');
     expect(screen.getByRole('img', { name: 'Bo' })).toHaveAttribute('src', '/data/images/bo.png');
     expect(screen.getByText('1 universe · 2 videos')).toBeInTheDocument();
     expect(screen.getByText('Not used yet')).toBeInTheDocument();
