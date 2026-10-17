@@ -255,7 +255,7 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
   }, 60000);
 });
 
-describe('pruneSegments time floor', () => {
+describe.skipIf(!hasFfmpeg)('pruneSegments time floor', () => {
   it('keeps a file written after the render started and still removes older unplanned ones', async () => {
     fixture.project = project({ id: 'mv-segments-floor-test' });
     const plan = await planShotSegments(fixture.project);
