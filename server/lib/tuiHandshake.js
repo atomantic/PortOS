@@ -479,7 +479,7 @@ const BOX_AND_BLOCK_GLYPHS = /[\s\u2500-\u259F]+/g;
  * a request-specific category, so the cooldown policy leaves the provider's
  * other models available (see isRequestSpecificCategory).
  */
-export function describeOpencodeModelRejection(rejectedModel) {
+function describeOpencodeModelRejection(rejectedModel) {
   return {
     category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
     actionable: true,
