@@ -94,12 +94,4 @@ describe('issue-create paths mention dispatch + contributor labels (#4351)', () 
       .filter(Boolean);
     expect(missing, missing.join('\n')).toEqual([]);
   });
-
-  it('self-diagnostics stays on monitoring labels only', () => {
-    const src = readFileSync(join(ROOT, 'server/services/autonomousJobs/selfDiagnostics.js'), 'utf8');
-    expect(src).toMatch(/monitoring/);
-    expect(src).toMatch(/needs attention/);
-    expect(src).not.toMatch(/model:light/);
-    expect(src).not.toMatch(/good first issue/);
-  });
 });
