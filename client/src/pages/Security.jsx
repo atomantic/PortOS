@@ -17,6 +17,8 @@ export default function Security() {
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const deviceRestartTimerRef = useRef(null);
+  const playbackGenerationRef = useRef(0);
+  const streamingRef = useRef(false);
 
   // The monitor routes the host's microphone stream through its OWN
   // AudioContext to the speakers, so it can't inherit the shared lookahead
@@ -29,6 +31,7 @@ export default function Security() {
   const { claim: claimAudioSession, release: releaseAudioSession } = useAudioSessionClaim('playback');
 
   const [streaming, setStreaming] = useState(false);
+  const [streamRevision, setStreamRevision] = useState(0);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [devices, setDevices] = useState({ video: [], audio: [] });
@@ -65,17 +68,36 @@ export default function Security() {
 
   // Fetch available devices from server
   const fetchDevices = useCallback(async () => {
-    const response = await api.get('/media/devices');
-    setDevices(response.data);
+    const response = await api.get('/media/devices', { silent: true });
+    setDevices(response);
 
     // Set default selections if not already set
-    if (!selectedVideo && response.data.video.length > 0) {
-      setSelectedVideo(response.data.video[0].id);
+    if (!selectedVideo && response.video.length > 0) {
+      setSelectedVideo(response.video[0].id);
     }
-    if (!selectedAudio && response.data.audio.length > 0) {
-      setSelectedAudio(response.data.audio[0].id);
+    if (!selectedAudio && response.audio.length > 0) {
+      setSelectedAudio(response.audio[0].id);
     }
   }, [selectedVideo, selectedAudio]);
+
+  const cleanupPlayback = useCallback((audioElement = audioRef.current) => {
+    playbackGenerationRef.current += 1;
+    streamingRef.current = false;
+    if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
+    deviceRestartTimerRef.current = null;
+    if (videoRef.current) videoRef.current.removeAttribute('src');
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.removeAttribute('src');
+    }
+    audioContextRef.current?.suspend?.()?.catch(() => {});
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    animationFrameRef.current = null;
+    releaseAudioSession();
+    setStreaming(false);
+    setAudioLevel(0);
+    setAudioNeedsInteraction(false);
+  }, [releaseAudioSession]);
 
   // Set up audio level monitoring from audio element. An HTMLMediaElement can be
   // attached to only one MediaElementAudioSourceNode for its lifetime (Web Audio
@@ -84,7 +106,7 @@ export default function Security() {
   // restart. A restart only resumes the existing context and restarts the meter
   // loop; the context itself is closed exclusively on unmount (see the cleanup
   // effect below).
-  const setupAudioAnalyser = useCallback(async (audioElement) => {
+  const setupAudioAnalyser = useCallback(async (audioElement, generation) => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
@@ -102,6 +124,7 @@ export default function Security() {
       // resume has to happen with the claim in force, so the context comes up
       // on the right session.
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = audioContext;
       analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaElementSource(audioElement);
 
@@ -121,8 +144,14 @@ export default function Security() {
     // Bring the context up if it isn't running (browser autoplay policy, or
     // iOS's `'interrupted'` after a call/lock) — see lib/audioContext.js.
     await resumeAudioContext(audioContext).catch(() => {
-      setAudioNeedsInteraction(true);
+      if (generation === playbackGenerationRef.current) setAudioNeedsInteraction(true);
     });
+
+    if (generation !== playbackGenerationRef.current) {
+      // A restart reuses this context; only silence it if no newer stream owns it.
+      if (!streamingRef.current) audioContext.suspend?.()?.catch(() => {});
+      return;
+    }
 
     // Use time-domain data for better audio level detection
     const dataArray = new Uint8Array(analyser.fftSize);
@@ -148,13 +177,19 @@ export default function Security() {
     if (audioRef.current && audioContextRef.current) {
       // Resume AudioContext — the whole point of this button, so it has to cover
       // every non-running state, not just `'suspended'`.
-      await resumeAudioContext(audioContextRef.current);
-
-      // Play audio element
-      await audioRef.current.play();
-
-      setAudioNeedsInteraction(false);
-      setError(null);
+      const generation = playbackGenerationRef.current;
+      await resumeAudioContext(audioContextRef.current).then(() => {
+        if (generation !== playbackGenerationRef.current || !streamingRef.current) return;
+        return audioRef.current?.play();
+      }).then(() => {
+        if (generation !== playbackGenerationRef.current) return;
+        setAudioNeedsInteraction(false);
+        setError(null);
+      }).catch(err => {
+        if (generation !== playbackGenerationRef.current) return;
+        setAudioNeedsInteraction(true);
+        setError(`Failed to enable audio: ${err.message}`);
+      });
     }
   }, []);
 
@@ -164,6 +199,7 @@ export default function Security() {
   // stale-closure restart would tell the server to keep streaming the OLD
   // enabled/disabled flag for one more round-trip.
   const startMedia = useCallback(async (overrides = {}) => {
+    cleanupPlayback();
     setIsLoading(true);
     setError(null);
     setAudioNeedsInteraction(false);
@@ -172,16 +208,25 @@ export default function Security() {
     const audio = overrides.audio !== undefined ? overrides.audio : audioEnabled;
 
     // Start streaming on server
-    await api.post('/media/start', {
-      videoDeviceId: selectedVideo,
-      audioDeviceId: selectedAudio,
+    const generation = ++playbackGenerationRef.current;
+    const started = await api.post('/media/start', {
+      videoDeviceId: overrides.videoDeviceId ?? selectedVideo,
+      audioDeviceId: overrides.audioDeviceId ?? selectedAudio,
       video,
       audio
-    });
-
-    setStreaming(true);
-    setIsLoading(false);
-  }, [videoEnabled, audioEnabled, selectedVideo, selectedAudio]);
+    }, { silent: true }).then(() => true).catch(err => {
+      cleanupPlayback();
+      setError(`Failed to start media: ${err.message}`);
+      return false;
+    }).finally(() => setIsLoading(false));
+    if (generation === playbackGenerationRef.current && started) {
+      streamingRef.current = true;
+      setStreaming(true);
+      setStreamRevision(revision => revision + 1);
+    } else if (started) {
+      api.post('/media/stop', undefined, { silent: true }).catch(() => {});
+    }
+  }, [videoEnabled, audioEnabled, selectedVideo, selectedAudio, cleanupPlayback]);
 
   // Set up media sources when streaming starts
   useEffect(() => {
@@ -193,6 +238,7 @@ export default function Security() {
     // to hand it back. `active` drops both continuations once this effect run is
     // superseded.
     let active = true;
+    const generation = playbackGenerationRef.current;
 
     const timestamp = Date.now();
 
@@ -206,48 +252,34 @@ export default function Security() {
       audioRef.current.src = `/api/media/audio?t=${timestamp}`;
 
       audioRef.current.play().then(() => {
-        if (active) setupAudioAnalyser(audioRef.current).catch(() => {});
+        if (active) setupAudioAnalyser(audioRef.current, generation).catch(() => {});
       }).catch(() => {
         if (!active) return;
         // On mobile browsers, autoplay is often blocked - show interaction prompt
         setAudioNeedsInteraction(true);
-        setupAudioAnalyser(audioRef.current).catch(() => {}); // Set up analyser anyway for when user enables
+        setupAudioAnalyser(audioRef.current, generation).catch(() => {}); // Set up analyser anyway for when user enables
       });
     }
 
-    return () => { active = false; };
-  }, [streaming, videoEnabled, audioEnabled, setupAudioAnalyser]);
-
-  // Stop media stream
-  const stopMedia = useCallback(async () => {
-    // Stop streaming on server
-    await api.post('/media/stop');
-
-    if (videoRef.current) {
-      videoRef.current.src = '';
-    }
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-    }
-    if (audioContextRef.current) {
-      // Suspend, don't close — the context and its MediaElementSourceNode are
-      // scoped to the <audio> element's lifetime (it can only ever be wired to
-      // ONE source node), so they're reused on the next start. Only the
-      // unmount cleanup effect below closes the context.
-      audioContextRef.current.suspend?.()?.catch(() => {});
-    }
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
+    return () => {
+      active = false;
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+      }
+      audioContextRef.current?.suspend?.()?.catch(() => {});
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
-    }
-    // Nothing is sounding any more, so hand the session back — holding it would
-    // follow the user (SPA, no reload) onto every other page and refuse the
-    // globally-mounted VoiceWidget's microphone.
-    releaseAudioSession();
-    setStreaming(false);
-    setAudioLevel(0);
-  }, [releaseAudioSession]);
+      releaseAudioSession();
+    };
+  }, [streaming, streamRevision, videoEnabled, audioEnabled, setupAudioAnalyser, releaseAudioSession]);
+
+  const stopMedia = useCallback(async () => {
+    cleanupPlayback();
+    await api.post('/media/stop', undefined, { silent: true }).catch(err => {
+      setError(`Failed to stop server media: ${err.message}`);
+    });
+  }, [cleanupPlayback]);
 
   // Toggle video
   const toggleVideo = useCallback(() => {
@@ -279,14 +311,15 @@ export default function Security() {
     });
   }, [fetchDevices]);
 
-  // Cleanup on unmount
   useEffect(() => {
+    // React detaches refs before passive unmount cleanup.
+    const audioElement = audioRef.current;
     return () => {
-      if (streaming) {
-        stopMedia();
-      }
+      const wasStreaming = streamingRef.current;
+      cleanupPlayback(audioElement);
+      if (wasStreaming) api.post('/media/stop', undefined, { silent: true }).catch(() => {});
     };
-  }, [streaming, stopMedia]);
+  }, [cleanupPlayback]);
 
   // The AudioContext and its MediaElementSourceNode are scoped to the <audio>
   // element's lifetime (setupAudioAnalyser builds them once and reuses them
@@ -319,16 +352,10 @@ export default function Security() {
       if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
       deviceRestartTimerRef.current = setTimeout(() => {
         deviceRestartTimerRef.current = null;
-        startMedia();
+        startMedia({ [`${type}DeviceId`]: deviceId });
       }, 100);
     }
   }, [streaming, startMedia]);
-
-  // Cancel any pending device-change restart on unmount so a deferred
-  // startMedia() can't fire into a component that's no longer mounted.
-  useEffect(() => () => {
-    if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
-  }, []);
 
   return (
     <div>
@@ -510,7 +537,7 @@ export default function Security() {
               )}
 
               <button
-                onClick={fetchDevices}
+                onClick={() => fetchDevices().catch(err => setError(`Failed to fetch devices: ${err.message}`))}
                 disabled={isLoading}
                 className="p-3 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Refresh devices" aria-label="Refresh devices"
