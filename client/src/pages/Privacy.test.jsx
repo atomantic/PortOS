@@ -159,7 +159,7 @@ describe('Privacy Center', () => {
 
   it('stale :tab param falls back to Overview', async () => {
     renderAt('/privacy/bogus');
-    await waitFor(() => expect(screen.getByText(/system of record/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Vault values stay hidden/i)).toBeInTheDocument());
   });
 
   // ── Household subjects (#3658) ────────────────────────────────────────────
