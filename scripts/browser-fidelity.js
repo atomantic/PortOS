@@ -49,6 +49,11 @@ async function fidelityToolchain(env) {
     '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(path => path && existsSync(path));
   const ffmpegPath = await findFfmpeg();
   if (!chromePath || !ffmpegPath) throw Error('Fidelity Chrome/FFmpeg toolchain unavailable.');
+  // Surface the structured probe cause here: the suite's own prerequisite gate
+  // reports through vitest output, which this command's refusal never relays.
+  const { probeChromeH264, describeH264Probe } = await import('../server/lib/browserSuiteGate.js');
+  const probe = await probeChromeH264(chromePath);
+  if (!probe.ok) throw Error(describeH264Probe(probe));
   const version = (path, args) => {
     const text = execFileSync(path, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 65536,
       stdio: ['ignore', 'pipe', 'ignore'], env: fidelityChildEnv(env, '') });
