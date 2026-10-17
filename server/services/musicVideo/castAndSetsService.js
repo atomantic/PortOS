@@ -546,6 +546,15 @@ async function assemble(projectId) {
 
 // ---- approval ------------------------------------------------------------------------
 
+// Save the approved check-in's new cast and sets to the catalog (Casting /
+// Environments), then show the stamped subjects. The approval already landed.
+function queueCheckinCastToCatalog(projectId) {
+  import('./catalogCast.js')
+    .then(({ saveCheckinCastToCatalog }) => saveCheckinCastToCatalog(projectId))
+    .then((result) => { if (result?.project) publish(projectId, result.project); })
+    .catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving cast to the catalog failed: ${err.message}`));
+}
+
 /**
  * Apply an approved check-in to the project (references, subjects), approve
  * its artifact, and re-base a production run that was waiting on it.
@@ -589,6 +598,7 @@ export async function approveCastAndSets(projectId) {
   });
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
   publish(projectId, out.project);
+  queueCheckinCastToCatalog(projectId);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

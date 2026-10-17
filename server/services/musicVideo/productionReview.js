@@ -399,10 +399,21 @@ function setClipLocks(project, scenes, { locked, reviewer, approvedBy }) {
 const storyboardApprovalCurrent = (approval, basis) => !!approval
   && (approval.basis === basis.storyboard || (!!basis.storyboardShots && approval.shotsBasis === basis.storyboardShots));
 
+// A subject's catalog link and keep-local choice are bookkeeping saved after an
+// approval (catalogCast.js), never a change to who or what was approved.
+const CATALOG_SUBJECT_KEYS = ['ingredientId', 'localOnly'];
+const withoutCatalogFields = subjects => (subjects || []).map(s => (s && typeof s === 'object' ? Object.fromEntries(Object.entries(s).filter(([k]) => !CATALOG_SUBJECT_KEYS.includes(k))) : s));
+const approvalConcept = concept => (concept?.subjects ? { ...concept, subjects: withoutCatalogFields(concept.subjects) } : concept);
+// Restoring approved subjects keeps the catalog fields saved since.
+const keepCatalogFields = (subjects, current) => {
+  const byId = new Map((current || []).map(s => [s?.id, s]));
+  return (subjects || []).map(s => ({ ...s, ...Object.fromEntries(CATALOG_SUBJECT_KEYS.filter(k => byId.get(s?.id)?.[k] !== undefined).map(k => [k, byId.get(s.id)[k]])) }));
+};
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
-    concept: project.concept, visualSpec: project.visualSpec, styleReferences: project.styleReferences,
+    concept: approvalConcept(project.concept), visualSpec: project.visualSpec, styleReferences: project.styleReferences,
     direction: project.castAndSets?.direction,
     cast: draft.cast, environments: draft.environments, visualLanguage: draft.visualLanguage,
     motionLanguage: draft.motionLanguage, implementationPlan: draft.implementationPlan, guide: artifactBasis(artifact(project, draft.guideArtifactId)) });
@@ -435,7 +446,7 @@ const h = v => hash(v ?? null);
 function productionApprovalInputs(project) {
   const draft = project.productionReview?.draft || {};
   const art = {
-    concept: h(project.concept), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
+    concept: h(approvalConcept(project.concept)), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
     'media mode': h([project.mediaMode, project.composition?.authoringRenderer, project.composition?.mode, project.productionPolicy]),
     'art direction': h(project.castAndSets?.direction), cast: h(draft.cast), environments: h(draft.environments),
     'visual language': h(draft.visualLanguage), 'motion language': h(draft.motionLanguage),
@@ -534,7 +545,7 @@ export function castAndSetsApprovalInputs(project) {
     concept: h(concept),
     style: h([style || '', universeStyle || '', moodBoardStyle || '', spec.palette || [], spec.typography || '',
       spec.cameraRules || '', spec.moodBoardId || null, project.styleReferences ?? null]),
-    subjects: h([subjects || [], (spec.references || []).map(r => r?.imageId || null)]),
+    subjects: h([withoutCatalogFields(subjects), (spec.references || []).map(r => r?.imageId || null)]),
     song: h([project.trackId || null, project.uploadedAudioFilename || null]),
   };
 }
@@ -772,7 +783,7 @@ function restoreScenePrompt(project, value) {
 function restoreCastAndSets(project, field, value) {
   const concept = objectConcept(project);
   if (field === 'concept') return { ...project, concept: { ...value, ...pick(concept, ['subjects', ...CAST_SETS_CONCEPT_STYLE_KEYS]) } };
-  if (field === 'subjects') return { ...project, concept: { ...concept, subjects: value } };
+  if (field === 'subjects') return { ...project, concept: { ...concept, subjects: keepCatalogFields(value, concept.subjects) } };
   const { styleReferences, ...rest } = value;
   const nextConcept = { ...concept };
   for (const k of CAST_SETS_CONCEPT_STYLE_KEYS) delete nextConcept[k];
@@ -805,7 +816,7 @@ export function revertApprovedInput(project, { stage, field }) {
   const value = record.values?.[field];
   if (value === undefined) throw unavailable('The approved value of that input was not kept, so it cannot be restored.');
   if (cast) return restoreCastAndSets(project, field, value);
-  if (field === 'concept') return { ...project, concept: value };
+  if (field === 'concept') return { ...project, concept: value?.subjects ? { ...value, subjects: keepCatalogFields(value.subjects, project.concept?.subjects) } : value };
   if (DRAFT_FIELD_LABELS[field]) return { ...project, productionReview: { ...project.productionReview,
     draft: { ...project.productionReview?.draft, [DRAFT_FIELD_LABELS[field]]: value } } };
   if (SCENE_PROMPT_LABEL.test(field)) return restoreScenePrompt(project, value);

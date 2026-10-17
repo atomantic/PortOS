@@ -124,6 +124,8 @@ export const musicVideoConceptSchema = z.object({
     // The catalog record this subject was cast from (Casting / Environments /
     // Objects). The project keeps its own name and description snapshot.
     ingredientId: z.string().max(128).optional(),
+    // Kept in this video only: never offered for saving to the catalog.
+    localOnly: z.boolean().optional(),
   }).strict()).max(24).optional(),
 }).strict();
 

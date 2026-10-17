@@ -1,0 +1,50 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+
+vi.mock('../services/apiCatalog', () => ({
+  previewMusicVideoCastImport: vi.fn(),
+  commitMusicVideoCastImport: vi.fn(),
+}));
+vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/MediaImage', () => ({
+  default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
+}));
+
+import CreativeCastImport from './CreativeCastImport';
+import { previewMusicVideoCastImport, commitMusicVideoCastImport } from '../services/apiCatalog';
+import toast from '../components/ui/Toast';
+
+const PREVIEW = { projects: [{ projectId: 'mv-1', name: 'Example Video', items: [
+  { subjectId: 'cs-protagonist', kind: 'character', name: 'Ada', imageId: 'ada.png', action: 'create', ingredientId: 'cat-chr-mv-1' },
+  { subjectId: 'mvc-2', kind: 'character', name: 'Cal', imageId: null, action: 'link', ingredientId: 'cat-chr-cal', ingredientName: 'Cal' },
+  { subjectId: 'cs-set-diner', kind: 'place', name: 'Night diner', imageId: 'diner.png', action: 'create', ingredientId: 'cat-plc-mv-2' },
+] }] };
+
+const renderPage = () => render(<MemoryRouter><CreativeCastImport /></MemoryRouter>);
+
+describe('CreativeCastImport', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows each video\'s proposals and imports the reviewed choices', async () => {
+    previewMusicVideoCastImport.mockResolvedValueOnce(PREVIEW).mockResolvedValueOnce({ projects: [] });
+    commitMusicVideoCastImport.mockResolvedValue({ projects: 1, created: 1, linked: 1, kept: 1 });
+    renderPage();
+
+    expect(await screen.findByRole('link', { name: 'Example Video' })).toHaveAttribute('href', '/music-video/mv-1');
+    expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/images/ada.png');
+    expect(screen.getByLabelText('What to do with Cal')).toHaveValue('link');
+    fireEvent.change(screen.getByLabelText('What to do with Night diner'), { target: { value: 'local' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import 2' }));
+
+    await waitFor(() => expect(commitMusicVideoCastImport).toHaveBeenCalledWith([
+      { projectId: 'mv-1', subjectId: 'cs-protagonist', action: 'create' },
+      { projectId: 'mv-1', subjectId: 'mvc-2', action: 'link', ingredientId: 'cat-chr-cal' },
+      { projectId: 'mv-1', subjectId: 'cs-set-diner', action: 'local' },
+    ], { silent: true }));
+    expect(toast.success).toHaveBeenCalledWith('Imported: 1 new, 1 linked, 1 kept in their videos');
+    expect(await screen.findByText(/already in the catalog/)).toBeInTheDocument();
+  });
+});
