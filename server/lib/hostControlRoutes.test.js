@@ -520,6 +520,8 @@ describe('Pipeline authoring remainder policy (#10907)', () => {
     'PATCH /api/pipeline/tts/narrate/segment',
     'POST /api/pipeline/editorial/custom-checks',
     'POST /api/pipeline/issues/:id/auto-run-text/cancel',
+    // Recovery only resets persisted state; generating again uses the gated route.
+    'POST /api/pipeline/issues/:id/stages/:stageId/recover',
     'POST /api/pipeline/issues/:id/stages/:stageId/restore',
     'POST /api/pipeline/issues/:id/stages/audio/cues/:cueIdx/render',
     'POST /api/pipeline/issues/:id/stages/audio/extract-lines',
