@@ -34,6 +34,7 @@ vi.mock('./github.js', () => ({
 }));
 vi.mock('./cos.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), forceSpawnTask: vi.fn(), getAgents: async () => [], updateTask: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cosAgentIndex.js', () => ({ removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length) }));
 vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
@@ -42,6 +43,7 @@ import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
 import { readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
 import { gatherBranchState, classifyBranches, filterActionable, formatInFlightForPrompt } from './branchReconcile.js';
 import { checkReconcileOwnership } from './cosClaimOwnership.js';
+import { removeDanglingAgentIndexEntries } from './cosAgentIndex.js';
 
 const task = completion => ({ id: 'task-example', taskType: 'internal', metadata: { prCompletion: completion } });
 function register(id, completion, startedAt = '2026-01-01T00:00:00Z', extra = {}) {
@@ -189,12 +191,34 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     expect(await readBranchCompletionHold({ repoPath: '/other', branch, prUrl, agents: Object.values(runtime.agents) })).toBeNull();
   });
 
-  it.each(['missing-index', 'corrupt-index', 'missing-record', 'untrusted-state'])('holds when policy storage is %s', async failure => {
-    await mkdir(join(runtime.dir, 'agents', '2026-01-01'), { recursive: true });
+  it.each(['missing-index', 'corrupt-index', 'missing-record', 'corrupt-record', 'untrusted-state'])('holds when policy storage is %s', async failure => {
+    await mkdir(join(runtime.dir, 'agents', '2026-01-01', 'agent-present'), { recursive: true });
     if (failure === 'corrupt-index') await writeFile(join(runtime.dir, 'agents', 'index.json'), 'broken');
-    if (failure === 'missing-record') await writeFile(join(runtime.dir, 'agents', 'index.json'), JSON.stringify({ 'agent-missing': '2026-01-01' }));
+    if (failure.endsWith('-record')) await writeFile(join(runtime.dir, 'agents', 'index.json'), JSON.stringify({ 'agent-present': '2026-01-01' }));
+    if (failure === 'corrupt-record') await writeFile(join(runtime.dir, 'agents', '2026-01-01', 'agent-present', 'metadata.json'), '{broken');
     if (failure === 'untrusted-state') runtime.trusted = false;
-    await expect(readBranchCompletionPolicies()).rejects.toThrow();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = await readBranchCompletionPolicies().catch(rejected => rejected);
+    expect(error.message).toBe('pr-completion-policy-unavailable');
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(error.cause.message);
+    warn.mockRestore();
     expect(await recheck()).toEqual({ admitted: false, reason: 'pr-completion-policy-unavailable' });
+    expect(removeDanglingAgentIndexEntries).not.toHaveBeenCalled();
+  });
+
+  it('reads past an index row whose archive directory is gone and repairs the index', async () => {
+    register('agent-human', 'leave-open');
+    const date = '2026-01-01';
+    await mkdir(join(runtime.dir, 'agents', date, 'agent-human'), { recursive: true });
+    await writeFile(join(runtime.dir, 'agents', 'index.json'), JSON.stringify({ 'agent-human': date, 'agent-gone': '2026-02-01' }));
+    await writeFile(join(runtime.dir, 'agents', date, 'agent-human', 'metadata.json'), JSON.stringify(runtime.agents['agent-human']));
+    runtime.agents = {};
+    removeDanglingAgentIndexEntries.mockClear();
+    const policies = await readBranchCompletionPolicies();
+    expect(policies.map(agent => agent.id)).toEqual(['agent-human']);
+    await vi.waitFor(() => expect(removeDanglingAgentIndexEntries).toHaveBeenCalledWith(['agent-gone']));
+    expect(await recheck()).toEqual({ admitted: false, reason: 'pr-completion-human-handoff' });
   });
 });

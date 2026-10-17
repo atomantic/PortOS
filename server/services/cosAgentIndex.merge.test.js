@@ -19,7 +19,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./domainUsage.js', () => ({ recordDomainUsage: vi.fn(async () => {}) }));
 
-import { addAgentArchivesToIndex, getAgentIdsForDates, loadAgentIndex } from './cosAgentIndex.js';
+import { addAgentArchivesToIndex, getAgentIdsForDates, loadAgentIndex, removeDanglingAgentIndexEntries } from './cosAgentIndex.js';
 
 const INDEX_FILE = join(mockCosState.agentsDir, 'index.json');
 
@@ -102,5 +102,28 @@ describe('getAgentIdsForDates (#3501)', () => {
 
   it('returns an empty map for an empty date list', async () => {
     expect((await getAgentIdsForDates([])).size).toBe(0);
+  });
+});
+
+describe('removeDanglingAgentIndexEntries (#11848)', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(join(mockCosState.agentsDir, '2026-09-05', 'agent-kept'), { recursive: true });
+    await writeFile(INDEX_FILE, '{}');
+    await addAgentArchivesToIndex([
+      { agentId: 'agent-kept', date: '2026-09-05' },
+      { agentId: 'agent-gone', date: '2026-02-01' },
+    ]);
+  });
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('persists removal only for rows whose archive directory is still absent', async () => {
+    expect(await removeDanglingAgentIndexEntries(['agent-gone', 'agent-kept', 'agent-unknown'])).toBe(1);
+    const onDisk = JSON.parse(await readFile(INDEX_FILE, 'utf8'));
+    expect(onDisk).toEqual(expect.objectContaining({ 'agent-kept': '2026-09-05' }));
+    expect(onDisk['agent-gone']).toBeUndefined();
+    expect(await removeDanglingAgentIndexEntries(['agent-gone'])).toBe(0);
   });
 });
