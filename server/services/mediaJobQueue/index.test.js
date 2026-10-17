@@ -3633,3 +3633,102 @@ describe('backup snapshot admission for media completion', () => {
     await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
   });
 });
+
+// Characterization of the per-kind runtime wiring (module entry point, event
+// bus, progress verb, idle-watchdog window). A kind added to JOB_KINDS must
+// declare all four; this pins what each existing kind does today, including the
+// inherited default window/verb of html-composition and supercollider.
+describe('mediaJobQueue per-kind runtime wiring', () => {
+  const WINDOWS = { VIDEO: 4000, TRAINING: 6000, AUDIO: 8000, IMAGE: 10000 };
+  const KIND_CASES = [
+    { kind: 'video', params: {}, entry: 'generateVideo', bus: 'video', verb: 'Rendering', window: WINDOWS.VIDEO },
+    { kind: 'video-upscale', params: {}, entry: 'runVideoUpscale', bus: 'video', verb: 'Upscaling', window: WINDOWS.VIDEO },
+    { kind: 'video-sharing', params: { sharingProjectId: 'mv-example', renderHistoryId: 'final-example', sourceHash: 'a'.repeat(64) },
+      entry: 'runSharingCopy', bus: 'video', verb: 'Generating', window: WINDOWS.VIDEO },
+    { kind: 'html-composition', params: { directory: 'compositions/example' }, entry: 'renderComposition', bus: 'video', verb: 'Generating', window: WINDOWS.IMAGE },
+    { kind: 'image', params: {}, entry: 'generateImage', bus: 'image', verb: 'Generating', window: WINDOWS.IMAGE },
+    { kind: 'training', params: {}, entry: 'runTraining', bus: 'training', verb: 'Training', window: WINDOWS.TRAINING },
+    { kind: 'audio', params: {}, entry: 'generateAudio', bus: 'audio', verb: 'Generating', window: WINDOWS.AUDIO },
+    { kind: 'supercollider', params: {}, entry: 'renderSuperCollider', bus: 'audio', verb: 'Generating', window: WINDOWS.IMAGE },
+  ];
+  const busFor = async (name) => ({
+    video: videoGenEvents,
+    image: imageGenEvents,
+    audio: audioGenEvents,
+    training: (await import('../loraTraining/events.js')).trainingEvents,
+  })[name];
+
+  it('covers every declared job kind', () => {
+    expect(KIND_CASES.map(c => c.kind).sort()).toEqual([...mediaJobQueue.JOB_KINDS].sort());
+  });
+
+  describe.each(KIND_CASES)('$kind', ({ kind, params, entry, bus, verb, window }) => {
+    afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+    it('invokes its entry point and renders progress from its own event bus', async () => {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: { prompt: 'example', ...params } });
+      await waitFor(() => stubs[entry].mock.calls.length === 1);
+      expect(stubs[entry]).toHaveBeenCalledWith(expect.objectContaining({ jobId }));
+      // The three other buses must not move this job; only its own does.
+      for (const other of ['video', 'image', 'audio', 'training'].filter(b => b !== bus)) {
+        (await busFor(other)).emit('progress', { generationId: jobId, progress: 0.1, step: 1, totalSteps: 4 });
+      }
+      expect(mediaJobQueue.getJob(jobId).statusMsg).not.toMatch(/step/);
+      (await busFor(bus)).emit('progress', { generationId: jobId, progress: 0.5, step: 2, totalSteps: 4 });
+      expect(mediaJobQueue.getJob(jobId).statusMsg).toBe(`${verb} step 2/4`);
+    });
+
+    it('trips the idle watchdog at its own window', async () => {
+      vi.useFakeTimers();
+      process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = String(WINDOWS.VIDEO);
+      process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS = String(WINDOWS.TRAINING);
+      process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS = String(WINDOWS.AUDIO);
+      process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS = String(WINDOWS.IMAGE);
+      await importFresh();
+      let jobId;
+      try {
+        ({ jobId } = await mediaJobQueue.enqueueJob({ kind, params: { prompt: 'hang', ...params } }));
+        await vi.waitFor(() => expect(stubs[entry]).toHaveBeenCalledTimes(1), { interval: 1 });
+        await vi.advanceTimersByTimeAsync(window - 100);
+        await flush();
+        expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+        // One watchdog tick is at most window/4 (capped at 30s) after the limit.
+        await vi.advanceTimersByTimeAsync(Math.floor(window / 4) + 200);
+        await flush();
+        await vi.waitFor(() => expect(mediaJobQueue.getJob(jobId)).toMatchObject({
+          status: 'failed', error: expect.stringMatching(/watchdog timeout/),
+        }));
+      } finally {
+        for (const name of ['VIDEO', 'TRAINING', 'AUDIO', 'IMAGE']) delete process.env[`MEDIA_JOB_WATCHDOG_${name}_MS`];
+        if (jobId) {
+          for (const name of ['video', 'image', 'audio', 'training']) (await busFor(name)).emit('failed', { generationId: jobId, error: 'Fixture teardown' });
+        }
+        await flush();
+      }
+    });
+  });
+
+  it('scales the video watchdog by chunk count and gives a chained render its own entry point', async () => {
+    vi.useFakeTimers();
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '4000';
+    await importFresh();
+    let jobId;
+    try {
+      ({ jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang', chunks: 3 } }));
+      await vi.waitFor(() => expect(stubs.generateChainedVideo).toHaveBeenCalledTimes(1), { interval: 1 });
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4000 * 3 - 100);
+      await flush();
+      expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+      await vi.advanceTimersByTimeAsync(4000 * 3 / 4 + 200);
+      await flush();
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(jobId).status).toBe('failed'));
+    } finally {
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      if (jobId) videoGenEvents.emit('failed', { generationId: jobId, error: 'Fixture teardown' });
+      await flush();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+});
