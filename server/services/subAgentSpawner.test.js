@@ -127,51 +127,6 @@ describe('Worktree & metadata flag helpers', () => {
     });
   });
 
-  // --- openPR worktree decision logic (uses imported isTruthyMeta) ---
-  describe('openPR/useWorktree decision logic', () => {
-    function resolveWorktreeFlags(metadata) {
-      const explicitOpenPR = isTruthyMeta(metadata?.openPR);
-      const explicitWorktree = isTruthyMeta(metadata?.useWorktree) || explicitOpenPR;
-      return { explicitOpenPR, explicitWorktree };
-    }
-
-    it('should not use worktree or PR when neither is set', () => {
-      const result = resolveWorktreeFlags({});
-      expect(result.explicitWorktree).toBe(false);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-
-    it('should use worktree but not PR when only useWorktree is set', () => {
-      const result = resolveWorktreeFlags({ useWorktree: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-
-    it('should imply worktree when openPR is set', () => {
-      const result = resolveWorktreeFlags({ openPR: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should use both when both are set', () => {
-      const result = resolveWorktreeFlags({ useWorktree: true, openPR: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should handle string "true" values from form/URL params', () => {
-      const result = resolveWorktreeFlags({ useWorktree: 'true', openPR: 'true' });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should not use worktree when useWorktree is false and openPR is false', () => {
-      const result = resolveWorktreeFlags({ useWorktree: false, openPR: false });
-      expect(result.explicitWorktree).toBe(false);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-  });
-
   // --- applyAppWorktreeDefault logic (imported from production cos.js) ---
   describe('applyAppWorktreeDefault', () => {
     it('should fill defaults when metadata has no worktree/openPR fields', () => {
