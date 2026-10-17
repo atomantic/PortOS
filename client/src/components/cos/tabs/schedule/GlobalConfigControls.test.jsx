@@ -401,6 +401,61 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
   });
 });
 
+describe('GlobalConfigControls — failed saves', () => {
+  it('rolls back a cadence change when onUpdate resolves false and releases the busy state', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(false);
+    const setUpdating = vi.fn();
+    renderControls({ config: { type: 'cron' }, onUpdate, setUpdating });
+
+    await act(async () => fireEvent.change(screen.getByLabelText('Interval Type'), { target: { value: 'on-demand' } }));
+
+    expect(screen.getByLabelText('Interval Type')).toHaveValue('cron');
+    expect(setUpdating).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps the cron draft open when onUpdate resolves false and releases the busy state', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(false);
+    const setUpdating = vi.fn();
+    renderControls({ onUpdate, setUpdating });
+    const expression = screen.getByLabelText('Cron expression');
+    fireEvent.change(expression, { target: { value: '15 8 * * *' } });
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save schedule' })));
+
+    expect(screen.getByLabelText('Cron expression')).toHaveValue('15 8 * * *');
+    expect(screen.getByText('Unsaved changes — save before closing')).toBeInTheDocument();
+    expect(setUpdating).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps a first cron draft visible when an on-demand task fails to save it', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(false);
+    renderControls({ config: { type: 'on-demand' }, onUpdate });
+    await act(async () => fireEvent.change(screen.getByLabelText('Interval Type'), { target: { value: 'cron' } }));
+    const expression = screen.getByLabelText('Cron expression');
+    fireEvent.change(expression, { target: { value: '15 8 * * *' } });
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save schedule' })));
+
+    expect(screen.getByLabelText('Interval Type')).toHaveValue('cron');
+    expect(screen.getByLabelText('Cron expression')).toHaveValue('15 8 * * *');
+    expect(screen.getByText('Unsaved changes — save before closing')).toBeInTheDocument();
+  });
+
+  it('keeps the prompt draft open when onUpdate resolves false and releases the busy state', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(false);
+    const setUpdating = vi.fn();
+    renderControls({ onUpdate, setUpdating });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prompt' }));
+    const prompt = screen.getByLabelText('Task prompt');
+    fireEvent.change(prompt, { target: { value: 'new prompt draft' } });
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save Prompt' })));
+
+    expect(screen.getByLabelText('Task prompt')).toHaveValue('new prompt draft');
+    expect(setUpdating).toHaveBeenLastCalledWith(false);
+  });
+});
+
 // A stall (the forge CLI failing several evaluations in a row) can coexist
 // with an apparently-healthy "Draining" state — the gate skips without
 // parking on purpose (#7551) — so it must render regardless of park state.

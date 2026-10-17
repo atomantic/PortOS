@@ -20,8 +20,11 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
   const handleBulkToggle = async () => {
     setBulkUpdating(true);
     const newEnabled = !allEnabled;
-    await onBulkToggleOverride(taskType, newEnabled);
-    setBulkUpdating(false);
+    try {
+      await onBulkToggleOverride(taskType, newEnabled);
+    } finally {
+      setBulkUpdating(false);
+    }
   };
 
   return (
