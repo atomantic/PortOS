@@ -77,9 +77,6 @@ function tripCircuit(errorKey) {
   return recent.length > CIRCUIT_MAX_FAILURES;
 }
 
-// Store pending tasks when CoS is not running (for later pickup)
-const pendingAutoFixTasks = [];
-
 // Collapse a (possibly multi-line) error string to one capped line for logging
 // — the single-line logging convention forbids multi-line blobs; the untruncated
 // text always remains in the run record's `error` field.
@@ -425,20 +422,6 @@ export function initAutoFixer() {
 }
 
 /**
- * Get pending autofix tasks (for CoS to pick up when it starts)
- */
-export function getPendingAutoFixTasks() {
-  return [...pendingAutoFixTasks];
-}
-
-/**
- * Clear pending autofix tasks after they've been processed
- */
-export function clearPendingAutoFixTasks() {
-  pendingAutoFixTasks.length = 0;
-}
-
-/**
  * Test-only: drop all deferred timers + dedupe entries so the next call
  * starts from a clean slate. Production code paths never call this.
  */
@@ -449,7 +432,6 @@ export function _resetAutoFixerForTests() {
   recentErrors.clear();
   failureTimestamps.clear();
   escalatedKeys.clear();
-  pendingAutoFixTasks.length = 0;
   // This module's task-creation path now goes through the SHARED investigation
   // circuit (investigationTaskProducer.js), so a reset that stopped at the local
   // maps would leave earlier cases' creations counted against later ones — every
@@ -568,43 +550,25 @@ async function createAIProviderInvestigationTask(error) {
     // matches the other two task producers in this file.
   };
 
-  // If CoS is running, create the task immediately. The approval verdict is
-  // resolved INSIDE this branch: on the other path the task is only queued for
-  // later pickup, so a verdict computed now would be read against a backlog that
-  // is stale by the time it is filed — and the read (both task files) buys
-  // nothing.
-  if (isRunning()) {
-    // Unattended by default, matching every other investigation producer (#3714):
-    // a provider failure is exactly the diagnosis CoS exists to do for itself, and
-    // gating it behind an approval only meant the queue filled with approvals while
-    // the provider stayed broken. The loop guards are unchanged and still upstream
-    // of here — `isDuplicateError` collapses a repeat inside the dedupe window and
-    // `tripCircuit` suppresses the task entirely past CIRCUIT_MAX_FAILURES.
-    const { task } = await fileInvestigationTask({
-      ...taskData,
-      fingerprint: investigationFingerprint({
-        category: diagnostics.category,
-        kind: 'provider-failure',
-        scope: ctx.provider
-      })
-    });
-    console.log(`✅ AI provider investigation task created: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
-    return task;
-  }
-
-  // Otherwise, store for later pickup
-  console.log(`📋 CoS not running - queuing AI provider investigation task [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
-  pendingAutoFixTasks.push({
+  // Filed durably whether or not the CoS daemon is running: `addTask` persists
+  // without it and CoS picks the task up when it next runs. (An in-memory queue
+  // here once had no consumer and silently dropped every failure while stopped.)
+  // Unattended by default, matching every other investigation producer (#3714):
+  // a provider failure is exactly the diagnosis CoS exists to do for itself, and
+  // gating it behind an approval only meant the queue filled with approvals while
+  // the provider stayed broken. The loop guards are unchanged and still upstream
+  // of here — `isDuplicateError` collapses a repeat inside the dedupe window and
+  // `tripCircuit` suppresses the task entirely past CIRCUIT_MAX_FAILURES.
+  const { task } = await fileInvestigationTask({
     ...taskData,
-    createdAt: Date.now(),
-    error: {
-      code: error.code,
-      message: error.message,
-      context: ctx
-    }
+    fingerprint: investigationFingerprint({
+      category: diagnostics.category,
+      kind: 'provider-failure',
+      scope: ctx.provider
+    })
   });
-
-  return null;
+  console.log(`✅ AI provider investigation task filed: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
+  return task;
 }
 
 /**
