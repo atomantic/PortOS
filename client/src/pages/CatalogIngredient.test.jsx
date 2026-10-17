@@ -143,6 +143,7 @@ const renderPage = async (path = '/catalog/character/cat-chr-1') => {
     { path: '/catalog/:type/:id', element: <CatalogIngredient /> },
     { path: '/casting', element: <div>Casting index</div> },
     { path: '/casting/:id/:tab?', element: <CatalogIngredient /> },
+    { path: '/objects/:id/:tab?', element: <CatalogIngredient /> },
     { path: '/environments/:id/:tab?', element: <CatalogIngredient /> },
   ], { initialEntries: [path] });
   const result = render(<RouterProvider router={router} />);
@@ -1035,4 +1036,43 @@ describe('buildGenerationPromptSeed', () => {
     expect(seed.length).toBeLessThanOrEqual(700);
     expect(seed.endsWith('…')).toBe(true);
   });
+});
+
+
+describe('contextual unlock in Create libraries', () => {
+  it.each([['objects', 'object'], ['environments', 'place'], ['casting', 'character']])(
+    'preserves draft edits and sheet selection in %s and renders only on request', async (library, type) => {
+      const api = await import('../services/apiCatalog');
+      const locked = { id: 'example-locked', type, name: 'Example locked record', tags: [], payload: { locked: true, description: 'Saved description' }, refs: [] };
+      let persisted = locked;
+      getCatalogIngredientDetails.mockImplementation(async () => detailsOf(persisted));
+      updateCatalogIngredient.mockImplementation(async (_id, patch) => {
+        persisted = { ...persisted, ...patch, updatedAt: '2026-01-01T00:00:01Z' };
+        return persisted;
+      });
+      api.listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'standard', label: 'Standard' }, { id: 'alternate', label: 'Alternate' }] });
+      api.renderCatalogSheet.mockReset().mockResolvedValue({ jobId: 'example-sheet-job', variant: 'alternate' });
+      api.attachCatalogIngredientMedia.mockResolvedValue({});
+      const { router } = await renderPage(`/${library}/example-locked/profile`);
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved draft name' } });
+      await act(async () => router.navigate(`/${library}/example-locked/sheets`));
+      const picker = await screen.findByLabelText('Sheet kind');
+      fireEvent.change(picker, { target: { value: 'alternate' } });
+      expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Unlock for rendering' }));
+      await screen.findByText(/Unlocked. Choose Generate/);
+      expect(picker).toHaveValue('alternate');
+      expect(api.renderCatalogSheet).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeDisabled();
+      expect(updateCatalogIngredient).toHaveBeenCalledWith('example-locked', { payload: { ...locked.payload, locked: false } }, { silent: true });
+      await act(async () => router.navigate(`/${library}/example-locked/profile`));
+      expect(screen.getByLabelText('Name')).toHaveValue('Unsaved draft name');
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(persisted.name).toBe('Unsaved draft name'));
+      await act(async () => router.navigate(`/${library}/example-locked/sheets`));
+      await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+      await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledTimes(1));
+    },
+  );
 });

@@ -53,6 +53,7 @@ import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
+import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
@@ -174,6 +175,7 @@ export default function CatalogIngredient() {
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   // A Looks-tab wardrobe save in flight; the profile Save waits for it so its
   // draft payload can't write back the previous wardrobes.
   const [lookSaving, setLookSaving] = useState(false);
@@ -204,6 +206,7 @@ export default function CatalogIngredient() {
     let cancelled = false;
     setLoading(true);
     setSaving(false);
+    setUnlocking(false);
     getCatalogIngredientDetails(id, { silent: true })
       .then((d) => {
         if (cancelled) return;
@@ -446,7 +449,7 @@ export default function CatalogIngredient() {
   }, [id]);
 
   const handleSave = async () => {
-    if (!record) return;
+    if (!record || unlocking) return;
     const submittedId = record.id;
     const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
@@ -598,7 +601,9 @@ export default function CatalogIngredient() {
     : [];
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
-  const renderBlockedReason = (subject) => (saving
+  const renderBlockedReason = (subject) => (record.payload?.locked === true
+    ? 'Unlock this record above before rendering.'
+    : saving
     ? `Saving — the ${subject} renders from the saved record.`
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
@@ -634,7 +639,7 @@ export default function CatalogIngredient() {
             <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -745,6 +750,15 @@ export default function CatalogIngredient() {
           </>
         )}
 
+        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
+          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving} onPendingChange={setUnlocking}
+            onUnlocked={(updated) => {
+              setRecord((current) => current?.id === updated.id
+                ? { ...current, updatedAt: updated.updatedAt, payload: { ...current.payload, locked: false } } : current);
+              setPayload((current) => ({ ...current, locked: false }));
+            }} />
+        </div>
+
         {activeTab === 'sheets' && (
           <CatalogSheetsPanel
             ingredientId={record.id}
@@ -767,7 +781,7 @@ export default function CatalogIngredient() {
             lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m)))}
             candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m))}
             missingMedia={missingMedia}
-            editLocked={saving}
+            editLocked={saving || unlocking}
             blockedReason={renderBlockedReason('look')}
             savedStamp={record.updatedAt || null}
             onSaveWardrobes={handleSaveWardrobes}
