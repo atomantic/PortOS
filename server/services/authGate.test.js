@@ -6,6 +6,7 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { request } from '../lib/testHelper.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -650,6 +651,39 @@ describe('authGate HTTP Basic auth (peer federation)', () => {
     expect(result.res.statusCode).toBe(401);
   });
 
+  it('keeps refusing a wrong password on repeat attempts (failures never become cached successes)', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { authGate } = await import('./authGate.js');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await runGate(authGate, {
+        path: '/api/cos',
+        headers: { authorization: basicHeader('wrong') },
+      });
+      expect(result.called).toBe(false);
+      expect(result.res.statusCode).toBe(401);
+    }
+  });
+
+  it('stops accepting a cached Basic password immediately after rotation', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'old-secret' });
+    const { authGate } = await import('./authGate.js');
+    const attempt = (password) => runGate(authGate, {
+      path: '/api/cos',
+      headers: { authorization: basicHeader(password) },
+    });
+    // Warm the success cache with the old password.
+    expect((await attempt('old-secret')).called).toBe(true);
+
+    await auth.setPassword({ newPassword: 'new-secret', currentPassword: 'old-secret' });
+
+    const stale = await attempt('old-secret');
+    expect(stale.called).toBe(false);
+    expect(stale.res.statusCode).toBe(401);
+    expect((await attempt('new-secret')).called).toBe(true);
+  });
+
   it('does not cache failed password verification', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'future-secret' });
@@ -728,7 +762,7 @@ describe('host-control authority', () => {
     expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }))).toBe(true);
     expect(await socketHasCurrentHostControl(socketFor())).toBe(false);
     expect(await socketHasCurrentHostControl(socketFor({ authorization: 'Basic fixture' }))).toBe(false);
-    expect(await socketHasCurrentHostControl(socketFor({ 'x-portos-peer-token': 'fixture' }))).toBe(false);
+    expect(await socketHasCurrentHostControl(socketFor({ [PEER_AUTH_HEADER.toLowerCase()]: 'fixture' }))).toBe(false);
     expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }, true))).toBe(false);
 
     await auth.revokeSession(bearerSession.token);
@@ -1187,6 +1221,20 @@ describe('paired peer credential (#8356)', () => {
     }
   });
 
+  it('refuses a pair secret shorter than 32 characters even with a correctly derived token', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const app = await buildApp();
+    const shortSecret = 'x'.repeat(31);
+    writePeers([pairedPeer({ syncSecret: shortSecret })]);
+    expect((await withHeaders(request(app).get('/api/example'), await peerHeaders(PEER_ID, shortSecret))).status).toBe(401);
+
+    const okSecret = 'x'.repeat(32);
+    writePeers([pairedPeer({ syncSecret: okSecret })]);
+    // A 32-character secret authenticates as a peer (then hits the peer scope fence).
+    expect((await withHeaders(request(app).get('/api/example'), await peerHeaders(PEER_ID, okSecret))).status).toBe(403);
+  });
+
   it('keeps an unpaired or older peer federating over Basic, warning once when a paired peer still uses it', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'example-password' });
@@ -1343,6 +1391,18 @@ describe('socketAuthGate middleware', () => {
       socketAuthGate({ handshake: { headers: { authorization: header } } }, (e) => resolve(e));
     });
     expect(err).toBeUndefined();
+  });
+
+  it('rejects a peer relay handshake with a wrong Basic password', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { socketAuthGate } = await import('./authGate.js');
+    const header = `Basic ${Buffer.from(':wrong-secret').toString('base64')}`;
+    const err = await new Promise((resolve) => {
+      socketAuthGate({ handshake: { headers: { authorization: header } } }, (e) => resolve(e));
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.data.code).toBe('AUTH_REQUIRED');
   });
 
   it('rejects a cross-origin handshake', async () => {
