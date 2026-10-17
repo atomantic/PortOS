@@ -17,17 +17,14 @@ const mock = vi.hoisted(() => ({
   cacheClears: 0,
   events: [],
   // PM2 process names belonging to desktop (GUI) apps — exempt from auto-restart.
-  desktopProcessNames: new Set(),
-  desktopLookupError: null
+  desktopProcessNames: new Set()
 }));
 
 // Mocked so the health check never reads the real apps registry off disk.
-// Mirrors the real annotateExpectedExit, including its fail-open behavior: a
-// registry read failure marks nothing expected, so nothing is exempted.
+// Fail-open on a registry read error is covered in appProcessStatus.test.js.
 vi.mock('./appProcessStatus.js', () => ({
   annotateExpectedExit: vi.fn(async (processes) => {
-    const names = mock.desktopLookupError ? new Set() : mock.desktopProcessNames;
-    return processes.map(p => ({ ...p, expectedExit: names.has(p?.name) }));
+    return processes.map(p => ({ ...p, expectedExit: mock.desktopProcessNames.has(p?.name) }));
   })
 }));
 
@@ -86,7 +83,6 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     RESTART_VERIFY.delayMs = 0;
     mock.events = [];
     mock.desktopProcessNames = new Set();
-    mock.desktopLookupError = null;
     // default restart success
     mock.restartImpl = async () => ({ success: true });
   });
@@ -299,19 +295,6 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       // Fresh post-restart metrics: web observed online.
       expect(metrics.pm2).toMatchObject({ errored: 0 });
       expect(issues).toEqual([]);
-    });
-
-    it('exempts nothing when the registry read fails (pre-existing behavior stands)', async () => {
-      mock.desktopLookupError = new Error('registry unreadable');
-      mock.pm2Processes = [{ name: 'web', status: 'errored' }];
-      mock.postRestart = (p) => p; // keep the pre-restart counts under test
-      const restarted = [];
-      mock.restartImpl = recordRestarts(restarted);
-
-      const { metrics } = await runHealthCheck();
-
-      expect(restarted).toEqual(['web']);
-      expect(metrics.pm2.errored).toBe(1);
     });
   });
 
