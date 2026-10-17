@@ -132,6 +132,16 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
         await page.goto(`${origin}prompt-test?w=${width - nav}&entry=${encodeURIComponent(entry)}`, { timeout: 15000 });
         const save = page.getByRole('button', { name: /^Save$/ });
         await save.waitFor();
+        // The workspace re-lays out after mount (container measurement, then
+        // the selected record loads), so a box read straight after waitFor can
+        // be null or pre-layout. Poll until two consecutive reads agree.
+        let previous = null;
+        await expect.poll(async () => {
+          const next = await save.boundingBox().catch(() => null);
+          const stable = next && previous && ['x', 'y', 'width', 'height'].every(k => next[k] === previous[k]);
+          previous = next;
+          return Boolean(stable);
+        }, { timeout: 8000, interval: 100 }).toBe(true);
         const box = await save.boundingBox();
         // The primary action sits inside the first screen without scrolling.
         expect(box.y).toBeGreaterThanOrEqual(0);
@@ -141,7 +151,7 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
         const narrow = width - nav - 32 < 720;
         const chooser = page.getByRole('button', { name: /Choose another/ });
-        expect(await chooser.count()).toBe(narrow ? 1 : 0);
+        await expect.poll(() => chooser.count(), { timeout: 8000 }).toBe(narrow ? 1 : 0);
         if (narrow) {
           await chooser.click();
           const drawer = page.getByRole('dialog');
