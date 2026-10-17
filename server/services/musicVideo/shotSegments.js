@@ -191,12 +191,15 @@ export const segmentRendering = (segment) => inFlight.has(segment.path);
 export function renderSegment(plan, segment, { signal, onProgress } = {}) {
   if (existsSync(segment.path)) return Promise.resolve(segment.path);
   let entry = inFlight.get(segment.path);
-  if (!entry) {
+  // An aborted entry is still tearing down (ffmpeg/browser) and can only reject
+  // with the abort, so a new caller replaces it rather than joining it.
+  if (!entry || entry.controller.signal.aborted) {
     const controller = new AbortController();
-    entry = { controller, waiters: 0, listeners: new Set() };
-    entry.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => entry.listeners.forEach((fn) => fn(f)) })
-      .finally(() => inFlight.delete(segment.path));
-    inFlight.set(segment.path, entry);
+    const fresh = { controller, waiters: 0, listeners: new Set() };
+    fresh.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => fresh.listeners.forEach((fn) => fn(f)) })
+      .finally(() => { if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path); });
+    inFlight.set(segment.path, fresh);
+    entry = fresh;
   }
   entry.waiters += 1;
   if (onProgress) entry.listeners.add(onProgress);

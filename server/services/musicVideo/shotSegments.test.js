@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, afterAll, afterEach, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -30,7 +30,7 @@ vi.mock('./render.js', async (importOriginal) => {
 vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)) }));
 
-const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
+const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview, segmentRendering } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');
@@ -253,4 +253,38 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(existsSync(pinned.segments[2].path)).toBe(false);
     expect(existsSync(pinned.segments[2].basePath)).toBe(true);
   }, 60000);
+});
+
+describe('renderSegment after a cancel', () => {
+  const deferred = () => { let release; const promise = new Promise((r) => { release = r; }); return { promise, release }; };
+
+  it('starts a fresh render instead of joining the aborted one still tearing down', async () => {
+    const dir = join(ROOT(), 'cancel-rejoin');
+    mkdirSync(dir, { recursive: true });
+    const segment = { sceneId: 'scene-cancel', startSec: 0, look: { id: 'look' }, ownLook: true, basePath: join(dir, 'base.mp4'), path: join(dir, 'final.mp4') };
+    writeFileSync(segment.basePath, 'base');
+    const plan = { dir, project: { id: 'p' } };
+    const first = deferred();
+    const second = deferred();
+    applyFilmLookFinish.mockReset();
+    applyFilmLookFinish.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const cancel = new AbortController();
+    const cancelled = renderSegment(plan, segment, { signal: cancel.signal });
+    await vi.waitFor(() => expect(applyFilmLookFinish).toHaveBeenCalledTimes(1));
+    cancel.abort();
+    await expect(cancelled).rejects.toMatchObject({ code: 'CANCELED' });
+    expect(segmentRendering(segment)).toBe(true); // old render still tearing down
+
+    const retry = renderSegment(plan, segment);
+    await vi.waitFor(() => expect(applyFilmLookFinish).toHaveBeenCalledTimes(2));
+
+    first.release(true); // the old render settles; it must not evict the new entry
+    await new Promise((r) => setTimeout(r, 20));
+    expect(segmentRendering(segment)).toBe(true);
+
+    second.release(true);
+    await expect(retry).resolves.toBe(segment.path);
+    expect(segmentRendering(segment)).toBe(false);
+  });
 });
