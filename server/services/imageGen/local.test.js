@@ -20,7 +20,16 @@ const mockSpawn = vi.fn();
 vi.mock('../../lib/childProcess.js', async (original) => ({ ...await original(), spawn: (...args) => mockSpawn(...args) }));
 const releaseClaim = vi.fn(async () => {});
 vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: async () => ({ ok: true, release: releaseClaim }) }));
-vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalMemory: async () => ({ blockers: [], unloaded: [] }) }));
+// A test sets `hold` to a pending promise to park generateImage inside memory preparation.
+const memoryGate = vi.hoisted(() => ({ hold: undefined, entered: undefined }));
+vi.mock('../localMemory.js', () => ({
+  gpuBlockersMessage: vi.fn(),
+  prepareLocalMemory: async () => {
+    memoryGate.entered?.();
+    await memoryGate.hold;
+    return { blockers: [], unloaded: [] };
+  },
+}));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
@@ -1088,6 +1097,39 @@ describe('imageGen local.generateImage runtime pre-flight', () => {
     expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('portos-stepwise-'), { recursive: true, force: true });
     claimSpy.mockRestore();
     rmSpy.mockRestore();
+  });
+
+  it('cancel() during memory preparation answers pending and aborts before spawn', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    mockSpawn.mockClear();
+    releaseClaim.mockClear();
+    const { cancel } = await import('./local.js');
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const terminal = vi.fn();
+    for (const event of ['started', 'completed', 'failed']) imageGenEvents.on(event, terminal);
+    let release;
+    memoryGate.hold = new Promise((resolve) => { release = resolve; });
+    const entered = new Promise((resolve) => { memoryGate.entered = resolve; });
+    try {
+      const rendering = generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox', jobId: 'test-cancel-while-preparing' });
+      const refused = expect(rendering).rejects.toMatchObject({ code: 'IMAGE_GEN_CANCELED' });
+      await entered;
+      expect(cancel()).toBe('pending');
+      release();
+      await refused;
+    } finally {
+      memoryGate.hold = undefined;
+      memoryGate.entered = undefined;
+      for (const event of ['started', 'completed', 'failed']) imageGenEvents.off(event, terminal);
+    }
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledTimes(1);
+    // The rejection is the one terminal signal (the queue maps it to canceled);
+    // no render ever started, so nothing else may be emitted.
+    expect(terminal).not.toHaveBeenCalled();
+    // Once the job unwound there is nothing left to cancel.
+    expect(cancel()).toBe(false);
   });
 });
 

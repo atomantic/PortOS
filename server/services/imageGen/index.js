@@ -282,7 +282,7 @@ export const cancel = () => {
   const grokCancelled = grok.cancelAll();
   const agyCancelled = agy.cancelAll();
   const falCancelled = fal.cancelAll();
-  return localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled;
+  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled);
 };
 
 // Exact-ID cancel (#9932). The explicit-target counterpart to cancel(): stops
