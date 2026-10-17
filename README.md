@@ -353,7 +353,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 - Check logs and restart services from your phone
 - View dashboard on your tablet while coding on your laptop
 
-> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5553-5561 to the public internet. An optional instance password (*Settings → Security*) gates `/api/*` and `/data/*` if you want a second layer, but it is **off by default** — the tailnet is the trust boundary. See the Security Model in [AGENTS.md](./AGENTS.md#security-model) and the [Setup Guide](./docs/SETUP.md) for network and authentication details.
+> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose the PortOS port band (5553-5569, see [docs/PORTS.md](./docs/PORTS.md)) to the public internet. An optional instance password (*Settings → Security*) gates `/api/*` and `/data/*` if you want a second layer, but it is **off by default** — the tailnet is the trust boundary. See the Security Model in [AGENTS.md](./AGENTS.md#security-model) and the [Setup Guide](./docs/SETUP.md) for network and authentication details.
 
 ## Tech Stack
 
@@ -424,7 +424,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Federated Media Providers](./docs/FEDERATED_MEDIA_PROVIDERS.md) — Authenticated, capacity-aware peer audio provider wire contract and setup
 - [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
 - [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
-- [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5561) and allocation guide
+- [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5569) and allocation guide
 - [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
 - [Quota Burn Automation](./docs/QUOTA-BURN.md) — Subscription quota spending loop and window rules
 - [Three.js Models](./docs/THREEJS_MODELS.md) — Procedural Three.js scene generation and trust boundary
