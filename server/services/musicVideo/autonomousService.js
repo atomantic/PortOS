@@ -1223,6 +1223,11 @@ const STAGES = {
       // The animated proof is optional review evidence, so the run renders the film once the
       // storyboard is approved; the director can still render and approve a proof by hand.
       const render = await deps.renderVideo(project.id);
+      // A cancel/stop during the render's preparation left no job id to cancel; the fresh job is stopped here.
+      if (render?.jobId && projectAutonomousRun(await getProject(project.id))?.status !== 'running') {
+        await deps.cancelRender(render.jobId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not cancel render ${render.jobId}: ${err.message}`));
+        throw runError(409, 'RUN_STOPPED', 'The run stopped while the final render was preparing');
+      }
       // The run is not finished until the MP4 exists: stay on produce and let the render's own event settle it.
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
@@ -1863,11 +1868,13 @@ export async function cancelAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!(AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed')) throw runError(409, 'NOT_CANCELABLE', `A ${run.status} run cannot be canceled`);
   const out = await patchRun(projectId, () => ({ status: 'canceled', awaiting: null }));
+  // Child ids come from the patched record: one stored just before the flip is missed by the earlier read.
+  const { renderJobId, finalAutoReviewId, productionRunId } = out.run.output;
   const childStopFailures = [];
-  if (run.output.renderJobId) await settleChildStop(childStopFailures, projectId, run, 'cancel render', run.output.renderJobId, () => deps.cancelRender(run.output.renderJobId));
-  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'cancel auto-review', run.output.finalAutoReviewId, () => deps.cancelAutoReview(projectId, run.output.finalAutoReviewId));
-  if (run.output.productionRunId) {
-    await settleChildStop(childStopFailures, projectId, run, 'cancel production', run.output.productionRunId, () => deps.cancelProduction(projectId, run.output.productionRunId));
+  if (renderJobId) await settleChildStop(childStopFailures, projectId, run, 'cancel render', renderJobId, () => deps.cancelRender(renderJobId));
+  if (finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'cancel auto-review', finalAutoReviewId, () => deps.cancelAutoReview(projectId, finalAutoReviewId));
+  if (productionRunId) {
+    await settleChildStop(childStopFailures, projectId, run, 'cancel production', productionRunId, () => deps.cancelProduction(projectId, productionRunId));
   }
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(projectId, out.run, childStopFailures);
@@ -2128,6 +2135,8 @@ musicVideoEvents.on('cast-and-sets', ({ projectId }) => {
 
 /** Park the run as failed on its final render, with the stage marked failed so Retry re-renders only. */
 async function failFinalRender(projectId, message, errorCode = 'FINAL_RENDER_FAILED') {
+  // A cancel/stop that landed while the render prepared is not a failure.
+  if (projectAutonomousRun(await getProject(projectId))?.status !== 'running') return;
   const error = trimTo(message, 500);
   await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'failed', error, step: null }));
   await park(projectId, 'failed', { error, errorCode });
@@ -2219,7 +2228,16 @@ async function startFinalRender(projectId, run) {
   if (!rendersFromCode(await getProject(projectId), run)) await ensureFootageComposition(projectId);
   const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
   if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
-  await patchRun(projectId, (r) => ({ output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null }));
+  let stopped = false;
+  await patchRun(projectId, (r) => {
+    stopped = r.status !== 'running';
+    return stopped ? {} : { output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null };
+  });
+  if (stopped) {
+    // Canceled/stopped while the render prepared: the cancel saw no job id, so stop the fresh job here.
+    if (render.jobId) await deps.cancelRender(render.jobId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not cancel render ${render.jobId}: ${err.message}`));
+    return;
+  }
   console.log(`🎬 Autonomous music video ${short(run.id)} is rendering the final video`);
   // A render that settled before its id was stored.
   await reconcileFinalRender(projectId);

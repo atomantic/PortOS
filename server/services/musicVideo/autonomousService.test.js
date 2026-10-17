@@ -742,6 +742,57 @@ describe('starting on an existing project\'s song (fromProjectId)', () => {
   });
 });
 
+describe('cancel while the final render is preparing (#11768)', () => {
+  // Uniquely catches a canceled run leaving a fresh render job running, or a rejected preparation relabeling the cancel as a failure.
+  const deferred = () => { let resolve; let reject; const promise = new Promise((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; };
+  const viaFinalRender = async (render) => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    doubles.renderVideo.mockImplementationOnce(() => render.promise);
+    const done = service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    return done;
+  };
+  const viaProduceStage = async (render) => {
+    doubles.renderVideo.mockImplementationOnce(() => render.promise);
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm' } });
+    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+  };
+
+  it.each([['final render', viaFinalRender], ['produce stage', viaProduceStage]])('cancels the job a %s returns after the run was canceled', async (_, begin) => {
+    const render = deferred();
+    const done = begin(render);
+    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    await service.cancelAutonomousVideo('mv-auto');
+    expect(doubles.cancelRender).not.toHaveBeenCalled();
+    render.resolve({ jobId: 'render-late' });
+    await done;
+    await vi.waitFor(() => expect(doubles.cancelRender).toHaveBeenCalledWith('render-late'));
+    expect(runOf()).toMatchObject({ status: 'canceled' });
+    expect(runOf().output.renderJobId).not.toBe('render-late');
+  });
+
+  it.each([['final render', viaFinalRender], ['produce stage', viaProduceStage]])('leaves a canceled run canceled when the %s preparation rejects', async (_, begin) => {
+    const render = deferred();
+    const done = begin(render);
+    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    await service.cancelAutonomousVideo('mv-auto');
+    render.reject(Object.assign(new Error('no audio'), { code: 'NO_AUDIO' }));
+    await done;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runOf()).toMatchObject({ status: 'canceled', errorCode: null });
+    expect(doubles.cancelRender).not.toHaveBeenCalled();
+  });
+
+  it('still cancels a render job stored before the cancel', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await service.cancelAutonomousVideo('mv-auto');
+    expect(doubles.cancelRender).toHaveBeenCalledWith('render-1');
+  });
+});
+
 describe('overlay text pass before the final render', () => {
   const finding = (atSec, message, severity = 'error') => ({ id: `f${atSec}`, kind: severity === 'error' ? 'overlap' : 'contrast', severity, atSec, texts: ['A'], message, count: 1 });
   const textEntries = () => (runOf()?.orchestration?.reviews || []).filter((r) => r.checkpoint === 'text');
