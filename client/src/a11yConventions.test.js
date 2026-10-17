@@ -4009,7 +4009,6 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     'src/pages/CapabilityMap.jsx',
     'src/pages/ImageClean.jsx',
     'src/pages/MoodBoardDetail.jsx',
-    'src/pages/RoundEditor.jsx',
     'src/pages/Security.jsx',
     'src/pages/UniverseBuilder.jsx',
     'src/pages/Uploads.jsx',
