@@ -61,7 +61,7 @@ describe('test process ownership boundaries', () => {
       mkdirSync(root); writeOwnerFile(root); ownerAlive = true;
       vi.advanceTimersByTime(2000);
       expect(kill).toHaveBeenCalledTimes(2);
-      expect(killTestProcessesUnder(root, { read: () => ancestors, kill })).toBe(0);
+      expect(killTestProcessesUnder(root, { read: () => ancestors, probe: () => true, kill })).toBe(0);
       expect(killTestProcessesUnder(root, { read: () => [target], kill })).toBe(0);
       writeFileSync(join(root, '.owner.pid'), '900009 0\n');
       expect(killTestProcessesUnder(root, { read, probe: () => true, kill })).toBe(0);
