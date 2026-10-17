@@ -155,16 +155,23 @@ async function startAdmittedExport(id, deps) {
   const directory = `${EXPORT_DIRECTORY_ROOT}/${id}/${randomUUID()}`;
   const dir = join(PATHS.data, directory);
   await sweepStaleStagings(join(PATHS.data, EXPORT_DIRECTORY_ROOT, id));
-  await mkdir(dir, { recursive: true });
-  // A three.js film imports `three` by bare name; the host's import map plus the
-  // hashed vendored modules beside it are the only code the render may load.
-  const three = importsThree(html);
-  const page = three ? injectThreeImportMap(html) : html;
-  await atomicWrite(join(dir, 'index.html'), injectExportShim(page, buildExportShim({ song })));
-  if (three) {
-    for (const { rel, data } of await threeStagedFiles()) await atomicWrite(join(dir, rel), data);
+  let queued;
+  try {
+    await mkdir(dir, { recursive: true });
+    // A three.js film imports `three` by bare name; the host's import map plus the
+    // hashed vendored modules beside it are the only code the render may load.
+    const three = importsThree(html);
+    const page = three ? injectThreeImportMap(html) : html;
+    await atomicWrite(join(dir, 'index.html'), injectExportShim(page, buildExportShim({ song })));
+    if (three) {
+      for (const { rel, data } of await threeStagedFiles()) await atomicWrite(join(dir, rel), data);
+    }
+    queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });
+  } catch (error) {
+    // Nothing references this staging yet (the enqueue failed or never ran), so it is litter.
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
-  const queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });
   console.log(`🎬 Code animation ${id.slice(0, 8)} frame-exact export queued as ${queued.jobId}`);
   return { ...queued, notes };
 }
