@@ -70,16 +70,15 @@ describe('camera rig paths', () => {
   });
 });
 
-// The engine's cover transform, evaluated on its own like engine.overlay.test.js.
+// The engine's math helpers and cover transform, evaluated from the engine source itself
+// (like engine.overlay.test.js) so the edge invariant runs against the engine's own easing and clamps.
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
-const cameraBlock = engine.slice(engine.indexOf('  const RIG = globalThis.PORTOS_CAMERA_RIG'), engine.indexOf('  // ---------- media'));
+const engineSlice = (from, to) => engine.slice(engine.indexOf(from), engine.indexOf(to));
+const mathBlock = engineSlice('  // ---------- math ----------', '  // ---------- song ----------');
+const cameraBlock = engineSlice('  const RIG = globalThis.PORTOS_CAMERA_RIG', '  // ---------- media');
 const W = 1920; const H = 1080;
-const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
-const lerp = (a, b, k) => a + (b - a) * k;
-const seg = (t, a, b) => (b > a ? clamp((t - a) / (b - a)) : (t >= b ? 1 : 0));
-const easeInOut = (k) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
-const engineCamera = (portosRig) => new Function('W', 'H', 'downs', 'beats', 'globalThis', 'lerp', 'easeInOut', 'seg',
-  `${cameraBlock}\nreturn { cameraView, cameraSample, moveFor };`)(W, H, [2, 6], [1, 2, 3, 4, 5, 6], { PORTOS_CAMERA_RIG: portosRig }, lerp, easeInOut, seg);
+const engineCamera = (portosRig) => new Function('W', 'H', 'downs', 'beats', 'globalThis',
+  `${mathBlock}\n${cameraBlock}\nreturn { cameraView, cameraSample, moveFor };`)(W, H, [2, 6], [1, 2, 3, 4, 5, 6], { PORTOS_CAMERA_RIG: portosRig });
 
 // Every canvas corner must land inside the rotated, scaled, offset frame (a same-aspect source is the tightest case).
 function coversCanvas(view) {
