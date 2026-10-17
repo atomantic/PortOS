@@ -2,9 +2,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
-const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn(), loadApps: vi.fn() }));
+const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn() }));
+vi.mock('child_process', () => ({ spawn: harness.spawn }));
 vi.mock('express', () => {
   const express = () => ({
     use: (handler) => harness.gates.push(handler),
@@ -34,12 +36,13 @@ let dataDir;
 beforeAll(async () => { passwordHash = await hashPassword(PASSWORD, SALT); }, 30_000);
 beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'autofixer-authority-'));
+  harness.spawn.mockReset();
   harness.execPm2.mockReset().mockResolvedValue({ stdout: 'ok', stderr: '' });
   harness.loadApps.mockReset().mockResolvedValue([{ pm2ProcessNames: ['example-process'] }]);
   harness.gates.length = 0;
   harness.routes.clear();
 });
-afterEach(async () => { await rm(dataDir, { recursive: true, force: true }); });
+afterEach(async () => { vi.useRealTimers(); await rm(dataDir, { recursive: true, force: true }); });
 
 const loadUi = async (enabled = false) => {
   await writeFile(join(dataDir, 'settings.json'), JSON.stringify({ secrets: { auth: {
@@ -155,5 +158,79 @@ describe('Autofixer process-control authority', () => {
     await harness.auth.requireHostControl({ headers: {}, socket: { remoteAddress: '127.0.0.1' } }, res, vi.fn());
     expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     expect(harness.execPm2).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Autofixer log child lifecycle', () => {
+  const child = () => {
+    const proc = new EventEmitter();
+    proc.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    proc.stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    proc.kill = vi.fn(() => true);
+    proc.unref = vi.fn();
+    return proc;
+  };
+  const openLogs = () => {
+    const req = Object.assign(new EventEmitter(), { query: {} });
+    const res = Object.assign(new EventEmitter(), response(), { write: vi.fn(), end: vi.fn() });
+    const done = harness.routes.get('/logs')[0](req, res);
+    return { req, res, done };
+  };
+
+  it('reports an initial spawn error and ends SSE without starting a live stream', async () => {
+    await loadUi();
+    const initial = child();
+    harness.spawn.mockReturnValue(initial);
+    const { res, done } = openLogs();
+    initial.emit('error', new Error('example spawn failure'));
+    initial.emit('close', -1);
+    await done;
+    expect(res.write.mock.calls.flat().join('')).toContain('example spawn failure');
+    expect(res.end).toHaveBeenCalledOnce();
+    expect(harness.spawn).toHaveBeenCalledOnce();
+    expect(res.listenerCount('close')).toBe(0);
+  });
+
+  it('cancels the initial read on disconnect and never starts a later stream', async () => {
+    await loadUi();
+    vi.useFakeTimers();
+    const initial = child();
+    harness.spawn.mockReturnValue(initial);
+    const { res, done } = openLogs();
+    res.destroyed = true;
+    res.emit('close');
+    await vi.advanceTimersByTimeAsync(2000);
+    await done;
+    initial.emit('close', 0);
+    expect(initial.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(initial.unref).toHaveBeenCalledOnce();
+    expect(harness.spawn).toHaveBeenCalledOnce();
+    expect(res.write).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('delivers initial and live logs then cleans the streaming child on disconnect', async () => {
+    await loadUi();
+    vi.useFakeTimers();
+    const initial = child();
+    const live = child();
+    harness.spawn.mockReturnValueOnce(initial).mockReturnValueOnce(live);
+    const { req, res, done } = openLogs();
+    initial.stdout.emit('data', 'initial log\n');
+    initial.emit('close', 0);
+    await Promise.resolve();
+    // A completed request body does not close an SSE response.
+    req.emit('close');
+    live.stdout.emit('data', 'live log\n');
+    expect(res.write.mock.calls.flat().join('')).toContain('initial log');
+    expect(res.write.mock.calls.flat().join('')).toContain('live log');
+    res.destroyed = true;
+    res.emit('close');
+    live.emit('close', null);
+    await done;
+    expect(live.kill.mock.calls).toEqual([['SIGTERM']]);
+    expect(live.stdout.listenerCount('data')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
