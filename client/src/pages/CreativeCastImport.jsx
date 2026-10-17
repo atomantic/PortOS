@@ -19,6 +19,19 @@ import { libraryForType } from '../lib/creativeLibraries';
 import { formatCount } from '../utils/formatters';
 
 const decisionKey = (projectId, subjectId) => `${projectId}\n${subjectId}`;
+// Under the server's per-request cap, so a large library imports in parts.
+const IMPORT_CHUNK = 500;
+
+async function commitInChunks(selections) {
+  const totals = { created: 0, linked: 0, kept: 0 };
+  for (let i = 0; i < selections.length; i += IMPORT_CHUNK) {
+    const result = await commitMusicVideoCastImport(selections.slice(i, i + IMPORT_CHUNK), { silent: true });
+    totals.created += result.created;
+    totals.linked += result.linked;
+    totals.kept += result.kept;
+  }
+  return totals;
+}
 
 function ImportRow({ project, item, action, onChange }) {
   const id = `cast-import-${project.projectId}-${item.subjectId}`;
@@ -79,7 +92,7 @@ export default function CreativeCastImport() {
 
   const handleImport = async () => {
     setImporting(true);
-    const result = await commitMusicVideoCastImport(selections, { silent: true })
+    const result = await commitInChunks(selections)
       .catch((err) => { toast.error(err?.message || 'Import failed'); return null; });
     setImporting(false);
     if (!result) return;

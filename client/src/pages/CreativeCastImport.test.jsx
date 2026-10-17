@@ -47,4 +47,16 @@ describe('CreativeCastImport', () => {
     expect(toast.success).toHaveBeenCalledWith('Imported: 1 new, 1 linked, 1 kept in their videos');
     expect(await screen.findByText(/already in the catalog/)).toBeInTheDocument();
   });
+
+  it('imports a large library in parts and totals the results', async () => {
+    const items = Array.from({ length: 501 }, (_, i) => ({ subjectId: `mvc-${i}`, kind: 'object', name: `Prop ${i}`, imageId: null, action: 'create', ingredientId: `cat-obj-${i}` }));
+    previewMusicVideoCastImport.mockResolvedValueOnce({ projects: [{ projectId: 'mv-1', name: 'Example Video', items }] }).mockResolvedValueOnce({ projects: [] });
+    commitMusicVideoCastImport.mockImplementation(async (rows) => ({ projects: 1, created: rows.length, linked: 0, kept: 0 }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Import 501' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported: 501 new, 0 linked, 0 kept in their videos'));
+    expect(commitMusicVideoCastImport.mock.calls.map(([rows]) => rows.length)).toEqual([500, 1]);
+  });
 });
