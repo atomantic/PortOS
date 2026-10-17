@@ -363,6 +363,20 @@ async function runStart() {
 
   setDaemonRunning(true);
 
+  try {
+    await bootDaemon(state);
+  } catch (err) {
+    // A failed start must not leave the flag reading "Already running" with
+    // half the timers armed — tear down whatever was scheduled, then rethrow.
+    console.error(`❌ CoS daemon start failed: ${err?.message || err}`);
+    await teardownDaemon().catch(teardownErr =>
+      console.error(`❌ CoS teardown after failed start failed: ${teardownErr?.message || teardownErr}`));
+    throw err;
+  }
+  return { success: true };
+}
+
+async function bootDaemon(state) {
   // First clean up orphaned agents (agents marked running but no live process)
   const { cleanupOrphanedAgents } = await import('./agentManagement.js');
   const cleanedAgents = await cleanupOrphanedAgents();
@@ -430,6 +444,7 @@ async function runStart() {
     type: 'interval',
     intervalMs: state.config.healthCheckIntervalMs,
     handler: async () => {
+      if (!isDaemonRunning()) return;
       await runHealthCheck();
       const { runDevelopmentWatchdog } = await import('./developmentWatchdog.js');
       await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
@@ -551,6 +566,7 @@ async function runStart() {
     type: 'interval',
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
+      if (!isDaemonRunning()) return;
       const s = await loadState();
       if (s.paused || getDomainMode(s.config, 'cos') !== 'execute') return;
       const prWatcher = await import('./prWatcher.js');
@@ -596,18 +612,25 @@ async function runStart() {
       scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
   }, POST_STARTUP_QUEUE_DELAY_MS);
-
-  return { success: true };
 }
 
 /**
  * Stop the CoS daemon
  */
 export async function stop() {
+  // A Stop issued mid-start would otherwise see the flag already true, cancel
+  // timers that don't exist yet, and then watch the resumed boot arm them all
+  // (#11860). Let the start settle so Stop tears down a fully started daemon.
+  if (daemonStartPromise) await daemonStartPromise.catch(() => {});
   if (!isDaemonRunning()) {
     return { success: false, error: 'Not running' };
   }
 
+  await teardownDaemon();
+  return { success: true };
+}
+
+async function teardownDaemon() {
   await shutdownPersistentMindSupervisor();
   unregisterPersistentMindTurnAdapter();
 
@@ -629,7 +652,6 @@ export async function stop() {
 
   setDaemonRunning(false);
   cosEvents.emit('status', { running: false });
-  return { success: true };
 }
 
 /**
