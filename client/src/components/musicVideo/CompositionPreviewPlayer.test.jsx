@@ -998,6 +998,8 @@ describe('native composition playback', () => {
     await screen.findByText(/Native playback clock could not be synchronized/);
     expect(playbackMessages('prepare')).toHaveLength(0);
     expect(playbackMessages('play')).toHaveLength(0);
+    // The fallback message renders before the player schedules its first tick.
+    await waitFor(() => expect(raf).toHaveBeenCalled());
     const audio = container.querySelector('audio');
     const image = container.querySelector('img');
     const initial = image.src;
