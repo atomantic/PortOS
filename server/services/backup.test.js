@@ -2190,6 +2190,19 @@ describe('generateManifest', () => {
     expect(manifest.files).not.toHaveProperty('dangling-link');
     expect((await fsp.lstat(joinPath(dataDir, 'dangling-link'))).isSymbolicLink()).toBe(true);
   });
+
+  it('records no OS metadata files in a new manifest', async () => {
+    const fsp = await vi.importActual('fs/promises');
+    const dataDir = joinPath(tmpRoot, 'data');
+    await fsp.mkdir(joinPath(dataDir, 'images'), { recursive: true });
+    await fsp.writeFile(joinPath(dataDir, 'images', 'example.png'), 'png');
+    await fsp.writeFile(joinPath(dataDir, 'images', '.DS_Store'), 'finder');
+    await fsp.writeFile(joinPath(dataDir, 'images', '._example.png'), 'appledouble');
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, joinPath(tmpRoot, 'manifest.json'));
+    expect(Object.keys(manifest.files)).toEqual([joinPath('images', 'example.png')]);
+    expect(manifest.fileCount).toBe(1);
+  });
 });
 
 describe('restoreSnapshot manifest verification', () => {
@@ -2308,6 +2321,36 @@ describe('restoreSnapshot manifest verification', () => {
       '--exclude=.DS_Store', '--exclude=._*',
     ]));
   });
+
+  it.each(['modified', 'deleted'])('restores a snapshot whose manifest hashed a .DS_Store that was later %s', async (change) => {
+    // Manifests written before OS metadata was excluded still list it; Finder
+    // rewriting that file must not fail verification of an intact snapshot.
+    const relativePath = 'images/example.png';
+    const metaPath = 'images/.DS_Store';
+    await writeManifest({
+      [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data'),
+      [metaPath]: await writeSnapshotFile(metaPath, 'original finder metadata'),
+    });
+    if (change === 'modified') await writeSnapshotFile(metaPath, 'finder rewrote this');
+    else await realFs.unlink(joinPath(snapshotDataDir, metaPath));
+
+    await expect(finishRestore({ dryRun: true }))
+      .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+  });
+
+  it.each(['brain/', './brain', 'brain/.', 'brain//'])(
+    'selects and verifies the same files for the equivalent scope %s',
+    async (spelling) => {
+      const relativePath = 'brain/example.json';
+      await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data') });
+
+      await expect(finishRestore({ dryRun: true, subdirFilter: spelling })).resolves.toMatchObject({
+        subdirFilter: 'brain',
+        verification: { status: 'verified', checkedFiles: 1 },
+      });
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--include=/brain', '--include=/brain/***']));
+    },
+  );
 
   it.each([
     ['missing', async (path) => realFs.unlink(path)],

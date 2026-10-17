@@ -275,6 +275,7 @@ export const ALWAYS_RUN_TESTS = [
   // can select it — a docs-only PR that documented a removed endpoint would
   // otherwise merge green.
   'docs/api-doc.test.js',
+  'docs/auth-public-paths-doc.test.js',
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',

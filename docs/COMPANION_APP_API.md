@@ -32,7 +32,7 @@ plus whether it currently holds an operator session for that instance.
 ## 1. Discovery & identity (pre-auth)
 
 `GET /api/system/health` — **public**, bypasses the auth gate even when the
-password is on (`PUBLIC_API_PATHS` in `server/services/authGate.js`), and is the same
+password is on (`ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js`), and is the same
 endpoint Tailscale reachability checks hit. Use it to confirm a tailnet host is a
 PortOS instance and to label it on a connection screen **before** the app holds
 any credential.

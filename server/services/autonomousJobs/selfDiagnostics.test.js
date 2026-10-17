@@ -261,9 +261,10 @@ describe('runSelfDiagnostics', () => {
     expect(res.failingCount).toBe(3)
     expect(res.issue).toMatchObject({ number: 99, created: true })
     const createCall = exec.mock.calls.find(c => c[1].includes('create') && c[1].includes('issue'))
-    expect(createCall[1]).toContain('--label')
-    expect(createCall[1]).toContain(MONITORING_LABEL)
-    expect(createCall[1]).toContain(NEEDS_ATTENTION_LABEL)
+    // Monitoring alerts must never carry dispatch labels (model:/effort:/good first issue),
+    // or the claim queue would spend agent runs on them.
+    const labels = createCall[1].flatMap((arg, i, args) => (arg === '--label' ? [args[i + 1]] : []))
+    expect(labels).toEqual([MONITORING_LABEL, NEEDS_ATTENTION_LABEL])
   })
 
   it('reuses (edits) an existing monitoring issue instead of filing a duplicate', async () => {

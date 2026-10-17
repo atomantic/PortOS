@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideoCreativeContext.js';
+import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
@@ -141,6 +142,39 @@ export function moodBoardImageList(board, resolveItem) {
     if (out.length >= MOOD_ITEMS_MAX) break;
   }
   return out;
+}
+
+export const CAST_SETS_SUBJECT_PREFIX = 'cs-';
+
+/**
+ * Catalog-linked cast and places the director chose in Creative setup: fixed
+ * casting the check-in keeps instead of redesigning. Each carries the image
+ * the Look step pulled for it (a reference labelled with its name), which
+ * conditions its sheet or plate. Cast & Sets' own earlier subjects are left
+ * out, so a regenerate can still redesign them.
+ */
+export function fixedCasting(project) {
+  const refs = project?.visualSpec?.references || [];
+  return (project?.concept?.subjects || [])
+    .filter((s) => s?.ingredientId && s.name && (s.kind === 'character' || s.kind === 'place')
+      && !String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX))
+    .map((s) => {
+      const role = s.kind === 'place' ? 'set' : 'character';
+      const name = s.name.trim().toLowerCase();
+      const ref = refs.find((r) => r?.imageId && r.role === role && String(r.label || '').trim().toLowerCase() === name
+        && !isOutsideMusicVideoReference(r));
+      return { kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', imageId: ref?.imageId || null };
+    });
+}
+
+function fixedCastingBlock(project) {
+  const fixed = fixedCasting(project);
+  if (!fixed.length) return '';
+  return [
+    'FIXED CASTING (catalog records the director chose; keep them):',
+    ...fixed.map((f) => `- ${f.kind}${f.role === 'protagonist' ? ' (protagonist)' : ''}: ${trimTo(f.name, 120)}${f.description ? ` — ${trimTo(f.description, 500)}` : ''}`),
+    'Use each one as given: the same name, and its description for face, hair and wardrobe, or for the empty location. A character marked protagonist is the protagonist unless a character style above fixes it; other characters go in "cast"; places become sets. Design only what this list leaves missing.',
+  ].join('\n');
 }
 
 const OUTPUT_SHAPE = `{
@@ -310,6 +344,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     header,
     facts,
     characterStyle,
+    fixedCastingBlock(project),
     songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
     sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',

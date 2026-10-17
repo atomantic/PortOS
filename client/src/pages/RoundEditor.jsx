@@ -32,6 +32,7 @@ import ReferenceAnalysis from '../components/songs/ReferenceAnalysis';
 import RoundEditForm from '../components/songs/RoundEditForm';
 import RoundReadView from '../components/songs/RoundReadView';
 import { TEMP_ID_RE } from '../lib/roundDraft.js';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 
 export default function RoundEditor() {
@@ -72,55 +73,60 @@ export default function RoundEditor() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header bar */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card shrink-0">
-        <button
-          type="button"
-          onClick={() => navigate("/rounds")}
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
-          title="Back to Rounds"
-          aria-label="Back to Rounds"
-        >
-          <ArrowLeft size={18} />
-        </button>
-        <Music size={18} className="text-port-accent shrink-0" />
-        <span className="text-white font-semibold truncate flex-1 min-w-0">{song.title || 'Untitled round'}</span>
-        {/* View / Edit toggle — mode lives in the URL so each view is linkable. */}
-        <div className="flex items-center rounded-lg border border-port-border overflow-hidden shrink-0">
-          <button
-            type="button"
-            onClick={() => setMode('read')}
-            aria-pressed={!editing}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors ${!editing ? 'bg-port-accent text-white' : 'text-gray-300 hover:text-white hover:bg-port-border/50'}`}
-          >
-            <Eye size={14} /> View
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('edit')}
-            aria-pressed={editing}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors border-l border-port-border ${editing ? 'bg-port-accent text-white' : 'text-gray-300 hover:text-white hover:bg-port-border/50'}`}
-          >
-            <Pencil size={14} /> Edit
-          </button>
-        </div>
-        <Link
-          to="/rounds/guide"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
-        >
-          <BookOpen size={14} />
-          Guide
-        </Link>
-        <button
-          type="button"
-          onClick={() => save()}
-          disabled={saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-        >
-          <Save size={14} />
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-      </div>
+      {/* Shared PageHeader wraps on narrow screens so the title and Save never clip (#11895). */}
+      <PageHeader
+        icon={Music}
+        title={song.title || 'Untitled round'}
+        className="bg-port-card"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={() => navigate('/rounds')}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
+              title="Back to Rounds"
+              aria-label="Back to Rounds"
+            >
+              <ArrowLeft size={18} />
+            </button>
+            {/* View / Edit toggle — mode lives in the URL so each view is linkable. */}
+            <div className="flex items-center rounded-lg border border-port-border overflow-hidden shrink-0">
+              <button
+                type="button"
+                onClick={() => setMode('read')}
+                aria-pressed={!editing}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors ${!editing ? 'bg-port-accent text-white' : 'text-gray-300 hover:text-white hover:bg-port-border/50'}`}
+              >
+                <Eye size={14} /> View
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('edit')}
+                aria-pressed={editing}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors border-l border-port-border ${editing ? 'bg-port-accent text-white' : 'text-gray-300 hover:text-white hover:bg-port-border/50'}`}
+              >
+                <Pencil size={14} /> Edit
+              </button>
+            </div>
+            <Link
+              to="/rounds/guide"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+            >
+              <BookOpen size={14} />
+              Guide
+            </Link>
+            <button
+              type="button"
+              onClick={() => save()}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
+            >
+              <Save size={14} />
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </>
+        )}
+      />
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6">

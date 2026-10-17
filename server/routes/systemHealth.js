@@ -68,7 +68,7 @@ router.get('/health', asyncHandler(async (req, res) => {
     getCurrentVersion(),
     // Whether the optional password gate is on, so a companion client knows to
     // prompt for a password without a second round-trip to /api/auth/status.
-    // This endpoint stays public (PUBLIC_API_PATHS) so the client can read
+    // This endpoint stays public (ALWAYS_PUBLIC_API_PATHS) so the client can read
     // identity before it holds any credential.
     isAuthEnabled()
   ]);
