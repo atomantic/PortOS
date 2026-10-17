@@ -17,11 +17,12 @@ vi.mock('fs', async (importOriginal) => {
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
 }));
-const fault = vi.hoisted(() => ({ command: null, subcommand: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, calls: [] }));
+const fault = vi.hoisted(() => ({ command: null, subcommand: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, onGit: null, calls: [] }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
     fault.calls.push({ args, cwd });
+    fault.onGit?.(args, cwd);
     if (args[0] === fault.command && (!fault.subcommand || args[1] === fault.subcommand) && (!fault.cwd || cwd === fault.cwd)) {
       if (fault.successfulMatches > 0) {
         fault.successfulMatches--;
@@ -44,6 +45,9 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
 });
 
 const root = () => realpathSync(lazyTempDataRoot('portos-external-cleanup-'));
+// An empty agent registry; omitting it reads this sandbox's missing state.json,
+// which fails closed and holds every tree.
+const NO_OWNERS = { claimOwners: { agents: [] } };
 let primary;
 let external;
 let initialHead;
@@ -90,6 +94,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.pathAlias = null;
     fault.aliasTarget = null;
     fault.registrationPath = null;
+    fault.onGit = null;
     await resetGitWorktreeSandbox(external, initialHead);
     await rm(PATHS.worktrees, { recursive: true, force: true });
     await mkdir(PATHS.worktrees, { recursive: true });
@@ -111,7 +116,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const merged = await addTree('agent-merged', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-merged', '--no-edit'], external);
 
-    expect(await cleanupOrphanedWorktrees(primary, new Set(['agent-active']))).toBe(1);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(['agent-active']), NO_OWNERS)).toBe(1);
     for (const path of [dirty, unmerged, locked, detached, active, human, nonAgent]) expect(existsSync(path)).toBe(true);
     expect(await readFile(join(dirty, 'private-recovery.txt'), 'utf8')).toBe('dirty recovery\n');
     expect(await readFile(join(locked, 'private-recovery.txt'), 'utf8')).toBe('locked recovery\n');
@@ -129,7 +134,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.registrationPath = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
     fault.aliasTarget = path;
     fault.pathAlias = alias;
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(1);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
     expect(existsSync(path)).toBe(false);
     expect(await branchExists('agent-path-alias')).toBe(false);
     await unlink(alias);
@@ -139,7 +144,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const path = await addTree('agent-relative');
     const pointer = (await readFile(join(path, '.git'), 'utf8')).replace(/^gitdir: /, '').trim();
     await rewriteGitPointer(path, `gitdir: ${relative(realpathSync(path), pointer)}\n`);
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(1);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
     expect(existsSync(path)).toBe(false);
   });
 
@@ -151,7 +156,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const unreadable = await addTree('agent-unreadable');
     await rewriteGitPointer(unreadable, 'unreadable registration\n');
     await rm(missingParent, { recursive: true, force: true });
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(missing)).toBe(true);
     expect(existsSync(unreadable)).toBe(true);
   });
@@ -160,7 +165,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const path = await addTree('agent-read-failure');
     fault.command = command;
     fault.cwd = path;
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-read-failure')).toBe(true);
   });
@@ -169,7 +174,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const path = await addTree('agent-cherry-failure', { committed: true });
     fault.command = 'cherry';
     fault.successfulMatches = successfulMatches;
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-cherry-failure')).toBe(true);
   });
@@ -180,14 +185,33 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     // itself reports for the parent repo, whose spelling differs on Windows.
     fault.command = 'worktree';
     fault.subcommand = 'remove';
-    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(fault.calls.some(({ args }) => args[0] === 'branch' && args[1] === '-D')).toBe(false);
   });
 
+  it('keeps the worktree and branch of an agent dispatched while the pass is inspecting its tree', async () => {
+    const path = await addTree('agent-dispatched');
+    const live = new Set();
+    // Registration lands after every pre-lock ownership read — while the pass
+    // reads the tree's status (#11858) — so only the in-lock re-read can see it.
+    fault.onGit = (args, cwd) => { if (args[0] === 'status' && cwd === path) live.add('agent-dispatched'); };
+    expect(await cleanupOrphanedWorktrees(primary, () => new Set(live), NO_OWNERS)).toBe(0);
+    expect(existsSync(path)).toBe(true);
+    expect(await branchExists('agent-dispatched')).toBe(true);
+  });
+
+  it('keeps a worktree a registered agent works in even when live liveness omits it', async () => {
+    const path = await addTree('agent-registered');
+    const owners = { claimOwners: { agents: [{ id: 'agent-registered', status: 'running', workspacePath: path, sourceWorkspace: external }] } };
+    expect(await cleanupOrphanedWorktrees(primary, () => new Set(), owners)).toBe(0);
+    expect(existsSync(path)).toBe(true);
+    expect(await branchExists('agent-registered')).toBe(true);
+  });
+
   it('holds all external agent work when liveness cannot be established', async () => {
     const path = await addTree('agent-unknown-liveness');
-    expect(await cleanupOrphanedWorktrees(primary, null)).toBe(0);
+    expect(await cleanupOrphanedWorktrees(primary, null, NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
   });
 });

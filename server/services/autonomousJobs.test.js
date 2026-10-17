@@ -1206,7 +1206,7 @@ describe('autonomousJobs', () => {
 
       expect(reapMergedWorktrees).toHaveBeenCalledOnce()
       const [, opts] = reapMergedWorktrees.mock.calls[0]
-      expect(opts.activeAgentIds.has('paused-agent-1')).toBe(true)
+      expect(opts.activeAgentIds().has('paused-agent-1')).toBe(true)
     })
 
     it('paused agent id is in the set passed to cleanupOrphanedWorktrees', async () => {
@@ -1220,8 +1220,23 @@ describe('autonomousJobs', () => {
       await agentDataCleanup()
 
       expect(cleanupOrphanedWorktrees).toHaveBeenCalledOnce()
-      const [, activeIds] = cleanupOrphanedWorktrees.mock.calls[0]
-      expect(activeIds.has('paused-agent-1')).toBe(true)
+      const [, getActiveIds] = cleanupOrphanedWorktrees.mock.calls[0]
+      expect(getActiveIds().has('paused-agent-1')).toBe(true)
+    })
+
+    it('both reap passes see an agent dispatched after the job took its snapshot', async () => {
+      readJSONFile.mockResolvedValueOnce({ agents: { 'paused-agent-1': { status: 'paused' } } })
+      // Empty when the job starts; agent-x registers while the earlier passes run.
+      getActiveAgentIds.mockReturnValueOnce([]).mockReturnValue(['agent-x'])
+
+      await agentDataCleanup()
+
+      const [, opts] = reapMergedWorktrees.mock.calls[0]
+      const [, getActiveIds] = cleanupOrphanedWorktrees.mock.calls[0]
+      for (const ids of [opts.activeAgentIds(), getActiveIds()]) {
+        expect(ids.has('agent-x')).toBe(true)
+        expect(ids.has('paused-agent-1')).toBe(true)
+      }
     })
 
     it('non-paused agent is NOT added to the protect set via state.json', async () => {
@@ -1236,7 +1251,7 @@ describe('autonomousJobs', () => {
 
       const [, opts] = reapMergedWorktrees.mock.calls[0]
       // running-agent-2 is not paused and not in getActiveAgentIds() → NOT in protect set
-      expect(opts.activeAgentIds.has('running-agent-2')).toBe(false)
+      expect(opts.activeAgentIds().has('running-agent-2')).toBe(false)
     })
 
     it('in-memory active agents are also protected alongside paused agents', async () => {
@@ -1248,8 +1263,8 @@ describe('autonomousJobs', () => {
       await agentDataCleanup()
 
       const [, opts] = reapMergedWorktrees.mock.calls[0]
-      expect(opts.activeAgentIds.has('paused-agent-1')).toBe(true)
-      expect(opts.activeAgentIds.has('live-agent-99')).toBe(true)
+      expect(opts.activeAgentIds().has('paused-agent-1')).toBe(true)
+      expect(opts.activeAgentIds().has('live-agent-99')).toBe(true)
     })
 
     it('handles missing cosState gracefully (null state.json)', async () => {
