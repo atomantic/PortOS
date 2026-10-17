@@ -101,24 +101,25 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const isQuota = explicitReason === 'quota' || isReviewerQuotaFailure(result)
   const isExplicitUnavailable = explicitReason === 'unavailable'
 
-  const settings = await getSettings().catch(() => null)
-  const prior = settings?.codeReview?.reviewerHealth?.[reviewer]
-  const priorCount = Number(prior?.failureCount) || 0
-  const failureCount = priorCount + 1
-  const isRepeatedFailure = failureCount >= 2
   const isProvider = isProviderReviewer(reviewer)
 
-  if (!isConfigFault && !isMalformed && !isQuota && !isExplicitUnavailable && !isRepeatedFailure && !isProvider) {
+  if (!isConfigFault && !isMalformed && !isQuota && !isExplicitUnavailable && !isProvider) {
     return false
   }
 
-  const shouldPause = isQuota || isExplicitUnavailable || isRepeatedFailure || (Number(prior?.pausedUntil) > now)
-  const pauseReason = isQuota ? 'quota' : (isExplicitUnavailable ? 'unavailable' : (isRepeatedFailure ? 'unavailable' : (prior?.reason || 'unavailable')))
-
+  // The failure count and pause decision derive from the persisted record
+  // inside the serialized update, so concurrent failures each see the others.
   // Reviewer telemetry is not a user action. The standalone claim bridge must
   // not initialize the live user-action database while updating local health.
+  let shouldPause = false
+  let pauseReason = null
   await updateSettingsWith((current) => {
     const existing = current.codeReview?.reviewerHealth?.[reviewer] || {}
+    const failureCount = (Number(existing.failureCount) || 0) + 1
+    const isRepeatedFailure = failureCount >= 2
+    shouldPause = isQuota || isExplicitUnavailable || isRepeatedFailure || (Number(existing.pausedUntil) > now)
+    pauseReason = isQuota ? 'quota' : (isExplicitUnavailable ? 'unavailable' : (isRepeatedFailure ? 'unavailable' : (existing.reason || 'unavailable')))
+
     let entry
     if (isMalformed) {
       entry = {
