@@ -105,6 +105,15 @@ to the config file, including the server's derived capture projects, so shared
 They are reused across runs and removed with their checkout; temporary test
 roots retain their separate teardown lifecycle. CI caches the same owned paths.
 
+Interrupted test runs reclaim individually identified processes under their run
+roots, including non-browser fixtures. Linux reads same-user `/proc` records;
+macOS uses the existing `/usr/bin/python3` with standard-library `ctypes` to read
+NUL-delimited arguments and selected test environment fields. No Python install
+is performed. If that optional reader is unavailable, macOS retains the legacy
+browser-profile cleanup only. Process identity, caller ancestry and run-owner
+liveness are rechecked before termination and escalation; unrelated process
+groups are never signalled. Unknown ownership is left alone.
+
 The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
 use `--configLoader runner` to load ESM configs without writing bundles into shared
 `node_modules/.vite-temp`.
