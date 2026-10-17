@@ -346,12 +346,17 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     });
   };
 
+  // Optimistic: drop the row immediately and reconcile with the server after.
+  // On success the server's tasks:changed event refreshes the queue, so no
+  // extra full refetch is needed; on failure refetch to restore the row.
   const handleDelete = async () => {
-    const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
-    if (!result) return;
     onTaskDeleted?.(task.id, taskSource);
+    const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    if (!result) {
+      onRefresh();
+      return;
+    }
     toast.success('Task deleted');
-    onRefresh();
   };
 
   // Resolve a parked challenge inline (#2471). `upheld` overturns the reviewer
