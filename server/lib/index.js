@@ -610,6 +610,7 @@ export * from './renderTargets.js';
 export * from './renderTiming.js';
 export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
+export * from './imageQuotaSignal.js';
 export * from './falImageModels.js';
 export * from './imageRuntimeRemedies.js';
 export * from './renderModeLadder.js';
