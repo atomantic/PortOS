@@ -26,11 +26,18 @@ vi.mock('../lib/db.js', async () => ({
 vi.mock('../lib/peerHttpClient.js', async () => ({
   ...await vi.importActual('../lib/peerHttpClient.js'), peerFetch: vi.fn(),
 }));
-// Any accidental executor integration fails the no-active-interruption contract.
+// Spies sit on the seams production executors really call (see peerExecutionAdapters.js
+// launchUpdate/launchRestart/installCatalog); any accidental executor integration fails
+// the no-active-interruption contract. The restart and install doubles spread the actual
+// module so a removed export fails here instead of passing as a phantom double.
 const execution = vi.hoisted(() => ({ update: vi.fn(), restart: vi.fn(), install: vi.fn() }));
 vi.mock('../services/portosSelfUpdate.js', () => ({ startPortosSelfUpdate: execution.update }));
-vi.mock('../services/localLlm.js', () => ({ installModel: execution.install }));
-vi.mock('../services/pm2.js', () => ({ restartProcess: execution.restart }));
+vi.mock('../lib/detachedSpawn.js', async () => ({
+  ...await vi.importActual('../lib/detachedSpawn.js'), spawnDetached: execution.restart,
+}));
+vi.mock('../services/peerCatalogInstaller.js', async () => ({
+  ...await vi.importActual('../services/peerCatalogInstaller.js'), installPeerCatalog: execution.install,
+}));
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
 const { default: receiver } = await import('./peerAdministration.js');
