@@ -264,3 +264,22 @@ describe('film look finishing pass on a footage excerpt', () => {
     expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
   });
 });
+
+describe('excerpt setup failure after the rendering mark (#11777)', () => {
+  it('settles the excerpt, reopens the linked revision, rethrows, and lets the revision render again', async () => {
+    const id = 'excerpt-graph-write-fails';
+    prime(id);
+    h.store.get(id).revisions = [{ id: 'rev-1', status: 'open', sections: [], renderAttempts: 0 }];
+    const failure = new Error('ENOSPC: no space left on device');
+    const spy = vi.spyOn(await import('../../lib/ffmpegFilterGraph.js'), 'filterGraphViaFile').mockRejectedValueOnce(failure);
+    await expect(startExcerptRender(id, { startSec: 0, endSec: 2 }, { revisionId: 'rev-1' })).rejects.toBe(failure);
+    const [record] = h.store.get(id).excerpts;
+    expect(record.status).toBe('error');
+    expect(record.error).toBe(failure.message);
+    expect(h.store.get(id).revisions[0].status).toBe('open');
+    spy.mockRestore();
+    const retry = await startExcerptRender(id, { startSec: 0, endSec: 2 }, { revisionId: 'rev-1' });
+    expect(retry.jobId).toBeTruthy();
+    expect(h.store.get(id).revisions[0].status).toBe('rendering');
+  });
+});
