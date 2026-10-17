@@ -7,7 +7,7 @@ import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '..
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router';
+import { useNavigate, useParams, useLocation, Link } from 'react-router';
 import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
@@ -50,6 +50,7 @@ import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import { libraryForPathname, ingredientPath } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
 
@@ -133,6 +134,10 @@ export default function CatalogIngredient() {
     activeVisitRef.current = { id, generation: activeVisitRef.current.generation + 1 };
   }
   const navigate = useNavigate();
+  // Opened from Casting / Environments / Objects → Back and post-delete return
+  // there; otherwise to the catalog.
+  const { pathname } = useLocation();
+  const backPath = libraryForPathname(pathname)?.path || '/catalog';
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
@@ -175,7 +180,7 @@ export default function CatalogIngredient() {
         if (!d?.ingredient) {
           setLoading(false);
           toast.error('Ingredient not found');
-          navigate('/catalog');
+          navigate(backPath);
           return;
         }
         const r = d.ingredient;
@@ -196,10 +201,10 @@ export default function CatalogIngredient() {
         if (cancelled) return;
         setLoading(false);
         toast.error(err?.message || 'Failed to load ingredient');
-        navigate('/catalog');
+        navigate(backPath);
       });
     return () => { cancelled = true; };
-  }, [id, navigate]);
+  }, [id, navigate, backPath]);
 
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
@@ -403,7 +408,7 @@ export default function CatalogIngredient() {
       .catch((err) => { toast.error(err?.message || 'Delete failed'); return false; });
     if (ok) {
       toast.success('Deleted');
-      navigate('/catalog');
+      navigate(backPath);
     }
   };
 
@@ -501,7 +506,7 @@ export default function CatalogIngredient() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Link to="/catalog" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
+            <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
             <button type="button" onClick={handleSave} disabled={saving}
@@ -915,7 +920,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
   const chip = (other) => {
     const badge = CATALOG_BADGE_BY_ID[other?.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
     return (
-      <Link to={`/catalog/${encodeURIComponent(other?.type || 'idea')}/${encodeURIComponent(other?.id)}`}
+      <Link to={ingredientPath({ type: other?.type, id: other?.id })}
         className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
         <span className="truncate max-w-[16rem]">{other?.name || other?.id || '(unnamed)'}</span>
         <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{other?.type}</span>
@@ -1505,7 +1510,7 @@ function SourcesPanel({ sources, evidence }) {
                       {siblings.map((sib) => {
                         const badge = CATALOG_BADGE_BY_ID[sib.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
                         return (
-                          <Link key={sib.id} to={`/catalog/${encodeURIComponent(sib.type || 'idea')}/${encodeURIComponent(sib.id)}`}
+                          <Link key={sib.id} to={ingredientPath(sib)}
                             className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
                             <span className="truncate max-w-[12rem]">{sib.name || sib.id}</span>
                             <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{sib.type}</span>

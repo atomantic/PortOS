@@ -15,6 +15,7 @@ import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWor
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
+import { ingredientPath } from '../lib/creativeLibraries.js';
 import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
@@ -269,7 +270,7 @@ export default function CmdKSearch() {
       id: ing.id,
       name: ing.name,
       type: ing.type,
-      path: `/catalog/${encodeURIComponent(ing.type)}/${encodeURIComponent(ing.id)}`,
+      path: ingredientPath(ing),
     })),
     [catalogResults]
   );

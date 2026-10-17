@@ -416,7 +416,7 @@ describe('CatalogIngredient — character sheet', () => {
     // its own detail page.
     expect(screen.getByText('From the same source')).toBeTruthy();
     const siblingLink = screen.getByText('Sibling Place').closest('a');
-    expect(siblingLink.getAttribute('href')).toBe('/catalog/place/cat-plc-1');
+    expect(siblingLink.getAttribute('href')).toBe('/environments/cat-plc-1');
   });
 
   it('renders no "From the same source" stub for a solo extraction or a manually-created ingredient (#7617)', async () => {
