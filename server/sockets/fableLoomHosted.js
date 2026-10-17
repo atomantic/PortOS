@@ -7,6 +7,7 @@
  */
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
+import { hostedPlaybackUpdateSchema, hostedTextTurnSchema } from '../lib/fableLoomValidation.js';
 import {
   _getInternalSession,
   abortHostedTurn,
@@ -161,10 +162,18 @@ export function registerFableLoomHostedNamespace(io) {
     socket.on('hosted:playback:update', async (data) => {
       if (socket.hostedRole !== 'host') return;
       try {
+        const parsed = hostedPlaybackUpdateSchema.safeParse(data);
+        if (!parsed.success) {
+          socket.emit('hosted:error', {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+          });
+          return;
+        }
         const updated = await updateHostedSession(sessionId, {
-          playbackPhase: data?.phase,
-          activeHoldIndex: data?.activeHoldIndex,
-          currentNodeId: data?.nodeId,
+          playbackPhase: parsed.data.phase,
+          activeHoldIndex: parsed.data.activeHoldIndex,
+          currentNodeId: parsed.data.nodeId,
         }, { io });
         ns.to(room).emit('hosted:playback:sync', {
           phase: updated.playbackPhase,
@@ -284,9 +293,28 @@ export function registerFableLoomHostedNamespace(io) {
     socket.on('hosted:turn:text', async (data) => {
       if (socket.hostedRole !== 'audience') return;
       const live = liveSession();
-      if (!live || live.turnPhase !== 'listening') return;
+      if (!live) return;
       try {
-        await processHostedUtterance(sessionId, { textMessage: data?.text, io });
+        const parsed = hostedTextTurnSchema.safeParse(data);
+        if (!parsed.success) {
+          const count = typeof data?.text === 'string' ? data.text.length : null;
+          const maxLength = hostedTextTurnSchema.shape.text.maxLength;
+          socket.emit('hosted:error', {
+            code: 'VALIDATION_ERROR',
+            message: count === null
+              ? 'Text must be a string.'
+              : `Text has ${count} characters; send between 1 and ${maxLength} characters.`,
+            count,
+            maxLength,
+          });
+          return;
+        }
+        if (live.turnPhase === 'thinking' || live.turnPhase === 'speaking') {
+          socket.emit('hosted:error', { code: 'TURN_IN_PROGRESS', message: 'A turn is already in progress' });
+          return;
+        }
+        if (live.turnPhase === 'idle') await startHostedListening(sessionId, { io });
+        await processHostedUtterance(sessionId, { textMessage: parsed.data.text, io });
       } catch (err) {
         if (!err?.hostedReported) socket.emit('hosted:error', { code: err.code || 'TEXT_FAILED', message: err.message });
       }
