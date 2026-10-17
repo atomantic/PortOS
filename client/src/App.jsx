@@ -71,6 +71,7 @@ const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
 const RoundsGuide = lazyWithReload(() => import('./pages/RoundsGuide'));
 const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
 const CatalogIngredient = lazyWithReload(() => import('./pages/CatalogIngredient'));
+const CreativeLibrary = lazyWithReload(() => import('./pages/CreativeLibrary'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -606,6 +607,12 @@ export default function App() {
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
+          <Route path="casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
+          <Route path="casting/:id" element={<CatalogIngredient />} />
+          <Route path="environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
+          <Route path="environments/:id" element={<CatalogIngredient />} />
+          <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
+          <Route path="objects/:id" element={<CatalogIngredient />} />
           <Route path="code-animation" element={<CodeAnimation />} />
           <Route path="code-animation/:jobId" element={<CodeAnimation />} />
           <Route path="code-animation/production" element={<CodeAnimation />} />

@@ -42,6 +42,9 @@ const EXACT_FULL_WIDTH_PATHS = [
   // body (#10994). Exact entries are the indexes whose detail routes are a
   // different component (and already classified, or intentionally padded).
   '/catalog',
+  '/casting',
+  '/environments',
+  '/objects',
   '/universes',
   '/rounds',
   '/story-builder',
@@ -70,6 +73,10 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // Catalog detail (/catalog/{type}/{id}) and Ingest (/catalog/ingest)
   // own their scroll. The /catalog index is an EXACT full-width entry above.
   '/catalog/',
+  // Casting / Environments / Objects detail pages render the catalog editor.
+  '/casting/',
+  '/environments/',
+  '/objects/',
   '/cos',
   // Both the Creative Director index and its detail editor manage
   // their own internal scroll (flex-col h-full + overflow-auto body),

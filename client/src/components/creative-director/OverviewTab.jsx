@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
 import { selectProjectPreview, previewAspectClass, previewMaxWidthClass } from '../../lib/creativeDirectorPreview.js';
+import { ingredientPath } from '../../lib/creativeLibraries.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from './ScenePreview.jsx';
@@ -353,11 +354,8 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
         {Array.isArray(project.cast) && project.cast.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             {project.cast.map((member) => {
-              // Ingredient detail route is /catalog/:type/:id (matches CatalogCard);
-              // fall back to a non-link span if the cast member is missing its type.
-              const detailPath = member.type
-                ? `/catalog/${encodeURIComponent(member.type)}/${encodeURIComponent(member.ingredientId)}`
-                : null;
+              // Fall back to a non-link span if the cast member is missing its type.
+              const detailPath = member.type ? ingredientPath({ type: member.type, id: member.ingredientId }) : null;
               return (
                 <div key={member.ingredientId} className="text-sm">
                   {detailPath
