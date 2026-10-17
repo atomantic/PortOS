@@ -1,1 +1,0 @@
-../../lib/slashdo/lib/code-review-checklist.md
