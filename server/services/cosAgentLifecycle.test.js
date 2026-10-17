@@ -867,6 +867,74 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
     expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
     expect(mockCosState.state.agents['agent-stale'].result.error).toMatch(/terminated unexpectedly/);
   });
+
+  describe('agent:completed emission (#11766)', () => {
+    const completedEvents = [];
+    const onCompleted = (agent) => completedEvents.push(agent);
+
+    beforeEach(() => {
+      completedEvents.length = 0;
+      cosEvents.on('agent:completed', onCompleted);
+    });
+
+    afterEach(() => {
+      cosEvents.off('agent:completed', onCompleted);
+    });
+
+    it('emits exactly one agent:completed for a reaped zombie, and none on a second sweep', async () => {
+      await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+      mockCosState.state.agents['agent-dead'] = {
+        id: 'agent-dead',
+        taskId: 'task-dead',
+        status: 'running',
+        pid: 2147483646,
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        metadata: { taskType: 'scheduled' },
+      };
+      // Listeners that re-read state must already see the finalized record.
+      let statusSeenByListener;
+      cosEvents.once('agent:completed', () => {
+        statusSeenByListener = mockCosState.state.agents['agent-dead'].status;
+      });
+
+      expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-dead']);
+
+      expect(statusSeenByListener).toBe('completed');
+      expect(completedEvents).toHaveLength(1);
+      expect(completedEvents[0]).toMatchObject({
+        id: 'agent-dead',
+        taskId: 'task-dead',
+        metadata: { taskType: 'scheduled' },
+        result: { success: false },
+      });
+
+      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
+      expect(completedEvents).toHaveLength(1);
+    });
+
+    it('emits nothing for live, dispatching or runner-shielded records', async () => {
+      mockCosState.state.agents['agent-owned'] = {
+        id: 'agent-owned', status: 'running', pid: 2147483646,
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+      };
+      activeAgents.set('agent-owned', {});
+      mockCosState.state.agents['agent-spawning'] = {
+        id: 'agent-spawning', taskId: 'task-spawning', status: 'running',
+        startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+      };
+      spawningTasks.add('task-spawning');
+      mockCosState.state.agents['agent-tui'] = {
+        id: 'agent-tui', status: 'running', pid: 0,
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+      };
+      vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+        id: 'agent-tui', pid: 0, kind: 'tui', processActive: true, liveness: 'pty',
+      }]);
+
+      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
+      expect(completedEvents).toEqual([]);
+    });
+  });
 });
 
 describe('deleteAgent directory cleanup (#11446)', () => {

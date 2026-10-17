@@ -682,7 +682,12 @@ export async function cleanupZombieAgents() {
       .map((row) => [row.id, row]),
   );
 
-  return withBackupAssetPublication(() => withStateLock(async () => {
+  // Finalized records, emitted as `agent:completed` once the lock and archive
+  // pass are done (same ordering as completeAgent) so listeners that re-read
+  // state see them finished.
+  const finalized = [];
+
+  const summary = await withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
     const cleaned = [];
@@ -776,6 +781,7 @@ export async function cleanupZombieAgents() {
       }
       await recordArchivedAgentOrder(archived);
       await saveAgentIndex();
+      finalized.push(...cleaned.map(agentId => state.agents[agentId]));
 
       console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
       cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
@@ -783,6 +789,17 @@ export async function cleanupZombieAgents() {
 
     return { cleaned, count: cleaned.length };
   }));
+
+  // Every `agent:completed` consumer (feature-agent pointer release, task
+  // settlement/dequeue, maintenance and quota-burn step advancement, learning)
+  // keys off this event, so a zombie-finalized run must fire it too (#11766).
+  // The sweep can't route through completeAgent: it batches one lock/archive
+  // pass, and completeAgent's duplicate guard would see these as already done.
+  for (const agent of finalized) {
+    cosEvents.emit('agent:completed', agent);
+  }
+
+  return summary;
 }
 
 // Delete a single agent from state and disk
