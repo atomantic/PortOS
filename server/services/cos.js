@@ -48,7 +48,7 @@ import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
-import { useRunner } from './agentState.js';
+import { useRunner, spawningTasks } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -1088,6 +1088,7 @@ async function spawnDequeuePriority1UserTasks(ctx) {
 
   await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    isOwned: (task) => capacity.isTaskOwned(task),
     canSpawn: (task) => capacity.canSpawn(task),
     emitSpawn: (task) => cosEvents.emit('task:ready', task),
     trackSpawn: (task) => capacity.trackSpawn(task),
@@ -1121,6 +1122,7 @@ async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
     spawnProjectCounts: capacity.spawnProjectCounts,
     instanceId,
   }, {
+    isOwned: (task) => capacity.isTaskOwned(task),
     canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
     trackSpawn: (task) => capacity.trackSpawn(task),
     emitSpawn: (task) => {
@@ -1249,6 +1251,7 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   // to every CoS-subscribed socket client.
   const loggedFullEndpoints = new Set();
   const capacity = createDequeueCapacity(state, {
+    inFlightTaskIds: spawningTasks,
     agentsByProject: countRunningAgentsByProject(state.agents),
     localEndpointCounts: countRunningAgentsByLocalEndpoint(state.agents, localSlots.endpointForAgent),
     localEndpointLimit: localSlots.limit,

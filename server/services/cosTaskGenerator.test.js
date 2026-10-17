@@ -100,6 +100,7 @@ import * as prReviewerPipeline from './prReviewerPipeline.js';
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from './taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { createDequeueCapacity } from './cosDequeue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
@@ -2165,5 +2166,73 @@ describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
     expect(persist).toHaveBeenCalledWith('exhausted', expect.objectContaining({ status: 'blocked' }), 'internal');
 
     vi.restoreAllMocks();
+  });
+});
+
+// A Priority 0 on-demand task is persisted as pending + auto-approved, so
+// Priority 2 reads the same id back before any agent is registered (#11847).
+describe('auto-approved admission skips tasks already owned this cycle (#11847)', () => {
+  const ctx = (tasks, capacity) => ({
+    state: { config: { appReviewCooldownMs: 60000 } },
+    cosTaskData: { exists: true, autoApproved: tasks },
+    taskSchedule: { tasks: {} },
+    cosAutonomyMode: 'execute',
+    autonomousSlotCeiling: capacity.availableSlots,
+    alreadySpawned: capacity.spawned,
+    perProjectLimit: capacity.perProjectLimit,
+    spawnProjectCounts: capacity.spawnProjectCounts,
+    instanceId: 'local',
+  });
+  const adapterFor = (capacity, emitted, deferred = []) => ({
+    isOwned: (t) => capacity.isTaskOwned(t),
+    canSpawn: (t, ceiling) => capacity.canSpawn(t, ceiling),
+    trackSpawn: (t) => capacity.trackSpawn(t),
+    emitSpawn: (t) => emitted.push(t.id),
+    onDefer: async (d) => { deferred.push(d.task.id); },
+  });
+  const makeCapacity = (inFlightTaskIds = []) => createDequeueCapacity(
+    { config: { maxConcurrentAgents: 4, maxConcurrentAgentsPerProject: null }, agents: {} },
+    { inFlightTaskIds }
+  );
+
+  beforeEach(() => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
+  });
+
+  it('does not emit task:ready a second time for the id Priority 0 just admitted', async () => {
+    const capacity = makeCapacity();
+    const onDemand = { id: 'on-demand-1', metadata: { app: 'appA' } };
+    expect(capacity.canSpawnCommitted(onDemand)).toBe(true);
+    capacity.trackSpawn(onDemand);
+
+    const emitted = [];
+    const deferred = [];
+    await admitAutoApprovedSystemTasks(
+      ctx([onDemand, { id: 'other-2', metadata: { app: 'appB' } }], capacity),
+      adapterFor(capacity, emitted, deferred)
+    );
+
+    expect(emitted).toEqual(['other-2']);
+    expect(deferred).toEqual([]);
+    expect(capacity.spawnedTaskIds).toEqual(['on-demand-1', 'other-2']);
+  });
+
+  it('skips a task whose spawn is in flight and spends no slot on it', async () => {
+    const capacity = makeCapacity(['spawning-1']);
+    expect(capacity.availableSlots).toBe(3);
+
+    const emitted = [];
+    await admitAutoApprovedSystemTasks(
+      ctx([
+        { id: 'spawning-1', metadata: { app: 'appA' } },
+        { id: 'a', metadata: { app: 'appB' } },
+        { id: 'b', metadata: { app: 'appC' } },
+        { id: 'c', metadata: { app: 'appD' } },
+      ], capacity),
+      adapterFor(capacity, emitted)
+    );
+
+    expect(emitted).toEqual(['a', 'b', 'c']);
+    expect(capacity.spawned).toBe(3);
   });
 });

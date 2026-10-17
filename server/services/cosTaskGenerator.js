@@ -53,7 +53,8 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { admitFeatureAgentTasks, admitIdleReviewTask, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { spawningTasks } from './agentState.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -575,16 +576,19 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
     spawnProjectCounts,
     instanceId,
   } = ctx;
-  const { canSpawn, trackSpawn, emitSpawn, onDefer = async () => {} } = adapter;
+  const { canSpawn, trackSpawn, emitSpawn, isOwned = () => false, onDefer = async () => {} } = adapter;
 
   if (!cosTaskData.exists) return [];
 
+  // A task already spawning or admitted this cycle is not a candidate: letting
+  // it reach the gates would record a capacity/cooldown deferral for work that
+  // is already running.
   const autoApproved = [
     ...(cosTaskData.autoApproved || []),
     ...(state.config.autoApproveInvestigations
       ? (cosTaskData.grouped?.pending || []).filter((task) => isAutoApprovableInvestigation(task, state.config))
       : [])
-  ];
+  ].filter((task) => !isOwned(task));
   // One hook set feeds both walks, so the dry-run plan and the execute pass
   // cannot disagree about what each gate means.
   const gateHooks = {
@@ -660,11 +664,13 @@ async function recordAutoApprovedDeferral({ type, task, appId, project }, state,
  * capacity denies a candidate.
  */
 export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, adapter) {
-  const { capacityExhausted, canSpawn, emitSpawn, trackSpawn, onDefer = async () => {} } = adapter;
+  const { capacityExhausted, canSpawn, emitSpawn, trackSpawn, isOwned = () => false, onDefer = async () => {} } = adapter;
 
   const admitted = [];
   for (const task of pendingUserTasks) {
     if (capacityExhausted()) break;
+    // Already spawning or admitted this cycle — not deferred, just not a candidate.
+    if (isOwned(task)) continue;
     // Not runnable here: the task is pinned to another instance (#4520), or a
     // federated peer holds a live lease on it (#1650) and is working it on the
     // other machine. Skip it during candidate selection so it doesn't consume
@@ -905,7 +911,8 @@ export async function evaluateTasks(options) {
   // Count running agents and available slots (global + per-project)
   const runningAgentEntries = Object.values(state.agents).filter(a => a.status === 'running');
   const runningAgents = runningAgentEntries.length;
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+  // In-flight spawns hold a slot before their agent registers as running.
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents - countUnregisteredInFlight(spawningTasks, state.agents);
 
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
   const agentsByProject = countRunningAgentsByProject(state.agents);
@@ -931,7 +938,10 @@ export async function evaluateTasks(options) {
   // Helper: check if a task can spawn (within both global and per-project limits).
   // `ceiling` defaults to the global slot count; autonomous sections pass the
   // lower `autonomousSlotCeiling` so the CoS action budget (#711) caps them.
+  const admittedTaskIds = new Set();
+  const isTaskOwned = (task) => Boolean(task?.id) && (admittedTaskIds.has(task.id) || spawningTasks.has(task.id));
   const canSpawnTask = (task, ceiling = availableSlots) => {
+    if (isTaskOwned(task)) return false;
     if (tasksToSpawn.length >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     return (spawnProjectCounts[project] || 0) < perProjectLimit;
@@ -941,6 +951,7 @@ export async function evaluateTasks(options) {
   // one without the other (#9609).
   const admitSpawn = (task) => {
     tasksToSpawn.push(task);
+    if (task.id) admittedTaskIds.add(task.id);
     const project = task.metadata?.app || '_self';
     spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
   };
@@ -948,7 +959,7 @@ export async function evaluateTasks(options) {
   // passes also serve dequeueNextTask (cos.js), which dispatches and counts
   // through different objects, so they take emit and track as separate hooks;
   // here `admitSpawn` already does both, so the track hook is inert.
-  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {} });
+  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {}, isOwned: isTaskOwned });
 
   // Check if there are pending user tasks (even if on cooldown). If user tasks
   // exist, don't run self-improvement — wait for user tasks to be ready.

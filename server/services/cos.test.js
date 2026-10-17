@@ -499,6 +499,54 @@ function makeLocalSlotCapacity(state, { activeProvider = CLOUD_PROVIDER, limit =
 
 const userBuckets = (tasks) => ({ onDemand: [], user: tasks, autoSystem: [], idle: [] });
 
+describe('dequeueNextTask — task ownership beyond registered agents (#11847)', () => {
+  it('never admits an in-flight spawn, and still counts it against the global slots', () => {
+    // 4-slot cap: 1 running agent + 2 spawns in flight (no agent record yet)
+    // leaves one real slot, which the queued task — not the in-flight ones — gets.
+    const state = makeState({ maxConcurrentAgents: 4, runningAgents: [makeRunningAgent()] });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: new Set(['spawning-a', 'spawning-b']) });
+    expect(capacity.availableSlots).toBe(1);
+
+    const buckets = {
+      onDemand: [],
+      user: [task('spawning-a'), task('spawning-b'), task('queued-c'), task('queued-d')],
+      autoSystem: [],
+      idle: [],
+    };
+    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['queued-c']);
+  });
+
+  it('admits nothing when running agents plus in-flight spawns fill maxConcurrentAgents', () => {
+    const state = makeState({ maxConcurrentAgents: 2, runningAgents: [makeRunningAgent()] });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: ['spawning-a'] });
+    expect(capacity.availableSlots).toBe(0);
+    expect(priorityDequeue({ onDemand: [], user: [task('queued-b')], autoSystem: [], idle: [] }, capacity)).toEqual([]);
+  });
+
+  it('does not double-count an in-flight spawn whose agent is already running', () => {
+    const state = makeState({
+      maxConcurrentAgents: 3,
+      runningAgents: [{ ...makeRunningAgent(), taskId: 'spawning-a' }],
+    });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: ['spawning-a'] });
+    expect(capacity.availableSlots).toBe(2);
+  });
+
+  it('admits a task id at most once per cycle across tiers', () => {
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = createDequeueCapacity(state, {});
+    const buckets = {
+      onDemand: [task('dup-1')],
+      user: [task('dup-1'), task('user-2')],
+      autoSystem: [task('dup-1'), task('user-2'), task('sys-3')],
+      idle: [],
+    };
+    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['dup-1', 'user-2', 'sys-3']);
+    expect(capacity.spawnedTaskIds).toEqual(['dup-1', 'user-2', 'sys-3']);
+    expect(capacity.spawned).toBe(3);
+  });
+});
+
 describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
   it('serializes two queued tasks that resolve to the SAME local endpoint', () => {
     // Global cap 5, nothing running: both tasks clear the global and
