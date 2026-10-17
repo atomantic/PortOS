@@ -156,15 +156,38 @@ export async function subscribe({ bucketId, recordKind, recordId }) {
     return live;
   });
 
-  // Export outside the state queue, then stamp only a still-live row.
-  const exp = await runExport({ bucketId, recordKind, recordId });
-  if (exp) return stampExport(sub, exp);
-  return sub;
+  // Export outside the state queue (serialized per subscription), then stamp
+  // only a still-live row.
+  return enqueueExport(id, async () => {
+    const exp = await runExport(sub);
+    return exp ? stampExport(sub, exp) : sub;
+  });
+}
+
+// subId → tail of that subscription's export chain. Exports of one
+// subscription run strictly one after another so the last manifest written
+// is always the newest content, and unsubscribe can wait out a running one.
+const inFlightExports = new Map();
+
+function enqueueExport(id, task) {
+  const prev = inFlightExports.get(id) || Promise.resolve();
+  const run = prev.then(task);
+  const tail = run.catch(() => {});
+  inFlightExports.set(id, tail);
+  tail.then(() => {
+    if (inFlightExports.get(id) === tail) inFlightExports.delete(id);
+  });
+  return run;
+}
+
+async function isSubscriptionLive(id) {
+  const { subscriptions } = await queueStateWrite(readState);
+  return subscriptions.some((s) => s.id === id);
 }
 
 /** Internal: dispatch to the right exporter based on recordKind. */
-async function runExport({ bucketId, recordKind, recordId }) {
-  const opts = { subscription: { recordKind, recordId } };
+async function runExport({ id, bucketId, recordKind, recordId }) {
+  const opts = { subscription: { recordKind, recordId }, isLive: () => isSubscriptionLive(id) };
   if (recordKind === 'series') return exportSeries(recordId, bucketId, opts);
   if (recordKind === 'universe') return exportUniverse(recordId, bucketId, opts);
   return null;
@@ -190,6 +213,11 @@ export async function unsubscribe(id) {
     clearTimeout(pending);
     pendingTimers.delete(sub.id);
   }
+
+  // An export already running would otherwise write its manifest after the
+  // delete below and resurrect the share. Its liveness check now fails, but
+  // wait for it (and any queued follow-ups) so the delete always lands last.
+  await inFlightExports.get(sub.id);
 
   // Delete the deterministic file from the bucket. Best-effort: the bucket
   // path may be unmounted; the subscription record removal still wins so the
@@ -256,13 +284,14 @@ export async function unsubscribeAllForRecord(recordKind, recordId) {
 const DEBOUNCE_MS = 3000;
 const pendingTimers = new Map(); // subId → Timeout
 
-async function reexportNow(sub) {
-  const exp = await runExport(sub).catch((err) => {
-    console.log(`⚠️ sharing.subscriptions: re-export failed for ${sub.id}: ${err.message}`);
-    return null;
+function reexportNow(sub) {
+  return enqueueExport(sub.id, async () => {
+    const exp = await runExport(sub).catch((err) => {
+      console.log(`⚠️ sharing.subscriptions: re-export failed for ${sub.id}: ${err.message}`);
+      return null;
+    });
+    if (exp) await stampExport(sub, exp);
   });
-  if (!exp) return;
-  await stampExport(sub, exp);
 }
 
 function stampExport(sub, exp) {

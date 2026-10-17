@@ -56,8 +56,10 @@ it('does not restore a subscription removed during its own export', async () => 
   const subscribing = subscriptions.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: 'a' });
   await started.promise;
   const [sub] = await subscriptions.listSubscriptions();
-  await subscriptions.unsubscribe(sub.id);
+  // unsubscribe waits for the running export so its manifest write can't land after the delete.
+  const unsubscribing = subscriptions.unsubscribe(sub.id);
   exported.resolve({ manifestId: 'a-export' });
+  await unsubscribing;
   expect(await subscribing).toBeNull();
   expect(await subscriptions.listSubscriptions()).toEqual([]);
 });
