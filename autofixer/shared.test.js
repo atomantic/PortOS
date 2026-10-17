@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { join, dirname } from 'path';
@@ -170,5 +170,44 @@ describeShared('autofixer/shared — listProcessesStrict', () => {
   it('resolves null (not []) for exit-0 stdout with no real array literal', async () => {
     spawnMock.mockReturnValue(fakeChild({ stdout: 'pm2 daemon not running', code: 0 }));
     await expect(shared.listProcessesStrict()).resolves.toBeNull();
+  });
+});
+
+describeShared('autofixer command lifecycle', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('bounds a hung PM2 mutation without claiming its daemon outcome', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter();
+    child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    child.kill = vi.fn(() => false);
+    child.unref = vi.fn();
+    spawnMock.mockReturnValue(child);
+    const result = shared.execPm2(['stop', 'example-process'], { timeoutMs: 10 }).catch(error => error);
+    child.stdout.emit('data', 'partial');
+    await vi.advanceTimersByTimeAsync(2010);
+    expect(await result).toMatchObject({ code: 'PM2_TIMEOUT', outcome: 'unknown', cleanupConfirmed: false });
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(child.stdout.listenerCount('data')).toBe(0);
+    expect(child.stdout.destroy).toHaveBeenCalledOnce();
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(() => child.emit('error', new Error('late kill failure'))).not.toThrow();
+  });
+
+  it('clears escalation when the CLI confirms close after termination', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => { child.emit('close', null); return true; });
+    spawnMock.mockReturnValue(child);
+    const result = shared.execPm2(['jlist'], { timeoutMs: 10 }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await result).toMatchObject({ code: 'PM2_TIMEOUT', cleanupConfirmed: true });
+    expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+    expect(child.listenerCount('close')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

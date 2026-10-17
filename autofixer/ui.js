@@ -1,5 +1,6 @@
 import express from 'express';
 import { spawn } from 'child_process';
+import { waitForChild } from './childProcess.js';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -149,97 +150,64 @@ app.get('/', (req, res) => {
 // Server-Sent Events endpoint for streaming logs
 app.get('/logs', async (req, res) => {
   const processName = req.query.process || 'portos-autofixer';
-
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-
   res.write(`: connected\n\n`);
 
-  let pm2Process = null;
-
-  const cleanup = () => {
-    if (pm2Process && !pm2Process.killed) {
-      pm2Process.kill();
-      pm2Process = null;
+  const controller = new AbortController();
+  const closed = () => controller.signal.aborted || req.aborted || res.destroyed || res.writableEnded;
+  const cleanup = () => controller.abort();
+  req.on('aborted', cleanup);
+  res.on('close', cleanup);
+  const send = (data, stream = 'out') => {
+    if (closed()) return;
+    try {
+      for (const message of data.toString().split('\n').filter(line => line.trim())) {
+        res.write(`data: ${JSON.stringify({ type: 'log', message, stream, timestamp: new Date().toISOString() })}\n\n`);
+      }
+    } catch (error) {
+      console.error(`❌ [Autofixer UI] Log stream write failed: ${error.message}`);
+      cleanup();
     }
   };
-
-  req.on('close', cleanup);
-  res.on('close', cleanup);
-
-  // Get initial logs via node pm2/bin/pm2 (bypasses pm2.cmd on Windows)
-  const initialChild = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '50', '--nostream', '--raw'], { windowsHide: true });
-  let initialStdout = '';
-  initialChild.stdout.on('data', (d) => { initialStdout += d.toString(); });
-  initialChild.on('close', () => {
-    if (res.writableEnded) return;
-
-    if (initialStdout) {
-      const lines = initialStdout.split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        const event = {
-          type: 'log',
-          message: line,
-          stream: 'out',
-          timestamp: new Date().toISOString()
-        };
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      });
+  let streamChild;
+  let onStdout;
+  let onStderr;
+  try {
+    if (closed()) return;
+    const initialChild = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '50', '--nostream', '--raw'], {
+      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const initial = await waitForChild(initialChild, { signal: controller.signal });
+    if (closed()) return;
+    if (initial.error || initial.timedOut || initial.code !== 0) {
+      send(`[ERROR] Failed to read pm2 logs: ${initial.error?.message || (initial.timedOut ? 'command timed out' : initial.stderr || `exit ${initial.code}`)}`, 'err');
+      return;
     }
-
-    // Stream new logs via node pm2/bin/pm2 (bypasses pm2.cmd on Windows)
-    pm2Process = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '0', '--raw'], { windowsHide: true });
-
-    pm2Process.stdout.on('data', (data) => {
-      if (res.writableEnded) {
-        cleanup();
-        return;
-      }
-
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        res.write(`data: ${JSON.stringify({
-          type: 'log',
-          message: line,
-          stream: 'out',
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      });
+    send(initial.stdout);
+    if (closed()) return;
+    streamChild = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '0', '--raw'], {
+      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
-
-    pm2Process.stderr.on('data', (data) => {
-      if (res.writableEnded) {
-        cleanup();
-        return;
-      }
-
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        res.write(`data: ${JSON.stringify({
-          type: 'log',
-          message: line,
-          stream: 'err',
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      });
-    });
-
-    pm2Process.on('error', (error) => {
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({
-          type: 'log',
-          message: `[ERROR] Failed to spawn pm2: ${error.message}`,
-          stream: 'err',
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      }
-      cleanup();
-    });
-
-    pm2Process.on('exit', cleanup);
-  });
+    onStdout = data => send(data);
+    onStderr = data => send(data, 'err');
+    streamChild.stdout.on('data', onStdout);
+    streamChild.stderr.on('data', onStderr);
+    const result = await waitForChild(streamChild, { signal: controller.signal, timeoutMs: null, capture: false });
+    if (result.error) send(`[ERROR] Failed to spawn pm2: ${result.error.message}`, 'err');
+  } catch (error) {
+    send(`[ERROR] Failed to spawn pm2: ${error.message}`, 'err');
+  } finally {
+    if (streamChild) {
+      streamChild.stdout.removeListener('data', onStdout);
+      streamChild.stderr.removeListener('data', onStderr);
+    }
+    req.removeListener('aborted', cleanup);
+    res.removeListener('close', cleanup);
+    if (!closed()) res.end();
+  }
 });
 
 // Registry failures reach every consumer (apps, process controls and staged

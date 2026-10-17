@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock('child_process', () => ({ spawn: spawnMock }));
 import {
+  execGit,
   sanitizeChildEnv,
   collectSecretEnvValues,
   buildFixPrompt,
@@ -282,5 +286,49 @@ new file mode 100644
     const paths = extractDiffPaths(diff);
     expect(paths).toContain('new.js');
     expect(paths).not.toContain('/dev/null');
+  });
+});
+
+
+describe('execGit command lifecycle', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('settles a hung git command with partial output and the existing failure shape', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter();
+    child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    child.kill = vi.fn(() => { throw new Error('example signal failure'); });
+    child.unref = vi.fn();
+    spawnMock.mockReturnValue(child);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = execGit(['status'], '/example/repo', { timeoutMs: 10 });
+      child.stdout.emit('data', 'partial status');
+      await vi.advanceTimersByTimeAsync(2010);
+      expect(await result).toEqual({ code: -1, stdout: 'partial status', stderr: expect.stringContaining('command outcome unknown') });
+      expect(spawnMock).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({
+        stdio: ['ignore', 'pipe', 'pipe'], env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      }));
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(child.unref).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { log.mockRestore(); }
+  });
+
+  it('preserves nonzero exit output and settles spawn errors without rejection', async () => {
+    for (const spawnError of [false, true]) {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      spawnMock.mockReturnValue(child);
+      const result = execGit(['status'], '/example/repo');
+      child.stdout.emit('data', 'partial');
+      if (spawnError) child.emit('error', new Error('missing git'));
+      else { child.stderr.emit('data', 'failed'); child.emit('close', 2); }
+      expect(await result).toEqual({ code: spawnError ? -1 : 2, stdout: 'partial', stderr: spawnError ? 'missing git' : 'failed' });
+      child.emit('close', 0);
+      expect(child.stdout.listenerCount('data')).toBe(0);
+    }
   });
 });
