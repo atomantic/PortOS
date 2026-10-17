@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
+import { isProcessAlive } from '../test/processAlive.js'
 
 // A scripted stand-in for a spawned child. It has no `pid`, so killProcessTree
 // takes its `.kill()` path and never signals a real process group.
@@ -210,50 +211,111 @@ describe('commandOutput lifecycle (#10604)', () => {
   it('a failed scratch cleanup cannot replace the probe result', async () => {
     rmMock.fail = true
     spawnMock.impl = () => fakeChild(exitWith('v1'))
-    await expect(commandOutput('tool')).resolves.toBe('v1')
+    try {
+      await expect(commandOutput('tool')).resolves.toBe('v1')
+    } finally {
+      rmMock.fail = false
+      const { rmSync } = await vi.importActual('node:fs')
+      rmSync(lastSpawn().opts.env.TMPDIR, { recursive: true, force: true })
+    }
   })
 
   // Real processes, POSIX only: the deadline must settle the probe on time, and
   // escalation must reach everything in the probe's own process group.
   const waitUntilGone = async (pid) => {
-    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
     const until = Date.now() + 5_000
-    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
-    return !alive()
+    while (isProcessAlive(pid) && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+    return !isProcessAlive(pid)
+  }
+
+  const cleanupChild = async (child) => {
+    if (!child?.pid) return
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    expect(await waitUntilGone(child.pid), 'probe fixture child survived cleanup').toBe(true)
   }
 
   it.skipIf(process.platform === 'win32')('a real child that ignores SIGTERM cannot hold the probe past its deadline', async () => {
     spawnMock.impl = null
     const script = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('alive')"
     const started = Date.now()
+    let settledAt
 
-    await expect(commandOutput(process.execPath, ['-e', script], { timeoutMs: 300 })).resolves.toBeNull()
+    try {
+      const result = await commandOutput(process.execPath, ['-e', script], { timeoutMs: 300 })
+        .finally(() => { settledAt = Date.now() })
+      expect(result).toBeNull()
 
-    expect(Date.now() - started).toBeLessThan(2_000)
-    expect(existsSync(lastSpawn().opts.env.TMPDIR)).toBe(false)
-    expect(await waitUntilGone(lastSpawn().child.pid)).toBe(true)
+      expect(Date.now() - started).toBeLessThan(2_000)
+      expect(existsSync(lastSpawn().opts.env.TMPDIR)).toBe(false)
+      expect(await waitUntilGone(lastSpawn().child.pid)).toBe(true)
+    } finally {
+      const graceRemaining = (settledAt ?? Date.now()) + 2_100 - Date.now()
+      if (graceRemaining > 0) await new Promise(resolve => setTimeout(resolve, graceRemaining))
+      await cleanupChild(lastSpawn()?.child)
+    }
   }, 10_000)
 
-  it.skipIf(process.platform === 'win32')('escalation reaches a descendant that ignores SIGTERM after its parent exits', async () => {
+  it.skipIf(process.platform === 'win32').each([false, true])('cleans up the descendant after escalation or an assertion failure (failure=%s)', async (forceFailure) => {
     spawnMock.impl = null
     const { mkdtempSync, readFileSync, rmSync } = await vi.importActual('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const dir = mkdtempSync(join(tmpdir(), 'probe-test-'))
     const pidFile = join(dir, 'grandchild.pid')
-    const grandchild = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    const grandchild = `process.on('SIGTERM', () => {});
+      require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      setInterval(() => { if (!require('fs').existsSync(${JSON.stringify(dir)})) process.kill(process.pid, 'SIGKILL'); }, 50)`
     // The parent keeps the default SIGTERM behavior (exits); its child ignores it.
     const parent = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: 'ignore' });
-      require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setInterval(() => {}, 1000)`
+      setInterval(() => {}, 1000)`
 
+    // Simulate a broken escalation only for the new fixture's exact group.
+    // Force an assertion failure; finally lets the grace timer finish while
+    // the group is reserved, then reaps both explicitly owned processes.
+    const originalKill = process.kill.bind(process)
+    const killSpy = forceFailure ? vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === -lastSpawn()?.child?.pid) return true
+      return originalKill(pid, signal)
+    }) : null
+    const exercise = async () => {
+      let settledAt = Date.now() + 500
+      try {
+        const result = await commandOutput(process.execPath, ['-e', parent], { timeoutMs: 500 })
+        settledAt = Date.now()
+        expect(result).toBeNull()
+
+        const grandchildPid = Number(readFileSync(pidFile, 'utf8'))
+        expect(grandchildPid).toBeGreaterThan(0)
+        if (forceFailure) {
+          expect(isProcessAlive(grandchildPid)).toBe(true)
+          throw Error('controlled escalation assertion failure')
+        }
+        expect(await waitUntilGone(grandchildPid)).toBe(true)
+      } finally {
+        // Stop the parent before reading the record so it cannot create another
+        // child after cleanup. Keep the record until the owned grandchild exits.
+        try {
+          const graceRemaining = settledAt + 2_100 - Date.now()
+          if (graceRemaining > 0) await new Promise(resolve => setTimeout(resolve, graceRemaining))
+          try {
+            await cleanupChild(lastSpawn()?.child)
+          } finally {
+            if (existsSync(pidFile)) {
+              const grandchildPid = Number(readFileSync(pidFile, 'utf8'))
+              rmSync(dir, { recursive: true, force: true })
+              expect(await waitUntilGone(grandchildPid), 'probe fixture grandchild survived cleanup').toBe(true)
+            }
+          }
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      }
+    }
     try {
-      await expect(commandOutput(process.execPath, ['-e', parent], { timeoutMs: 500 })).resolves.toBeNull()
-
-      const grandchildPid = Number(readFileSync(pidFile, 'utf8'))
-      expect(grandchildPid).toBeGreaterThan(0)
-      expect(await waitUntilGone(grandchildPid)).toBe(true)
+      if (forceFailure) await expect(exercise()).rejects.toThrow('controlled escalation assertion failure')
+      else await exercise()
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      killSpy?.mockRestore()
     }
   }, 10_000)
 })
