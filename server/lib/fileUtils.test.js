@@ -1416,6 +1416,30 @@ describe('fileUtils', () => {
       }
     );
 
+    it.skipIf(process.platform === 'win32')(
+      'creates the temp file with the destination\'s mode so a secret is never briefly world-readable',
+      async () => {
+        const target = join(tmpRoot, 'secret.json');
+        writeFileSync(target, '{"token":"old"}', { mode: 0o600 });
+        await realFsPromises.chmod(target, 0o600); // independent of the creation umask
+        let modeAtCreation = null;
+        let tempPath = null;
+        // The final chmod would mask a missing creation mode, so observe the
+        // temp file straight after its first write, before chmod/rename run.
+        fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+          await realFsPromises.writeFile(path, data, options);
+          tempPath = path;
+          modeAtCreation = (await realFsPromises.stat(path)).mode & 0o777;
+        });
+
+        await atomicWrite(target, { token: 'new' });
+
+        expect(tempPath).not.toBe(target);
+        expect(modeAtCreation).toBe(0o600);
+        expect((await realFsPromises.stat(target)).mode & 0o777).toBe(0o600);
+      }
+    );
+
     it('creates a new file at the default mode when the destination does not exist', async () => {
       const target = join(tmpRoot, 'fresh.json');
       await atomicWrite(target, { created: true });
