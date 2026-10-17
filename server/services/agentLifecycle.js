@@ -129,7 +129,7 @@ async function runAdmittedAgentSpawn(task, permit) {
       persist: privateSecurity,
     });
     if (task.metadata?.jobId) {
-      cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
+      cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed' });
     }
     return null;
   } finally {

@@ -110,6 +110,7 @@ import {
   getScheduledActionReservations,
   clearSpawningJob,
   registerSingleJobSchedule,
+  handleJobSpawnFailed,
 } from './cosJobScheduler.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent } from './eventScheduler.js';
 vi.mock('./taskSchedule.js', () => ({ getUpcomingTasks: vi.fn() }));
@@ -439,5 +440,36 @@ describe('scheduleNextImprovementCheck — getUpcomingTasks input failure (#7527
 
     expect(scheduleEvent).toHaveBeenCalledTimes(1);
     expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'cos-improvement-check' }));
+  });
+});
+
+describe('handleJobSpawnFailed — no 1s re-fire loop after a failed dispatch', () => {
+  beforeEach(() => {
+    scheduleEvent.mockClear();
+    recordJobGateSkip.mockClear();
+    generateTaskFromJob.mockClear();
+  });
+
+  it('a held dispatch retries on the 60s defer and re-runs the job at most once per minute', async () => {
+    await handleJobSpawnFailed('job-held', 'held');
+
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+    const evt = scheduleEvent.mock.calls[0][0];
+    expect(evt).toMatchObject({ id: 'job:job-held', type: 'once', delayMs: 60000 });
+    expect(recordJobGateSkip).not.toHaveBeenCalled();
+
+    await evt.handler();
+    expect(generateTaskFromJob).toHaveBeenCalledTimes(1);
+    clearSpawningJob('job-held');
+  });
+
+  it('a spawn error records a gate skip and re-arms via the normal schedule, not a 1s retry', async () => {
+    getJob.mockResolvedValueOnce({ id: 'job-err', name: 'job-err', enabled: true, intervalMs: 86_400_000, lastRun: new Date().toISOString() });
+
+    await handleJobSpawnFailed('job-err', 'failed');
+
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-err');
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+    expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(60000);
   });
 });
