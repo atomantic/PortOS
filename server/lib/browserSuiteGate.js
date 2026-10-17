@@ -1,5 +1,4 @@
 import { spawn } from './childProcess.js';
-import { IS_WIN32, MAX_OUTPUT_BYTES, killProcessTree } from './bufferedSpawn.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +36,24 @@ export function browserSuiteCanRun(label, prerequisites, { onUnavailable } = {})
 
 const H264_PROBE_PAGE = `data:text/html,<body><script>document.body.textContent='H264:'+document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028"')</script></body>`;
 
+// Kept free of bufferedSpawn.js on purpose: this module is imported ahead of
+// `vi.mock('./paths.js')` factories, and that import graph reaches paths.js.
+const IS_WIN32 = process.platform === 'win32';
+const MAX_OUTPUT_BYTES = 64 * 1024;
+
+// Signals the probe's whole process group (it was spawned detached) so Chrome's
+// helper processes go with it; Windows takes the tree down with taskkill.
+function killProbeTree(child, signal, processGroup) {
+  if (IS_WIN32 && child.pid) {
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).on('error', () => {}).unref();
+    return;
+  }
+  if (processGroup && child.pid) {
+    try { process.kill(-child.pid, signal); return; } catch { /* group already gone */ }
+  }
+  child.kill(signal);
+}
+
 const PROBE_TIMEOUT_MS = 20000;
 const PROBE_KILL_GRACE_MS = 5000;
 
@@ -58,7 +75,7 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs }) {
       settled = true;
       timers.forEach(clearTimeout);
       // Reap renderer/GPU helpers a slow-exiting Chrome may have left behind.
-      killProcessTree(child, 'SIGKILL', { processGroup });
+      killProbeTree(child, 'SIGKILL', processGroup);
       child.stdout?.destroy();
       resolve({ stdout, timedOut, ...outcome });
     };
@@ -71,9 +88,9 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs }) {
 
     timers.push(setTimeout(() => {
       timedOut = true;
-      killProcessTree(child, 'SIGTERM', { processGroup });
+      killProbeTree(child, 'SIGTERM', processGroup);
       timers.push(setTimeout(() => {
-        killProcessTree(child, 'SIGKILL', { processGroup });
+        killProbeTree(child, 'SIGKILL', processGroup);
         timers.push(setTimeout(() => finish({ cleanupVerified: false }), graceMs));
       }, graceMs));
     }, timeoutMs));
