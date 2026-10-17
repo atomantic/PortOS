@@ -15,7 +15,7 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve, relative } from 'node:path';
+import { dirname, join, resolve, relative, sep } from 'node:path';
 
 /** A `/` after an operator, opener or `return` begins a regex literal, not a division. */
 function startsRegex(source, at) {
@@ -184,7 +184,7 @@ const exportCache = new Map();
 /** `file:line — spec mocks <key>` for each key the real module does not export. */
 export function mockDrift(testFile, rawSource, { root, allowed = new Map() }) {
   const masked = mask(rawSource);
-  const rel = relative(root, testFile);
+  const rel = relative(root, testFile).split(sep).join('/');
   const violations = [];
   // The specifier is a string, so it is blanked in `masked`; match on raw and
   // require the call itself to be live code (not inside a comment).
