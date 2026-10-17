@@ -18,6 +18,8 @@ import {
   mergeProjectRecord,
 } from './projectsLogic.js';
 
+import { productionReviewBasis } from './productionReview.js';
+
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
 describe('buildProjectRecord', () => {
@@ -591,6 +593,55 @@ describe('scene board operations', () => {
     const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8 });
     const split = splitScene(project, scene.sceneId, { atSec: 4 });
     expect(split.project.scenes.map((s) => s.stillMove)).toEqual(['push', 'push']);
+  });
+
+  // Catches the split text disagreeing with its storyboard anchors during an instrumental lead-in.
+  it('splits word-timed lyrics by their sung span and keeps retiming consistent', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 3.5, endSec: 8 });
+    project.lyricCues = [{ id: 'cue-1', text: '  Sung line  ', startSec: 3.5, endSec: 8,
+      words: [{ w: 'Sung', startSec: 5, endSec: 6 }, { w: 'line', startSec: 6, endSec: 8 }] }];
+    project.productionReview = { draft: { storyboard: [{ id: 'shot-1', sceneId: scene.sceneId, startSec: 3.5, endSec: 8 }] } };
+    const split = splitScene(project, scene.sceneId, { atSec: 4.9 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual([null, 'Sung line']);
+    expect(split.project.productionReview.draft.storyboard.map(shot => shot.lyricCueIds)).toEqual([[], ['cue-1']]);
+    expect(applySceneUpdate(split.project, scene.sceneId, { endSec: 4.8 }).updated.lyricText).toBeNull();
+  });
+
+  // Catches a shared text helper changing existing unaligned lyric formatting or the field's size cap.
+  it('keeps line-window lyrics, formatting and length limits on a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    project.lyricCues = [
+      { id: 'cue-1', text: '  First  ', startSec: 0, endSec: 4 },
+      { id: 'cue-2', text: 'Second', startSec: 1, endSec: 4 },
+      { id: 'cue-3', text: 'x'.repeat(2100), startSec: 4, endSec: 8 },
+    ];
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual(['First / Second', 'x'.repeat(2000)]);
+  });
+
+  // Catches valid legacy start-only cues losing their text during a split.
+  it.each([null, undefined])('keeps a start-only lyric on its split piece (endSec: %s)', endSec => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    project.lyricCues = [{ id: 'cue-1', text: 'Line', startSec: 1, endSec }];
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.scenes.map(piece => piece.lyricText)).toEqual(['Line', null]);
+  });
+
+  // Catches a split staling a whole-board approval or reviving one that was already stale.
+  it.each([true, false])('carries only a current whole-board approval across a split (current: %s)', current => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', startSec: 0, endSec: 8 });
+    const basis = productionReviewBasis(project);
+    const approval = { basis: current ? basis.storyboard : 'stale', shotsBasis: current ? basis.storyboardShots : 'stale' };
+    project.productionReview = { approvals: { storyboard: approval } };
+    const next = splitScene(project, scene.sceneId, { atSec: 4 }).project;
+    const after = next.productionReview.approvals.storyboard;
+    if (current) {
+      expect(after).toMatchObject({ basis: productionReviewBasis(next).storyboard,
+        shotsBasis: productionReviewBasis(next).storyboardShots, carriedOver: { reason: 'Split a shot' } });
+      expect(after.shotsBasis).not.toBe(basis.storyboardShots);
+    } else {
+      expect(after).toEqual(approval);
+    }
   });
 
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {

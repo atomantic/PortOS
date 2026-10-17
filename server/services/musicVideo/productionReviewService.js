@@ -4,7 +4,7 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, clipLocked, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
-import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
 
@@ -327,8 +327,7 @@ export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
     const anchored = anchorShotsToSungLyrics(current, ids);
     const scenes = (anchored.scenes || []).map(scene => {
       if (!ids.includes(scene.sceneId) || clipLocked(current, scene.sceneId)) return scene;
-      const sung = cuesSungWithin(anchored.lyricCues, scene.startSec, scene.endSec).map(cue => cue.text?.trim()).filter(Boolean);
-      return { ...scene, lyricText: sung.length ? sung.join(' / ').slice(0, 2000) : null };
+      return { ...scene, lyricText: sungLyricTextWithin(anchored.lyricCues, scene.startSec, scene.endSec) };
     });
     return { project: { ...anchored, scenes, updatedAt: new Date().toISOString() } };
   });
