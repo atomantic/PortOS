@@ -509,11 +509,13 @@ export async function spawnAndWatchVideo({
             }
           } else if (signal) {
             // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-            // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
             // stamped with the runtime fingerprint that died so the report is
             // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
             reason = describeSignalDeath(signal, {
               fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
+              stderr: stderrTail.join('\n'),
+              mlxRuntime: runtimeUsesMlx(model.runtime),
             });
           } else {
             const diagnostic = failure?.summary || failure?.cause;
