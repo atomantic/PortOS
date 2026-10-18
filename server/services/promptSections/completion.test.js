@@ -25,10 +25,17 @@ describe('review-enabled completion merge gate', () => {
     expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
     expect(section).toContain('allow_auto_merge: true');
     expect(section).toContain('autoMergeRequest.enabledAt');
-    expect(section).toContain('check admission immediately before');
-    expect(section).toContain('Release with outcome merged if MERGED, otherwise leave-open');
+    expect(section).toContain('If this run requires repository merge admission, do not enable GitHub auto-merge');
+    expect(section).toContain('every outstanding check');
+    expect(section).toContain('Missing/unknown required-check policy');
     expect(section).toContain('all configured reviews pass');
     expect(section).toContain('8. Write a short markdown summary');
+  });
+
+  it('retains immediate merging for a registered claim requiring local admission', () => {
+    const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(section).toContain('Local admission forbids GitHub deferred auto-merge');
+    expect(section).toContain('confirm MERGED, then release');
   });
 
   it('uses GitLab CI and merge commands when the completion forge is GitLab', () => {
