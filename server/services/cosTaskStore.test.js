@@ -2468,6 +2468,37 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(statuses).toEqual(['completed', 'in_progress']);
     });
 
+    it('does not reap an investigation after its completed origin is resumed between flips', async () => {
+      await addTask({ description: 'stale failure', id: 'task-race-origin-block', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-race-origin-block', {
+        status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
+      }, 'user', { now: NOW });
+      await addTask({ description: 'completed origin', id: 'task-race-origin', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-race-origin', { status: 'completed' }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [race]: origin was completed',
+        id: 'sys-race-origin-investigation',
+        isInvestigation: true,
+        affectedTasks: ['task-race-origin'],
+      }, 'internal', { now: NOW });
+
+      // The first user-queue flip lands before the investigation's planned
+      // internal-queue flip. Resume the origin in that gap; the investigation
+      // must be checked against this fresh origin state, not the sweep snapshot.
+      mock.afterWrite = (path) => {
+        if (path !== USER_FILE) return false;
+        const tasks = parseTasksMarkdown(mock.files.get(path));
+        tasks.find(task => task.id === 'task-race-origin').status = 'pending';
+        mock.files.set(path, generateTasksMarkdown(tasks));
+        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+        return true;
+      };
+
+      const result = await sweepResolvedFailureTasks({ now: NOW });
+      expect(result).toMatchObject({ reaped: 1, staleBlocks: 1, investigations: 0 });
+      expect((await getCosTasks()).tasks.find(task => task.id === 'sys-race-origin-investigation').status).toBe('pending');
+    });
+
     it.each([
       ['blockedAt', new Date(NOW).toISOString()],
       ['blockedCategory', 'provider-config'],
