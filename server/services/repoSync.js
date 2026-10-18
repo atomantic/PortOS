@@ -747,6 +747,18 @@ export function describeStep(step) {
 }
 
 /**
+ * Branches the app's pr-watcher queue owns (undefined without an app; null when
+ * the record is unreadable, which holds every branch in reconcile).
+ */
+async function readPendingMergeBranches(appId) {
+  if (!appId) return undefined;
+  const [{ getAppById }, { readPendingMergePrs }] = await Promise.all([import('./apps.js'), import('./prWatcher.js')]);
+  const app = await getAppById(appId).catch(() => null);
+  if (!app) return null;
+  return new Set(readPendingMergePrs(app).map((entry) => entry?.prBranch).filter(Boolean));
+}
+
+/**
  * Sync ONE repo: snapshot → plan → execute → hand back what still needs a human
  * or an agent. Never throws; a scan that blows up is reported as a `scan-failed`
  * escalation so the sweep continues.
@@ -837,11 +849,13 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
     && !state.fetchError;
   if (actionOn(actions, 'cleanupMerged') && reconcileSafe) {
     const { reconcile } = await import('./branchReconcile.js');
+    const pendingMergeBranches = await readPendingMergeBranches(appId);
     const result = await reconcile(repoPath, {
       cleanup: true,
       reapRemotes: actions.reapRemotes === true,
       activeAgentIds,
-      forgeAccount
+      forgeAccount,
+      pendingMergeBranches
     }).catch((err) => {
       escalations.push({ kind: ESCALATION_KINDS.SCAN_FAILED, detail: `branch cleanup failed: ${err.message}` });
       return null;

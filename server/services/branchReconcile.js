@@ -464,6 +464,26 @@ function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace })
 }
 
 /**
+ * A branch queued for the pr-watcher's deterministic merge coordinator (an
+ * agent handoff receipt or a merge-on-green PR) has an open PR and no live
+ * agent, yet the coordinator owns its merge: a reconcile agent waiting on CI or
+ * rebasing would race it and invalidate the handoff's head binding.
+ *
+ * `pendingMergeBranches` is a Set of queued branch names, `null` when the app
+ * record could not be read (holds every branch — fail closed), and undefined
+ * when the caller has no app to ask (nothing added).
+ *
+ * @param {Set<string>|null|undefined} pendingMergeBranches
+ * @param {string} branch
+ * @returns {string|null}
+ */
+function pendingMergeReason(pendingMergeBranches, branch) {
+  if (pendingMergeBranches === undefined) return null;
+  if (pendingMergeBranches === null) return 'pending-merge-unavailable';
+  return pendingMergeBranches.has(branch) ? 'pending-merge-queued' : null;
+}
+
+/**
  * Is this worktree a CoS agent workspace whose agent is no longer running?
  *
  * Pure. True only for a `agent-<id>` worktree (the CoS naming convention) that
@@ -885,7 +905,7 @@ async function worktreeAgeMs(worktreePath) {
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree,
  *     abandonedClaimWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, claimOwners = undefined, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, claimOwners = undefined, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
   // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
@@ -999,7 +1019,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // set nor the branch name can see it (#10089).
       liveOwnerReason: resolveLiveOwnerReason({
         branch: b.name, path: worktreePath, locked: worktreeLocked, activeAgentIds
-      }) || claimOwnerReason || (worktreeStatusUnavailable ? 'worktree-status-unavailable' : null),
+      }) || claimOwnerReason || pendingMergeReason(pendingMergeBranches, b.name) || (worktreeStatusUnavailable ? 'worktree-status-unavailable' : null),
       claimOwnerReason,
       behind: divergence.behind,
       ahead: divergence.ahead,
@@ -1559,6 +1579,8 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   registered claim owners — see `resolveClaimOwnerReason`; a dispatching
  *   caller must pass it. `readAgents` re-reads the registry right before each
  *   retirement, because a claim run can bind a branch after the scan.
+ *   `pendingMergeBranches` (Set, or null for an unreadable app record) holds the
+ *   branches queued for the pr-watcher merge coordinator — see `pendingMergeReason`.
  *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
@@ -1574,7 +1596,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
   if (claimOwners === undefined) claimOwners = { agents: await readClaimOwnershipAgents(), readAgents: readClaimOwnershipAgents };
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
@@ -1637,7 +1659,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
   const inputs = await gatherBranchState(repoPath, {
     defaultBranch, activeAgentIds, claimOwners, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin,
-    forgeExec, forgeAccount
+    forgeExec, forgeAccount, pendingMergeBranches
   });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
   // page) is still "we could not ask" — surface it so the caller retries next
