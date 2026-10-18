@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { lstat, rm } from 'node:fs/promises';
@@ -118,6 +118,43 @@ describe('owned server browser fixture lifecycle', () => {
     expect(existsSync(other.profile)).toBe(true);
     expect(other.server.kill).not.toHaveBeenCalled();
     expect(other.server.close).not.toHaveBeenCalled();
+    expect(fixture.child.eventNames()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['during close', 'before close'])('releases inherited pipes only after owned exit %s and verifies cleanup', async timing => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // Make filesystem completion deterministic while preserving real identity
+    // and absence checks at the public fixture boundary.
+    rm.mockImplementation(async (path, options) => rmSync(path, options));
+    lstat.mockImplementation(async path => lstatSync(path));
+    const fixture = owned();
+    const pipesClosed = deferred();
+    const remaining = new Set(['stdout', 'stderr']);
+    const pipes = [...remaining].map(name => ({ destroy: vi.fn(() => {
+      remaining.delete(name);
+      if (!remaining.size) pipesClosed.resolve();
+    }) }));
+    [fixture.child.stdout, fixture.child.stderr] = pipes;
+    fixture.child.stdio = [null, ...pipes];
+    fixture.server.close.mockImplementation(() => pipesClosed.promise);
+    fixture.server.kill.mockImplementation(() => pipesClosed.promise);
+    const started = await fixture.start();
+    const temp = recordRoot(fixture);
+    if (timing === 'before close') fixture.child.exitCode = 0;
+    const result = started.close().catch(error => error);
+    if (timing === 'during close') {
+      await vi.advanceTimersByTimeAsync(29);
+      for (const pipe of pipes) expect(pipe.destroy).not.toHaveBeenCalled();
+      fixture.child.exitCode = 0;
+      fixture.child.emit('exit', 0, null);
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toBeUndefined();
+    for (const pipe of pipes) expect(pipe.destroy).toHaveBeenCalledTimes(1);
+    expect(fixture.server.kill).not.toHaveBeenCalled();
+    expect(existsSync(temp)).toBe(false);
+    expect(existsSync(fixture.profile)).toBe(false);
     expect(fixture.child.eventNames()).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
