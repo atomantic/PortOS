@@ -13,19 +13,28 @@ import { join } from 'node:path';
  * also report `{ probeFailure }` for a probe that ran and failed). `onUnavailable` runs
  * before the skip or the throw: prerequisite discovery can initialize mocked
  * path fixtures, and Vitest runs no cleanup hooks for a skipped (or failed) file.
+ *
+ * `browserSuiteBlockReason` is the verdict alone (null when every prerequisite
+ * is present), so a caller that only reports — the local pregate — can share
+ * the exact wording the suites print without the skip/throw side effects.
  */
-export function browserSuiteCanRun(label, prerequisites, { onUnavailable } = {}) {
+export function browserSuiteBlockReason(prerequisites) {
   const entries = Object.entries(prerequisites);
   // A probe that ran but failed is a distinct verdict from an absent prerequisite.
   const failed = entries.filter(([, found]) => found?.probeFailure);
   const missing = entries.filter(([, found]) => !found).map(([name]) => name);
-  if (missing.length === 0 && failed.length === 0) return true;
-
-  onUnavailable?.();
-  const reason = [
+  if (missing.length === 0 && failed.length === 0) return null;
+  return [
     ...(missing.length ? [`missing ${missing.join(', ')}`] : []),
     ...failed.map(([name, found]) => `${name} probe failed (${found.probeFailure})`),
   ].join('; ');
+}
+
+export function browserSuiteCanRun(label, prerequisites, { onUnavailable } = {}) {
+  const reason = browserSuiteBlockReason(prerequisites);
+  if (reason === null) return true;
+
+  onUnavailable?.();
   if (process.env.PORTOS_REQUIRE_BROWSER_SUITES) {
     throw new Error(`${label}: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — ${reason}`);
   }
