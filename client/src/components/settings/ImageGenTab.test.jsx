@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
-  updateSettings: vi.fn(),
+  patchSettingsSlice: vi.fn(),
   getImageGenStatus: vi.fn(),
   getVideoGenModelContext: vi.fn(),
   generateImage: vi.fn(),
@@ -36,12 +36,16 @@ vi.mock('./LocalSetupPanel', () => ({
 vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 import {
-  getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
+  getSettings, getToolsList, patchSettingsSlice, listAgyImageModels, listImageModels, getImageGenStatus,
   getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+
+// Every slice PATCH a save sent, keyed by slice path.
+const sentSlices = () => Object.fromEntries(patchSettingsSlice.mock.calls.map(([slicePath, partial]) => [slicePath, partial]));
+const awaitSave = () => waitFor(() => expect(patchSettingsSlice).toHaveBeenCalled());
 
 const renderTab = async (initialEntries = ['/media/image']) => {
   const view = render(
@@ -81,7 +85,7 @@ beforeEach(() => {
       { id: 'reactor', label: 'reactor.inc', configured: false, source: 'none', editable: true },
     ],
   });
-  updateSettings.mockResolvedValue({});
+  patchSettingsSlice.mockResolvedValue({});
   getProviders.mockResolvedValue({
     providers: [{ id: 'codex', type: 'cli', command: 'codex', models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-luna'] }],
   });
@@ -108,8 +112,8 @@ describe('ImageGenTab grouped tabs', () => {
       fireEvent.blur(input);
       expect(input.value).toBe('50');
       fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-      await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-      expect(updateSettings.mock.calls[0][0].imageGen.codex.parallelLimit).toBe(50);
+      await awaitSave();
+      expect(sentSlices()['imageGen.codex'].parallelLimit).toBe(50);
     },
   );
 
@@ -180,9 +184,9 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByRole('option', { name: 'Install default (FastMetal 5B QAD)' })).toBeTruthy();
     fireEvent.change(select, { target: { value: 'ltx23_distilled_q4' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    await awaitSave();
 
-    expect(updateSettings.mock.calls[0][0].videoGen.defaultModelId).toBe('ltx23_distilled_q4');
+    expect(sentSlices().videoGen).toEqual({ defaultModelId: 'ltx23_distilled_q4' });
   });
 
   it('clears the saved local video model pin to follow the install default', async () => {
@@ -195,9 +199,9 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.change(screen.getByLabelText('Default local video model'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    await awaitSave();
 
-    expect(updateSettings.mock.calls[0][0].videoGen.defaultModelId).toBeNull();
+    expect(sentSlices().videoGen).toEqual({ defaultModelId: null });
   });
 
   it('keeps LocalSetupPanel mounted (hidden) after leaving the Local tab so an in-flight install stream is not torn down', async () => {
@@ -312,7 +316,11 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByText(/grok — grok-cli 0\.0\.30/)).toBeTruthy();
   });
 
-  it('preserves the save behavior — dirtying a field enables Save and PUTs the full imageGen patch', async () => {
+  it('saves only the changed fields as slice patches, so a sibling panel\'s later write survives (#12030)', async () => {
+    // The drawer loaded pythonPath '/usr/bin/python3'. While it is open,
+    // VideoGen's LocalSetupPanel patches imageGen.local.pythonPath to a new
+    // interpreter — a write this drawer cannot see. Its save must not carry
+    // a snapshot of imageGen.local (or of any slice the user did not edit).
     await renderTab();
     fireEvent.click(screen.getByRole('tab', { name: /External/i }));
     const urlInput = screen.getByPlaceholderText('http://localhost:7860');
@@ -320,14 +328,30 @@ describe('ImageGenTab grouped tabs', () => {
     const saveBtn = screen.getByRole('button', { name: /^Save$/ });
     expect(saveBtn.disabled).toBe(false);
     fireEvent.click(saveBtn);
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    const patch = updateSettings.mock.calls[0][0];
-    expect(patch.imageGen.external.sdapiUrl).toBe('http://localhost:9999');
-    expect(patch.imageGen.mode).toBe('external');
-    expect(patch.imageGen).toHaveProperty('codex');
-    expect(patch.imageGen).toHaveProperty('grok');
-    expect(patch.imageGen).toHaveProperty('agy');
-    expect(patch.imageGen).toHaveProperty('expose');
+    await awaitSave();
+    // The legacy flat `imageGen.sdapiUrl` is kept populated beside the
+    // external slice; nothing else travels.
+    expect(sentSlices()).toEqual({
+      'imageGen.external': { sdapiUrl: 'http://localhost:9999' },
+      imageGen: { sdapiUrl: 'http://localhost:9999' },
+    });
+    expect(patchSettingsSlice.mock.calls.every(([, , options]) => options?.silent === true)).toBe(true);
+    await waitFor(() => expect(saveBtn.disabled).toBe(true));
+  });
+
+  it('keeps the form dirty and re-sends the same patches when a slice save fails', async () => {
+    patchSettingsSlice.mockRejectedValueOnce(new Error('offline'));
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /External/i }));
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:7860'), { target: { value: 'http://localhost:9999' } });
+    const saveBtn = screen.getByRole('button', { name: /^Save$/ });
+    fireEvent.click(saveBtn);
+    await awaitSave();
+    await waitFor(() => expect(saveBtn.disabled).toBe(false));
+    patchSettingsSlice.mockClear();
+    fireEvent.click(saveBtn);
+    await awaitSave();
+    expect(sentSlices()['imageGen.external']).toEqual({ sdapiUrl: 'http://localhost:9999' });
   });
 
   it('offers the Codex provider\'s models in a picker and keeps an unlisted stored pin', async () => {
@@ -344,8 +368,8 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.change(select, { target: { value: 'gpt-6-sol' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    expect(updateSettings.mock.calls[0][0].imageGen.codex.model).toBe('gpt-6-sol');
+    await awaitSave();
+    expect(sentSlices()['imageGen.codex']).toEqual({ model: 'gpt-6-sol' });
   });
 
   it('pins the install-wide default local model and saves it under imageGen.local.modelId', async () => {
@@ -359,11 +383,11 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.change(select, { target: { value: 'flux2-klein-4b' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    expect(updateSettings.mock.calls[0][0].imageGen.local.modelId).toBe('flux2-klein-4b');
+    await awaitSave();
+    expect(sentSlices()['imageGen.local']).toEqual({ modelId: 'flux2-klein-4b' });
   });
 
-  it('drops modelId from the save body when the pin is cleared, so the server default resolves again', async () => {
+  it('clears modelId with an explicit null when the pin is cleared, so the server default resolves again', async () => {
     getSettings.mockResolvedValue({
       imageGen: {
         mode: 'local',
@@ -380,11 +404,11 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.change(select, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    // Absent, not '' — every consumer reads `local.modelId || DEFAULT`, and a
+    await awaitSave();
+    // null, not '' — the slice merge keeps an omitted key, so the clear must
+    // be a value; every consumer reads `local.modelId || DEFAULT`, and a
     // persisted empty string is a value they would all have to keep coercing.
-    expect(JSON.parse(JSON.stringify(updateSettings.mock.calls[0][0])).imageGen.local)
-      .not.toHaveProperty('modelId');
+    expect(sentSlices()['imageGen.local']).toEqual({ modelId: null });
   });
 
   it('keeps a pin the catalog no longer lists selectable rather than silently dropping it', async () => {
@@ -405,12 +429,11 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByRole('option', { name: /retired-model \(unavailable on this machine\)/ })).toBeTruthy();
   });
 
-  it('the imageGen.local save body round-trips sibling keys the tab does not edit', async () => {
-    // Same wholesale-slice-replace hazard the videoGen case below pins:
+  it('the imageGen.local save body names only the changed field, so hand-edited siblings survive', async () => {
     // imageGen.local carries hand-edit-only render knobs this tab never
     // renders (steps / guidance / quantize, read by fableLoom/production.js).
-    // Rebuilding the slice from the rendered fields alone wipes them on every
-    // Media save. The server can't see this — it validates whatever arrives.
+    // The slice PATCH merges per field, so the drawer neither re-sends a
+    // snapshot of them nor omits them into oblivion.
     getSettings.mockResolvedValue({
       imageGen: {
         mode: 'local',
@@ -425,19 +448,14 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    const local = updateSettings.mock.calls[0][0].imageGen.local;
-    expect(local).toMatchObject({ steps: 28, guidance: 4.5, quantize: '4' });
-    expect(local.modelId).toBe('flux2-klein-4b');
-    expect(local.pythonPath).toBe('/usr/bin/python3');
+    await awaitSave();
+    expect(sentSlices()).toEqual({ 'imageGen.local': { modelId: 'flux2-klein-4b' } });
   });
 
-  it('the videoGen save body round-trips sibling keys the tab does not edit (#3231 Phase 4)', async () => {
-    // The settings PUT replaces top-level slices wholesale, so if this wire
-    // body ever drops the loaded slice's sibling keys, a Defaults-tab save
-    // erases videoGen.defaultModelId (read by pipeline video stages). The
-    // server suite can't see this — it validates whatever body arrives — so
-    // the exact wire body is pinned HERE.
+  it('the videoGen save body carries only the changed pin (#3231 Phase 4)', async () => {
+    // A Defaults-tab save that re-sent the loaded slice would overwrite a
+    // videoGen.defaultModelId another surface changed after this drawer
+    // opened. The exact wire body is pinned HERE.
     getSettings.mockResolvedValue({
       imageGen: { mode: 'external', external: { sdapiUrl: 'http://localhost:7860' } },
       videoGen: { mode: 'grok', defaultModelId: 'ltx23_distilled_q4' },
@@ -447,13 +465,10 @@ describe('ImageGenTab grouped tabs', () => {
     expect(videoSelect.value).toBe('grok');
     fireEvent.change(videoSelect, { target: { value: 'local' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    const patch = updateSettings.mock.calls[0][0];
+    await awaitSave();
     // fal/reactor keys are no longer part of this save body (#8997) — they
     // move through the write-only credential setter instead.
-    expect(patch.videoGen).toEqual({
-      mode: 'local', defaultModelId: 'ltx23_distilled_q4', displaySleep: false,
-    });
+    expect(sentSlices()).toEqual({ videoGen: { mode: 'local' } });
   });
 });
 
@@ -545,7 +560,7 @@ describe('ImageGenTab — Test Render backend picker (#4128)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
     fireEvent.click(screen.getByLabelText(/Enable Grok/i));
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    await awaitSave();
 
     fireEvent.click(screen.getByRole('tab', { name: /^Test$/i }));
     const select = screen.getByLabelText('Backend');
@@ -571,12 +586,8 @@ describe('ImageGenTab — Agy CLI section', () => {
     expect(modelInput.value).toBe('gemini-image');
     fireEvent.change(modelInput, { target: { value: 'custom/image-v3' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    expect(updateSettings.mock.calls[0][0].imageGen.agy).toEqual(expect.objectContaining({
-      enabled: true,
-      agyPath: '/opt/agy',
-      model: 'custom/image-v3',
-    }));
+    await awaitSave();
+    expect(sentSlices()).toEqual({ 'imageGen.agy': { model: 'custom/image-v3' } });
   });
 
   it('render-defaults tab pins a backend + model per surface and saves the slice (#3231)', async () => {
@@ -594,12 +605,25 @@ describe('ImageGenTab — Agy CLI section', () => {
     const modelInput = screen.getByLabelText('Sprite references & anchors model');
     fireEvent.change(modelInput, { target: { value: 'gemini-3.6-flash-low' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    // The saved wire body carries exactly the pinned entries — no 'auto' no-ops.
-    expect(updateSettings.mock.calls[0][0].renderDefaults).toEqual({
-      'universe-bible': { imageMode: 'codex' },
-      'sprite-reference': { imageMode: 'agy', imageModel: 'gemini-3.6-flash-low' },
+    await awaitSave();
+    // The wire body carries exactly the changed target — the untouched
+    // universe-bible pin is not re-sent, and no 'auto' no-ops travel.
+    expect(sentSlices()).toEqual({
+      renderDefaults: { 'sprite-reference': { imageMode: 'agy', imageModel: 'gemini-3.6-flash-low' } },
     });
+  });
+
+  it('clears a render-default pin with an explicit null entry (#12030)', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'local' },
+      renderDefaults: { 'universe-bible': { imageMode: 'codex' } },
+    });
+    await renderTab(['/media/image?mediaTab=defaults']);
+    const bibleSelect = await screen.findByLabelText('Universe Bible & canon renders');
+    fireEvent.change(bibleSelect, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await awaitSave();
+    expect(sentSlices()).toEqual({ renderDefaults: { 'universe-bible': null } });
   });
 
   it('grok pins never show a model input — its backend has no model knob (#3231)', async () => {
@@ -657,11 +681,8 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
     fireEvent.change(screen.getByPlaceholderText('grok (uses $PATH)'), { target: { value: '/usr/local/bin/grok' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    const patch = updateSettings.mock.calls[0][0];
-    expect(patch.imageGen.grok).toEqual(expect.objectContaining({
-      enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '16:9',
-    }));
+    await awaitSave();
+    expect(sentSlices()).toEqual({ 'imageGen.grok': { grokPath: '/usr/local/bin/grok' } });
   });
 
   it('falls the mode back to local when grok is disabled while active', async () => {
@@ -676,10 +697,8 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
     fireEvent.click(screen.getByLabelText(/Enable Grok Imagegen/i));
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    const patch = updateSettings.mock.calls[0][0];
-    expect(patch.imageGen.grok.enabled).toBe(false);
-    expect(patch.imageGen.mode).toBe('local');
+    await awaitSave();
+    expect(sentSlices()).toEqual({ imageGen: { mode: 'local' }, 'imageGen.grok': { enabled: false } });
   });
 });
 
@@ -703,10 +722,10 @@ describe('ImageGenTab — fal.ai section', () => {
     fireEvent.click(screen.getByLabelText(/Enable fal\.ai Imagegen/i));
     fireEvent.change(screen.getByLabelText(/Default model/i), { target: { value: 'fal-ai/bytedance/seedream/v5/lite/text-to-image' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-    expect(updateSettings.mock.calls[0][0].imageGen.fal).toEqual(expect.objectContaining({
+    await awaitSave();
+    expect(sentSlices()['imageGen.fal']).toEqual({
       enabled: true, model: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
-    }));
+    });
     fireEvent.click(screen.getByRole('tab', { name: /Backend/i }));
     expect(screen.getByText(/Hosted image and reference-edit models through fal\.ai/i)).toBeTruthy();
   });

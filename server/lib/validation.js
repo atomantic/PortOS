@@ -2106,8 +2106,10 @@ const renderTargetEntrySchema = z.object({
   videoMode: videoModePinSchema,
   videoModel: renderTargetModelSchema,
 });
+// A null entry is an explicit "no pin for this surface": the slice PATCH merges
+// per target, so clearing one must be sent as a value, not an omitted key.
 export const renderDefaultsSettingsSchema = z.object(
-  Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.optional()])),
+  Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.nullable().optional()])),
 );
 
 // Install-wide video render pin (`settings.videoGen`, #3231 Phase 4) — the
@@ -2245,9 +2247,42 @@ const renderFormSettingsSchema = z.object({
 export const settingsSlicePartialSchemas = Object.freeze({
   ...Object.fromEntries(Object.entries(localLlmSettingsSchema.shape)
     .map(([runtime, schema]) => [`localLlm.${runtime}`, schema.unwrap()])),
+  // The Media settings drawer (ImageGenTab) saves field-by-field through these
+  // so a sibling panel's later patch (VideoGen's LocalSetupPanel writing
+  // `imageGen.local.pythonPath`) survives a drawer save. Cleared strings travel
+  // as '' (every reader falls back on a blank); the two pins that readers
+  // coerce with `||` accept null so an un-pin needs no sentinel string.
+  imageGen: z.object({
+    mode: z.enum(IMAGE_GEN_MODES).optional(),
+    // Legacy flat field, kept populated beside `imageGen.external.sdapiUrl`.
+    sdapiUrl: z.string().max(500).optional(),
+  }).strict(),
+  'imageGen.external': z.object({
+    sdapiUrl: z.string().max(500).optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
+  }).strict(),
   'imageGen.local': z.object({
     pythonPath: z.string().max(500).nullable().optional(),
+    modelId: z.string().max(300).nullable().optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
   }).strict(),
+  'imageGen.codex': z.object({
+    enabled: z.boolean().optional(),
+    codexPath: z.string().max(500).optional(),
+    model: z.string().max(300).optional(),
+    effort: z.string().max(40).optional(),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
+  }).strict(),
+  'imageGen.grok': imageGenGrokSettingsSchema.strict(),
+  'imageGen.agy': imageGenAgySettingsSchema.strict(),
+  'imageGen.fal': imageGenFalSettingsSchema.strict(),
+  'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
+  renderDefaults: renderDefaultsSettingsSchema,
+  videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   seriesAutopilot: seriesAutopilotSettingsSchema.partial(),
