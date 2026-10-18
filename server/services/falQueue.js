@@ -213,6 +213,11 @@ export async function awaitFalCompletion({
     }
     statusFailures = 0;
     if (status.status === 'COMPLETED') {
+      // A poll that started inside the budget and returned COMPLETED is a
+      // finished paid render. `remoteTerminal` is set before the break so the
+      // post-loop deadline check cannot discard it when the round trip
+      // straddles `deadline` (#12053). Cancel still wins if the caller aborted
+      // while this read was in flight.
       entry.remoteTerminal = true;
       break;
     }
@@ -228,6 +233,9 @@ export async function awaitFalCompletion({
     await cancelFalRequest(entry);
     return { outcome: 'canceled' };
   }
+  // Reaching here with remoteTerminal means the COMPLETED branch broke out.
+  // ERROR returns inside the loop, so this is not a failed render.
+  if (entry.remoteTerminal) return { outcome: 'completed' };
   if (Date.now() >= deadline) {
     await cancelFalRequest(entry);
     return { outcome: 'failed', reason: `fal.ai did not finish within ${Math.round(timeoutMs / 1000)}s` };
