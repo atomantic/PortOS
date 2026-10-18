@@ -49,7 +49,7 @@ vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
-import { activeAgents, runnerAgents } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 
 describe('syncRunnerAgents runner-owned TUI recovery', () => {
@@ -57,6 +57,7 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
     vi.clearAllMocks();
     runnerAgents.clear();
     activeAgents.clear();
+    spawningTasks.clear();
     vi.mocked(shellService.getSession).mockReturnValue(null);
     vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ id: 'agent-1', status: 'running' });
   });
@@ -220,6 +221,7 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
     vi.clearAllMocks();
     runnerAgents.clear();
     activeAgents.clear();
+    spawningTasks.clear();
     vi.mocked(shellService.getSession).mockReturnValue(null);
     vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ status: 'running', metadata: { runId: 'run-abc123' } });
   });
@@ -302,5 +304,14 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
     await syncRunnerAgents();
     expect(terminateAgentViaRunner).toHaveBeenCalledTimes(2);
     expect(shellService.registerExternalSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a late-acknowledged spawn with its live controller on reconnect', async () => {
+    spawningTasks.add(survivingTui.taskId);
+    getActiveAgentsFromRunner.mockResolvedValue([{ ...survivingTui, promptSubmitted: false }]);
+    await expect(syncRunnerAgents()).resolves.toBe(0);
+    expect(runnerAgents.has('agent-1')).toBe(false);
+    expect(terminateAgentViaRunner).not.toHaveBeenCalled();
+    expect(shellService.registerExternalSession).not.toHaveBeenCalled();
   });
 });

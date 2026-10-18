@@ -15,7 +15,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { isAgentOwnedLocally, runnerAgents } from './agentState.js';
+import { isAgentOwnedLocally, runnerAgents, spawningTasks } from './agentState.js';
 import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from './shell.js';
@@ -102,6 +102,10 @@ export async function syncRunnerAgents() {
     // re-adopt — adopting it would put it in runnerAgents and the orphan
     // sweep would treat that local map as ownership. Live rows still sync.
     if (!(await runnerEntryShieldsRunningRecord(agent))) continue;
+    // A reconnect can list a PTY while this process still awaits its spawn
+    // acknowledgement/ledger write. Its controller owns startup already, even
+    // though it has not registered in activeAgents yet.
+    if (spawningTasks.has(agent.taskId)) continue;
     maintenance.recoverOwned('agent', agent.id);
     if (runnerAgents.get(agent.id)?.startupErrorAnalysis) {
       await stopInterruptedStartup(agent.id);
