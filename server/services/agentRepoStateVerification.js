@@ -373,7 +373,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
  * A map rather than a switch with a `default`, so a new code cannot ship without
  * one — `repoStateExpectations.test.js` asserts the two key sets match.
  * `PR_UNMERGED` delegates to branch-reconcile's `driveToMerge`, which carries the
- * caveats a hand-written line loses: merge from the repo ROOT (gh cannot delete a
+ * caveats a hand-written line loses: preserve the linked checkout (gh can implicitly delete a
  * branch checked out elsewhere), retry `--squash`/`--rebase` on "not allowed",
  * verify the GitHub auto-merge handoff, or remove the worktree after merging
  * before deleting the branch.

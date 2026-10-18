@@ -269,7 +269,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('**Required local-review merge gate:**');
     expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).toContain('never merge on checks that were expected but never appeared');
-    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
     expect(section).toContain('repeat the configured review loop for `ollama`, `copilot`, `codex`, `@example-user` against the new HEAD');
     expect(section).toContain(`8. ${INLINE_EXIT_STEP}`);
     expect(section).not.toContain('6. Exit. Do **not** run `/do:push`');
@@ -284,15 +284,16 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('on GitHub `gh pr diff 42` also works');
     expect(section).toContain(`gh pr diff 42 | jq -Rs '{ backend:`);
     expect(section).toContain('4. **Wait for CI to finish**');
-    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
-    expect(section).toContain('(Equivalent: `gh pr merge 42 --repo example-org/example-repo --merge --delete-branch`.)');
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
+    expect(section).toContain('(Equivalent: `gh pr merge 42 --repo example-org/example-repo --merge --match-head-commit <verified-head>`.)');
     expect(section).toContain('`gh pr view "https://github.com/example-org/example-repo/pull/42" --json state -q .state` must return `MERGED`');
     expect(section).toContain('If it returns `MERGED`, publication succeeded even when the CLI failed during local cleanup');
     expect(section).toContain('Do not retry a successful merge');
     expect(section).toContain('Leave the active managed local worktree and its branch to PortOS cleanup');
     expect(section).toContain('never checkout the default branch');
-    expect(section).toContain('a failed lookup is not proof of absence');
-    expect(section).toContain('retry remote deletion only for that verified task branch');
+    expect(section).toContain('Remote auto-deletion proves no archive');
+    expect(section).toContain('compare-and-delete only the exact ref at the CI-verified head');
+    expect(section).toContain('Leave local teardown to PortOS');
     expect(section).toContain('Only while the PR is still unmerged');
     expect(section).toContain('a failed state lookup is inconclusive, never success');
     expect(section).toContain('8. Exit. Do **not** run `/do:push` or open a new PR — the merge handles everything.');
@@ -404,7 +405,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
       fixture({ reviewLoopMergeOnly: true }),
       { verbose: false },
     );
-    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
     expect(section).not.toContain('glab mr merge');
   });
 });
@@ -432,7 +433,7 @@ describe('buildReviewLoopFollowUpSection — self-review follow-up', () => {
     expect(section).toContain('3. **Wait for CI to finish**');
     expect(section).toContain('6. **Confirm the merge before exiting**');
     // …and its merge command is untouched: only who reads the diff changed.
-    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
   });
 
   it('never tells a self-reviewing agent that no review was requested', () => {

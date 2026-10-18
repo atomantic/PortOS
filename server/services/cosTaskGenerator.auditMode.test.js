@@ -433,7 +433,7 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('## Merge Gate');
-    expect(prompt).toContain('--merge --delete-branch');
+    expect(prompt).toContain('--merge --match-head-commit <verified-head>');
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 

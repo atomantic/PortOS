@@ -484,7 +484,9 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toContain('/api/cos/merge-admission');
     expect(prompt).toContain('agent-1');
     expect(prompt).toContain('--match-head-commit <sha>');
-    expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --delete-branch/);
+    expect(prompt).not.toContain('--delete-branch');
+    expect(prompt).toContain('Archive failure');
+    expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);
     // Read before the workflow whose TUI form ends on the sentinel write.
     expect(prompt.indexOf(ADMISSION)).toBeLessThan(prompt.search(/^## Completion/m));
     // A saved slashdo merge default must not land the PR outside the lease.
@@ -1073,7 +1075,7 @@ describe('buildLightContextPrompt', () => {
       // "no checks reported" is ambiguous on a just-opened PR — merging on it races CI.
       expect(prompt).toMatch(/AMBIGUOUS/);
       expect(prompt).toMatch(/gh workflow list/);
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
       expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
       expect(prompt).toContain('autoMergeRequest.enabledAt');
       expect(prompt).toContain('allow_auto_merge: true');
@@ -1354,13 +1356,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('do NOT post a PR/MR comment saying the review was unavailable or inconclusive');
       expect(prompt).toMatch(/PR_URL=\$\(gh pr create --base main --head "\$PR_HEAD"/);
       expect(prompt).toMatch(/## Review Loop/);
-      expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --match-head-commit <verified-head>/);
       expect(prompt).toContain('LOCAL_PHASE_START_SHA');
       expect(prompt).toContain('Cross-phase stop-mode gate');
       expect(prompt).toContain('`all` always runs the PR-side reviewers.');
       expect(prompt.indexOf('### Local Review Before Opening the PR/MR')).toBeLessThan(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"'));
       expect(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"')).toBeLessThan(prompt.indexOf('## Review Loop'));
-      expect(prompt.indexOf('Required local-review merge gate')).toBeLessThan(prompt.indexOf('gh pr merge "$PR_URL" --merge --delete-branch'));
+      expect(prompt.indexOf('Required local-review merge gate')).toBeLessThan(prompt.indexOf('gh pr merge "$PR_URL" --merge --match-head-commit <verified-head>'));
       // The post-PR section receives only Copilot, never the local codex reviewer.
       expect(prompt.slice(prompt.indexOf('## Review Loop'))).not.toMatch(/CLI Reviewer Procedure/);
       // PortOS no longer promises to do any of it.
@@ -1575,7 +1577,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/## Merge Gate/);
       expect(prompt).not.toMatch(/## Review Loop/);
       expect(prompt).toMatch(/gh pr checks/);
-      expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --match-head-commit <verified-head>/);
       expect(prompt).not.toMatch(/PortOS will push the branch/);
     });
 
@@ -1742,7 +1744,9 @@ describe('buildLightContextPrompt', () => {
       // The verified auto-merge handoff adds ~1.7KB of required policy. Keep
       // the staging ceiling below the 40KB recipe and retain its explicit
       // absence assertion above; this allowance covers only the new contract.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(32_000);
+      // #12133 adds the managed-worktree preservation handoff to the merge gate;
+      // the ceiling stays well below the 40KB recipe.
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(33_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -1945,7 +1949,7 @@ describe('buildLightContextPrompt', () => {
       // After /do:pr drives the Copilot review loop clean, the agent must
       // merge and verify — without these steps the PR sits open after the
       // agent exits (the original "agent abandoned the PR" bug).
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
       expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
       expect(prompt).toContain('autoMergeRequest.enabledAt');
       expect(prompt).toContain('allow_auto_merge: true');
@@ -1964,7 +1968,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/Copilot review loop/i);
       // No review loop means nothing else merges the PR — the agent gates on CI.
       expect(prompt).toMatch(/gh pr checks "<PR_URL>" --watch --fail-fast/);
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).not.toMatch(/review loop reports/);
     });
@@ -1978,7 +1982,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/simplify`/);
       // Merge guidance still applies when /simplify is skipped.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
     });
 
     it('tells Claude Code CLI to commit only (no /do:push) when PortOS merges the worktree branch back', () => {
@@ -2086,7 +2090,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('--match-head-commit <sha>');
       expect(prompt).toContain('/api/cos/merge-admission');
       expect(prompt).toMatch(/task-src-1/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
       // Pending CI may finish with a GitHub-confirmed auto-merge handoff.
       expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
       expect(prompt).toContain('autoMergeRequest.enabledAt');
@@ -2127,7 +2131,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/## Review-Loop Follow-up/);
       // CI is the gate, and the merge command matches the review-loop contract.
       expect(prompt).toMatch(/gh pr checks "https:\/\/github\.com\/o\/r\/pull\/9" --watch --fail-fast/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
       expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
       expect(prompt).toContain('autoMergeRequest.enabledAt');
       expect(prompt).toContain('allow_auto_merge: true');
@@ -2178,7 +2182,7 @@ describe('buildLightContextPrompt', () => {
         }}),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' });
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.example\.com\/o\/r\/pull\/7" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.example\.com\/o\/r\/pull\/7" --merge --match-head-commit <verified-head>/);
       expect(prompt).not.toMatch(/glab (?:issue|mr) /);
     });
 
@@ -2938,8 +2942,8 @@ describe('buildAgentPrompt — provider type routing', () => {
       { branchName: 'b', worktreePath: '/tmp/wt' },
       { providerType: 'api' });
     expect(prompt).toMatch(/## Review-Loop Follow-up/);
-    // Merge command must be present, exactly with --merge --delete-branch.
-    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
+    // Merge command must be present, exactly with --merge --match-head-commit <verified-head>.
+    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
     // Pending CI may finish with a GitHub-confirmed auto-merge handoff.
     expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
     expect(prompt).toContain('autoMergeRequest.enabledAt');
@@ -3217,7 +3221,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     const FIXTURE_GLOBAL_CLAUDE_MD = [
       '# Example Global Instructions',
       '',
-      '- When CI is green, land it with `gh pr merge <url> --merge --delete-branch`.',
+      '- When CI is green, land it with `gh pr merge <url> --merge --match-head-commit <verified-head>`.',
       '- Commit and push your changes before you stop.',
     ].join('\n');
 
@@ -3376,7 +3380,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       // to do work — the task metadata asks for a PR, and discardWorktree must
       // still win. Remove the discardWorktree arm and this prompt falls through to
       // buildTuiCompletionSection, which renders `gh pr merge … --merge
-      // --delete-branch`. (The `openPR: false` sibling above never reaches that
+      // --match-head-commit <verified-head>`. (The `openPR: false` sibling above never reaches that
       // line at all, which is why its /gh pr merge/ check can't carry this.)
       const prTask = makeTask({ metadata: { discardWorktree: true, useWorktree: true, openPR: true, simplify: true } });
       const prompt = buildLightContextPrompt(prTask, '/r', wt, { isTui: true });

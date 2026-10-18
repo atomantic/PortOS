@@ -1,3 +1,4 @@
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
  * CoS Task Pre-Step Blocks
@@ -288,6 +289,8 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 
 ## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
 Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
+
+${forgeKey === 'gh' ? MANAGED_WORKTREE_CLEANUP_CONTRACT : ''}
 
 **Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (write it at the EXACT sentinel path that section gives you — the filename carries your agent id — with a short run summary of the issues claimed + their ${pr}s + merge outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
 

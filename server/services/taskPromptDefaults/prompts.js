@@ -10,6 +10,7 @@
  */
 
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from './appLaunchVideo.js';
 import { CONTRIBUTION_SECURITY_POLICY } from '../../lib/contributionSecurityPolicy.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
@@ -2850,11 +2851,14 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 3. **Wait for required CI before merging.** Run \`gh pr checks <num> --required --watch --fail-fast\` — REQUIRED checks only, so optional jobs cannot stall the merge. If a required check stays red, comment on the PR naming the failure, remove only the worktree, and leave the branch and PR for reconciliation.
 4. **Merge immediately via \`gh pr merge\`** — NEVER a local merge and NEVER \`--auto\`. Prefer a true merge commit so Git retains the branch tip, but fall back when the repository disallows that method:
    \`\`\`bash
+   # CI_VERIFIED_HEAD is the SHA recorded when required CI and configured reviews passed.
+   # Re-read the forge head and checks, and check merge admission before each attempt.
+   : "\${CI_VERIFIED_HEAD:?Missing CI-verified head}"
    PR_URL=$(gh pr view --json url -q .url)   # no number: resolves the PR from the checked-out branch
-   gh pr merge "$PR_URL" --merge --delete-branch || {
+   gh pr merge "$PR_URL" --merge --match-head-commit "$CI_VERIFIED_HEAD" || {
      [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ] || \
-       gh pr merge "$PR_URL" --squash --delete-branch || \
-       gh pr merge "$PR_URL" --rebase --delete-branch
+       gh pr merge "$PR_URL" --squash --match-head-commit "$CI_VERIFIED_HEAD" || \
+       gh pr merge "$PR_URL" --rebase --match-head-commit "$CI_VERIFIED_HEAD"
    }
    STATE=$(gh pr view "$PR_URL" --json state -q .state)
    [ "$STATE" = "MERGED" ] || { echo "Expected MERGED, got $STATE" >&2; exit 1; }
@@ -2865,7 +2869,9 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
 
-From the **source repo** (cd back to {repoPath} first; you are currently inside the worktree):
+${MANAGED_WORKTREE_CLEANUP_CONTRACT}
+
+From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first; you are currently inside the worktree):
 
 \`\`\`bash
 cd {repoPath}
@@ -3032,9 +3038,12 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 6. **Merge immediately via \`gh pr merge\`** — NEVER a local merge and NEVER \`--auto\`. Prefer a true merge commit so Git retains the branch tip, but fall back when the repository disallows that method:
    \`\`\`bash
+   # CI_VERIFIED_HEAD is the SHA recorded when required CI and configured reviews passed.
+   # Re-read the forge head and checks, and check merge admission before each attempt.
+   : "\${CI_VERIFIED_HEAD:?Missing CI-verified head}"
    PR_URL=$(gh pr view --json url -q .url)   # no number: resolves the PR from the checked-out branch
-   gh pr merge "$PR_URL" --merge --delete-branch || {
-     [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ] ||        gh pr merge "$PR_URL" --squash --delete-branch ||        gh pr merge "$PR_URL" --rebase --delete-branch
+   gh pr merge "$PR_URL" --merge --match-head-commit "$CI_VERIFIED_HEAD" || {
+     [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ] ||        gh pr merge "$PR_URL" --squash --match-head-commit "$CI_VERIFIED_HEAD" ||        gh pr merge "$PR_URL" --rebase --match-head-commit "$CI_VERIFIED_HEAD"
    }
    STATE=$(gh pr view "$PR_URL" --json state -q .state)
    [ "$STATE" = "MERGED" ] || { echo "Expected MERGED, got $STATE" >&2; exit 1; }
@@ -3045,7 +3054,9 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
 
-From the **source repo** (cd back to {repoPath} first; you are currently inside the worktree):
+${MANAGED_WORKTREE_CLEANUP_CONTRACT}
+
+From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first; you are currently inside the worktree):
 
 \`\`\`bash
 cd {repoPath}
@@ -3293,11 +3304,14 @@ Every local reviewer's fixes are already committed, so the PR opens against fini
 4. **Let required CI finish and go green** — \`gh pr checks <pr-number> --required --watch --fail-fast\` (scope the wait to REQUIRED checks so an optional job can't stall a merge branch protection would allow). A red required check is not merge-eligible: fix it and re-push (same 3-round cap), or, if it stays red, stop exactly as the review-stuck cleanup above does.
 5. **Merge immediately via \`gh pr merge\`** — NEVER a local \`git merge\` and NEVER \`--auto\`, which can return successfully while leaving the PR queued and OPEN. Prefer a true merge commit, with squash/rebase fallbacks for repositories that disallow it:
    \`\`\`bash
+   # CI_VERIFIED_HEAD is the SHA recorded when required CI and configured reviews passed.
+   # Re-read the forge head and checks, and check merge admission before each attempt.
+   : "\${CI_VERIFIED_HEAD:?Missing CI-verified head}"
    PR_URL=$(gh pr view --json url -q .url)   # no number: resolves the PR from the checked-out branch
-   gh pr merge "$PR_URL" --merge --delete-branch || {
+   gh pr merge "$PR_URL" --merge --match-head-commit "$CI_VERIFIED_HEAD" || {
      [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ] || \
-       gh pr merge "$PR_URL" --squash --delete-branch || \
-       gh pr merge "$PR_URL" --rebase --delete-branch
+       gh pr merge "$PR_URL" --squash --match-head-commit "$CI_VERIFIED_HEAD" || \
+       gh pr merge "$PR_URL" --rebase --match-head-commit "$CI_VERIFIED_HEAD"
    }
    STATE=$(gh pr view "$PR_URL" --json state -q .state)
    [ "$STATE" = "MERGED" ] || { echo "Expected MERGED, got $STATE" >&2; exit 1; }
@@ -3306,7 +3320,11 @@ Every local reviewer's fixes are already committed, so the PR opens against fini
 
 ## Phase 7 — Clean up (post-merge ONLY)
 
-This phase runs only after the PR merged via Phase 6. From the **source repo** (cd back to {repoPath} first):
+This phase runs only after the PR merged via Phase 6.
+
+${MANAGED_WORKTREE_CLEANUP_CONTRACT}
+
+From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first):
 
 \`\`\`bash
 cd {repoPath}

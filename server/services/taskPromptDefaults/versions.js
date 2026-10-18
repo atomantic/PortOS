@@ -111,7 +111,7 @@ export const PROMPT_VERSIONS = {
 // Code review isolation is a preference; supported headless reviewers remain usable.
 // v39 (claim-issue) / v35 (gitlab) / v22 (jira): an optional reviewer (~opt) failure/timeout/provider error never sets review-blocked and does not prevent merge.
 // Revalidate current need and project alignment before claims, contributor handoff or epic splits.
-PROMPT_VERSIONS['claim-issue'] = 41;
+PROMPT_VERSIONS['claim-issue'] = 42; // Preserve managed checkouts through merge until explicit verified cleanup (#12133).
 PROMPT_VERSIONS['claim-issue-gitlab'] = 37;
 // Accepted review findings require resolution regardless of severity.
 PROMPT_VERSIONS['claim-issue-jira'] = 24;
@@ -129,3 +129,6 @@ PROMPT_VERSIONS['claim-issue-jira'] = 24;
 // moves past this anchor — forcing whoever bumps the prompt to re-confirm the default still
 // matches the prompt's behavior and then advance this anchor in the same change. See issue #734.
 export const REFERENCE_WATCH_AUDITED_VERSION = 4;
+
+// Managed GitHub merges preserve linked checkouts on every method fallback (#12133).
+PROMPT_VERSIONS['plan-task'] = 22;
