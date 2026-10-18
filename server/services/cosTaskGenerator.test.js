@@ -1165,7 +1165,7 @@ describe('emitOnDemandEmpty', () => {
     expect(await emitTransient('claim-issue')).toMatchObject({ outcome: 'transient', forge: null });
   });
 
-  it('treats a perpetual on-demand drain as detector-driven for transient feedback', async () => {
+  it('treats a one-shot branch sweep as detector-driven for transient feedback', async () => {
     const skip = { gate: 'perpetual-work', cli: null, reason: 'probe-failed', remedy: null, detail: null };
     expect(await emitTransient('branch-reconcile', skip, false)).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient', forge: null });
   });

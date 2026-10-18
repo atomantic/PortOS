@@ -44,6 +44,7 @@ vi.mock('./taskSchedule.js', () => ({
   getTaskInterval: vi.fn(async () => ({ type: 'perpetual', taskMetadata: {} })),
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
+  recordBranchReconcileOutcome: vi.fn(async () => {}),
   parkPerpetual: (...a) => parkPerpetual(...a),
   getPerpetualDrainState: (...a) => getPerpetualDrainState(...a),
   recordPerpetualDispatch: (...a) => recordPerpetualDispatch(...a),
@@ -96,7 +97,7 @@ vi.mock('./cosState.js', () => ({
 }));
 
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
-import { getTaskInterval } from './taskSchedule.js';
+import { getTaskInterval, recordBranchReconcileOutcome } from './taskSchedule.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
 
@@ -134,6 +135,9 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     expect(reconcileMock).toHaveBeenCalledWith(APP.repoPath, expect.any(Object));
     // … the convergence gate ran and spent a dispatch …
     expect(recordPerpetualDispatch).toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith(APP.id, expect.objectContaining({
+      status: 'running', remaining: [{ branch: 'claim/issue-42', reason: 'actionable' }],
+    }));
     expect(parkPerpetual).not.toHaveBeenCalled();
     // … and the renderer folded its block in, leaving no literal token behind.
     expect(task.description).not.toContain('{inFlightBranches}');
