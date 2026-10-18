@@ -1,0 +1,1153 @@
+/**
+ * Content-addressed test memo — key computation ("locked code paths").
+ *
+ * A key is one sha256 over every input that can change a test file's
+ * outcome. Two keys exist for each test:
+ *
+ * - The **floor** key hashes the static+dynamic module closure: `import` /
+ *   `export … from`, `require()`, `import()` and the `vi.mock` / `vi.doMock` /
+ *   `vi.importActual` / `vi.importMock` / `vi.unmock` family, all with
+ *   literal specifiers, from working-tree bytes. It needs no prior run.
+ * - The **recorded** key hashes the modules the test actually loaded in the
+ *   green run that produced its entry (Vitest's `experimental.recordDependencies`
+ *   depfile). A module a test mocks away or never reaches cannot change its
+ *   outcome, so this key survives churn in the lazily imported server cluster
+ *   that the floor key cannot. A new edge still invalidates: the importer
+ *   that gained it is in the recorded set and its bytes changed.
+ *
+ * Both keys add, over their member set: every non-JS file a member names
+ * through a literal path anchored at `import.meta.url`, `__dirname`,
+ * `process.cwd()` or an identifier bound to one of those (a literal that
+ * names a directory contributes its whole tree, bounded by
+ * `DIRECTORY_INPUT_LIMIT`); the installed version of every package the
+ * members reach; the workspace's Vitest configuration closure and manifest;
+ * the Node major, platform and arch; and `TEST_MEMO_ENV`.
+ *
+ * Fail closed. A test is not memoizable when a member reads a path the
+ * analyzer cannot resolve, when a test or `scripts/` member spawns `git`
+ * (repository state is not in the key), when a directory input exceeds the
+ * limit, when the `// test-memo: never` marker is present, when the test is in
+ * the planner's `ALWAYS_RUN_TESTS` or `TEST_MEMO_NEVER`, or — for the floor
+ * key only — when a module edge is non-literal or unresolvable. A recorded
+ * set that reaches outside the repository is not memoizable either. Every
+ * unknown construct lands in one of those buckets rather than silently
+ * narrowing the key.
+ *
+ * The store is `testMemoStore.js`; selection and the summary line live in
+ * `scripts/run-ci-tests.js`.
+ */
+
+import { createHash } from 'node:crypto';
+import { builtinModules } from 'node:module';
+import { posix } from 'node:path';
+import { ALWAYS_RUN_TESTS, FIXTURE_OWNERS } from '../ci-test-plan.js';
+
+/** Opt-out marker; anywhere in a test or a closure member. */
+export const NEVER_MARKER = /\/\/\s*test-memo:\s*never\b/;
+
+/** A literal directory input larger than this is "the tree", not an input. */
+export const DIRECTORY_INPUT_LIMIT = 400;
+
+/**
+ * Environment variables that change what a suite does. Audited from
+ * `process.env.*` reads in test files, the Vitest configs and setup files:
+ * CI/runner gates, browser and containment requirements, output verbosity,
+ * and the submodule expectation. Worker-count and diagnostics variables are
+ * left out on purpose — they change how fast a run is, never what it proves.
+ */
+export const TEST_MEMO_ENV = Object.freeze([
+  'CI',
+  'CI_EXPECT_SLASHDO_SUBMODULE',
+  'GITHUB_ACTIONS',
+  'MEMORY_BACKEND',
+  'NODE_ENV',
+  'PORTOS_BROWSER_TEST_PROFILE',
+  'PORTOS_CI_BROWSER_OWNER',
+  'PORTOS_REQUIRE_BROWSER_SUITES',
+  'PORTOS_REQUIRE_DB',
+  'PORTOS_REQUIRE_LINUX_CONTAINMENT',
+  'PORTOS_TEST_QUIET',
+  'SKIP_HEAVY_INTEGRATION',
+  'VITEST_FAST',
+]);
+
+/**
+ * Tree-wide guards that read the repository rather than import it. Most are
+ * also in `ALWAYS_RUN_TESTS`; the rest spawn git or walk the tree and would
+ * fail closed on their own. Naming them keeps the reason explicit.
+ */
+export const TEST_MEMO_NEVER = Object.freeze({
+  'scripts/catalog-merge-union.test.js': 'reads every catalog README and barrel through git ls-files',
+  'scripts/setup-data-drift.test.js': 'sweeps every migration export against prompt-hash baselines',
+  'scripts/direct-invocation-drift.test.js': 'scans every tracked .js file',
+  'scripts/repo-scan-guards.test.js': 'scans every tracked test file',
+  'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',
+  'server/lib/generatedManifests.test.js': 'scans scripts/generate-*.js and their sibling tests',
+  'server/lib/index.test.js': 'enumerates the server/lib directory against its README and barrel',
+  'server/logLevelConventions.test.js': 'scans the whole server tree',
+  'server/mockContractConventions.test.js': 'scans every tracked test file',
+  'server/negativeProofSleepConventions.test.js': 'scans every tracked test file',
+  'server/childListenerOrderConventions.test.js': 'scans the whole server tree',
+  'server/routeTestCoverageConventions.test.js': 'scans server/index.js mounts against every test',
+  'server/routeValidationConventions.test.js': 'scans every route module',
+  'server/timerCallbackConventions.test.js': 'scans the whole server tree',
+  'client/src/lib/index.test.js': 'enumerates the client/src/lib directory against its README and barrel',
+  'client/src/hooks/index.test.js': 'enumerates the client/src/hooks directory against its README and barrel',
+  'client/src/utils/index.test.js': 'enumerates the client/src/utils directory against its README and barrel',
+  'client/src/services/index.test.js': 'enumerates the client/src/services directory against its catalog',
+});
+
+/**
+ * Workspace inputs shared by every key: the Vitest config(s) and setup files
+ * (walked as closures), the worker-pool policy, and the manifest/lockfile.
+ */
+export const WORKSPACE_BASE_INPUTS = Object.freeze({
+  server: ['server/vitest.config.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'server/package.json', 'server/package-lock.json'],
+  client: ['client/vitest.config.js', 'client/src/test/setup.js', 'scripts/vitestCiPool.js', 'client/package.json', 'client/package-lock.json'],
+});
+
+const JS_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
+const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.json'];
+const RESOLVE_INDEXES = ['/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
+const BUILTINS = new Set(builtinModules);
+/** Never repository inputs: installs, caches, build output, machine-local state. */
+const SKIP_TREE_DIRS = new Set(['node_modules', '.git', '.cache', 'coverage', 'dist', '.vite']);
+const IGNORED_INPUT_PREFIXES = ['data/', '.cache/', 'coverage/', 'dist/', 'client/dist/', 'server/.cache/', 'client/.cache/'];
+
+const PATH_JOIN = new Set(['join', 'resolve']);
+const PATH_DIRNAME = new Set(['dirname']);
+const PATH_IDENTITY = new Set(['fileURLToPath', 'pathToFileURL', 'String', 'normalize', 'toNamespacedPath']);
+/** Consumers of a path that never read it: string/path arithmetic and assertions. */
+const NON_READ_CALLEES = new Set([
+  'relative', 'basename', 'extname', 'isAbsolute', 'startsWith', 'endsWith', 'includes', 'replace', 'replaceAll',
+  'split', 'slice', 'indexOf', 'lastIndexOf', 'trim', 'toLowerCase', 'toUpperCase', 'localeCompare', 'expect',
+  'toBe', 'toEqual', 'toStrictEqual', 'toContain', 'toMatch', 'toHaveBeenCalledWith', 'toMatchObject', 'log',
+  'error', 'warn', 'info', 'debug', 'stringify', 'encodeURIComponent', 'escapeRegExp', 'RegExp', 'toModuleKey',
+  'push', 'add', 'set', 'has', 'get', 'map', 'filter', 'some', 'every', 'test', 'match', 'exec', 'isDirectlyInvoked',
+  'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat',
+  'mkdirSync', 'mkdir', 'writeFileSync', 'writeFile', 'rmSync', 'rm', 'unlinkSync', 'renameSync', 'rename',
+]);
+/** `exec`/`spawn`-style sinks whose first argument names a program. */
+const SPAWN_CALLEES = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork',
+  'bufferedSpawn', 'bufferedSpawnOrThrow', 'prepareCliSpawn', 'execa']);
+/** Filesystem sinks whose first argument names what is read. */
+const READ_CALLEES = new Set(['readFileSync', 'readFile', 'readdirSync', 'readdir', 'existsSync', 'statSync',
+  'lstatSync', 'stat', 'lstat', 'accessSync', 'access', 'createReadStream', 'opendirSync', 'opendir', 'realpathSync',
+  'copyFileSync', 'copyFile', 'cpSync', 'cp', 'readJson', 'readJsonSync', 'globSync', 'glob']);
+const DIR_READ_CALLEES = /^(?:readdir|opendir|glob)/;
+const MOCK_CALLEES = new Set(['mock', 'doMock', 'importActual', 'importMock', 'unmock', 'doUnmock']);
+const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+  'throw', 'case', 'do', 'else', 'yield', 'await']);
+const PATH_LIKE_LITERAL = /^(?:\.{1,2}\/)?[\w@.-]+(?:\/[\w@.-]+)+\.[a-z0-9]{1,8}$/i;
+const GIT_SPAWN = /\b(?:execFileSync|execFile|spawnSync|spawn|execSync|exec|bufferedSpawn|bufferedSpawnOrThrow)\s*\(\s*(?:'git'|`git\s)/;
+const GIT_PACKAGE = /^(?:simple-git|isomorphic-git|nodegit)$/;
+
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+
+// ---------------------------------------------------------------------------
+// Tokenizer: lenient enough for JSX prose, strict enough to find every literal.
+// ---------------------------------------------------------------------------
+
+const isIdentStart = (c) => /[A-Za-z_$]/.test(c);
+const isIdentPart = (c) => /[\w$]/.test(c);
+
+function regexAllowed(prev) {
+  if (!prev) return true;
+  if (prev.t === 'p') return !(prev.v === ')' || prev.v === ']' || prev.v === '}');
+  if (prev.t === 'id') return REGEX_PRECEDING_KEYWORDS.has(prev.v);
+  return false;
+}
+
+function unescape(ch) {
+  return { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }[ch] ?? ch ?? '';
+}
+
+function readString(src, start) {
+  const quote = src[start];
+  let text = '';
+  for (let i = start + 1; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '\\') { text += unescape(src[i + 1]); i += 1; continue; }
+    if (ch === '\n') return null;
+    if (ch === quote) return { text, end: i + 1 };
+    text += ch;
+  }
+  return null;
+}
+
+function readRegex(src, start) {
+  let inClass = false;
+  for (let i = start + 1; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '\\') { i += 1; continue; }
+    if (ch === '\n') return null;
+    if (inClass) { if (ch === ']') inClass = false; continue; }
+    if (ch === '[') { inClass = true; continue; }
+    if (ch === '/') {
+      let end = i + 1;
+      while (end < src.length && /[a-z]/.test(src[end])) end += 1;
+      return end;
+    }
+  }
+  return null;
+}
+
+/**
+ * Tokens of `src`: `{ t: 'id'|'p'|'s'|'n'|'re'|'tpl', v, i }`. Strings decode
+ * common escapes; a template literal keeps `quasis` and the recursively
+ * tokenized `exprs` of its `${}` holes. Comments vanish. A quote with no
+ * partner on its line is JSX prose, and a `/` with no closing partner on its
+ * line is division, a `/*` with no partner is prose, and a backtick with no
+ * partner before EOF is prose. Throws when a template hole never closes; the
+ * caller fails closed on a throw.
+ */
+export function tokenize(src, proseBackticks = new Set()) {
+  const out = [];
+  let pos = 0;
+  const n = src.length;
+  const scan = (tokens, stopAtBrace) => {
+    let depth = 0;
+    while (pos < n) {
+      const c = src[pos];
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v') { pos += 1; continue; }
+      if (c === '/' && src[pos + 1] === '/') {
+        const end = src.indexOf('\n', pos);
+        pos = end === -1 ? n : end;
+        continue;
+      }
+      if (c === '/' && src[pos + 1] === '*') {
+        const end = src.indexOf('*/', pos + 2);
+        // No partner anywhere: JSX prose such as `/sdapi/v1/*`, not a comment.
+        if (end === -1) { tokens.push({ t: 'p', v: c, i: pos }); pos += 1; continue; }
+        pos = end + 2;
+        continue;
+      }
+      if (c === '\'' || c === '"') {
+        const value = readString(src, pos);
+        if (value === null) { tokens.push({ t: 'p', v: c, i: pos }); pos += 1; continue; }
+        tokens.push({ t: 's', v: value.text, i: pos });
+        pos = value.end;
+        continue;
+      }
+      if (c === '`' && proseBackticks.has(pos)) { tokens.push({ t: 'p', v: c, i: pos }); pos += 1; continue; }
+      if (c === '`') {
+        const start = pos;
+        pos += 1;
+        const quasis = [];
+        const exprs = [];
+        let quasi = '';
+        for (;;) {
+          if (pos >= n) throw Object.assign(new Error('unterminated template literal'), { prose: start });
+          const ch = src[pos];
+          if (ch === '\\') { quasi += unescape(src[pos + 1]); pos += 2; continue; }
+          if (ch === '`') { pos += 1; break; }
+          if (ch === '$' && src[pos + 1] === '{') {
+            quasis.push(quasi);
+            quasi = '';
+            pos += 2;
+            const inner = [];
+            scan(inner, true);
+            exprs.push(inner);
+            continue;
+          }
+          quasi += ch;
+          pos += 1;
+        }
+        quasis.push(quasi);
+        tokens.push({ t: 'tpl', quasis, exprs, i: start });
+        continue;
+      }
+      if (c === '/' && regexAllowed(tokens[tokens.length - 1])) {
+        const end = readRegex(src, pos);
+        if (end !== null) { tokens.push({ t: 're', v: src.slice(pos, end), i: pos }); pos = end; continue; }
+      }
+      if (isIdentStart(c)) {
+        let end = pos + 1;
+        while (end < n && isIdentPart(src[end])) end += 1;
+        tokens.push({ t: 'id', v: src.slice(pos, end), i: pos });
+        pos = end;
+        continue;
+      }
+      if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(src[pos + 1] || ''))) {
+        let end = pos + 1;
+        while (end < n && /[\w.]/.test(src[end])) end += 1;
+        tokens.push({ t: 'n', v: src.slice(pos, end), i: pos });
+        pos = end;
+        continue;
+      }
+      if (stopAtBrace) {
+        if (c === '{') depth += 1;
+        else if (c === '}') {
+          if (depth === 0) { pos += 1; return; }
+          depth -= 1;
+        }
+      }
+      const three = src.slice(pos, pos + 3);
+      const two = src.slice(pos, pos + 2);
+      if (three === '...') { tokens.push({ t: 'p', v: three, i: pos }); pos += 3; continue; }
+      if (two === '=>' || two === '?.') { tokens.push({ t: 'p', v: two, i: pos }); pos += 2; continue; }
+      tokens.push({ t: 'p', v: c, i: pos });
+      pos += 1;
+    }
+    if (stopAtBrace) throw new Error('unterminated template expression');
+  };
+  try {
+    scan(out, false);
+  } catch (error) {
+    // A backtick with no partner before EOF is JSX prose; rescan with it demoted (bounded).
+    if (error.prose === undefined || proseBackticks.size >= 32) throw error;
+    return tokenize(src, new Set([...proseBackticks, error.prose]));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Bracket matching and the path-expression evaluator.
+// ---------------------------------------------------------------------------
+
+const OPENERS = { '(': ')', '[': ']', '{': '}' };
+
+/** Matching bracket indexes; an unmatched closer is ignored, an unmatched opener stays undefined. */
+function matchBrackets(tokens) {
+  const match = new Array(tokens.length);
+  const stack = [];
+  tokens.forEach((token, index) => {
+    if (token.t !== 'p') return;
+    if (OPENERS[token.v]) { stack.push(index); return; }
+    if (token.v === ')' || token.v === ']' || token.v === '}') {
+      for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
+        if (OPENERS[tokens[stack[depth]].v] !== token.v) continue;
+        const open = stack[depth];
+        stack.length = depth;
+        match[open] = index;
+        match[index] = open;
+        return;
+      }
+    }
+  });
+  return match;
+}
+
+const UNKNOWN = Object.freeze({ k: 'unknown' });
+const EXTERNAL = Object.freeze({ k: 'ext' });
+const NODE = Object.freeze({ k: 'node' });
+const str = (v) => ({ k: 'str', v });
+const normalizeRel = (value) => {
+  const normalized = posix.normalize(value);
+  return normalized === '.' ? '' : normalized.replace(/\/$/, '');
+};
+const pathValue = (v, extra = {}) => ({ k: 'path', v: normalizeRel(v), partial: false, isDir: false, ...extra });
+const dirValue = (v) => pathValue(v, { isDir: true });
+
+function joinPath(base, segment) {
+  if (base.partial) return base;
+  if (segment.k === 'str') {
+    if (segment.v.startsWith('/')) return EXTERNAL;
+    const leaf = posix.basename(segment.v);
+    const isDir = segment.v.endsWith('/') || leaf === '..' || leaf === '.' || (base.isDir && !/\.[A-Za-z0-9]+$/.test(leaf));
+    return pathValue(posix.join(base.v, segment.v), { isDir });
+  }
+  if (segment.k === 'path') return segment;
+  if (segment.k === 'ext') return EXTERNAL;
+  return { ...base, partial: true };
+}
+
+/** `${dir}/x` and `dir + '/x'`: the separator belongs to the join, not to an absolute path. */
+function appendPath(base, text) {
+  if (text === '') return base;
+  return joinPath(base, str(text.replace(/^\/+/, '')));
+}
+
+function concatValue(left, right) {
+  if (left.k === 'str' && right.k === 'str') return str(left.v + right.v);
+  if (left.k === 'str' && left.v === '') return right;
+  if (left.k === 'path') return right.k === 'str' ? appendPath(left, right.v) : joinPath(left, right);
+  if (left.k === 'ext') return EXTERNAL;
+  return UNKNOWN;
+}
+
+function urlValue(args) {
+  if (args.length === 0) return UNKNOWN;
+  if (args.length === 1) {
+    const only = args[0];
+    return only.k === 'path' ? only : only.k === 'str' && /^[a-z]+:/i.test(only.v) ? EXTERNAL : only.k === 'ext' ? EXTERNAL : UNKNOWN;
+  }
+  const [spec, base] = args;
+  if (base.k === 'ext') return EXTERNAL;
+  if (base.k !== 'path') return UNKNOWN;
+  if (base.partial) return base;
+  const baseDir = base.isDir ? base.v : posix.dirname(base.v);
+  if (spec.k === 'str') {
+    if (/^[a-z]+:/i.test(spec.v) || spec.v.startsWith('/')) return EXTERNAL;
+    return pathValue(posix.join(baseDir, spec.v), { isDir: spec.v.endsWith('/') });
+  }
+  if (spec.k === 'path') return spec;
+  return { ...dirValue(baseDir), partial: true };
+}
+
+function dirnameValue(value) {
+  if (value.k !== 'path') return value.k === 'ext' ? EXTERNAL : UNKNOWN;
+  if (value.partial) return UNKNOWN;
+  return dirValue(posix.dirname(value.v));
+}
+
+function foldJoin(args) {
+  if (args.length === 0) return UNKNOWN;
+  let acc = args[0];
+  if (acc.k === 'str' && acc.v.startsWith('/')) acc = EXTERNAL;
+  for (const arg of args.slice(1)) {
+    if (acc.k === 'str') {
+      if (arg.k === 'str') acc = str(posix.join(acc.v, arg.v));
+      else if (arg.k === 'path') acc = arg;
+      else return UNKNOWN;
+      continue;
+    }
+    if (acc.k !== 'path') return acc.k === 'ext' ? EXTERNAL : UNKNOWN;
+    acc = joinPath(acc, arg);
+  }
+  return acc;
+}
+
+function evaluateArgs(tokens, match, open, ctx, depth) {
+  const close = match[open];
+  if (close === undefined) return null;
+  const args = [];
+  let cursor = open + 1;
+  while (cursor < close) {
+    const { value, end } = evaluate(tokens, match, cursor, ctx, depth + 1);
+    args.push(value);
+    cursor = end;
+    while (cursor < close && !(tokens[cursor].t === 'p' && tokens[cursor].v === ',')) {
+      const token = tokens[cursor];
+      cursor = token.t === 'p' && OPENERS[token.v] && match[cursor] !== undefined ? match[cursor] + 1 : cursor + 1;
+    }
+    if (cursor < close) cursor += 1;
+  }
+  return args;
+}
+
+function evaluate(tokens, match, start, ctx, depth = 0) {
+  if (depth > 12 || start >= tokens.length) return { value: UNKNOWN, end: start };
+  let { value, end } = evaluatePostfix(tokens, match, start, ctx, depth);
+  while (tokens[end]?.t === 'p' && tokens[end].v === '+') {
+    const rhs = evaluatePostfix(tokens, match, end + 1, ctx, depth);
+    value = concatValue(value, rhs.value);
+    end = rhs.end;
+  }
+  return { value, end };
+}
+
+const closeOf = (match, open) => (match[open] ?? open) + 1;
+
+function evaluatePostfix(tokens, match, start, ctx, depth) {
+  let { value, end } = evaluatePrimary(tokens, match, start, ctx, depth);
+  for (;;) {
+    const token = tokens[end];
+    if (!token || token.t !== 'p' || !(token.v === '.' || token.v === '?.') || tokens[end + 1]?.t !== 'id') break;
+    const name = tokens[end + 1].v;
+    const open = end + 2;
+    const call = tokens[open]?.t === 'p' && tokens[open].v === '(';
+    if (name === 'href' || name === 'pathname') { end += 2; continue; }
+    if (name === 'toString' && call) { end = closeOf(match, open); continue; }
+    if (call && value.k === 'unknown' && (PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name))) {
+      // `path.join(...)`, `posix.resolve(...)`, `url.fileURLToPath(...)`: a module namespace receiver.
+      const args = evaluateArgs(tokens, match, open, ctx, depth) ?? [];
+      value = PATH_JOIN.has(name) ? foldJoin(args) : PATH_DIRNAME.has(name) ? dirnameValue(args[0] ?? UNKNOWN) : (args[0] ?? UNKNOWN);
+      end = closeOf(match, open);
+      continue;
+    }
+    if (call && value.k === 'unknown' && (name === 'tmpdir' || name === 'homedir')) { value = EXTERNAL; end = closeOf(match, open); continue; }
+    // Any other member access or method call on a path leaves the subset.
+    return { value: value.k === 'path' ? UNKNOWN : value, end };
+  }
+  return { value, end };
+}
+
+function evaluatePrimary(tokens, match, start, ctx, depth) {
+  const token = tokens[start];
+  if (!token) return { value: UNKNOWN, end: start };
+  if (token.t === 's') return { value: str(token.v), end: start + 1 };
+  if (token.t === 'tpl') {
+    let acc = str(token.quasis[0]);
+    for (let i = 0; i < token.exprs.length; i += 1) {
+      const inner = token.exprs[i];
+      const { value } = evaluate(inner, matchBrackets(inner), 0, ctx, depth + 1);
+      acc = concatValue(acc, value);
+      acc = concatValue(acc, str(token.quasis[i + 1]));
+    }
+    return { value: acc, end: start + 1 };
+  }
+  if (token.t === 'p' && token.v === '(') {
+    const inner = evaluate(tokens, match, start + 1, ctx, depth + 1);
+    return { value: inner.value, end: closeOf(match, start) };
+  }
+  if (token.t !== 'id') return { value: UNKNOWN, end: start + 1 };
+  const dot = (i) => tokens[i]?.t === 'p' && tokens[i].v === '.';
+  const id = (i, name) => tokens[i]?.t === 'id' && tokens[i].v === name;
+  if (token.v === 'new' && id(start + 1, 'URL') && tokens[start + 2]?.v === '(') {
+    return { value: urlValue(evaluateArgs(tokens, match, start + 2, ctx, depth) ?? []), end: closeOf(match, start + 2) };
+  }
+  if (token.v === '__dirname') return { value: dirValue(posix.dirname(ctx.fileRel)), end: start + 1 };
+  if (token.v === '__filename') return { value: pathValue(ctx.fileRel), end: start + 1 };
+  if (token.v === 'import' && dot(start + 1) && id(start + 2, 'meta')) {
+    if (dot(start + 3) && (id(start + 4, 'url') || id(start + 4, 'filename'))) return { value: pathValue(ctx.fileRel), end: start + 5 };
+    if (dot(start + 3) && id(start + 4, 'dirname')) return { value: dirValue(posix.dirname(ctx.fileRel)), end: start + 5 };
+    return { value: UNKNOWN, end: start + 3 };
+  }
+  if (token.v === 'process' && dot(start + 1)) {
+    if (id(start + 2, 'cwd') && tokens[start + 3]?.v === '(') return { value: dirValue(ctx.cwdRel), end: closeOf(match, start + 3) };
+    if (id(start + 2, 'execPath')) return { value: NODE, end: start + 3 };
+    if (id(start + 2, 'env')) {
+      let end = start + 3;
+      if (dot(end) && tokens[end + 1]?.t === 'id') end += 2;
+      return { value: EXTERNAL, end };
+    }
+    return { value: UNKNOWN, end: start + 1 };
+  }
+  const call = tokens[start + 1]?.t === 'p' && tokens[start + 1].v === '(';
+  if (call) {
+    const end = closeOf(match, start + 1);
+    if (['tmpdir', 'homedir', 'mkdtempSync', 'mkdtemp'].includes(token.v)) return { value: EXTERNAL, end };
+    const args = evaluateArgs(tokens, match, start + 1, ctx, depth);
+    if (args === null) return { value: UNKNOWN, end };
+    if (PATH_JOIN.has(token.v)) return { value: foldJoin(args), end };
+    if (PATH_DIRNAME.has(token.v)) return { value: dirnameValue(args[0] ?? UNKNOWN), end };
+    if (PATH_IDENTITY.has(token.v)) return { value: args[0] ?? UNKNOWN, end };
+    if (token.v === 'URL') return { value: urlValue(args), end };
+    return { value: UNKNOWN, end };
+  }
+  return { value: bindingValue(token.v, ctx, depth), end: start + 1 };
+}
+
+/** The evaluated initializer of a `const`/`let`/`var` binding, memoized per file. */
+function bindingValue(name, ctx, depth = 0) {
+  const bound = ctx.bindings.get(name);
+  if (bound === undefined || ctx.resolving.has(name)) return UNKNOWN;
+  if (ctx.bindingValues.has(name)) return ctx.bindingValues.get(name);
+  ctx.resolving.add(name);
+  const { value } = evaluate(ctx.tokens, ctx.match, bound, ctx, depth + 1);
+  ctx.resolving.delete(name);
+  ctx.bindingValues.set(name, value);
+  return value;
+}
+
+/** `const|let|var NAME =` initializers by name; a name bound twice is ambiguous and dropped. */
+function collectBindings(tokens) {
+  const bindings = new Map();
+  const seen = new Set();
+  for (let i = 0; i + 3 < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.t !== 'id' || !(token.v === 'const' || token.v === 'let' || token.v === 'var')) continue;
+    const name = tokens[i + 1];
+    if (name.t !== 'id' || tokens[i + 2].t !== 'p' || tokens[i + 2].v !== '=') continue;
+    if (seen.has(name.v)) { bindings.delete(name.v); continue; }
+    seen.add(name.v);
+    bindings.set(name.v, i + 3);
+  }
+  return bindings;
+}
+
+function calleeStart(tokens, open) {
+  let start = open;
+  while (tokens[start - 1]?.t === 'id') {
+    start -= 1;
+    if (tokens[start - 1]?.t === 'p' && (tokens[start - 1].v === '.' || tokens[start - 1].v === '?.') && tokens[start - 2]?.t === 'id') start -= 1;
+    else break;
+  }
+  if (tokens[start - 1]?.t === 'id' && tokens[start - 1].v === 'new') start -= 1;
+  return start;
+}
+
+const calleeName = (tokens, open) => (tokens[open - 1]?.t === 'id' ? tokens[open - 1].v : null);
+
+/** The nearest enclosing opener whose partner lies beyond `index`, or null. */
+function enclosingOpen(tokens, match, index) {
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const token = tokens[i];
+    if (token.t !== 'p') continue;
+    if (token.v === ')' || token.v === ']' || token.v === '}') {
+      if (match[i] !== undefined) { i = match[i]; continue; }
+      depth += 1;
+      continue;
+    }
+    if (OPENERS[token.v]) {
+      if (depth > 0) { depth -= 1; continue; }
+      return match[i] !== undefined && match[i] > index ? i : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * From an anchor token, walk outward through enclosing path-building calls
+ * and `+` chains to the widest expression that still evaluates as a path,
+ * and report what consumes it. `null` means the occurrence is a binding
+ * initializer, a reassignment, or a `cwd:`/`root:` option — never a read.
+ */
+function widestPathExpression(tokens, match, index) {
+  let start = index;
+  for (;;) {
+    while (tokens[start - 1]?.t === 'p' && tokens[start - 1].v === '+') {
+      const operand = tokens[start - 2];
+      if (!operand) break;
+      if (operand.t === 'p' && operand.v === ')' && match[start - 2] !== undefined) start = calleeStart(tokens, match[start - 2]);
+      else start -= 2;
+    }
+    const parent = enclosingOpen(tokens, match, start);
+    if (parent === null || tokens[parent].v !== '(') break;
+    const callee = calleeStart(tokens, parent);
+    const name = calleeName(tokens, parent);
+    const isNew = tokens[callee]?.t === 'id' && tokens[callee].v === 'new';
+    if ((isNew && name === 'URL') || name === 'URL' || PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name)) {
+      start = callee;
+      continue;
+    }
+    break;
+  }
+  const before = tokens[start - 1];
+  if (before?.t === 'p' && before.v === '=') return null;
+  if (before?.t === 'p' && before.v === ':' && tokens[start - 2]?.t === 'id' && ['cwd', 'root', 'dir', 'base'].includes(tokens[start - 2].v)) return null;
+  const parent = enclosingOpen(tokens, match, start);
+  let consumer = null;
+  let walk = false;
+  if (parent !== null && tokens[parent].v === '(') {
+    consumer = calleeName(tokens, parent);
+    walk = consumer !== null && SPAWN_CALLEES.has(consumer);
+  } else if (parent !== null && tokens[parent].v === '[') {
+    const outer = enclosingOpen(tokens, match, parent);
+    walk = outer !== null && tokens[outer].v === '(' && SPAWN_CALLEES.has(calleeName(tokens, outer) ?? '');
+    consumer = walk ? calleeName(tokens, outer) : null;
+  }
+  return { index: start, consumer, walk, bare: start === index };
+}
+
+// ---------------------------------------------------------------------------
+// Per-file extraction.
+// ---------------------------------------------------------------------------
+
+/** Static `import`/`export … from` specifiers, from tokens (comments and strings cannot fake one). */
+function staticEdges(tokens, match) {
+  const specs = [];
+  const isDotted = (i) => tokens[i - 1]?.t === 'p' && (tokens[i - 1].v === '.' || tokens[i - 1].v === '?.');
+  const fromSpec = (i, limit) => {
+    for (let j = i; j < Math.min(tokens.length - 1, i + limit); j += 1) {
+      if (tokens[j].t === 'p' && tokens[j].v === ';') return null;
+      if (tokens[j].t === 'id' && tokens[j].v === 'from' && tokens[j + 1].t === 's') return tokens[j + 1].v;
+    }
+    return null;
+  };
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.t !== 'id' || isDotted(i)) continue;
+    const next = tokens[i + 1];
+    if (token.v === 'import') {
+      if (!next || (next.t === 'p' && next.v === '(') || (next.t === 'p' && next.v === '.')) continue;
+      if (next.t === 's') { specs.push(next.v); continue; }
+      const spec = fromSpec(i + 1, 400);
+      if (spec !== null) specs.push(spec);
+      continue;
+    }
+    if (token.v === 'export' && next?.t === 'p' && (next.v === '*' || next.v === '{')) {
+      const after = next.v === '{' ? (match[i + 1] ?? i + 1) + 1 : i + 2;
+      const spec = fromSpec(after, 6);
+      if (spec !== null) specs.push(spec);
+    }
+  }
+  return specs;
+}
+
+/**
+ * Everything one source file contributes, before any filesystem lookup:
+ * module edges, path inputs, directory inputs, cwd-relative literals, and the
+ * reasons it fails closed. Pure.
+ */
+export function extractFileFacts(src, { fileRel, cwdRel }) {
+  const facts = {
+    edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' }
+    paths: [], // { rel, walk } — repo-relative literal paths
+    dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
+    cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
+    unresolvedEdges: [], // the module graph is not fully known from source
+    unresolvedInputs: [], // a filesystem input is not fully known from source
+    never: NEVER_MARKER.test(src),
+    git: false,
+  };
+  let tokens;
+  try { tokens = tokenize(src); } catch (error) {
+    facts.unresolvedEdges.push(`unparseable source: ${error.message}`);
+    facts.unresolvedInputs.push(`unparseable source: ${error.message}`);
+    return facts;
+  }
+  const match = matchBrackets(tokens);
+  const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set() };
+  for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
+
+  const code = tokens.map((t) => (t.t === 's' ? `'${t.v}'` : t.t === 'tpl' ? `\`${t.quasis.join('${}')}\`` : t.t === 'id' || t.t === 'p' ? t.v : '0')).join(' ');
+  if (GIT_SPAWN.test(code)) facts.git = true;
+  if (/\bimport \. meta \. glob\b/.test(code)) facts.unresolvedEdges.push('import.meta.glob');
+
+  const literalArg = (open) => {
+    const first = tokens[open + 1];
+    const second = tokens[open + 2];
+    if (!first || match[open] === undefined) return { kind: 'none' };
+    const endsArg = second?.t === 'p' && (second.v === ',' || second.v === ')');
+    if (first.t === 's' && endsArg) return { kind: 'literal', value: first.v };
+    if (first.t === 'tpl' && first.exprs.length === 0 && endsArg) return { kind: 'literal', value: first.quasis[0] };
+    if (first.t === 'p' && first.v === ')') return { kind: 'none' };
+    return { kind: 'expr', index: open + 1 };
+  };
+
+  const record = (value, { walk = false, consumer = null, bare = false } = {}) => {
+    if (value.k === 'str') {
+      if (value.v.startsWith('/') || /^[a-z]+:/i.test(value.v)) return true;
+      facts.cwdLiterals.push({ value: value.v, walk, dir: false });
+      return true;
+    }
+    if (value.k !== 'path') return value.k !== 'unknown';
+    if (consumer !== null && NON_READ_CALLEES.has(consumer)) return true;
+    if (value.partial || value.isDir) {
+      // A complete directory handed to an unknown function (`resolveInstallRoot(join(__dirname, '..'))`)
+      // or passed nowhere (`cwd || process.cwd()`) is a value. A partial path (variable
+      // segments) or a directory handed to a read/spawn sink is a read of that tree.
+      const read = value.partial || (consumer !== null && (READ_CALLEES.has(consumer) || SPAWN_CALLEES.has(consumer)));
+      if (!read) return true;
+      facts.dirs.push({ rel: value.v, walk });
+      return true;
+    }
+    facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v) });
+    return true;
+  };
+
+  const anchorInside = (list) => list.some((t) => (t.t === 'id' && (t.v === '__dirname' || t.v === '__filename' || t.v === 'import' || t.v === 'process'
+    || (ctx.bindings.has(t.v) && bindingValue(t.v, ctx).k === 'path'))) || (t.t === 'tpl' && t.exprs.some(anchorInside)));
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.t === 's') continue; // a bare string is a name (a registry entry, an exclude glob), never a read
+    if (token.t === 'tpl') {
+      // `${ROOT}/docs/x.md`: the hole holds the anchor, the template is the expression.
+      if (!token.exprs.some(anchorInside)) continue;
+      const widest = widestPathExpression(tokens, match, i);
+      if (widest !== null) record(evaluate(tokens, match, widest.index, ctx).value, widest);
+      continue;
+    }
+    if (token.t !== 'id') continue;
+    const open = tokens[i + 1]?.t === 'p' && tokens[i + 1].v === '(' ? i + 1 : null;
+    const prev = tokens[i - 1];
+    const isMember = prev?.t === 'p' && (prev.v === '.' || prev.v === '?.');
+    const receiver = isMember ? tokens[i - 2] : null;
+
+    // Module edges that the static pass cannot see.
+    if ((token.v === 'import' || token.v === 'require') && open !== null && !isMember) {
+      const kind = token.v === 'import' ? 'dynamic' : 'require';
+      const arg = literalArg(open);
+      if (arg.kind === 'literal') { facts.edges.push({ spec: arg.value, kind }); continue; }
+      if (arg.kind === 'none') continue;
+      const { value } = evaluate(tokens, match, arg.index, ctx);
+      if (value.k === 'path' && !value.partial && !value.isDir) { facts.paths.push({ rel: value.v, walk: true }); continue; }
+      if (value.k === 'path') { facts.dirs.push({ rel: value.v, walk: true }); continue; }
+      facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
+      continue;
+    }
+    if (isMember && receiver?.t === 'id' && receiver.v === 'vi' && open !== null && MOCK_CALLEES.has(token.v)) {
+      const arg = literalArg(open);
+      if (arg.kind === 'literal') facts.edges.push({ spec: arg.value, kind: 'mock' });
+      else if (arg.kind === 'expr' && tokens[arg.index].t === 'id' && tokens[arg.index].v === 'import') continue; // vi.mock(import('./x')): the import() pass records it
+      else facts.unresolvedEdges.push(`vi.${token.v}() with a non-literal specifier`);
+      continue;
+    }
+
+    // Sinks.
+    if (open !== null && SPAWN_CALLEES.has(token.v) && !(isMember && receiver?.t === 'id' && receiver.v === 'vi')) {
+      const arg = literalArg(open);
+      if (arg.kind === 'literal' && posix.basename(arg.value.split(/\s+/)[0]) === 'git') facts.git = true;
+      else if (arg.kind === 'expr') {
+        const { value } = evaluate(tokens, match, arg.index, ctx);
+        if (value.k === 'path') record(value, { walk: true, consumer: token.v });
+      }
+      const close = match[open];
+      for (let j = open + 1; j < close; j += 1) {
+        const literal = tokens[j].t === 's' ? tokens[j].v : tokens[j].t === 'tpl' && tokens[j].exprs.length === 0 ? tokens[j].quasis[0] : null;
+        if (literal !== null && JS_EXT.test(literal) && PATH_LIKE_LITERAL.test(literal)) facts.cwdLiterals.push({ value: literal, walk: true, dir: false });
+      }
+      continue;
+    }
+    if (open !== null && READ_CALLEES.has(token.v)) {
+      const arg = literalArg(open);
+      if (arg.kind === 'literal') {
+        if (!(arg.value.startsWith('/') || /^[a-z]+:/i.test(arg.value))) facts.cwdLiterals.push({ value: arg.value, walk: false, dir: DIR_READ_CALLEES.test(token.v) });
+      } else if (arg.kind === 'expr') {
+        const { value } = evaluate(tokens, match, arg.index, ctx);
+        // An unanchored variable is a temp path or runtime data, not a repository read.
+        record(value, { consumer: token.v });
+      }
+      continue;
+    }
+    if (open !== null && token.v === 'toMatchFileSnapshot') {
+      const arg = literalArg(open);
+      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(posix.dirname(fileRel), arg.value)), walk: false });
+      else if (arg.kind === 'expr') record(evaluate(tokens, match, arg.index, ctx).value, { consumer: token.v });
+      continue;
+    }
+
+    // Anchors anywhere else: the widest path expression around them is an input.
+    const isAnchor = token.v === '__dirname' || token.v === '__filename'
+      || (!isMember && token.v === 'import' && tokens[i + 1]?.v === '.' && tokens[i + 2]?.v === 'meta')
+      || (!isMember && token.v === 'process' && tokens[i + 1]?.v === '.' && tokens[i + 2]?.v === 'cwd')
+      || (!isMember && open === null && ctx.bindings.has(token.v) && bindingValue(token.v, ctx).k === 'path');
+    if (!isAnchor) continue;
+    // The declared name itself (`const ROOT = …`) is not a use.
+    if (prev?.t === 'id' && (prev.v === 'const' || prev.v === 'let' || prev.v === 'var')) continue;
+    const widest = widestPathExpression(tokens, match, i);
+    if (widest === null) continue;
+    const { value } = evaluate(tokens, match, widest.index, ctx);
+    record(value, widest);
+  }
+  return facts;
+}
+
+// ---------------------------------------------------------------------------
+// Closure analysis and key computation.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a specifier relative to the importing file, mirroring Vite's
+ * extensionless and directory-index resolution. Returns the repo-relative
+ * posix path of an existing file, or null.
+ */
+export function resolveRelativeSpecifier(fromRel, spec, kindOf) {
+  const clean = spec.replace(/[?#].*$/, '');
+  const target = posix.normalize(posix.join(posix.dirname(fromRel), clean));
+  if (target.startsWith('../') || target === '..') return null;
+  const candidates = [target, ...RESOLVE_EXTENSIONS.map((ext) => target + ext), ...RESOLVE_INDEXES.map((index) => target + index)];
+  return candidates.find((candidate) => kindOf(candidate) === 'file') ?? null;
+}
+
+/** The package name a bare specifier reaches: `@scope/name` or `name`. */
+export function packageNameOf(spec) {
+  const clean = spec.replace(/[?#].*$/, '');
+  const parts = clean.split('/');
+  return clean.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
+const isBuiltin = (spec) => spec.startsWith('node:') || BUILTINS.has(packageNameOf(spec));
+
+/**
+ * The git rule and the oversized-tree rule apply to the test itself and to
+ * repository tooling under `scripts/`; a product or library module's git use
+ * and unbounded reads happen only when a test calls them.
+ */
+const gitRuleApplies = (rel, testRel) => rel === testRel || rel.startsWith('scripts/');
+
+/**
+ * The analyzer over an abstract filesystem (`read(rel) -> Buffer|null`,
+ * `kind(rel) -> 'file'|'dir'|null`, `list(rel) -> string[]`), so the whole
+ * thing is unit-testable from an in-memory tree.
+ */
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeMajor = Number(process.versions.node.split('.')[0]) }) {
+  const hashes = new Map();
+  const facts = new Map();
+  const trees = new Map();
+  const packages = new Map();
+
+  const fileHash = (rel) => {
+    if (hashes.has(rel)) return hashes.get(rel);
+    const bytes = fs.read(rel);
+    const digest = bytes === null ? null : sha256(bytes);
+    hashes.set(rel, digest);
+    return digest;
+  };
+
+  const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix));
+  const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
+
+  /** Sorted files under `dirRel`, or null when the tree exceeds the limit. */
+  const tree = (dirRel) => {
+    if (trees.has(dirRel)) return trees.get(dirRel);
+    const files = [];
+    const walk = (dir) => {
+      for (const name of fs.list(dir).sort()) {
+        if (SKIP_TREE_DIRS.has(name) || (dir === '' && name === 'data')) continue;
+        const rel = dir === '' ? name : `${dir}/${name}`;
+        const kind = fs.kind(rel);
+        if (kind === 'dir') walk(rel);
+        else if (kind === 'file') files.push(rel);
+        if (files.length > DIRECTORY_INPUT_LIMIT) throw new RangeError('tree too large');
+      }
+    };
+    let result = files;
+    try { walk(dirRel); } catch (error) { if (!(error instanceof RangeError)) throw error; result = null; }
+    trees.set(dirRel, result);
+    return result;
+  };
+
+  /** Installed version of the package `spec` reaches from `fromRel`, or null. */
+  const packageVersion = (fromRel, spec) => {
+    const name = packageNameOf(spec);
+    const cacheKey = `${posix.dirname(fromRel)}\0${name}`;
+    if (packages.has(cacheKey)) return packages.get(cacheKey);
+    const roots = [];
+    for (let dir = posix.dirname(fromRel); ; dir = posix.dirname(dir)) {
+      roots.push(dir === '.' ? '' : dir);
+      if (dir === '.' || dir === '') break;
+    }
+    roots.push(workspaceRel);
+    let found = null;
+    for (const root of roots) {
+      const bytes = fs.read(`${root === '' ? '' : `${root}/`}node_modules/${name}/package.json`);
+      if (bytes === null) continue;
+      try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? '') }; } catch { found = null; }
+      break;
+    }
+    packages.set(cacheKey, found);
+    return found;
+  };
+
+  /** Extracted and resolved facts for one file (cached). */
+  const factsFor = (rel) => {
+    if (facts.has(rel)) return facts.get(rel);
+    const resolved = { modules: new Set(), inputs: new Set(), absent: new Set(), packages: new Map(), unresolvedEdges: [], unresolvedInputs: [], oversized: [], never: false, git: false };
+    facts.set(rel, resolved);
+    const bytes = fs.read(rel);
+    if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
+    if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
+    const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel });
+    resolved.never = raw.never;
+    resolved.git = raw.git;
+    resolved.unresolvedEdges.push(...raw.unresolvedEdges);
+    resolved.unresolvedInputs.push(...raw.unresolvedInputs);
+
+    const addPackage = (spec, { mock = false } = {}) => {
+      const pkg = packageVersion(rel, spec);
+      if (pkg) { resolved.packages.set(pkg.name, pkg.version); return; }
+      if (mock) { resolved.packages.set(packageNameOf(spec), 'absent'); return; }
+      resolved.unresolvedEdges.push(`package not installed: ${packageNameOf(spec)}`);
+    };
+    const addFile = (target, walk) => {
+      if (walk && JS_EXT.test(target)) resolved.modules.add(target);
+      else resolved.inputs.add(target);
+    };
+    const addDir = (dirRel, walk) => {
+      if (ignoredInput(dirRel)) return;
+      if (underGit(dirRel)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
+      if (fs.kind(dirRel) !== 'dir') return;
+      const files = tree(dirRel);
+      if (files === null) { resolved.oversized.push(dirRel || '<repo root>'); return; }
+      for (const file of files) addFile(file, walk);
+    };
+    const addPath = (target, walk) => {
+      if (underGit(target)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
+      if (ignoredInput(target)) return;
+      const inModules = target.match(/(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)/);
+      if (inModules) { addPackage(inModules[1]); return; }
+      const kind = fs.kind(target);
+      if (kind === 'file') { addFile(target, walk); return; }
+      if (kind === 'dir') { addDir(target, walk); return; }
+      const viaExt = resolveRelativeSpecifier('x', `./${target}`, fs.kind);
+      if (viaExt) addFile(viaExt, walk);
+    };
+
+    for (const { spec, kind } of raw.edges) {
+      if (spec.startsWith('/')) { resolved.unresolvedEdges.push(`absolute specifier ${spec}`); continue; }
+      if (spec.startsWith('.')) {
+        const target = resolveRelativeSpecifier(rel, spec, fs.kind);
+        if (target !== null) { addFile(target, true); continue; }
+        // Node cannot load a module whose import is missing, so a file with one
+        // is data (served to a browser, templated, mocked away): the key records
+        // the absence and changes the day the file appears.
+        resolved.absent.add(normalizeRel(posix.join(posix.dirname(rel), spec.replace(/[?#].*$/, ''))));
+        continue;
+      }
+      if (isBuiltin(spec) || spec.startsWith('data:')) continue;
+      if (GIT_PACKAGE.test(packageNameOf(spec))) resolved.git = true;
+      addPackage(spec, { mock: kind === 'mock' });
+    }
+    for (const { rel: target, walk } of raw.paths) addPath(target, walk);
+    for (const { rel: dirRel, walk } of raw.dirs) addDir(dirRel, walk);
+    for (const { value, walk, dir } of raw.cwdLiterals) {
+      const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
+      for (const base of bases) {
+        const target = normalizeRel(posix.join(base, value));
+        if (target.startsWith('..')) continue;
+        const kind = fs.kind(target);
+        if (kind === 'file') { addPath(target, walk); break; }
+        if (kind === 'dir' && dir) { addDir(target, walk); break; }
+      }
+    }
+    return resolved;
+  };
+
+  /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
+  const gather = (roots, { walk, testRel = null }) => {
+    const members = new Set();
+    const stack = [...roots];
+    const inputs = new Set();
+    const absent = new Set();
+    const packageVersions = new Map();
+    const unresolvedEdges = [];
+    const unresolvedInputs = [];
+    let never = false;
+    let git = false;
+    while (stack.length) {
+      const rel = stack.pop();
+      if (members.has(rel)) continue;
+      members.add(rel);
+      const f = factsFor(rel);
+      if (walk) for (const dep of f.modules) if (!members.has(dep)) stack.push(dep);
+      for (const input of f.inputs) inputs.add(input);
+      for (const missing of f.absent) absent.add(missing);
+      for (const [name, version] of f.packages) packageVersions.set(name, version);
+      for (const reason of f.unresolvedEdges) unresolvedEdges.push(`${rel}: ${reason}`);
+      for (const reason of f.unresolvedInputs) unresolvedInputs.push(`${rel}: ${reason}`);
+      // A tree past the limit under a variable path is the whole repository as
+      // far as the key can tell. For the test and for repository tooling that
+      // fails closed. A library member (`server/lib/testHelper.js` and its
+      // source walkers) reads such a tree only when a test calls it, and every
+      // test that does is a tree scanner the planner already keeps always-run
+      // (`scripts/repo-scan-guards.test.js` enforces the registration).
+      for (const dir of f.oversized) if (testRel === null || gitRuleApplies(rel, testRel)) unresolvedInputs.push(`${rel}: directory input too large: ${dir}`);
+      if (f.never) never = true;
+      if (f.git && (testRel === null || gitRuleApplies(rel, testRel))) git = true;
+    }
+    return { members, inputs, absent, packages: packageVersions, unresolvedEdges, unresolvedInputs, never, git };
+  };
+
+  const closureOf = (entry, testRel = entry) => gather([entry], { walk: true, testRel });
+
+  const snapshotInputs = (testRel) => {
+    const base = posix.basename(testRel);
+    const dir = posix.dirname(testRel);
+    return [`${dir}/__snapshots__/${base}.snap`, `${dir}/__snapshots__/${base.replace(/\.(?:test|spec)\.[jt]sx?$/, '')}.snap`]
+      .filter((rel) => fs.kind(rel) === 'file');
+  };
+
+  const fixtureInputs = (testRel) => {
+    const inputs = new Set();
+    const problems = [];
+    for (const owner of FIXTURE_OWNERS) {
+      if (!owner.tests.includes(testRel)) continue;
+      const files = tree(owner.dir);
+      if (files === null) problems.push(`fixture directory too large: ${owner.dir}`);
+      else for (const file of files) inputs.add(file);
+    }
+    return { inputs, problems };
+  };
+
+  const environmentLines = [
+    `node ${nodeMajor} ${platform} ${arch}`,
+    ...TEST_MEMO_ENV.map((name) => `env ${name} ${env[name] === undefined ? '<unset>' : env[name]}`),
+  ];
+
+  /** The workspace-level inputs every key shares: the Vitest config closure and manifest. */
+  const workspaceBase = (roots) => {
+    const files = new Set();
+    const packageVersions = new Map();
+    const unresolved = [];
+    for (const root of roots) {
+      if (fs.kind(root) !== 'file') { unresolved.push(`missing workspace input ${root}`); continue; }
+      if (!JS_EXT.test(root)) { files.add(root); continue; }
+      const closure = closureOf(root, null);
+      for (const rel of closure.members) files.add(rel);
+      for (const rel of closure.inputs) files.add(rel);
+      for (const [name, version] of closure.packages) packageVersions.set(name, version);
+      unresolved.push(...closure.unresolvedEdges, ...closure.unresolvedInputs);
+    }
+    return { files, packages: packageVersions, unresolved };
+  };
+
+  const verdict = (testRel, gathered, extra, baseClosure, { requireEdges }) => {
+    const reasons = [];
+    if (ALWAYS_RUN_TESTS.includes(testRel)) reasons.push('always-run guard');
+    if (TEST_MEMO_NEVER[testRel]) reasons.push(TEST_MEMO_NEVER[testRel]);
+    if (gathered.never) reasons.push('test-memo: never marker');
+    if (gathered.git) reasons.push('spawns git');
+    if (baseClosure.unresolved.length) reasons.push(`workspace config: ${baseClosure.unresolved[0]}`);
+    if (requireEdges) reasons.push(...gathered.unresolvedEdges);
+    reasons.push(...gathered.unresolvedInputs, ...extra.problems);
+    if (reasons.length) return { key: null, memoizable: false, reason: reasons[0], reasons };
+    const lines = [...environmentLines];
+    const files = new Set([...gathered.members, ...gathered.inputs, ...extra.inputs, ...snapshotInputs(testRel), ...baseClosure.files]);
+    for (const rel of [...files].sort()) {
+      const digest = fileHash(rel);
+      if (digest === null) return { key: null, memoizable: false, reason: `unreadable input ${rel}`, reasons: [`unreadable input ${rel}`] };
+      lines.push(`file ${rel} ${digest}`);
+    }
+    for (const rel of [...gathered.absent].sort()) lines.push(`absent ${rel}`);
+    const versions = new Map([...baseClosure.packages, ...gathered.packages]);
+    for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
+    return { key: sha256(lines.join('\n')), memoizable: true, reasons: [] };
+  };
+
+  /**
+   * Both keys for one test. `recorded` is the module list a previous green
+   * run loaded (repo-relative), or null when none is on record.
+   *
+   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean }}
+   */
+  const analyzeTest = (testRel, { baseClosure, recorded = null }) => {
+    const closure = closureOf(testRel);
+    const fixtures = fixtureInputs(testRel);
+    const floor = verdict(testRel, closure, fixtures, baseClosure, { requireEdges: true });
+    let recordedVerdict = null;
+    if (recorded !== null) {
+      const outside = recorded.find((rel) => rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel));
+      if (outside !== undefined) {
+        recordedVerdict = { key: null, memoizable: false, reason: `loaded a module outside the repository: ${outside}`, reasons: [] };
+      } else {
+        const gathered = gather(new Set([testRel, ...recorded]), { walk: false, testRel });
+        recordedVerdict = verdict(testRel, gathered, fixtures, baseClosure, { requireEdges: false });
+      }
+    }
+    return { floor, recorded: recordedVerdict, closure: closure.members, edgesResolved: closure.unresolvedEdges.length === 0 };
+  };
+
+  return { analyzeTest, closureOf, fileHash, workspaceBase, factsFor };
+}
+
+/**
+ * Keys for `testFiles` (repo-relative posix paths) in one workspace.
+ * `records` maps a test to the module list its last green run loaded.
+ *
+ * @returns {Map<string, { floor, recorded, closure: Set<string>, edgesResolved: boolean }>}
+ */
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeMajor, records = new Map() }) {
+  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeMajor });
+  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? []);
+  const out = new Map();
+  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null }));
+  return out;
+}
+
+/**
+ * Tests related to `sources` under closure-based selection: a test is related
+ * when a source is in its module closure, or when its edges could not all be
+ * resolved (fail closed: it may reach anything).
+ */
+export function relatedTests(keys, sources) {
+  const changed = new Set(sources);
+  return [...keys.entries()]
+    .filter(([, info]) => !info.edgesResolved || [...info.closure].some((rel) => changed.has(rel)))
+    .map(([test]) => test);
+}
+
+/** A disk-backed `fs` for `createTestMemoAnalyzer`, rooted at `repoRoot`. */
+export function createDiskFs(repoRoot, nodeFs, nodePath) {
+  const abs = (rel) => nodePath.join(repoRoot, ...rel.split('/').filter(Boolean));
+  const stat = (rel) => {
+    try { return nodeFs.statSync(abs(rel)); } catch { return null; }
+  };
+  return {
+    read(rel) {
+      const s = stat(rel);
+      if (!s || !s.isFile()) return null;
+      try { return nodeFs.readFileSync(abs(rel)); } catch { return null; }
+    },
+    kind(rel) {
+      const s = stat(rel);
+      return !s ? null : s.isDirectory() ? 'dir' : s.isFile() ? 'file' : null;
+    },
+    list(rel) {
+      try { return nodeFs.readdirSync(abs(rel)); } catch { return []; }
+    },
+  };
+}
