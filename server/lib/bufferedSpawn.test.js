@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { ChildProcess } from './childProcess.js';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -31,6 +32,7 @@ const {
   spawnFailureDetail,
   guardChildStdin,
   deliverChildStdin,
+  terminateWithEscalation,
 } = await import('./bufferedSpawn.js');
 
 /**
@@ -475,6 +477,61 @@ describe('prepareCliSpawn (composed resolve+wrap — the CoS spawn fix, #2243)',
     await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
     const result = prepareCliSpawn('opencode', ['run', '-m', 'ollama/x'], { PATH: fakePathDir }, false);
     expect(result).toEqual({ command: 'opencode', args: ['run', '-m', 'ollama/x'] });
+  });
+});
+
+describe.skipIf(IS_WIN32)('terminateWithEscalation (#12021)', () => {
+  // Real children: the contract is that a process which traps SIGTERM still
+  // dies, which a kill spy cannot prove.
+  const spawnReal = (script) => new Promise((resolve) => {
+    const child = nodeSpawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.once('data', () => resolve(child));
+  });
+  const closed = (child) => new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
+
+  it('SIGKILLs a child that ignores SIGTERM once the grace elapses, and close fires', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = await spawnReal("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');");
+    const cancel = terminateWithEscalation(child, { graceMs: 300, label: 'stubborn child' });
+    const result = await closed(child);
+    cancel();
+    expect(result.signal).toBe('SIGKILL');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stubborn child ignored SIGTERM for 300ms'));
+    warn.mockRestore();
+  });
+
+  it('leaves a child that honoured SIGTERM alone: cancel clears the escalation and no SIGKILL warning fires', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = makeFakeChild();
+    const cancel = terminateWithEscalation(child, { graceMs: 300, label: 'polite child' });
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    // The child exits inside the grace window; the caller's close handler cancels.
+    child.signalCode = 'SIGTERM';
+    cancel();
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('skips the SIGKILL timer when a child already exited before the grace elapsed (no stray signal at a reused pid)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const child = makeFakeChild();
+    terminateWithEscalation(child, { graceMs: 300 });
+    child.exitCode = 0;
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Windows the tree kill is already forced, so there is nothing to escalate', () => {
+    const child = makeFakeChild({ pid: 4242 });
+    const taskkill = makeFakeChild();
+    spawnMock.mockReturnValueOnce(taskkill);
+    const cancel = terminateWithEscalation(child, { graceMs: 300 }, true);
+    expect(spawnMock).toHaveBeenCalledWith('taskkill', ['/T', '/F', '/PID', '4242'], expect.anything());
+    expect(cancel).toBeTypeOf('function');
+    cancel();
   });
 });
 

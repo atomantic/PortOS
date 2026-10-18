@@ -2848,7 +2848,13 @@ export const calendarAutoConfigureBodySchema = z.object({
   email: optionalString,
   requestId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
-export const commandExecuteBodySchema = z.object({ command: nonEmptyString, workspacePath: nullishString });
+// timeoutMs bounds an operator command run (#12021); absent means unbounded,
+// the right default for an interactive run the operator is watching.
+export const commandExecuteBodySchema = z.object({
+  command: nonEmptyString,
+  workspacePath: nullishString,
+  timeoutMs: z.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
+});
 export const dataArchiveBodySchema = z.object({
   daysToKeep: z.preprocess((value) => (value == null ? undefined : value), z.coerce.number().finite().min(0).optional()),
 });

@@ -86,6 +86,8 @@ function createChildProcess() {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
   child.kill = vi.fn();
   return child;
 }
@@ -505,6 +507,42 @@ describe('commands routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ stopped: true });
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // The child has not closed yet (it may be ignoring SIGTERM): a repeat
+      // stop inside the grace window is absorbed, not reported as gone (#12021).
+      const again = await request(app)
+        .post(`/api/commands/${started.body.commandId}/stop`);
+      expect(again.status).toBe(200);
+      expect(again.body).toEqual({ stopped: true });
+      expect(child.kill).toHaveBeenCalledTimes(1);
+
+      child.emit('close', null, 'SIGTERM');
+      const afterClose = await request(app)
+        .post(`/api/commands/${started.body.commandId}/stop`);
+      expect(afterClose.status).toBe(404);
+      expect(afterClose.body.code).toBe('NOT_ACTIVE');
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(
+        `command:${started.body.commandId}:complete`,
+        expect.objectContaining({ success: false, signal: 'SIGTERM', stopped: true, error: 'Stopped (SIGTERM)' }),
+      );
+    });
+
+    it('accepts an optional per-command timeoutMs and rejects a non-positive one (#12021)', async () => {
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp();
+
+      const rejected = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'pwd', timeoutMs: 0 });
+      expect(rejected.status).toBe(400);
+      expect(spawnMock).not.toHaveBeenCalled();
+
+      const started = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'pwd', timeoutMs: 60_000 });
+      expect(started.status).toBe(202);
+      child.emit('close', 0);
     });
 
     it('returns NOT_ACTIVE for an unknown command id', async () => {

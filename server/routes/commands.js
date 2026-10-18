@@ -14,7 +14,7 @@ const router = Router();
 
 // POST /api/commands/execute - Execute a command
 router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
-  const { command, workspacePath } = validateRequest(commandExecuteBodySchema, req.body);
+  const { command, workspacePath, timeoutMs } = validateRequest(commandExecuteBodySchema, req.body);
 
   // Validate workspacePath if provided: must exist, be a directory, and — after
   // symlinks are followed — resolve within an allowed root. Using realpath here
@@ -57,7 +57,8 @@ router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
     },
     (result) => {
       if (commandId) broadcastToCommandSubscribers(`command:${commandId}:complete`, result);
-    }
+    },
+    { timeoutMs }
   );
 
   if (!commandId) {
