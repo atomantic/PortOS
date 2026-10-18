@@ -415,3 +415,19 @@ describe('videoGen/grok — cancel', () => {
     expect(grok.cancelAll()).toBe(false);
   });
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { videoGenEvents: events } = await import('./events.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-videoGen-grok';
+  const pending = grok.generateVideo({ prompt: 'a quiet gate', jobId });
+  expect(grok.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(spawnCalls).toHaveLength(0);
+  expect(grok.cancel(jobId)).toBe(false);
+});

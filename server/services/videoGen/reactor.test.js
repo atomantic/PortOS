@@ -405,3 +405,20 @@ describe('Reactor SDK adapter', () => {
   });
 
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { videoGenEvents: events } = await import('./events.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-videoGen-reactor';
+  const pending = reactor.generateVideo({ prompt: 'a quiet gate', jobId });
+  expect(reactor.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(mocks.spawn).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(reactor.cancel(jobId)).toBe(false);
+});

@@ -23,6 +23,7 @@
  * cost is recorded as unknown.
  */
 
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
@@ -98,10 +99,14 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("videoGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const entry = activeRequests.get(jobId);
   if (!entry) return false;
   entry.aborted = true;
@@ -111,7 +116,7 @@ export const cancel = (jobId) => {
 };
 
 export const cancelAll = () => {
-  const ids = [...activeRequests.keys()];
+  const ids = [...preparations.ids(), ...activeRequests.keys()];
   if (ids.length === 0) return false;
   for (const id of ids) cancel(id);
   return true;
@@ -181,7 +186,9 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
   return { planned, record };
 }
 
-export async function generateVideo({
+export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+
+async function generateVideoPrepared({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
@@ -314,6 +321,7 @@ async function runFalVideo(job, jobId, {
   frameAspect = null,
 }) {
   const entry = createFalRequestEntry(apiKey);
+  entry.aborted = preparations.take(jobId);
   const publication = {};
   // Every terminal path shares the same cleanup attempt. A publication error
   // can enter the catch after the success path has already settled its inputs.

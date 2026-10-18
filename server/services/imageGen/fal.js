@@ -1,3 +1,4 @@
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — fal.ai queue REST API provider.
@@ -96,10 +97,14 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 // Cancel one specific render. jobId is required — with parallel renders an
 // anonymous cancel would stop every in-flight one; use cancelAll() for that.
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error('imageGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const entry = activeRequests.get(jobId);
   if (!entry) return false;
   entry.aborted = true;
@@ -109,7 +114,7 @@ export const cancel = (jobId) => {
 };
 
 export const cancelAll = () => {
-  const ids = [...activeRequests.keys()];
+  const ids = [...preparations.ids(), ...activeRequests.keys()];
   if (ids.length === 0) return false;
   for (const id of ids) cancel(id);
   return true;
@@ -218,7 +223,9 @@ export function falImageSentPrompt({ family, prompt = '', negativePrompt, inputI
   };
 }
 
-export async function generateImage({
+export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+
+async function generateImagePrepared({
   promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
@@ -312,6 +319,7 @@ async function runFal(job, jobId, {
   inputPaths, outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
   const entry = createFalRequestEntry(apiKey);
+  entry.aborted = preparations.take(jobId);
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_IMAGE_TIMEOUT_MS;
   let wroteOutput = false;

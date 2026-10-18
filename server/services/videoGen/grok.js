@@ -21,6 +21,7 @@
  * disabled/missing-binary up front; this module assumes it's enabled.
  */
 
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
@@ -83,10 +84,14 @@ const sigtermWithEscalation = (id, proc) => {
   killWithEscalation(proc, { label: 'grok video child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
 };
 
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("videoGen/grok.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
   sigtermWithEscalation(jobId, proc);
@@ -94,9 +99,9 @@ export const cancel = (jobId) => {
 };
 
 export const cancelAll = () => {
-  const entries = [...activeProcs.entries()];
-  if (entries.length === 0) return false;
-  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
+  const ids = [...preparations.ids(), ...activeProcs.keys()];
+  if (ids.length === 0) return false;
+  for (const id of ids) cancel(id);
   return true;
 };
 
@@ -141,7 +146,9 @@ export function grokVideoSentPrompt({
   };
 }
 
-export async function generateVideo({
+export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+
+async function generateVideoPrepared({
   grokPath, aspectRatio, prompt = '', negativePrompt, width, height,
   sourceImagePath = null, duration,
   uploadedTempPath = null,
@@ -220,15 +227,6 @@ export async function generateVideo({
 async function runGrokVideo(job, jobId, bin, args, {
   useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath,
 }) {
-  // Resolve a path-shaped grokPath against the PortOS cwd before the child's
-  // cwd moves to the scratch dir; bare names stay bare for PATH lookup.
-  const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
-  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
-  // process.cwd(), so this is defensive rather than a live fix; it keeps every
-  // scratch-dir spawn telling the child one consistent story about where it is.
-  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
-  activeProcs.set(jobId, proc);
   const retainOwnership = (error) => {
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
@@ -248,6 +246,20 @@ async function runGrokVideo(job, jobId, bin, args, {
       if (result.status === 'rejected' && result.reason?.code !== 'ENOENT') retainOwnership(result.reason);
     }
   });
+
+  if (preparations.take(jobId)) {
+    await cleanup();
+    return finalizeJobFailure.canceled(job, jobId);
+  }
+  // Resolve a path-shaped grokPath against the PortOS cwd before the child's
+  // cwd moves to the scratch dir; bare names stay bare for PATH lookup.
+  const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
+  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
+  // process.cwd(), so this is defensive rather than a live fix; it keeps every
+  // scratch-dir spawn telling the child one consistent story about where it is.
+  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  activeProcs.set(jobId, proc);
 
   if (useStdin) {
     proc.stdin.on('error', () => {});
