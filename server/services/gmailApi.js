@@ -14,14 +14,18 @@ const GMAIL_ORIGIN = 'https://gmail.googleapis.com/gmail/v1/users/me';
  * @param {{ request: Function }} auth - authenticated OAuth2 client
  */
 export function createGmailApi(auth) {
-  const call = (method, path, { query, body, options } = {}) => {
+  const call = (method, path, { query, body, options, neverRetry = false } = {}) => {
     const search = query?.toString();
+    const requestedTimeout = options?.timeout;
+    const timeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+      ? Math.min(requestedTimeout, GOOGLE_API_TIMEOUT_MS)
+      : GOOGLE_API_TIMEOUT_MS;
     return auth.request({
       url: `${GMAIL_ORIGIN}${path}${search ? `?${search}` : ''}`,
       method,
-      timeout: GOOGLE_API_TIMEOUT_MS,
+      timeout,
       ...(body !== undefined && { data: body }),
-      ...options
+      ...((neverRetry || options?.retry === false) && { retry: false })
     }).then((res) => res.data);
   };
   const messagePath = (id) => `/messages/${encodeURIComponent(id)}`;
@@ -37,8 +41,9 @@ export function createGmailApi(auth) {
       return call('GET', '/messages', { query });
     },
 
-    // `options` overrides per-request transport settings (e.g. a shorter
-    // `timeout`, `retry: false`) without widening the endpoint surface.
+    // Only a shorter timeout and explicitly disabled retries are accepted as
+    // transport options. The fixed endpoint, verb, data and timeout ceiling
+    // are always owned by this adapter.
     getMessage: (id, { format, metadataHeaders = [] } = {}, options) => {
       const query = new URLSearchParams();
       if (format) query.set('format', format);
@@ -46,9 +51,9 @@ export function createGmailApi(auth) {
       return call('GET', messagePath(id), { query, options });
     },
 
-    // No idempotency key exists for send: the caller passes `retry: false` so
-    // the transport never resubmits after a lost acknowledgement.
-    sendMessage: (body, options) => call('POST', '/messages/send', { body, options }),
+    // No idempotency key exists for send, so the transport never resubmits it
+    // after a lost acknowledgement, regardless of caller-supplied options.
+    sendMessage: (body, options) => call('POST', '/messages/send', { body, options, neverRetry: true }),
 
     trashMessage: (id) => call('POST', `${messagePath(id)}/trash`),
 

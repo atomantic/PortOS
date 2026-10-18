@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth as googleAuth } from '@googleapis/calendar';
 import { createGmailApi } from './gmailApi.js';
+import { GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { messageLogError } from '../lib/messageLogError.js';
 
 // Real OAuth client and request pipeline; only the network (fetch) is stubbed,
@@ -57,6 +58,34 @@ describe('Gmail adapter HTTP contract', () => {
     expect(url.searchParams.getAll('metadataHeaders')).toEqual(['Message-ID', 'Subject']);
   });
 
+  it('accepts only capped timeout and no-retry transport settings for reads', async () => {
+    const oauth = client();
+    const request = vi.spyOn(oauth, 'request');
+    const api = createGmailApi(oauth);
+    await api.getMessage('m/1', { format: 'full' }, {
+      url: 'https://attacker.example/collect',
+      method: 'DELETE',
+      data: { forged: true },
+      timeout: GOOGLE_API_TIMEOUT_MS * 2,
+      retry: false,
+    });
+    await api.getMessage('m/2', {}, { timeout: 10_000, retry: false });
+
+    const [capped, shorter] = request.mock.calls.map(([options]) => options);
+    expect(capped).toMatchObject({
+      url: `${ORIGIN}/messages/m%2F1?format=full`, method: 'GET',
+      timeout: GOOGLE_API_TIMEOUT_MS, retry: false,
+    });
+    expect(capped).not.toHaveProperty('data');
+    expect(shorter).toMatchObject({
+      url: `${ORIGIN}/messages/m%2F2`, method: 'GET', timeout: 10_000, retry: false,
+    });
+    expect(calls.map(({ method, url, body }) => [method, url, body])).toEqual([
+      ['GET', `${ORIGIN}/messages/m%2F1?format=full`, undefined],
+      ['GET', `${ORIGIN}/messages/m%2F2`, undefined],
+    ]);
+  });
+
   it('posts send, trash and modify with explicit methods and JSON bodies', async () => {
     const api = createGmailApi(client());
     await api.sendMessage({ raw: 'ZXhhbXBsZQ', threadId: 'thread-1' }, { retry: false });
@@ -94,6 +123,53 @@ describe('Gmail adapter HTTP contract', () => {
     answer = () => json(503, { error: { code: 503, message: 'Example backend error' } });
     const failure = await createGmailApi(client()).sendMessage({ raw: 'ZXhhbXBsZQ' }, { retry: false }).catch(err => err);
     expect(failure.response.status).toBe(503);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps send endpoint, method, body, timeout ceiling and no-retry policy adapter-owned', async () => {
+    answer = () => json(503, { error: { code: 503, message: 'Example backend error' } });
+    const oauth = client();
+    const request = vi.spyOn(oauth, 'request');
+    const payload = { raw: 'ZXhhbXBsZQ', threadId: 'thread-1' };
+    const overrides = {
+      url: 'https://attacker.example/collect',
+      method: 'DELETE',
+      data: { raw: 'forged' },
+      timeout: GOOGLE_API_TIMEOUT_MS * 2,
+      retry: true,
+      headers: { authorization: 'Bearer attacker' },
+    };
+
+    const failure = await createGmailApi(oauth).sendMessage(payload, overrides).catch(err => err);
+
+    expect(failure.response.status).toBe(503);
+    expect(request).toHaveBeenCalledTimes(1);
+    const requestOptions = request.mock.calls[0][0];
+    expect(requestOptions).toMatchObject({
+      url: `${ORIGIN}/messages/send`,
+      method: 'POST',
+      timeout: GOOGLE_API_TIMEOUT_MS,
+      data: payload,
+      retry: false,
+    });
+    expect(Object.keys(requestOptions).sort()).toEqual(['data', 'headers', 'method', 'retry', 'timeout', 'url']);
+    expect(requestOptions.headers.get('authorization')).toBe('Bearer example-token');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ url: `${ORIGIN}/messages/send`, method: 'POST', body: payload });
+    expect(calls[0].headers.get('authorization')).toBe('Bearer example-token');
+  });
+
+  it('preserves a shorter send timeout without allowing retries', async () => {
+    const oauth = client();
+    const request = vi.spyOn(oauth, 'request');
+    const payload = { raw: 'ZXhhbXBsZQ' };
+
+    await createGmailApi(oauth).sendMessage(payload, { timeout: 10_000, retry: true });
+
+    expect(request.mock.calls[0][0]).toMatchObject({
+      url: `${ORIGIN}/messages/send`, method: 'POST', timeout: 10_000,
+      data: payload, retry: false,
+    });
     expect(calls).toHaveLength(1);
   });
 });
