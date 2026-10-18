@@ -77,7 +77,7 @@ const mutateMock = (id, transform, options = {}) => {
 vi.mock('./projects.js', () => ({
   getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
   listProjects: async () => [...store.values()].map(clone),
-  mutateProjectRecord: mutateMock,
+  mutateProjectRecord: (...args) => mutateMock(...args),
   appendSceneTakes: async (id, sceneId, inputs) => {
     const { appendSceneTakes: append } = await import('./takes.js');
     const outcome = await mutateMock(id, current => append(current, sceneId, inputs), {
