@@ -120,16 +120,22 @@ that was validated — untracked and uncommitted files included, so a later
 commit of that state yields the same `HEAD^{tree}`. A green summary never
 claims a suite it skipped; required CI checks still apply.
 
-After the push, `node scripts/pregate-attest.js` posts that receipt as a
-`pregate` commit status on the pushed head, bound to the validated tree, and
-the pull request's impact planner skips the stages it attests to (only stages
-that ran and passed; never Windows, Linux containment or the Node-minimum
-check). It refuses — saying what to rerun — when the receipt did not pass,
-the tree changed after pregate, the commit is not on the upstream remote yet,
-or nothing attestable ran; a refusal just means CI runs everything as before.
-`--dry-run` prints the status without posting it. Only a repository writer
-can create the status and only the repository owner's counts, so fork and
-Dependabot pull requests are unaffected. Contract and inspection:
+After the push (and, when you open the pull request yourself, before
+`gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
+`pregate` commit status on the pushed head, bound to the validated tree and
+naming the platform and Node it ran on, and the pull request's impact planner
+skips the stages it attests to (only stages that ran and passed; never
+Windows, Linux containment or the Node-minimum check; and, per stage, never
+one that a change `main` gained since the branch forked could reach). It
+refuses — saying what to rerun — when the receipt did not pass, the tree
+changed after pregate, the commit is not on the upstream remote yet, or
+nothing attestable ran, and it attests no server, client or lint stage from
+a receipt planned with `--base` against something other than the default
+branch's merge base; a refusal just means CI runs everything as before.
+`--dry-run` prints the status without posting it; `--revoke "<reason>"`
+withdraws every earlier attestation on the commit. Only a repository writer
+can create the status and only the repository owner's newest one counts, so
+fork and Dependabot pull requests are unaffected. Contract and inspection:
 [Pregate attestation](GITHUB_ACTIONS.md#pregate-attestation).
 
 PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly

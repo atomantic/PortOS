@@ -6,8 +6,10 @@
  * The status is bound to a TREE hash, not a commit: the receipt hashes the
  * exact working tree pregate validated, and the planner compares it with
  * `<head>^{tree}` — the same "content, not SHA" reasoning as
- * `scripts/verify-ci-status.js`. A description is at most 140 characters
- * (GitHub's limit), which fits every stage name with room to spare.
+ * `scripts/verify-ci-status.js`. The description also names the platform and
+ * Node major the stages ran on, so the plan summary can show what vouched for
+ * a Linux job. A description is at most 140 characters (GitHub's limit),
+ * which fits every stage name plus those two fields.
  *
  * Builtins only: the planner loads this before any dependency install.
  */
@@ -54,19 +56,27 @@ export function attestedStagesFromReceipt(report) {
   });
 }
 
+/** `process.version` → its major, e.g. `v26.10.0` → 26. */
+export const nodeMajor = (version) => {
+  const match = /^v?(\d+)/.exec(String(version ?? ''));
+  return match ? Number(match[1]) : null;
+};
+
 /**
- * The status description for a tree and its attested stages.
+ * The status description for a tree, the platform it ran on, and its stages.
  *
- * @param {{tree: string, stages: string[]}} attestation
+ * @param {{tree: string, stages: string[], os: string, node: number}} attestation
  * @returns {string}
  */
-export function encodeAttestation({ tree, stages }) {
+export function encodeAttestation({ tree, stages, os, node }) {
   if (!TREE_RE.test(tree ?? '')) throw new Error('attestation needs a 40-hex tree hash');
+  if (!/^[a-z0-9]+$/.test(os ?? '')) throw new Error('attestation needs a platform name (process.platform)');
+  if (!Number.isInteger(node) || node <= 0) throw new Error('attestation needs a Node major version');
   const ordered = ATTESTABLE_STAGES.filter((stage) => stages.includes(stage));
   const unknown = stages.filter((stage) => !ATTESTABLE.has(stage));
   if (unknown.length > 0) throw new Error(`unknown attestation stage(s): ${unknown.join(', ')}`);
   if (ordered.length === 0) throw new Error('attestation needs at least one stage');
-  const description = `tree=${tree} stages=${ordered.join(',')}`;
+  const description = `tree=${tree} os=${os} node=${node} stages=${ordered.join(',')}`;
   if (description.length > STATUS_DESCRIPTION_MAX_LENGTH) {
     throw new Error(`attestation description exceeds ${STATUS_DESCRIPTION_MAX_LENGTH} characters`);
   }
@@ -74,66 +84,93 @@ export function encodeAttestation({ tree, stages }) {
 }
 
 /**
- * The tree and stages a status description claims, or null when it is not an
- * attestation this module wrote: any unknown stage name, a malformed tree, or
- * extra fields make the whole description unreadable rather than partially
- * trusted.
+ * The tree, platform, Node major and stages a status description claims, or
+ * null when it is not an attestation this module wrote: any unknown stage
+ * name, a malformed tree, or extra fields make the whole description
+ * unreadable rather than partially trusted.
  *
  * @param {string} description
- * @returns {{tree: string, stages: string[]}|null}
+ * @returns {{tree: string, stages: string[], os: string, node: number}|null}
  */
 export function parseAttestation(description) {
-  const match = /^tree=([0-9a-f]{40}) stages=([a-z,-]+)$/.exec(String(description ?? '').trim());
+  const match = /^tree=([0-9a-f]{40}) os=([a-z0-9]+) node=(\d{1,3}) stages=([a-z,-]+)$/.exec(String(description ?? '').trim());
   if (!match) return null;
-  const stages = match[2].split(',');
+  const stages = match[4].split(',');
   if (stages.length === 0 || stages.some((stage) => !ATTESTABLE.has(stage))) return null;
   if (new Set(stages).size !== stages.length) return null;
-  return { tree: match[1], stages: ATTESTABLE_STAGES.filter((stage) => stages.includes(stage)) };
+  return { tree: match[1], os: match[2], node: Number(match[3]), stages: ATTESTABLE_STAGES.filter((stage) => stages.includes(stage)) };
 }
+
+/**
+ * The description a revocation posts: a `failure` state whose text says why,
+ * so the planner's refusal names it and a reader of the commit's statuses
+ * sees the operator's reason.
+ */
+export function encodeRevocation(reason) {
+  const text = `revoked: ${String(reason ?? '').trim() || 'pregate result withdrawn'}`.replace(/[\r\n]+/g, ' ');
+  return text.length > STATUS_DESCRIPTION_MAX_LENGTH ? `${text.slice(0, STATUS_DESCRIPTION_MAX_LENGTH - 1)}…` : text;
+}
+
+/**
+ * GitHub's SSH endpoint hosts answer for github.com. Same rule as
+ * `server/lib/gitRemote.js`: the host is what the API is addressed to.
+ */
+const API_HOST_ALIASES = { 'ssh.github.com': 'github.com' };
 
 /**
  * Parse an `owner/repo` out of a git remote URL — the SSH and HTTPS shapes
  * `server/lib/gitRemote.js#parseGitRemoteUrl` accepts, without that module's
- * ssh-alias resolution (the API host is always github.com here) or its
- * import closure. Null for anything that is not exactly two path segments.
+ * ssh-config alias resolution or its import closure. `ssh.github.com` is
+ * folded to `github.com`. A personal ssh alias (`git@github-acme:…`, no dot in
+ * the host) parses but `hostIsResolvable` is false for it: the caller then
+ * learns the real host from `gh repo view`. Null for anything that is not
+ * exactly two path segments.
  *
  * @param {string} url
- * @returns {{host: string, owner: string, repo: string}|null}
+ * @returns {{host: string, owner: string, repo: string, hostIsResolvable: boolean}|null}
  */
 export function parseRemoteRepository(url) {
   if (typeof url !== 'string' || !url.trim()) return null;
   const trimmed = url.trim().replace(/\/$/, '');
   const stripGit = (value) => value.replace(/\.git$/i, '');
-  const stripPort = (host) => host.replace(/:\d+$/, '');
+  const normalizeHost = (host) => {
+    const bare = host.replace(/:\d+$/, '').toLowerCase();
+    return API_HOST_ALIASES[bare] ?? bare;
+  };
+  const shape = (host, owner, repo) => ({ host, owner, repo: stripGit(repo), hostIsResolvable: host.includes('.') });
   const scp = /^[a-zA-Z0-9._-]+@([^:]+):(?:\d+\/)?([^/]+)\/([^/]+)$/.exec(trimmed);
-  if (scp) return { host: stripPort(scp[1]), owner: scp[2], repo: stripGit(scp[3]) };
+  if (scp) return shape(normalizeHost(scp[1]), scp[2], scp[3]);
   const urlStyle = /^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/.exec(trimmed);
-  if (urlStyle) return { host: stripPort(urlStyle[1]), owner: urlStyle[2], repo: stripGit(urlStyle[3]) };
+  if (urlStyle) return shape(normalizeHost(urlStyle[1]), urlStyle[2], urlStyle[3]);
   return null;
 }
 
 /**
- * The newest usable attestation among a commit's statuses, or null with the
- * reason none qualifies.
+ * The newest `pregate` status decides, whatever its state: a later `failure`
+ * (a revocation, `pregate-attest.js --revoke`) or `pending`/`error` withdraws
+ * an earlier success on the same commit, and a later success by someone else
+ * blocks it too — the newest word on the commit is not the owner's.
  *
  * Trust rests on three facts, each checked here: only a repository writer can
  * create a status on this repository (a fork's `pull_request` token is
  * read-only); the status was created by the repository owner; and the tree it
- * names is the tree of the head being tested. "Newest" is by `created_at`, so
- * a re-run of pregate-attest after a fix supersedes an older attestation on
- * the same commit.
+ * names is the tree of the head commit.
  *
  * @param {Array<object>} statuses - `/repos/{repo}/commits/{sha}/statuses` rows
  * @param {{owner: string, headTree: string}} expected
- * @returns {{attestation: {tree: string, stages: string[], creator: string, createdAt: string}|null, reason: string}}
+ * @returns {{attestation: {tree: string, stages: string[], os: string, node: number, creator: string, createdAt: string}|null, reason: string}}
  */
 export function selectAttestation(statuses, { owner, headTree }) {
   if (!Array.isArray(statuses)) return { attestation: null, reason: 'statuses unreadable' };
   const candidates = statuses
-    .filter((status) => status?.context === PREGATE_STATUS_CONTEXT && status?.state === 'success')
+    .filter((status) => status?.context === PREGATE_STATUS_CONTEXT)
     .sort((a, b) => String(b?.created_at ?? '').localeCompare(String(a?.created_at ?? '')));
-  if (candidates.length === 0) return { attestation: null, reason: `no successful "${PREGATE_STATUS_CONTEXT}" status on the head` };
+  if (candidates.length === 0) return { attestation: null, reason: `no "${PREGATE_STATUS_CONTEXT}" status on the head` };
   const newest = candidates[0];
+  if (newest?.state !== 'success') {
+    const detail = typeof newest?.description === 'string' && newest.description ? ` (${newest.description.slice(0, 80)})` : '';
+    return { attestation: null, reason: `newest pregate status is ${newest?.state ?? 'unknown'}, not success${detail}` };
+  }
   const creator = newest?.creator?.login;
   if (!owner || creator !== owner) {
     return { attestation: null, reason: `newest pregate status was created by ${creator ? `"${creator}"` : 'an unknown actor'}, not the repository owner` };
@@ -143,5 +180,5 @@ export function selectAttestation(statuses, { owner, headTree }) {
   if (!TREE_RE.test(headTree ?? '') || parsed.tree !== headTree) {
     return { attestation: null, reason: `attested tree ${parsed.tree.slice(0, 12)} is not the head tree ${String(headTree ?? '').slice(0, 12) || '(unknown)'}` };
   }
-  return { attestation: { ...parsed, creator, createdAt: String(newest.created_at ?? '') }, reason: `attested by ${creator} at ${newest.created_at}` };
+  return { attestation: { ...parsed, creator, createdAt: String(newest.created_at ?? '') }, reason: `attested by ${creator} at ${newest.created_at} on ${parsed.os}/node ${parsed.node}` };
 }
