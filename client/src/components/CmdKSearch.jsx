@@ -383,7 +383,12 @@ export default function CmdKSearch() {
         toast(`${item.label} needs arguments — use voice or open the related page.`);
         return;
       }
-      const res = await runPaletteAction(item.id);
+      // request() already toasts the failure centrally; a rejection here
+      // must neither bubble as unhandled nor raise a second toast. The
+      // palette stays open with the query intact so the user can retry or
+      // pick another command — mirrors the capture and layout branches.
+      const res = await runPaletteAction(item.id).then((result) => result, () => null);
+      if (!res) { inputRef.current?.focus(); return; }
       const summary = res?.result?.summary || `${item.label} ran.`;
       if (res?.ok === false) toast.error(summary);
       else toast.success(summary);

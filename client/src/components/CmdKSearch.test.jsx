@@ -259,6 +259,48 @@ describe('CmdKSearch inline Brain capture', () => {
   });
 });
 
+describe('CmdKSearch action dispatch', () => {
+  const TIME_NOW = { id: 'time_now', label: 'What time is it', section: 'Tools', description: '', aliases: [], keywords: [], parameters: { type: 'object', required: [], properties: {} } };
+
+  const renderActionPalette = async () => {
+    getPaletteManifest.mockResolvedValue({ nav: [], actions: [TIME_NOW] });
+    render(
+      <MemoryRouter>
+        <CmdKSearch />
+      </MemoryRouter>,
+    );
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    await screen.findByRole('dialog', { name: 'Command palette' });
+    const input = screen.getByRole('combobox', { name: 'Command palette' });
+    fireEvent.change(input, { target: { value: 'time' } });
+    await screen.findByRole('option', { name: /What time is it/ });
+    return input;
+  };
+
+  it('keeps the palette open with the query intact when an action request rejects', async () => {
+    // request() toasts the failure centrally, so the component raises no
+    // second toast and the rejection must not escape as unhandled.
+    runPaletteAction.mockRejectedValue(new Error('boom'));
+    const input = await renderActionPalette();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(runPaletteAction).toHaveBeenCalledWith('time_now'));
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(input).toHaveValue('time');
+    expect(input).toHaveFocus();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('toasts the summary and closes when an action resolves', async () => {
+    runPaletteAction.mockResolvedValue({ ok: true, result: { summary: 'It is noon.' } });
+    const input = await renderActionPalette();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('It is noon.'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull());
+  });
+});
+
 describe('CmdKSearch dialog accessibility', () => {
   it('keeps the active option stable through filtering and executes the indicated destination', async () => {
     render(
