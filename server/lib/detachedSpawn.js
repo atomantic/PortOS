@@ -807,6 +807,10 @@ async function spawnDetachedWithReservation(bin, args, {
     }
   }
 
+  // No POSIX launcher PID means no process was started. A PID-bearing
+  // launcher remains evidence even if it later errors or its publication fails.
+  if (!isWindows && launchError && !launcher?.pid) markAbandoned(writer);
+
   if (isWindows && launchError) {
     // Persist cancellation before returning or scheduling cleanup. A supervisor
     // still cold-starting must not launch an orphan after this failed handoff.

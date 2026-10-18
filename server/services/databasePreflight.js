@@ -9,6 +9,7 @@ import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal, databaseMaintenanceEndpointSchema } from '../lib/databaseMaintenanceJournal.js';
 import { databaseMaintenancePreflightSchema } from '../lib/validation.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { classifyWriterQuiescence, createDatabaseWriterRegistry } from '../lib/databaseWriterRegistry.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
 
 const require = createRequire(import.meta.url);
@@ -75,6 +76,20 @@ async function assertTrustedIdle() {
   if (!summarizeSystemActivity(activity.data).idle || activeAgents > 0 || !mindGuard.safe) throw busy();
 }
 
+async function assertReconcilableWriters() {
+  let rows, processes;
+  try {
+    const { snapshotProcesses } = await import('../lib/detachedSpawn.js');
+    processes = process.platform === 'win32' ? [] : await snapshotProcesses();
+    // Read after the asynchronous snapshot so newly admitted reservations are
+    // included. Acceptance repeats this under the fence before worker launch.
+    rows = createDatabaseWriterRegistry().read();
+  } catch { throw unavailable(); }
+  if (rows.some(row => process.platform === 'win32'
+    ? row.state !== 'abandoned'
+    : ['pending', 'ambiguous', 'orphaned'].includes(classifyWriterQuiescence(row, processes).verdict))) throw busy();
+}
+
 /** Non-mutating advice only; no operation token, reservation, or writer drain. */
 export async function preflightDatabaseMaintenance(input) {
   const direction = databaseMaintenancePreflightSchema.parse(input);
@@ -82,6 +97,7 @@ export async function preflightDatabaseMaintenance(input) {
   const initial = readConfiguration();
   validateDirection(direction, initial);
   await assertTrustedIdle();
+  await assertReconcilableWriters();
   // No await between the final fence/configuration checks and the response.
   // This narrows the observation race, but is deliberately NOT acceptance.
   assertDatabaseAdmission();
@@ -119,14 +135,18 @@ export async function acceptDatabaseMaintenance(input) {
   });
   let operation;
   try {
-    operation = journal.begin({ source: configuration.source, target: configuration.target });
-  } catch {
-    throw refuse('DATABASE_MAINTENANCE', 'Another database maintenance operation is active or requires recovery.');
+    await assertReconcilableWriters();
+    try {
+      operation = journal.begin({ source: configuration.source, target: configuration.target });
+    } catch {
+      throw refuse('DATABASE_MAINTENANCE', 'Another database maintenance operation is active or requires recovery.');
+    }
   } finally {
     releaseSnapshotCut();
   }
   try {
     await assertTrustedIdle();
+    await assertReconcilableWriters();
     const final = readConfiguration();
     validateDirection(direction, final);
     if (final.revision !== configuration.revision) throw stale();

@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events';
+import * as childProcess from './childProcess.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { classifyWriterQuiescence, createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
@@ -39,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   context.setupBarrier = null;
+  vi.restoreAllMocks();
   for (const { handle, done } of handles) {
     if (handle.exitCode === null && handle.signalCode === null) handle.kill('SIGKILL');
     await done;
@@ -90,6 +93,33 @@ describe('durable detached launch admission', () => {
     expect(readdirSync(join(context.data, 'database-writers'))).toEqual([]);
   });
 
+  it.skipIf(process.platform === 'win32')('records a launcher spawn refusal as abandoned', async () => {
+    const error = Object.assign(new Error('spawn sh EAGAIN'), { code: 'EAGAIN' });
+    vi.spyOn(childProcess, 'spawn').mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      child.unref = () => {};
+      process.nextTick(() => child.emit('error', error));
+      return child;
+    });
+    const handle = await spawnDetached(process.execPath, ['-e', 'process.exit(0)'], {
+      controlDir: join(root, 'failed-control'), pollMs: 1,
+    });
+    expect((await observe(handle)).error).toBe(error);
+    expect(registry.read()).toEqual([expect.objectContaining({ state: 'abandoned' })]);
+  });
+
+  it('ignores only regular dotfiles and identifies unsafe inventory entries', () => {
+    const directory = join(context.data, 'database-writers');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, '.DS_Store'), 'finder');
+    expect(registry.read()).toEqual([]);
+    writeFileSync(join(directory, 'unexpected.txt'), 'unknown');
+    expect(() => registry.read()).toThrow(/unexpected.txt/);
+    unlinkSync(join(directory, 'unexpected.txt'));
+    mkdirSync(join(directory, '.hidden'));
+    expect(() => registry.read()).toThrow(/\.hidden/);
+  });
+
   it('fails closed on legacy compacted exit history and refuses to extend it when unreadable', () => {
     mkdirSync(join(context.data, 'database-writers'), { recursive: true });
     writeFileSync(join(context.data, 'database-writers', 'unreconciled-exits.json'), JSON.stringify({ version: 1 }));
@@ -112,13 +142,13 @@ describe('durable detached launch admission', () => {
   });
 
   it('reports bounded operator diagnostics without publishing local identities or claiming quiescence', () => {
-    registry.reserve(join(root, 'private-control'));
+    const writer = registry.reserve(join(root, 'private-control'));
     const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
     const result = spawnSync(process.execPath, [fileURLToPath(cli), 'writers'], {
       encoding: 'utf8', env: { ...process.env, PORTOS_DATA_ROOT: root }, timeout: 10000,
     });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ unresolved: 1, launching: 0, launched: 0, exited: 0, abandoned: 0, quiescenceVerified: false });
+    expect(JSON.parse(result.stdout)).toEqual({ unresolved: 1, launching: 0, launched: 0, exited: 0, abandoned: 0, unresolvedIds: [writer.id], quiescenceVerified: false });
     expect(result.stdout).not.toContain(root);
   });
 
