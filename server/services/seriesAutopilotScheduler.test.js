@@ -55,6 +55,10 @@ beforeEach(() => {
   startSeriesAutopilot.mockResolvedValue({ runId: 'r1' });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('activeSchedules', () => {
   it('keeps only enabled entries with a valid cron and a seriesId', () => {
     const out = activeSchedules(withSchedules([
@@ -182,10 +186,14 @@ describe('scheduled handler', () => {
   });
 
   it('skips when the schedule was disabled since registration', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const handler = await registerAndGetHandler({ seriesId: 's1', enabled: true, cron: '0 3 * * *' });
     getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: false, cron: '0 3 * * *' }]));
     await handler();
     expect(startSeriesAutopilot).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('#s1 disabled/removed since registration — skipping run'));
+    expect(error).not.toHaveBeenCalled();
   });
 
   it('delegates the cos-off gate to startSeriesAutopilot and handles its rejection', async () => {
@@ -199,11 +207,15 @@ describe('scheduled handler', () => {
   });
 
   it('skips when the series no longer exists', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const handler = await registerAndGetHandler({ seriesId: 's1', enabled: true, cron: '0 3 * * *' });
     getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: true, cron: '0 3 * * *' }]));
     getSeries.mockResolvedValue(null);
     await handler();
     expect(startSeriesAutopilot).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('series s1 not found — skipping run'));
+    expect(error).not.toHaveBeenCalled();
   });
 
   it('never throws even if startSeriesAutopilot rejects (runs outside the request lifecycle)', async () => {
