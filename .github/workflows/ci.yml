@@ -354,9 +354,25 @@ jobs:
         if: needs.impact.outputs.slashdo == 'true'
         run: git submodule update --init lib/slashdo
 
+      # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): the runner skips a
+      # selected test file whose every input — loaded modules, fixtures,
+      # package versions, Node/platform, gating env — is byte-identical to one
+      # a trusted green run verified. Pull requests only read. The scheduled,
+      # dispatched and called full runs save, so the cache holds nothing a PR
+      # branch wrote. Each job and shard keeps its own lineage under the key
+      # prefix; a restore takes the newest.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run server tests
         if: needs.impact.outputs.server_mode != 'skip'
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_BROWSER_OWNER: unit
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
@@ -370,6 +386,15 @@ jobs:
           # isolated test file without changing DB selection or credentials.
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
+
+      # Only trusted full runs on the default/release branches seed the memo;
+      # a red shard still saves the files that passed (entries are per file).
+      - name: Save the test memo
+        if: github.event_name != 'pull_request' && !cancelled()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       # Smoke-boot does not need Postgres: NODE_ENV=test selects the file
       # backend. It does need the native rebuild (server boot loads node-pty),
@@ -456,14 +481,32 @@ jobs:
         if: needs.impact.outputs.client_mode != 'skip'
         run: bash scripts/ci-warm-test-chrome.sh
 
+      # Same contract as the server job's memo steps.
+      - name: Restore the test memo
+        if: needs.impact.outputs.client_mode != 'skip'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: node scripts/run-ci-tests.js client
+
+      - name: Save the test memo
+        if: needs.impact.outputs.client_mode != 'skip' && github.event_name != 'pull_request' && !cancelled()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       - name: Build client
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
@@ -846,6 +889,16 @@ jobs:
         if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
+      # Same contract as the server job's memo steps. The browser profile is
+      # part of every key, so a smoke verdict never stands in for a full one.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-browser-
+
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
@@ -854,6 +907,7 @@ jobs:
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: files
@@ -861,6 +915,13 @@ jobs:
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
         run: node scripts/watch-ci-tests.js server
+
+      - name: Save the test memo
+        if: github.event_name != 'pull_request' && !cancelled()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
 
       - name: Preserve browser test failure diagnostics
         if: failure()
@@ -987,12 +1048,23 @@ jobs:
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
+      # Same contract as the server job's memo steps; the platform is part of
+      # every key, so Windows reads only Windows verdicts.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run server tests on Windows
         # A step timeout FAILS the step (log kept, `if: failure()` reporting
         # runs); the job-level timeout would cancel the job and lose the log
         # (#10415). Observed healthy runs take 2-10 minutes.
         timeout-minutes: 15
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           # Outside the launcher's disposable temp root; recoverable after exit.
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
@@ -1005,6 +1077,13 @@ jobs:
           # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
           PORTOS_CI_MAX_WORKERS: 2
         run: node scripts/run-ci-tests.js server
+
+      - name: Save the test memo
+        if: github.event_name != 'pull_request' && !cancelled()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       - name: Preserve Windows test failure diagnostics
         if: failure()

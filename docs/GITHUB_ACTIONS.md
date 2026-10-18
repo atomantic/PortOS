@@ -65,8 +65,8 @@ A release therefore pays for one full run (on its PR), not three.
 
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
 before installing dependencies. Directory-scoped features add their server and
-client feature tests, and every behavioral source (nested or flat) uses
-Vitest's import-graph-aware `related` mode, fed the changed behavioral source
+client feature tests, and every behavioral source (nested or flat) uses the
+runner's import-graph-aware `related` mode, fed the changed behavioral source
 paths plus the planner's explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
 unknown artifacts, or wide diffs.
@@ -452,8 +452,9 @@ pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
-deeper history. The planner passes the resulting source paths directly to
-`vitest related`; Vitest no longer performs its own Git diff.
+deeper history. The planner passes the resulting source paths to the runner,
+which resolves them through its own module graph; Vitest no longer performs
+its own Git diff.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -771,13 +772,88 @@ failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
 
 Targeted `files` plans run the planner's exact test files once. `related` plans
-run `vitest related` once with changed behavioral source paths and the cheap
-structural/repository contract files as inputs. Vitest treats a test-file input
-as directly selected, so contracts and changed tests share the import-graph run
-without being repeated in a second process.
+resolve the changed behavioral source paths through the runner's own module
+graph (`scripts/lib/testMemo.js`: static, dynamic and `vi.mock` edges, the
+same edges `vitest related` follows): a test is selected when a changed
+source is in its closure or when one of its edges cannot be resolved, plus
+the cheap structural/repository contract files, in one Vitest invocation.
+The exact list reaches Vitest through a selection file
+(`PORTOS_CI_TEST_SELECTION`, read by both workspace configs) rather than
+command-line selectors, because a related set can exceed the Windows
+command-line limit. Computing the set in the runner is what lets the test
+memo below subtract the files a trusted green run already verified.
 There is no buffered discovery pass: the old `vitest list --changed` path could
 spend minutes printing every test name, overflow Node's buffer, discard the
 result, and rerun the same graph.
+
+### Test memo
+
+`scripts/run-ci-tests.js` skips a selected test file whose every input is
+byte-identical to one a trusted green run already verified, locally under
+`npm run pregate` and in CI through the same code path. Each selected file
+gets two content-addressed keys (`scripts/lib/testMemo.js`):
+
+- the **floor** key hashes the working-tree bytes of the file's static +
+  dynamic module closure (`import`/`export … from`, `require()`, `import()`,
+  `vi.mock`/`vi.doMock`/`vi.importActual`/`vi.importMock`/`vi.unmock`, all
+  with literal specifiers);
+- the **recorded** key hashes the modules the file actually loaded in the
+  green run that produced its entry (Vitest's
+  `experimental.recordDependencies` depfile). A module the test mocks away or
+  never reaches cannot change its outcome, so a change to the lazily
+  imported server cluster invalidates only the suites that loaded it; a new
+  edge still invalidates because the importer's own bytes changed.
+
+Both keys also cover: every non-JS file a member names through a literal path
+anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
+bound to one of those (a literal directory contributes its whole tree, up to
+400 files; snapshot files and the planner's `FIXTURE_OWNERS` directories are
+added for the test itself); the installed version of every package the
+members reach (so a lockfile bump invalidates exactly the suites that reach
+the bumped packages); the workspace Vitest config closure, setup files,
+`scripts/vitestCiPool.js`, `package.json` and lockfile; the Node major,
+`process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`, `NODE_ENV`,
+`PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
+`PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
+`PORTOS_TEST_QUIET`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
+
+**Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
+or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
+file whose closure contains the `// test-memo: never` marker; a test file or
+`scripts/` module that spawns `git` (repository state is not in the key —
+product modules that run git on their own targets are under the test's
+control); a member that reads a path the analyzer cannot resolve
+(`import.meta.glob`, anything under `.git/`, a literal directory with more
+than 400 files); a bare specifier that resolves to no installed package; and,
+for the floor key only, a non-literal `import()`/`require()` or an
+unparseable member. A recorded set that reaches outside the repository is
+not memoizable either. Every unknown construct lands in one of those buckets
+rather than silently narrowing the key.
+
+**Store.** `~/.portos/test-memo/` (override with `PORTOS_TEST_MEMO_DIR`):
+`entries/<key[0..2]>/<key>.json` holds `{ test, workspace, verifiedAt,
+source: 'local'|'ci', commit }`, `records/<workspace>/<sha256(test)>.json`
+the loaded-module list. Writes are temp-file-plus-rename so concurrent
+worktree pregates never tear a file; any read error is a miss. Entries are
+written only for files Vitest's JSON report shows passed with no failed and
+no skipped case (a browser profile's name pattern is the one accepted skip
+reason). The runner prints one line —
+`🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
+— and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
+selected file is memoized nothing is launched and the job exits 0.
+
+**CI seeding.** The server, client, browser and Windows jobs restore
+`${{ runner.temp }}/portos-test-memo` with `actions/cache/restore` under a
+per-job, per-shard key prefix (`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
+Pull requests only read. The scheduled nightly, `workflow_dispatch` and
+`workflow_call` runs on the default/release branches save a new entry keyed
+by run id, so the cache holds nothing a pull-request branch wrote and every
+PR restores the newest trusted lineage. The DB job does not go through
+`run-ci-tests.js` and is not memoized.
+
+**Disable.** `PORTOS_TEST_MEMO=off` turns reads and writes off together and
+restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
+never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.
 
 No third-party change-filter action is used. The planner passes test paths as a
 JSON argument array to `spawnSync`, never through shell interpolation.

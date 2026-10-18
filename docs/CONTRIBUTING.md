@@ -253,8 +253,18 @@ For server watch mode, run this alternative from the repository root:
 npm run test:watch --prefix server
 ```
 
+`npm run pregate` (and CI, through the same runner) also consults the test
+memo: a selected test file whose every input — the modules it loads, the
+fixtures and package versions it reaches, the Node major and platform, and
+the gating environment variables — is byte-identical to a run that already
+passed is skipped, and new green results are recorded under
+`~/.portos/test-memo/`. Tree-wide scanners and anything that reads repository
+state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
+`PORTOS_TEST_MEMO_VERBOSE=1` lists the skipped files; see
+[GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md#test-memo).
+
 Pull requests into `main` run the tests for affected feature directories, with
-conservative fallbacks to Vitest related-test mode or the complete suite. The
+conservative fallbacks to the runner's related-test mode or the complete suite. The
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
 run nothing — the pull request gate already covered that tree. Release

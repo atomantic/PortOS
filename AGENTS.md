@@ -56,6 +56,8 @@ npm test --prefix client         # Vitest (happy-dom) — component/unit tests
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 
 npm run pregate                  # BEFORE EVERY PUSH — CI's plan run locally; receipt in .cache/pregate/report.json
+# pregate and CI skip test files whose every input already passed (the test
+# memo, docs/GITHUB_ACTIONS.md "Test memo"); PORTOS_TEST_MEMO=off runs them all.
 ```
 
 **Run `npm run pregate` before every push and again after rebasing onto a moved base.** It uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. The local plan includes both committed and uncommitted changes, including untracked files.
