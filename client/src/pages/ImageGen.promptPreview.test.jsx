@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
@@ -18,6 +18,7 @@ await loadImageGenPage();
 // The preview body is the Generate request with the upload named by count
 // (no bytes ride a JSON body), and the box keeps only the typed words.
 describe('ImageGen prompt preview', () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     resetImageGenMockState();
     state.settings = { imageGen: { mode: 'codex' } };
@@ -29,6 +30,21 @@ describe('ImageGen prompt preview', () => {
       promptAdditions: [{ id: 'agent-instructions', label: 'Codex image tool instructions', text: '$imagegen Edit the attached image: [prompt]' }],
     });
     vi.stubGlobal('createImageBitmap', vi.fn(() => Promise.reject(new Error('no decoder'))));
+  });
+
+  it('leaves an untouched Codex form quiet but previews image-only edits', async () => {
+    await renderImageGenPage('/media/image');
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: '   ' } });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(state.previewImagePrompt).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'pick-init' })); });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    expect(state.previewImagePrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: '', uploadedInitImage: true }),
+      { silent: true },
+    );
   });
 
   it('previews the request with the upload counted and shows the additions as chips', async () => {

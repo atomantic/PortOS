@@ -336,7 +336,9 @@ export function useImageGenPageRuntime() {
       ...(uploadedReferenceCount ? { uploadedReferenceCount, referenceStrengths } : {}),
     };
   })();
-  const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, { enabled: !form.remix.pending });
+  const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
+    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing,
+  });
 
   const submitGenerationPayload = async () => {
     const { payload, initFields, referenceFields, hasInputImages } = buildGenerationPayload();

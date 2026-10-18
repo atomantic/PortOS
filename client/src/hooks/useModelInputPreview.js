@@ -22,10 +22,13 @@ export function useModelInputPreview(fetchPreview, body, { enabled = true } = {}
         .then((preview) => { if (current === generation.current) setState({ preview, error: null }); })
         .catch((err) => { if (current === generation.current) setState({ preview: null, error: err?.message || 'Preview failed' }); });
     }, PREVIEW_DELAY_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      generation.current++;
+    };
   }, [fetchPreview, key]);
 
-  return state;
+  return enabled ? state : { preview: null, error: null };
 }
 
 export default useModelInputPreview;
