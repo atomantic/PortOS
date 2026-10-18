@@ -3062,6 +3062,103 @@ describe('durable remote source-audio settlement', () => {
     }
   });
 
+  it('reconciles a failed reservation in-process, explains the hold, then dispatches the next job to that peer', async () => {
+    const first = await startAudioJob();
+    stubs.generateVideoRemote.mockClear();
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    // No restart: the blocked peer re-enqueues the retained reservation as a reconcile run.
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    expect(stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0].remoteMedia.reconcile).toBe(true);
+    await waitFor(() => mediaJobQueue.getJob(next.jobId)?.peerHold);
+    expect(mediaJobQueue.getJob(next.jobId)).toMatchObject({
+      status: 'queued',
+      peerHold: { reason: 'peer-settling', blockingJobId: first.jobId },
+    });
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+    expect(mediaJobQueue.getJob(next.jobId)).not.toHaveProperty('peerHold');
+    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+  });
+
+  it('keeps reconciliation SSE live across the prior attempt cleanup and a reconnect', async () => {
+    const first = await startAudioJob();
+    const client = () => {
+      const frames = [];
+      return { frames, writeHead: vi.fn(), end: vi.fn(), req: { on: vi.fn() },
+        write: (message) => frames.push(JSON.parse(message.slice('data: '.length).trim())) };
+    };
+    const original = client();
+    mediaJobQueue.attachSseClient(first.jobId, original);
+    const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+    const timers = [];
+    const realSetTimeout = globalThis.setTimeout;
+    // Exercise the real helper callback without sleeping through its grace
+    // window or replacing the queue's dispatch and persistence clocks.
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      const timer = realSetTimeout(callback, delay, ...args);
+      if (delay === SSE_CLEANUP_DELAY_MS) timers.push({ timer, expire: () => { clearTimeout(timer); callback(...args); } });
+      return timer;
+    });
+    try {
+      videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false });
+      await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+      await flush();
+      expect(timers).toHaveLength(1);
+      stubs.generateVideoRemote.mockClear();
+      const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+      await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+      const reconciling = client();
+      mediaJobQueue.attachSseClient(first.jobId, reconciling);
+      timers[0].expire();
+      expect(original.end).toHaveBeenCalledOnce();
+      expect(reconciling.end).not.toHaveBeenCalled();
+      const reconnected = client();
+      mediaJobQueue.attachSseClient(first.jobId, reconnected);
+      videoGenEvents.emit('progress', { generationId: first.jobId, type: 'progress', progress: 0.5 });
+      for (const response of [reconciling, reconnected]) {
+        expect(response.frames).toContainEqual(expect.objectContaining({ type: 'progress', progress: 0.5 }));
+      }
+      videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+        remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+      await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'completed');
+      await flush();
+      expect(timers).toHaveLength(2);
+      for (const response of [reconciling, reconnected]) {
+        expect(response.frames).toContainEqual(expect.objectContaining({ type: 'complete' }));
+      }
+      timers[1].expire();
+      expect(reconciling.end).toHaveBeenCalledOnce();
+      expect(reconnected.end).toHaveBeenCalledOnce();
+      await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+      videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+    } finally {
+      timerSpy.mockRestore();
+      for (const { timer } of timers) clearTimeout(timer);
+    }
+  });
+
+  it('keeps every later job to the peer waiting while its reservation reconciles', async () => {
+    const first = await startAudioJob();
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    stubs.generateVideoRemote.mockClear();
+    const later = [];
+    for (let i = 0; i < 2; i += 1) later.push(await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } }));
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    await flush();
+    expect(stubs.generateVideoRemote.mock.calls.map(([params]) => params.jobId)).toEqual([first.jobId]);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === later[0].jobId));
+    videoGenEvents.emit('completed', { generationId: later[0].jobId, remoteInputsDisposable: true });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === later[1].jobId));
+    videoGenEvents.emit('completed', { generationId: later[1].jobId, remoteInputsDisposable: true });
+  });
+
   it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {
     const { first, maintenance } = await restoreUnsettledAudioJob(true);
     const journal = () => JSON.parse(readFileSync(join(maintenance.directory, 'state.json'), 'utf8'));
