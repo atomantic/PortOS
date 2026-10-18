@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -133,7 +133,7 @@ describe('makeVideoGenLineHandler', () => {
   const eventsOfType = (t) => emitted.filter((e) => e.type === t).map((e) => e.payload);
 
   // Prompt-encode phase (#4589) — the signal that decides whether a later
-  // SIGABRT is worth one relaunch at a smaller Gemma budget.
+  // SIGABRT is worth one relaunch with smaller command buffers.
   it('tracks the Gemma prompt-encode phase as three distinct states', () => {
     // Never reported: every runtime other than the LTX-2 MLX helper stays here,
     // and an unstamped field must not read as "encoding right now".
@@ -591,41 +591,6 @@ describe('isPromptEncodingMetalWatchdog', () => {
     expect(isPromptEncodingMetalWatchdog()).toBe(false);
     expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', promptEncodePhase: 'active' })).toBe(false);
     expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr: null, promptEncodePhase: 'active' })).toBe(false);
-  });
-});
-
-describe('planPromptEncodingRetry', () => {
-  const WATCHDOG_ABORT = '[METAL] Command buffer execution failed: (00000004:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)';
-  const qualifying = {
-    signal: 'SIGABRT',
-    stderr: WATCHDOG_ABORT,
-    promptEncodePhase: 'active',
-    retriesUsed: 0,
-    platform: 'darwin',
-  };
-
-  it('plans one relaunch at the reduced Gemma budget', () => {
-    expect(planPromptEncodingRetry(qualifying)).toEqual({ gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH });
-    // The reduced budget is a real cut from what upstream would otherwise use —
-    // a plan that handed back the default would relaunch into the same abort.
-    expect(RETRY_GEMMA_MAX_LENGTH).toBeLessThan(DEFAULT_GEMMA_MAX_LENGTH);
-  });
-
-  it('allows exactly one — a second abort at the reduced budget is a real failure', () => {
-    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 1 })).toBeNull();
-    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 2 })).toBeNull();
-  });
-
-  // The command-buffer watchdog is a macOS construct; a Windows/CUDA render that
-  // somehow produced a matching string must not be relaunched with an
-  // Apple-specific mitigation.
-  it.each([['win32'], ['linux']])('never fires on %s', (platform) => {
-    expect(planPromptEncodingRetry({ ...qualifying, platform })).toBeNull();
-  });
-
-  it('passes the classifier verdict straight through', () => {
-    expect(planPromptEncodingRetry({ ...qualifying, promptEncodePhase: 'done' })).toBeNull();
-    expect(planPromptEncodingRetry({ ...qualifying, signal: 'SIGKILL' })).toBeNull();
   });
 });
 

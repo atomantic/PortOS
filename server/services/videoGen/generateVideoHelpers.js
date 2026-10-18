@@ -233,7 +233,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       // 'active' = encoding right now, 'done' = finished — so a later SIGABRT can
       // be attributed to the encode without conflating "never reported" with
       // "finished". Compared exactly: the '-done' marker is a prefix extension of
-      // the begin marker. See planPromptEncodingRetry.
+      // the begin marker. Used only to name the phase in the recovery status.
       if (line === PROMPT_ENCODE_BEGIN_MARKER) job.promptEncodePhase = 'active';
       else if (line === PROMPT_ENCODE_END_MARKER) job.promptEncodePhase = 'done';
       const parts = line.split(':');
@@ -450,19 +450,6 @@ export function describeSignalDeath(signal, { fingerprint = null } = {}) {
   return fp ? `${cause} [runtime: ${fp}]` : cause;
 }
 
-/**
- * Gemma prompt-encode sequence length. `LTX2_GEMMA_MAX_LENGTH` is read by
- * ltx-2-mlx at encode time (`utils/blocks.py#PromptEncoder.encode`) and defaults
- * to 1024 there; the retry halves it so the encoder's attention matrices are a
- * quarter the size and each Metal command buffer finishes well inside the
- * watchdog window. Halving (rather than a deeper cut) keeps a long prompt's
- * tail intact — the tokenizer truncates from the LEFT, so a smaller budget
- * silently drops the START of the prompt, which is where the subject usually
- * is.
- */
-export const DEFAULT_GEMMA_MAX_LENGTH = 1024;
-export const RETRY_GEMMA_MAX_LENGTH = 512;
-
 // The macOS Metal command-buffer watchdog reports WHY it killed a buffer via a
 // `kIOGPUCommandBufferCallbackError*` enum name in the abort text. Two of those
 // mean "this buffer ran too long for the compositor to stay responsive", which
@@ -513,33 +500,6 @@ export function isPromptEncodingMetalWatchdog({ signal = null, stderr = '', prom
 }
 
 /**
- * Decide whether one render may be relaunched after a prompt-encode watchdog
- * abort, and with what Gemma budget. Pure — returns the plan, never acts.
- *
- * Returns `null` for "do not retry" and `{ gemmaMaxLength }` for "relaunch this
- * same job once with that budget". Exactly one retry is ever allowed: a second
- * watchdog abort at the reduced budget is a real failure the user must see, not
- * something to keep grinding the GPU over.
- *
- * @param {object} [opts]
- * @param {string|null} [opts.signal]
- * @param {string} [opts.stderr]
- * @param {'active'|'done'|null} [opts.promptEncodePhase]
- * @param {number} [opts.retriesUsed] - retries already spent on this job
- * @param {string} [opts.platform] - `process.platform` of the host
- * @returns {{ gemmaMaxLength: number }|null}
- */
-export function planPromptEncodingRetry({ signal = null, stderr = '', promptEncodePhase = null, retriesUsed = 0, platform = process.platform } = {}) {
-  // The command-buffer watchdog is a macOS construct. A Windows/CUDA render
-  // that somehow produced a matching string must not be relaunched with an
-  // Apple-specific mitigation.
-  if (platform !== 'darwin') return null;
-  if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
-  if (!isPromptEncodingMetalWatchdog({ signal, stderr, promptEncodePhase })) return null;
-  return { gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH };
-}
-
-/**
  * Per-command-buffer caps MLX reads at startup (`MLX_MAX_OPS_PER_BUFFER` /
  * `MLX_MAX_MB_PER_BUFFER`). Smaller values only move command-buffer boundaries —
  * same kernels, same output, slightly slower — so each buffer finishes inside the
@@ -552,8 +512,10 @@ export const METAL_BUFFER_RETRY_ENV = Object.freeze({
 
 /**
  * Decide whether a render may be relaunched once with tiny MLX command buffers
- * after a Metal watchdog abort ANYWHERE in the render (the prompt-encode case has
- * its own plan, planPromptEncodingRetry). Pure — returns the plan, never acts.
+ * after a Metal watchdog abort ANYWHERE in the render, including inside the Gemma
+ * prompt encoder. The prompt token sequence is never shortened to recover: the
+ * encoder keeps only the LAST max_length tokens, so a lowered sequence budget
+ * would silently drop the start of an accepted prompt. Pure — returns the plan, never acts.
  * Apple-silicon MLX runtimes only; OutOfMemory / InnocentVictim aborts never
  * qualify (smaller buffers do not fix them). One retry per job.
  *
