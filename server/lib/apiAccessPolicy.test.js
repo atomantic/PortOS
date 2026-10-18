@@ -89,6 +89,8 @@ describe('peer API surface (#8387)', () => {
       '/api/peer-sync//manifest',
       '/data/images/%2e%2e/secret.json',
       '/data/images/a%2fb.png',
+      '/data/images/a%5cb.png',
+      '/data/images/a\\b.png',
       '/data/images/..',
     ]) {
       expect(isPeerApiRequestAllowed('GET', path)).toBe(false);
