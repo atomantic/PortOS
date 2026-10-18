@@ -172,6 +172,16 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
     await auditRan();
   });
 
+  it.each(['unreadable', 'closed unmerged'])('preserves the worktree for %s PR state', async (state) => {
+    getAgent.mockResolvedValue(worktreeAgent);
+    if (state === 'unreadable') probePrForBranch.mockRejectedValue(new Error('forge unavailable'));
+    else probePrForBranch.mockResolvedValue({ readable: true, prState: 'CLOSED' });
+    const warnings = await cleanupAgentWorktree('agent-1', true, { skipMerge: true, originalTask: { id: 'task-1', metadata: { openPR: true } } });
+    expect(warnings).toEqual([]);
+    expect(removeWorktree).not.toHaveBeenCalled();
+    await auditRan();
+  });
+
   it('returns the cleanup warnings unchanged, and survives an audit that throws', async () => {
     // The audit is an observer. A failure in it must never swallow the warnings
     // the caller uses to notify the user and spawn a merge recovery task.

@@ -1273,6 +1273,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
   it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {
     // The follow-up agent already merged via `gh pr merge`; re-merging the worktree
     // branch into source workspace would duplicate the squashed commits.
+    findPullRequestForBranchMock.mockResolvedValueOnce({ status: 'found', detail: 'MERGED' });
     await cleanupAgentWorktree('agent-1', true, { prCreation: 'never', skipMerge: true });
 
     expect(removeWorktree).toHaveBeenCalledWith(
