@@ -1,3 +1,4 @@
+import MediaBatchImport from '../components/media/MediaBatchImport';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { ArrowLeft, Cloud, CloudOff, CheckSquare, Copy, DatabaseZap, FolderInput, HardDriveDownload, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
@@ -474,6 +475,18 @@ export default function MediaCollectionDetail() {
           </div>
         )}
       </div>
+
+      <MediaBatchImport key={id} collectionId={isUnsorted ? undefined : id} onImported={(item, updated) => {
+        // Mutation responses omit GET-only peer locations. Keep those for
+        // existing members so remote-only thumbnails do not disappear.
+        if (updated) setCollection(previous => ({ ...updated, items: updated.items.map(member => ({
+          ...previous?.items.find(existing => existing.kind === member.kind && existing.ref === member.ref),
+          ...member,
+          ...(member.kind === item.kind && member.ref === item.ref ? { location: 'local' } : {}),
+        })) }));
+        page.setItems(previous => [item, ...previous.filter(row => !(row.kind === item.kind && row.data.filename === item.data.filename))]);
+        page.refresh();
+      }} />
 
       {selectMode && (
         <div className="bg-port-card border border-port-border rounded-lg px-3 py-2 flex flex-wrap items-center gap-2 sticky top-0 z-30">
