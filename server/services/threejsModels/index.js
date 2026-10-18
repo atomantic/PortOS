@@ -180,6 +180,9 @@ async function executeGeneration({
     if (physicalAudit.errorCount > 0 || physicalAudit.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} physical audit: ${physicalAudit.errorCount} error, ${physicalAudit.warningCount} warning finding(s) across ${physicalAudit.evaluatedPoseCount} pose(s)`);
     }
+    if (physicalAudit.poseCoverage?.status === 'partial' && physicalAudit.poseCoverage.measuresAttachments) {
+      console.warn(`⚠️ Three.js model ${id} physical audit: clip pose budget of ${physicalAudit.poseCoverage.budget} exhausted, some clip poses were not measured`);
+    }
     if (materialPlausibility.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} material plausibility: ${materialPlausibility.warningCount} of ${materialPlausibility.matchedMaterialCount} recognized material(s) carry values their substance does not support`);
     }

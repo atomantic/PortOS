@@ -41,6 +41,7 @@ import {
   listSpecNames,
   resolveThreejsAttachments,
 } from './threejsModel.js';
+import { evaluateThreejsModelClipPose } from './threejsModelClipPose.js';
 import {
   applyTransform,
   composeTransform,
@@ -51,7 +52,21 @@ import {
 const EPSILON = 1e-4;
 const COPLANAR_TOLERANCE = 1e-3;
 const TOUCH_TOLERANCE = 0.02;
-const MAX_AUDIT_POSES = 16;
+// Clip poses measured per audit, shared by every clip. Boundaries alone miss
+// motion that leaves and comes back inside one window — an arm turned through
+// 360° is back at rest at both ends — so each sequence also contributes interior
+// samples. The budget is dealt round-robin across clips, so a sequence-heavy
+// first clip cannot starve a later one, and every sample that does not fit is
+// reported rather than dropped. 48 keeps the walk bounded (12 clips is the
+// schema maximum, four poses each) while covering a typical model completely.
+const MAX_CLIP_AUDIT_POSES = 48;
+// A rotating sequence gets one interior sample per this many degrees of turn,
+// up to MAX_INTERIOR_SEGMENTS segments; every sequence gets at least its midpoint.
+const MAX_ROTATION_STEP_DEGREES = 90;
+const MAX_INTERIOR_SEGMENTS = 8;
+// Omitted times are listed for the reader up to this many per clip; the count
+// is always exact.
+const MAX_LISTED_OMITTED_TIMES = 24;
 // One percent anisotropy is small enough to ignore authoring noise while still
 // catching the intentional shape-squashing that distorts a child hierarchy.
 const NONUNIFORM_SCALE_TOLERANCE = 0.01;
@@ -196,77 +211,91 @@ function faceAreaOverlap2D(minA1, maxA1, minA2, maxA2, minB1, maxB1, minB2, maxB
 const isTransparent = (material) => Boolean(material)
   && ((material.transparent === true && (material.opacity ?? 1) < 1) || (material.transmission ?? 0) > 0);
 
+// The clip pose is the one the preview and the exported player show
+// (`threejsModelClipPose.js`); a part no sequence drives keeps its authored pose.
 function getPoseStateResolver(clip, timeSeconds) {
-  const sequences = Array.isArray(clip?.sequences) ? clip.sequences : [];
-
-  const getChannelValue = (sequence, channel, t) => {
-    const range = sequence.channels?.[channel];
-    if (!range) return null;
-    if (channel === 'visible' || channel === 'opacity') {
-      if (t >= sequence.endSeconds) return range.to;
-      if (t < sequence.startSeconds) return range.from;
-      if (channel === 'visible') return range.to;
-    }
-    if (t <= sequence.startSeconds) return range.from;
-    if (t >= sequence.endSeconds) return range.to;
-
-    const duration = sequence.endSeconds - sequence.startSeconds;
-    const progress = duration > 0 ? (t - sequence.startSeconds) / duration : 1;
-    let eased = progress;
-    if (sequence.easing === 'easeIn') eased = progress * progress;
-    else if (sequence.easing === 'easeOut') eased = progress * (2 - progress);
-    else if (sequence.easing === 'easeInOut') eased = progress < 0.5 ? 2 * progress * progress : -1 + ((4 - (2 * progress)) * progress);
-
-    if (Array.isArray(range.from) && Array.isArray(range.to)) {
-      return range.from.map((v, i) => v + ((range.to[i] - v) * eased));
-    }
-    if (typeof range.from === 'number' && typeof range.to === 'number') {
-      return range.from + ((range.to - range.from) * eased);
-    }
-    return range.to;
-  };
-
-  const partSequences = new Map();
-  for (const seq of sequences) {
-    if (!seq.partId) continue;
-    const list = partSequences.get(seq.partId) || [];
-    list.push(seq);
-    partSequences.set(seq.partId, list);
-  }
-
+  const pose = evaluateThreejsModelClipPose(clip, timeSeconds);
   return (part) => {
-    const seqs = partSequences.get(part.id) || [];
-    let pos = part.position || [0, 0, 0];
-    let rot = part.rotationDegrees || [0, 0, 0];
-    let sca = part.scale || [1, 1, 1];
-    let vis = part.visible !== false;
-    let opac = part.opacity ?? 1;
-
-    for (const channel of ['position', 'rotationDegrees', 'scale', 'visible', 'opacity']) {
-      const drivingSeqs = seqs.filter((s) => s.channels?.[channel] && s.startSeconds <= timeSeconds);
-      if (drivingSeqs.length > 0) {
-        drivingSeqs.sort((a, b) => a.startSeconds - b.startSeconds);
-        const active = drivingSeqs[drivingSeqs.length - 1];
-        const val = getChannelValue(active, channel, timeSeconds);
-        if (val !== null) {
-          if (channel === 'position') pos = val;
-          else if (channel === 'rotationDegrees') rot = val;
-          else if (channel === 'scale') sca = val;
-          else if (channel === 'visible') vis = Boolean(val);
-          else if (channel === 'opacity') opac = Number(val);
-        }
-      }
-    }
-    return { position: pos, rotationDegrees: rot, scale: sca, visible: vis, opacity: opac };
+    const driven = pose[part.id] || {};
+    return {
+      position: driven.position ?? part.position ?? [0, 0, 0],
+      rotationDegrees: driven.rotationDegrees ?? part.rotationDegrees ?? [0, 0, 0],
+      scale: driven.scale ?? part.scale ?? [1, 1, 1],
+      visible: driven.visible ?? (part.visible !== false),
+      opacity: driven.opacity ?? part.opacity ?? 1,
+    };
   };
 }
+
+const roundTime = (value) => Number(value.toFixed(4));
+
+const formatTimes = (times) => times.map((time) => `${time}s`).join(', ');
+
+const sequenceSegments = (sequence) => {
+  const range = sequence.channels?.rotationDegrees;
+  const turn = range && Array.isArray(range.from) && Array.isArray(range.to)
+    ? Math.max(...range.from.map((value, axis) => Math.abs((range.to[axis] ?? value) - value)))
+    : 0;
+  return Math.min(MAX_INTERIOR_SEGMENTS, Math.max(2, Math.ceil(turn / MAX_ROTATION_STEP_DEGREES)));
+};
+
+/**
+ * Every pose time worth measuring in one clip, highest priority first: the clip
+ * boundaries, then each sequence's midpoint, then sequence boundaries, then the
+ * extra subdivisions of large rotations. Priority only matters when the budget
+ * runs out, and then it decides which poses are reported as omitted.
+ */
+const planClipSampleTimes = (clip) => {
+  const sequences = (Array.isArray(clip.sequences) ? clip.sequences : [])
+    .filter((sequence) => Number.isFinite(sequence.startSeconds) && Number.isFinite(sequence.endSeconds))
+    .sort((a, b) => (a.startSeconds - b.startSeconds) || (a.endSeconds - b.endSeconds));
+  const tiers = [
+    [0, Number.isFinite(clip.durationSeconds) ? clip.durationSeconds : 0],
+    sequences.map((sequence) => (sequence.startSeconds + sequence.endSeconds) / 2),
+    sequences.flatMap((sequence) => [sequence.startSeconds, sequence.endSeconds]),
+    sequences.flatMap((sequence) => {
+      const segments = sequenceSegments(sequence);
+      const span = sequence.endSeconds - sequence.startSeconds;
+      return Array.from({ length: segments - 1 }, (_, index) => sequence.startSeconds + ((span * (index + 1)) / segments));
+    }),
+  ];
+  const ordered = [];
+  const seen = new Set();
+  for (const time of tiers.flat()) {
+    const rounded = roundTime(time);
+    if (seen.has(rounded)) continue;
+    seen.add(rounded);
+    ordered.push(rounded);
+  }
+  return ordered;
+};
+
+// Round-robin, in clip declaration order: deterministic, and no clip gets a
+// second pose until every clip with candidates left has had another one.
+const allocateClipPoseBudget = (candidateLists, budget) => {
+  const quotas = candidateLists.map(() => 0);
+  let remaining = budget;
+  let progressed = true;
+  while (remaining > 0 && progressed) {
+    progressed = false;
+    candidateLists.forEach((candidates, index) => {
+      if (remaining <= 0 || quotas[index] >= candidates.length) return;
+      quotas[index] += 1;
+      remaining -= 1;
+      progressed = true;
+    });
+  }
+  return quotas;
+};
 
 function collectPoseVolumes(spec, getPartState) {
   const volumes = [];
   // Every part, not only the ones that carry geometry: a socket hangs off its
   // parent part's world transform, and that parent is routinely a bare group.
   const transformsByPartId = new Map();
-  const walk = (part, parentTransform, ancestorIds) => {
+  // A hidden parent hides its whole subtree in Three.js, so visibility is
+  // inherited down the walk; opacity lives on each part's own material and is not.
+  const walk = (part, parentTransform, ancestorIds, parentVisible) => {
     const state = getPartState ? getPartState(part) : {
       position: part.position,
       rotationDegrees: part.rotationDegrees,
@@ -277,6 +306,7 @@ function collectPoseVolumes(spec, getPartState) {
 
     const transform = composeTransform(parentTransform, state);
     transformsByPartId.set(part.id, transform);
+    const visible = parentVisible && state.visible !== false;
     const localBounds = getLocalBounds(part.geometry);
 
     if (localBounds) {
@@ -288,19 +318,19 @@ function collectPoseVolumes(spec, getPartState) {
         materialId: part.material || null,
         explodeWithParent: part.explodeWithParent === true,
         ancestorIds,
-        visible: state.visible,
+        visible,
         opacity: state.opacity,
         worldBounds,
       });
     }
 
     for (const child of part.children || []) {
-      walk(child, transform, [...ancestorIds, part.id]);
+      walk(child, transform, [...ancestorIds, part.id], visible);
     }
   };
 
   for (const part of spec?.parts || []) {
-    walk(part, IDENTITY_TRANSFORM, []);
+    walk(part, IDENTITY_TRANSFORM, [], true);
   }
 
   return { volumes, transformsByPartId };
@@ -494,7 +524,7 @@ function measureAttachmentAnchors({
     if (distance <= attachment.maxOffset) continue;
 
     const scope = clipName
-      ? `In clip "${clipName}", part ${label(attachment.partId)}`
+      ? `In clip "${clipName}" at ${formatOffset(metadata.timeSeconds ?? 0)}s, part ${label(attachment.partId)}`
       : `Part ${label(attachment.partId)}`;
     findings.push({
       code: 'attachment-far-from-anchor',
@@ -978,9 +1008,11 @@ export function evaluateThreejsPhysicalAudit(spec) {
 
   // 2. Animated Clips & Pose Evaluation
   const clips = Array.isArray(spec.animation?.clips) ? spec.animation.clips : [];
-  let remainingBudget = MAX_AUDIT_POSES - 1;
+  const candidateTimes = clips.map(planClipSampleTimes);
+  const quotas = allocateClipPoseBudget(candidateTimes, MAX_CLIP_AUDIT_POSES);
+  const clipCoverage = [];
 
-  for (const clip of clips) {
+  clips.forEach((clip, clipIndex) => {
     const sequences = Array.isArray(clip.sequences) ? clip.sequences : [];
 
     for (const part of parts) {
@@ -999,17 +1031,32 @@ export function evaluateThreejsPhysicalAudit(spec) {
       }
     }
 
-    if (remainingBudget <= 0) continue;
-
-    const sampleTimes = new Set([0, clip.durationSeconds || 0]);
-    for (const seq of sequences) {
-      if (Number.isFinite(seq.startSeconds)) sampleTimes.add(seq.startSeconds);
-      if (Number.isFinite(seq.endSeconds)) sampleTimes.add(seq.endSeconds);
-    }
-
-    const timesToTest = [...sampleTimes].sort((a, b) => a - b).slice(0, remainingBudget);
-    remainingBudget -= timesToTest.length;
+    const candidates = candidateTimes[clipIndex];
+    const timesToTest = candidates.slice(0, quotas[clipIndex]).sort((a, b) => a - b);
+    const omittedTimes = candidates.slice(quotas[clipIndex]).sort((a, b) => a - b);
     evaluatedPoseCount += timesToTest.length;
+    clipCoverage.push({
+      clipId: clip.id,
+      clipName: clip.name || clip.id,
+      sampledTimes: timesToTest,
+      omittedCount: omittedTimes.length,
+      omittedTimes: omittedTimes.slice(0, MAX_LISTED_OMITTED_TIMES),
+    });
+    // Only the attachment measurement walks the sampled poses, so a pose left
+    // out of the budget is a gap in that check alone — and it is said so,
+    // rather than letting the clean count imply every moment was measured.
+    if (omittedTimes.length > 0 && anchoredAttachments.length > 0) {
+      const listed = omittedTimes.slice(0, MAX_LISTED_OMITTED_TIMES);
+      addFinding({
+        code: 'clip-poses-unsampled',
+        severity: 'note',
+        partIds: [],
+        clipId: clip.id,
+        omittedTimes: listed,
+        omittedCount: omittedTimes.length,
+        message: `In clip "${clip.name || clip.id}", attachments were checked at ${timesToTest.length} of ${candidates.length} sampled pose(s); the audit's ${MAX_CLIP_AUDIT_POSES}-pose budget across ${clips.length} clip(s) left ${formatTimes(listed)}${omittedTimes.length > listed.length ? ` and ${omittedTimes.length - listed.length} more` : ''} unmeasured, so an attachment could leave its anchor there unreported.`,
+      });
+    }
 
     // A clip can carry an attachment away from its anchor without ever breaking
     // the resting pose, so the same measurement runs over the sampled poses —
@@ -1074,7 +1121,7 @@ export function evaluateThreejsPhysicalAudit(spec) {
         }
       }
     }
-  }
+  });
 
   for (const [partId, finding] of strongestAnimatedScaleFindings) {
     const staticFinding = staticScaleFindings.get(partId);
@@ -1100,6 +1147,18 @@ export function evaluateThreejsPhysicalAudit(spec) {
     // measured was not checked, and reporting it as passing is the failure this
     // gate exists to avoid.
     unmeasuredAttachments,
+    // Which clip times the pose walk measured and which the budget left out.
+    // `complete`/`partial` describe the attachment check over clip motion;
+    // a record written before this field existed carries none, which readers
+    // treat as "interior clip poses never measured", not as complete.
+    poseCoverage: {
+      status: clips.length === 0
+        ? 'static'
+        : clipCoverage.some((entry) => entry.omittedCount > 0) ? 'partial' : 'complete',
+      measuresAttachments: anchoredAttachments.length > 0,
+      budget: MAX_CLIP_AUDIT_POSES,
+      clips: clipCoverage,
+    },
   };
 }
 
@@ -1113,7 +1172,10 @@ export function evaluateThreejsPhysicalAudit(spec) {
 export function buildThreejsPhysicalAuditFeedback(physicalAudit) {
   const actionable = (physicalAudit?.findings || []).filter((f) => f.severity === 'error' || f.severity === 'warning');
   const unmeasured = Array.isArray(physicalAudit?.unmeasuredAttachments) ? physicalAudit.unmeasuredAttachments : [];
-  if (actionable.length === 0 && unmeasured.length === 0) return '';
+  // A clip pose the budget left out is, like an unmeasured anchor, an
+  // attachment relationship nothing verified — so it is fed back too.
+  const unsampled = (physicalAudit?.findings || []).filter((f) => f.code === 'clip-poses-unsampled');
+  if (actionable.length === 0 && unmeasured.length === 0 && unsampled.length === 0) return '';
   const hasNonuniformParentScale = actionable.some((finding) => finding.code === 'nonuniform-parent-scale');
   const hasBilateralChirality = actionable.some((finding) => (
     finding.code === 'bilateral-chirality'
@@ -1134,6 +1196,7 @@ export function buildThreejsPhysicalAuditFeedback(physicalAudit) {
     'The previous pass failed physical conformance audits:',
     ...actionable.map((finding, index) => `${index + 1}. ${finding.message}`),
     ...unmeasured.map((entry) => `Attachment "${entry.partId}" could not be checked against ${entry.anchorSocket ? `socket "${entry.anchorSocket}"` : `"${entry.anchorPartId}"`} because ${entry.reason} — give both the attachment and its anchor real geometry so the relationship can be verified.`),
+    ...unsampled.map((finding) => `${finding.message} Keep every carried part on its anchor throughout each motion, not only where a sequence starts and ends.`),
     ...(hasNonuniformParentScale ? [
       'For non-uniform parent scale findings, size each part through its own geometry dimensions (for example, box width/height/depth or sphere radius) and keep containers near-uniform instead of squashing a parent that owns other components.',
     ] : []),
