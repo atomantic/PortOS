@@ -249,3 +249,20 @@ describe('imageGen/fal — checkConnection', () => {
     expect(await fal.checkConnection({})).toMatchObject({ connected: false, reason: expect.stringContaining('HTTP 401') });
   });
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  vi.stubGlobal('fetch', vi.fn());
+  const jobId = 'preamble-cancel-imageGen-fal';
+  const pending = fal.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(fal.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(fal.cancel(jobId)).toBe(false);
+});

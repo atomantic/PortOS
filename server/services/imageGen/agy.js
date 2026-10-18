@@ -1,3 +1,4 @@
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
@@ -82,8 +83,12 @@ const terminate = (jobId, proc) => {
   });
 };
 
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) throw new Error('agy.cancel requires a jobId — use agy.cancelAll() to terminate every in-flight render');
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
   terminate(jobId, proc);
@@ -91,9 +96,9 @@ export const cancel = (jobId) => {
 };
 
 export const cancelAll = () => {
-  const entries = [...activeProcs.entries()];
-  if (!entries.length) return false;
-  for (const [jobId, proc] of entries) terminate(jobId, proc);
+  const ids = [...preparations.ids(), ...activeProcs.keys()];
+  if (ids.length === 0) return false;
+  for (const id of ids) cancel(id);
   return true;
 };
 
@@ -276,7 +281,9 @@ export function agySentPrompt({ prompt = '', negativePrompt, width, height, stag
   };
 }
 
-export async function generateImage({
+export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+
+async function generateImagePrepared({
   promptAdditions = [],
   agyPath,
   model,
@@ -408,6 +415,10 @@ function runAgy(job, jobId, bin, args, {
     maintenance.markCurrentUnsettled();
     console.error(`❌ agy scratch cleanup failed: ${err.message}`);
   });
+  if (preparations.take(jobId)) {
+    void removeScratch();
+    return finalizeJobFailure.canceled(job, jobId);
+  }
   let proc;
   try {
     const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;

@@ -897,3 +897,5 @@ export * from './musicVideoImageEffects.js';
 export * from './securityScanEvidence.js';
 
 export * from './musicDesignerValidation.js';
+
+export * from './mediaJobPreparation.js';

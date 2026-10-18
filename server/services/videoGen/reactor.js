@@ -1,4 +1,5 @@
 /** Reactor FastH3 renders one bounded SDK/WebRTC session per job. */
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
 import { stat, rm } from 'fs/promises';
 import { spawn } from '../../lib/childProcess.js';
@@ -79,10 +80,14 @@ export async function mintReactorToken(apiKey) {
   return { jwt: payload.jwt, expiresAt: payload.expires_at || null };
 }
 
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("videoGen/reactor.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const entry = activeRequests.get(jobId);
   if (!entry || entry.finalizing) return false;
   entry.aborted = true;
@@ -91,7 +96,7 @@ export const cancel = (jobId) => {
 };
 
 export const cancelAll = () => {
-  const ids = [...activeRequests.keys()];
+  const ids = [...preparations.ids(), ...activeRequests.keys()];
   if (ids.length === 0) return false;
   for (const id of ids) cancel(id);
   return true;
@@ -211,7 +216,9 @@ function captureClip(entry, input, pythonPath, job, jobId) {
   });
 }
 
-export async function generateVideo({
+export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+
+async function generateVideoPrepared({
   settings, prompt = '', negativePrompt,
   continueFromClipId, seconds, seed, aspect,
   sourceImagePath = null, jobId: providedJobId = null,
@@ -272,6 +279,7 @@ async function runReactorVideo(job, jobId, {
   apiKey, prompt, seconds, seed, aspect, continueFromClipId, sourceImagePath, outputPath, filename, meta,
 }) {
   const entry = { aborted: false, finalizing: false, stop: null };
+  entry.aborted = preparations.take(jobId);
   activeRequests.set(jobId, entry);
   // Declared outside the try so the finally can still delete a fitted frame
   // whose render failed after it was written.

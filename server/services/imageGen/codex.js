@@ -1,3 +1,4 @@
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — Codex CLI provider.
@@ -130,10 +131,14 @@ const sigtermWithEscalation = (id, proc) => {
 // in-flight render), so callers have to be explicit. Use `cancelAll()` for
 // the legacy "stop everything" path that the imageGen.cancel() dispatcher
 // wires up.
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("codex.cancel requires a jobId — use codex.cancelAll() to terminate every in-flight render");
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
   sigtermWithEscalation(jobId, proc);
@@ -144,9 +149,9 @@ export const cancel = (jobId) => {
 // dispatcher's "cancel everything" route — the per-job mediaJobQueue path
 // always passes a specific jobId to `cancel()`.
 export const cancelAll = () => {
-  const entries = [...activeProcs.entries()];
-  if (entries.length === 0) return false;
-  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
+  const ids = [...preparations.ids(), ...activeProcs.keys()];
+  if (ids.length === 0) return false;
+  for (const id of ids) cancel(id);
   return true;
 };
 
@@ -237,7 +242,9 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
 // Input images are attached via codex CLI's `-i <FILE>` flag (variadic, so all
 // of them ride one flag) and the prompt is reshaped so the `$imagegen` skill
 // feeds the attachments to `image_gen` as references.
-export async function generateImage({
+export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+
+async function generateImagePrepared({
   promptAdditions = [],
   codexPath, model, modelIsShippedDefault = false, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
@@ -401,6 +408,10 @@ function removeScratchDirectory(scratchDir) {
 // close handler to settle once it has physically exited.
 function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false, scratchDir } = {}) {
   const removeScratch = () => removeScratchDirectory(scratchDir);
+  if (preparations.take(jobId)) {
+    void removeScratch();
+    return finalizeJobFailure.canceled(job, jobId);
+  }
   let proc;
   try {
     const resolvedBin = !isAbsolute(bin) && (bin.includes('/') || bin.includes(sep)) ? resolve(bin) : bin;

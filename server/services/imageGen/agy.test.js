@@ -519,3 +519,19 @@ describe('agy image provider — launch refusal settlement', () => {
     expect(agy.cancel(job.jobId)).toBe(false);
   });
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-imageGen-agy';
+  const pending = agy.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(agy.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(spawnCalls).toHaveLength(0);
+  expect(agy.cancel(jobId)).toBe(false);
+});

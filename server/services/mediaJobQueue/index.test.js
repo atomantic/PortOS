@@ -1060,6 +1060,25 @@ describe('mediaJobQueue', () => {
     for (const path of [uploadedTempPath, audioFilePath, extraPath]) expect(existsSync(path)).toBe(false);
   });
 
+  it('accepts cancellation while a cloud provider is preparing before started', async () => {
+    let finishPreparation;
+    stubs.generateVideoGrok.mockImplementationOnce(({ jobId }) => new Promise(resolve => {
+      finishPreparation = () => {
+        videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
+        resolve({ jobId });
+      };
+    }));
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'preparing render' } });
+    await waitFor(() => typeof finishPreparation === 'function');
+    stubs.cancelVideo.mockReturnValueOnce('pending');
+    try {
+      await expect(mediaJobQueue.cancelJob(job.jobId)).resolves.toEqual({ ok: true, status: 'canceling' });
+    } finally {
+      finishPreparation();
+    }
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
+  });
+
   it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
       mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },

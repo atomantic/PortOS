@@ -1099,3 +1099,19 @@ describe('Codex cached defaults and isolated workspace', () => {
     expect(JSON.stringify(failed.mock.calls)).toContain('does not establish whether the tool is available');
   });
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-imageGen-codex';
+  const pending = codex.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(codex.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(spawnCalls).toHaveLength(0);
+  expect(codex.cancel(jobId)).toBe(false);
+});
