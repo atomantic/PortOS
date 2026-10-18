@@ -44,6 +44,37 @@ beforeEach(() => {
   mockUseSocketResource.mockReturnValue({ data: snapshot, loading: false, error: null });
 });
 
+describe('CosDashboardWidget snapshot comparator', () => {
+  const captureCompare = () => {
+    renderWidget();
+    const options = mockUseSocketResource.mock.calls.at(-1)[1];
+    expect(options.compare).toBeTypeOf('function');
+    return options.compare;
+  };
+  const withPatch = (patch) => patch(structuredClone(snapshot));
+
+  it('treats an identical snapshot as unchanged and a null previous as changed', () => {
+    const compare = captureCompare();
+    expect(compare(snapshot, structuredClone(snapshot))).toBe(true);
+    expect(compare(null, snapshot)).toBe(false);
+  });
+
+  it('re-renders for any rendered field, including ones no field list ever named', () => {
+    const compare = captureCompare();
+    // avgTasksPerActiveDay is rendered in the heatmap summary row but was
+    // absent from the hand-written comparator this replaced.
+    expect(compare(snapshot, withPatch((s) => { s.activityCalendar.summary.avgTasksPerActiveDay = 3.5; return s; }))).toBe(false);
+    expect(compare(snapshot, withPatch((s) => { s.recentTasks.tasks[0].description = 'Renamed'; return s; }))).toBe(false);
+    expect(compare(snapshot, withPatch((s) => { s.summary.today.succeeded = 5; return s; }))).toBe(false);
+  });
+
+  it('ignores the volatile fields the widget never renders', () => {
+    const compare = captureCompare();
+    expect(compare(snapshot, withPatch((s) => { s.summary.status.lastEvaluation = '2026-07-13T10:05:00.000Z'; return s; }))).toBe(true);
+    expect(compare(snapshot, withPatch((s) => { s.recentTasks.tasks[1].completedRelative = '21m ago'; return s; }))).toBe(true);
+  });
+});
+
 describe('CosDashboardWidget recent-task outcomes', () => {
   it('names each outcome in text and exposes the expander state', () => {
     renderWidget();
