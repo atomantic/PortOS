@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import TabPills from './ui/TabPills';
+import { useEscLayer } from './ui/Modal';
 
 // Right-side slide-in panel for the "settings over a feature page" pattern.
 // Mobile (<sm): full width. Desktop: a `size` bracket (see SIZE below). Backdrop
@@ -83,12 +84,13 @@ export default function Drawer({
   const currentTab = hasTabs ? (activeTab ?? internalTab) : undefined;
   const changeTab = onTabChange || setInternalTab;
 
-  useEffect(() => {
-    if (!open || !closeOnEsc) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose, closeOnEsc]);
+  // Esc goes through Modal's shared stack rather than a private window
+  // listener: the top-most layer alone receives it (a drawer over a modal, or
+  // a modal over a drawer, closes innermost-first), and an inner widget that
+  // consumed the key via preventDefault() (EntityCombobox, native <select>)
+  // leaves the drawer — and the form it holds — open. A closeOnEsc=false
+  // drawer still registers so the keystroke is absorbed at this layer.
+  useEscLayer(open, () => { if (closeOnEsc) onClose(); });
 
   if (!open) return null;
 

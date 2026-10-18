@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import Drawer from './Drawer';
+import Modal from './ui/Modal';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -72,6 +73,59 @@ describe('Drawer', () => {
       fireEvent.click(document.querySelector('[aria-hidden="true"]'));
       fireEvent.keyDown(window, { key: 'Escape' });
       expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('leaves the drawer open when an inner widget consumed Escape via preventDefault()', () => {
+      // EntityCombobox / native <select> close their own popover on Esc and
+      // call preventDefault(); the drawer (and the form it holds) must survive.
+      const onClose = vi.fn();
+      render(
+        <Drawer open onClose={onClose} title="X">
+          <input aria-label="popover" onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault(); }} />
+          <input aria-label="plain" />
+        </Drawer>
+      );
+      fireEvent.keyDown(screen.getByLabelText('popover'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      // A plain Escape from a field that doesn't own the key still closes.
+      fireEvent.keyDown(screen.getByLabelText('plain'), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares the Esc stack with Modal so nested surfaces close innermost-first', () => {
+      const closeDrawer = vi.fn();
+      const closeModal = vi.fn();
+      // The confirm modal opens from inside the already-open drawer, as a
+      // user action would — it lands on top of the stack.
+      const tree = (modalOpen) => (
+        <Drawer open onClose={closeDrawer} title="X">
+          <Modal open={modalOpen} onClose={closeModal} ariaLabel="confirm"><p>sure?</p></Modal>
+        </Drawer>
+      );
+      const { rerender } = render(tree(false));
+      rerender(tree(true));
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(closeModal).toHaveBeenCalledTimes(1);
+      expect(closeDrawer).not.toHaveBeenCalled();
+
+      rerender(tree(false));
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(closeDrawer).toHaveBeenCalledTimes(1);
+      expect(closeModal).toHaveBeenCalledTimes(1);
+    });
+
+    it('absorbs Escape at a closeOnEsc=false drawer instead of dismissing the layer beneath', () => {
+      const closeDrawer = vi.fn();
+      const closeModal = vi.fn();
+      render(
+        <>
+          <Modal open onClose={closeModal} ariaLabel="base"><p>base</p></Modal>
+          <Drawer open onClose={closeDrawer} title="X" closeOnEsc={false}>b</Drawer>
+        </>
+      );
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(closeDrawer).not.toHaveBeenCalled();
+      expect(closeModal).not.toHaveBeenCalled();
     });
 
     it('fires onClose from the header close button', () => {
