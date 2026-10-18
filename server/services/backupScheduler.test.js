@@ -168,6 +168,27 @@ describe('startBackupScheduler', () => {
     expect(schedule).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a backup refused by the already-running latch as a skipped slot, not a success (#12023)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const settings = { backup: { enabled: true, destPath: '/example-backups' } };
+      getSettings.mockResolvedValueOnce(settings);
+      await startBackupScheduler();
+      const handler = schedule.mock.calls[0][0].handler;
+      getSettings.mockResolvedValueOnce(settings);
+      runBackup.mockResolvedValueOnce({ skipped: true });
+
+      await expect(handler()).resolves.toEqual({ skipped: true, reason: 'already running' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('already running'));
+
+      getSettings.mockResolvedValueOnce(settings);
+      runBackup.mockResolvedValueOnce({ success: true });
+      await expect(handler()).resolves.toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('handler skips the run if backup was disabled since registration', async () => {
     getSettings.mockResolvedValueOnce({
       backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }

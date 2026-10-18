@@ -58,6 +58,8 @@ function registrationInputs(settings) {
  * Re-read settings and run a backup if it is still wanted — the cron handler
  * body, shared with the missed-slot catch-up (#8456) so both paths respect a
  * disable/destPath-clear that happened after registration/detection.
+ * Returns `{ skipped: true, reason }` when no snapshot was taken, so the
+ * scheduler records the slot as skipped instead of as a successful run (#12023).
  * @param {string} logReason - what triggered this run, for the log line
  */
 async function runScheduledBackup(logReason) {
@@ -67,17 +69,21 @@ async function runScheduledBackup(logReason) {
   if (corrupt) throw new Error('Backup settings unreadable — scheduled run was not started');
   const effective = resolveBackupConfig(fresh.backup);
   if (!effective.enabled) {
-    console.log('💾 Backup scheduler: disabled since registration — skipping run');
-    return;
+    console.warn('💾 Backup scheduler: disabled since registration — skipping run');
+    return { skipped: true, reason: 'disabled since registration' };
   }
   if (!effective.destPath) {
-    console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
-    return;
+    console.warn('💾 Backup scheduler: destPath cleared since registration — skipping run');
+    return { skipped: true, reason: 'destination cleared since registration' };
   }
   const excludePaths = fresh.backup?.excludePaths || [];
   const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
   console.log(`💾 Backup scheduler: running ${logReason} backup`);
-  await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
+  const result = await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
+  if (result?.skipped) {
+    console.warn(`⚠️ Backup scheduler: ${logReason} backup skipped — a backup is already running`);
+    return { skipped: true, reason: 'already running' };
+  }
 }
 
 /**
