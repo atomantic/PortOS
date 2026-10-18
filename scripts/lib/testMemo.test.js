@@ -56,7 +56,7 @@ const TREE = {
 };
 
 const ENV = { NODE_ENV: 'test', CI: 'true' };
-const options = (files, extra = {}) => ({ fs: memoryFs(files), workspace: 'server', env: ENV, platform: 'linux', arch: 'x64', nodeMajor: 24, ...extra });
+const options = (files, extra = {}) => ({ fs: memoryFs(files), workspace: 'server', env: ENV, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', ...extra });
 const keyOf = (files, test = 'server/lib/a.test.js', extra = {}) => computeTestMemoKeys([test], options(files, extra)).get(test);
 
 describe('floor key', () => {
@@ -86,6 +86,7 @@ describe('floor key', () => {
     expect(keys.size).toBe(Object.keys(variants).length + 1);
     expect(keyOf(TREE, 'server/lib/a.test.js', { env: { ...ENV, PORTOS_TEST_QUIET: '1' } }).floor.key).not.toBe(baseline.floor.key);
     expect(keyOf(TREE, 'server/lib/a.test.js', { platform: 'win32' }).floor.key).not.toBe(baseline.floor.key);
+    expect(keyOf(TREE, 'server/lib/a.test.js', { nodeVersion: '24.1.1' }).floor.key).not.toBe(baseline.floor.key);
   });
 
   it('fails closed on a non-literal import, a git spawn, the never marker, a missing package, and the curated lists', () => {
@@ -129,7 +130,7 @@ describe('floor key', () => {
 
 describe('recorded key', () => {
   const recorded = ['server/lib/a.test.js', 'server/lib/a.js', 'server/lib/b.js'];
-  const withRecord = (files) => keyOf(files, 'server/lib/a.test.js', { records: new Map([['server/lib/a.test.js', recorded]]) });
+  const withRecord = (files, test = 'server/lib/a.test.js', loaded = recorded) => keyOf(files, test, { records: new Map([[test, loaded]]) });
 
   it('ignores modules the green run never loaded and moves with the ones it did', () => {
     const baseline = withRecord(TREE);
@@ -148,14 +149,98 @@ describe('recorded key', () => {
     expect(info.recorded.memoizable).toBe(true);
   });
 
+  it('keeps JS a member reads as text, spawns, loads natively or runs as a worker, with their closures, even when the run never imported it', () => {
+    const cases = {
+      'text read': {
+        test: ["import { it } from 'vitest';", "import { readFileSync } from 'node:fs';", "const src = readFileSync(new URL('../routes/x.js', import.meta.url), 'utf8');", 'it(\'g\', () => {});'],
+        mutate: 'server/routes/x.js',
+      },
+      spawn: {
+        test: ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "import { join } from 'node:path';", "it('c', () => { spawnSync(process.execPath, [join(__dirname, '../routes/x.js')]); });"],
+        mutate: 'server/routes/helper.js', // the spawned script's own import
+      },
+      'spawn target': {
+        test: ["import { it } from 'vitest';", "import { fork } from 'node:child_process';", "it('c', () => { fork(new URL('../routes/x.js', import.meta.url)); });"],
+        mutate: 'server/routes/x.js',
+      },
+      worker: {
+        test: ["import { it } from 'vitest';", "import { Worker } from 'node:worker_threads';", "it('w', () => new Worker(new URL('../routes/x.js', import.meta.url)));"],
+        mutate: 'server/routes/x.js',
+      },
+      createRequire: {
+        test: ["import { it } from 'vitest';", "import { createRequire } from 'node:module';", "const require = createRequire(import.meta.url);", "const legacy = require('../routes/legacy.cjs');", 'it(\'u\', () => {});'],
+        mutate: 'server/routes/legacy.cjs',
+      },
+      'shared source reader': {
+        test: ["import { it } from 'vitest';", "import { readServerSource } from './testHelper.js';", "it('r', () => readServerSource('routes/x.js'));"],
+        mutate: 'server/routes/x.js',
+      },
+    };
+    const files = {
+      ...TREE,
+      'server/routes/x.js': "import { h } from './helper.js';\nexport const x = h;\n",
+      'server/routes/helper.js': 'export const h = 1;\n',
+      'server/routes/legacy.cjs': 'module.exports = 1;\n',
+      'server/lib/testHelper.js': "export const readServerSource = (rel) => rel;\n",
+    };
+    for (const [label, { test, mutate }] of Object.entries(cases)) {
+      const tree = { ...files, 'server/lib/side.test.js': test.join('\n') };
+      const loaded = ['server/lib/side.test.js', ...(label === 'shared source reader' ? ['server/lib/testHelper.js'] : [])];
+      const before = withRecord(tree, 'server/lib/side.test.js', loaded);
+      expect(before.recorded.memoizable, label).toBe(true);
+      const after = withRecord({ ...tree, [mutate]: `${tree[mutate]}// changed\n` }, 'server/lib/side.test.js', loaded);
+      expect(after.recorded.key, label).not.toBe(before.recorded.key);
+      expect(after.floor.key, label).not.toBe(before.floor.key);
+    }
+    // Assembled so this file does not itself read as a tree scanner to scripts/repo-scan-guards.test.js.
+    const unresolvable = { ...files, 'server/lib/side.test.js': ["import { it } from 'vitest';", "import { readServerSource } from './testHelper.js';", `it('r', () => ${'readServerSource'}(process.env.TARGET));`].join('\n') };
+    expect(withRecord(unresolvable, 'server/lib/side.test.js', ['server/lib/side.test.js']).recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('readServerSource') });
+  });
+
   it('is not memoizable when the loaded set reaches outside the repository', () => {
     const info = keyOf(TREE, 'server/lib/a.test.js', { records: new Map([['server/lib/a.test.js', [...recorded, '../outside/x.js']]]) });
     expect(info.recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('outside the repository') });
   });
 });
 
+describe('python sidecars, external tools and machine-local state', () => {
+  it('hashes a python sidecar and its resolvable sibling imports, and keys the python version', () => {
+    const files = {
+      ...TREE,
+      'scripts/tool.py': 'import os\nfrom _common import run\nimport _pins\n',
+      'scripts/_common.py': 'def run(): pass\n',
+      'scripts/_pins.py': 'PINS = 1\n',
+      'scripts/tool.test.js': ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "it('p', () => spawnSync(process.env.PORTOS_TEST_PYTHON || 'python3', [new URL('./tool.py', import.meta.url).pathname]));"].join('\n'),
+    };
+    const versions = { python: 'Python 3.12.1' };
+    const key = (tree, extra = {}) => keyOf(tree, 'scripts/tool.test.js', { toolVersion: (tool) => versions[tool] ?? null, ...extra }).floor;
+    const base = key(files);
+    expect(base.memoizable).toBe(true);
+    expect(key({ ...files, 'scripts/_common.py': 'def run(): return 1\n' }).key).not.toBe(base.key);
+    expect(key({ ...files, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(base.key);
+    expect(key(files, { toolVersion: () => 'Python 3.13.0' }).key).not.toBe(base.key);
+    expect(key({ ...files, 'scripts/tool.py': 'from .missing import x\n' }).memoizable).toBe(false);
+    // A test that never reaches python does not carry its version.
+    expect(keyOf(TREE, 'server/lib/a.test.js', { toolVersion: () => 'Python 3.13.0' }).floor.key).toBe(keyOf(TREE).floor.key);
+  });
+
+  it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {
+    // The fixture sources spell the data directory from pieces so this file
+    // does not itself trip lib/testDataIsolation.guards.test.js.
+    const DATA = ['da', 'ta'].join('');
+    const read = (rel) => ["import { it } from 'vitest';", "import { readFileSync } from 'node:fs';", "import { join } from 'node:path';", "import { homedir } from 'node:os';", `it('d', () => readFileSync(${rel}));`].join('\n');
+    expect(keyOf({ ...TREE, 'server/lib/a.test.js': read(`join(__dirname, '../../${DATA}/settings.json')`) }).floor).toMatchObject({ memoizable: false, reason: expect.stringContaining('machine-local') });
+    expect(keyOf({ ...TREE, 'server/lib/a.test.js': read("join(homedir(), '.portos', 'agent-key.json')") }).floor).toMatchObject({ memoizable: false, reason: expect.stringContaining('machine-local') });
+    expect(keyOf({ ...TREE, 'server/lib/a.test.js': read("join(process.env.HOME, '.portos')") }).floor.memoizable).toBe(false);
+    const product = { ...TREE, 'server/lib/a.js': `import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nexport const a = () => readFileSync(join(__dirname, '..', '..', '${DATA}', 'settings.json'));\n` };
+    expect(keyOf(product).floor.memoizable).toBe(true);
+  });
+});
+
 describe('closure-based related selection', () => {
-  it('follows static, dynamic and mock edges, and treats unresolved edges as related to everything', () => {
+  it('follows static, dynamic and mock edges, JSON inputs, and treats unresolved edges as related to everything', () => {
+    const withJson = { ...TREE, 'server/lib/plain.test.js': "import { it } from 'vitest';\nimport manifest from './manifest.json';\nit('plain', () => {});\n", 'server/lib/manifest.json': '{}' };
+    expect(relatedTests(computeTestMemoKeys(['server/lib/a.test.js', 'server/lib/plain.test.js'], options(withJson)), ['server/lib/manifest.json'])).toEqual(['server/lib/plain.test.js']);
     const keys = computeTestMemoKeys(['server/lib/a.test.js', 'server/lib/plain.test.js'], options(TREE));
     expect(relatedTests(keys, ['server/lib/lazy.js'])).toEqual(['server/lib/a.test.js']);
     expect(relatedTests(keys, ['server/lib/mocked.js'])).toEqual(['server/lib/a.test.js']);
