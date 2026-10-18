@@ -29,6 +29,7 @@ vi.mock('./cosState.js', async (importOriginal) => ({
 
 const { init } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
+const { resolveTaskStatusTransition } = await import('../lib/taskStatusTransition.js');
 
 // One macrotask turn is enough: the listener schedules with setImmediate and the
 // wrapper's .catch settles on the microtask queue right after.
@@ -53,6 +54,12 @@ describe('scheduleDequeue — rejections stay inside the cycle (#5644)', () => {
     // Two independent event sources, so a guard added to only one of them fails.
     cosEvents.emit('tasks:cos:added');
     cosEvents.emit('tasks:changed', { action: 'approved' });
+    // A completed task returned to pending must wake this real listener (#12058).
+    cosEvents.emit('tasks:changed', {
+      action: resolveTaskStatusTransition('completed', 'pending').action,
+      previousStatus: 'completed',
+      task: { id: 'task-revived', status: 'pending' }
+    });
     await drainScheduled();
 
     process.off('unhandledRejection', onUnhandled);
@@ -61,7 +68,7 @@ describe('scheduleDequeue — rejections stay inside the cycle (#5644)', () => {
     const logged = errorSpy.mock.calls
       .map(args => args.join(' '))
       .filter(line => line.includes('CoS dequeue cycle failed'));
-    expect(logged).toHaveLength(2);
+    expect(logged).toHaveLength(3);
     expect(logged[0]).toContain(STATE_ERROR);
   });
 });

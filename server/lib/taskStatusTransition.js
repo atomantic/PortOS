@@ -62,7 +62,7 @@ export function resolveTaskStatusTransition(previousStatus, nextStatus) {
 
   // A revive: the task was parked and is spawnable again. Drives the `unblocked`
   // action, which is what re-runs cos.init's dequeue (#2614).
-  const isRevive = resultingStatus === 'pending' && previousStatus === 'blocked';
+  const isRevive = resultingStatus === 'pending' && (previousStatus === 'blocked' || previousStatus === 'completed');
   // The one BACKWARD step in the lifecycle (#3376) — the orphan sweep and the
   // retry-hold release both perform it, and the federated merge has to tell it
   // apart from an ordinary edit landing on a peer's stale `pending` copy.
