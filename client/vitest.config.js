@@ -30,6 +30,8 @@ const config = defineConfig({
       // The runner's selection is for THIS Vitest process only: a suite that
       // spawns a nested Vitest on a fixture must not inherit it.
       PORTOS_CI_TEST_SELECTION: '',
+      // Same for the memo store: a nested Vitest must point at its own directory or stay off.
+      PORTOS_TEST_MEMO_DIR: '',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public
     // runner before ChiefOfStaff's config panel settled. Keep the proven

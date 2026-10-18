@@ -101,7 +101,7 @@ const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?trackedFiles\.js['"]/;
  * Matched against comment-stripped source so a comment describing a walk
  * does not register one.
  */
-const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(/;
+const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(|\bread(?:Server|Client)Source\s*\(\s*[^'"`)\s]/;
 const RECURSIVE_READDIR = /readdirSync\s*\([^)]*\brecursive\s*:\s*true/;
 const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm, '');
 
