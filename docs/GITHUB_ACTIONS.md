@@ -799,10 +799,15 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
   with literal specifiers);
 - the **recorded** key hashes the modules the file actually loaded in the
   green run that produced its entry (Vitest's
-  `experimental.recordDependencies` depfile). A module the test mocks away or
-  never reaches cannot change its outcome, so a change to the lazily
-  imported server cluster invalidates only the suites that loaded it; a new
-  edge still invalidates because the importer's own bytes changed.
+  `experimental.recordDependencies` depfile, cleared before each run so only
+  this run's records count). A module the test mocks away or never reaches
+  cannot change its outcome, so a change to the lazily imported server
+  cluster invalidates only the suites that loaded it; a new edge still
+  invalidates because the importer's own bytes changed. Only plain import
+  edges are narrowed this way: JS a member reads as text, spawns, loads
+  with `require()`/`createRequire` or runs as a worker, and JS named through
+  `readServerSource`/`readClientSource`, is a side module that stays in
+  every key together with its own closure.
 
 Both keys also cover: every non-JS file a member names through a literal path
 anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
@@ -810,46 +815,65 @@ bound to one of those (a literal directory contributes its whole tree, up to
 400 files; snapshot files and the planner's `FIXTURE_OWNERS` directories are
 added for the test itself); the installed version of every package the
 members reach (so a lockfile bump invalidates exactly the suites that reach
-the bumped packages); the workspace Vitest config closure, setup files,
-`scripts/vitestCiPool.js`, `package.json` and lockfile; the Node major,
-`process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`, `NODE_ENV`,
-`PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
+the bumped packages); a Python sidecar's resolvable sibling imports; the
+version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
+python the sidecar tests spawn, ffmpeg/ffprobe, and Chrome for the browser
+suites); the workspace Vitest config closure, setup files,
+`scripts/vitestCiPool.js`, `package.json` and lockfile; the full Node
+version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
+`NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
 `PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
-`PORTOS_TEST_QUIET`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
+`PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
+`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
 
 **Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
 or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
 file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —
 product modules that run git on their own targets are under the test's
-control); a member that reads a path the analyzer cannot resolve
-(`import.meta.glob`, anything under `.git/`, a literal directory with more
-than 400 files); a bare specifier that resolves to no installed package; and,
-for the floor key only, a non-literal `import()`/`require()` or an
-unparseable member. A recorded set that reaches outside the repository is
-not memoizable either. Every unknown construct lands in one of those buckets
-rather than silently narrowing the key.
+control); a test file or `scripts/` member that reads machine-local state
+(`data/`, the home directory); a member that reads a path the analyzer
+cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
+`readServerSource`/`readClientSource`, a literal directory with more than
+400 files); a bare specifier that resolves to no installed package; and, for
+the floor key only, a non-literal `import()`/`require()` or an unparseable
+member. A recorded set that reaches outside the repository is not memoizable
+either. Every unknown construct lands in one of those buckets rather than
+silently narrowing the key.
 
 **Store.** `~/.portos/test-memo/` (override with `PORTOS_TEST_MEMO_DIR`):
 `entries/<key[0..2]>/<key>.json` holds `{ test, workspace, verifiedAt,
 source: 'local'|'ci', commit }`, `records/<workspace>/<sha256(test)>.json`
 the loaded-module list. Writes are temp-file-plus-rename so concurrent
-worktree pregates never tear a file; any read error is a miss. Entries are
-written only for files Vitest's JSON report shows passed with no failed and
-no skipped case (a browser profile's name pattern is the one accepted skip
-reason). The runner prints one line —
+worktree pregates never tear a file; any read error is a miss, and so is an
+entry older than 14 days, so the nightly re-verifies what it keeps skipping.
+Entries are written only from a Vitest process that exited 0 whose run-level
+report (`scripts/vitestRunDiagnostics.js`) ended `passed` with no unhandled
+error — a rejection after the last test still marks every file `passed` in
+the JSON report — and only for files that report shows passed with no failed
+and no skipped case (a browser profile's name pattern is the one accepted
+skip reason). Every key is recomputed after the run and written only when it
+still matches, so a file edited while Vitest ran is never attributed to the
+verdict. The runner prints one line —
 `🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
 — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
 selected file is memoized nothing is launched and the job exits 0.
+
+**Shards.** A matrix shard takes its slice of the FULL selected list with
+Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
+against a real `vitest run --shard`) before the memo subtracts anything, so
+every file lands in exactly one shard whatever each shard's store holds;
+Vitest itself is never given `--shard`.
 
 **CI seeding.** The server, client, browser and Windows jobs restore
 `${{ runner.temp }}/portos-test-memo` with `actions/cache/restore` under a
 per-job, per-shard key prefix (`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
 Pull requests only read. The scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
-by run id, so the cache holds nothing a pull-request branch wrote and every
-PR restores the newest trusted lineage. The DB job does not go through
-`run-ci-tests.js` and is not memoized.
+by run id, and only when the test step itself succeeded, so the cache holds
+nothing a pull-request branch or a red run wrote and every PR restores the
+newest trusted lineage. The DB job does not go through `run-ci-tests.js`
+and is not memoized.
 
 **Disable.** `PORTOS_TEST_MEMO=off` turns reads and writes off together and
 restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)

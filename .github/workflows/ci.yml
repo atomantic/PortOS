@@ -370,6 +370,7 @@ jobs:
             test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
 
       - name: Run server tests
+        id: server-tests
         if: needs.impact.outputs.server_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
@@ -387,10 +388,11 @@ jobs:
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
-      # Only trusted full runs on the default/release branches seed the memo;
-      # a red shard still saves the files that passed (entries are per file).
+      # Only trusted full runs on the default/release branches seed the memo,
+      # and only from a green test step: the runner writes no entry from a
+      # red process, and a step that never ran has nothing to save.
       - name: Save the test memo
-        if: github.event_name != 'pull_request' && !cancelled()
+        if: steps.server-tests.outcome == 'success' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -492,6 +494,7 @@ jobs:
             test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
 
       - name: Run client tests
+        id: client-tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
@@ -502,7 +505,7 @@ jobs:
         run: node scripts/run-ci-tests.js client
 
       - name: Save the test memo
-        if: needs.impact.outputs.client_mode != 'skip' && github.event_name != 'pull_request' && !cancelled()
+        if: steps.client-tests.outcome == 'success' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -903,6 +906,7 @@ jobs:
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
+        id: browser-tests
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
@@ -917,7 +921,7 @@ jobs:
         run: node scripts/watch-ci-tests.js server
 
       - name: Save the test memo
-        if: github.event_name != 'pull_request' && !cancelled()
+        if: steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -1059,6 +1063,7 @@ jobs:
             test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
 
       - name: Run server tests on Windows
+        id: windows-tests
         # A step timeout FAILS the step (log kept, `if: failure()` reporting
         # runs); the job-level timeout would cancel the job and lose the log
         # (#10415). Observed healthy runs take 2-10 minutes.
@@ -1079,7 +1084,7 @@ jobs:
         run: node scripts/run-ci-tests.js server
 
       - name: Save the test memo
-        if: github.event_name != 'pull_request' && !cancelled()
+        if: steps.windows-tests.outcome == 'success' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo

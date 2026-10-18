@@ -63,6 +63,8 @@ const config = defineConfig({
       // The runner's selection is for THIS Vitest process only: a suite that
       // spawns a nested Vitest on a fixture must not inherit it.
       PORTOS_CI_TEST_SELECTION: '',
+      // Same for the memo store: a nested Vitest must point at its own directory or stay off.
+      PORTOS_TEST_MEMO_DIR: '',
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform
