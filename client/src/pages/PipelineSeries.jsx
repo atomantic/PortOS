@@ -11,7 +11,7 @@ import { compareIssuesInSeries } from '../../../server/lib/pipelineIssueOrder.js
  * Mobile (< lg): single column, sidebar reflows above canvas.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import SeriesReviewPanel from '../components/pipeline/SeriesReviewPanel';
@@ -125,7 +127,9 @@ export default function PipelineSeries() {
   const [editorTab, setEditorTab] = useDrawerTab('view', 'issues', EDITOR_TABS.map((tab) => tab.id));
   const [series, setSeries] = useState(null);
   const [issues, setIssues] = useState([]);
-  const [universes, setWorlds] = useState([]);
+  const fetchUniverses = useCallback(() => listUniverses({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const { items: universes } = universesResource;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageBool(
@@ -139,13 +143,11 @@ export default function PipelineSeries() {
     Promise.all([
       getPipelineSeries(seriesId, { silent: true }),
       listPipelineIssues(seriesId, { silent: true }),
-      listUniverses().catch(() => []),
     ])
-      .then(([s, is, ws]) => {
+      .then(([s, is]) => {
         if (canceled) return;
         setSeries(s);
         setIssues(Array.isArray(is) ? is : []);
-        setWorlds(Array.isArray(ws) ? ws : []);
       })
       .catch((err) => {
         if (canceled) return;
@@ -361,6 +363,8 @@ export default function PipelineSeries() {
             <BibleSidebar
               series={series}
               universes={universes}
+              universesError={universesResource.error}
+              universesRetry={universesResource.retry}
               patchSeries={patchSeries}
               onSeriesUpdate={updateSeriesFromServer}
               onFlushPending={flushPending}
@@ -374,7 +378,7 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
+function BibleSidebar({ series, universes, universesError, universesRetry, patchSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
   const [generatingLogo, setGeneratingLogo] = useState(false);
   const handleGenerateLogo = async () => {
     // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
@@ -559,6 +563,9 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
             <Globe size={12} /> Open
           </Link>
         </div>
+        {universesError ? (
+          <ListLoadError what="universes" error={universesError} onRetry={universesRetry} className="mt-2" />
+        ) : null}
       </Field>
 
       <Field compact label="Universe style override (this series only)">

@@ -7,13 +7,15 @@
  * drills into its detail page where issues are created and managed.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useListResource from '../hooks/useListResource';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen, Waypoints } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import ListLoadError from '../components/ui/ListLoadError';
 import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -64,12 +66,16 @@ const emptyForm = () => ({
 
 export default function Pipeline() {
   const navigate = useNavigate();
-  const [series, setSeries] = useState([]);
+  const fetchSeries = useCallback(() => listPipelineSeriesSummaries({ silent: true }), []);
+  const seriesResource = useListResource(fetchSeries);
+  const { items: series, setItems: setSeries } = seriesResource;
   const [universes, setWorlds] = useState([]);
-  // seriesId -> number of FableLoom looms soft-linked to it (#4785). A failed
-  // fetch degrades to "no badges", never to a broken series list.
-  const [loomCounts, setLoomCounts] = useState(() => new Map());
-  const [loading, setLoading] = useState(true);
+  // Series badges are optional; a failed loom read leaves the series list
+  // usable and exposes its own retry row below.
+  const fetchLooms = useCallback(() => listLooms({ silent: true }), []);
+  const loomsResource = useListResource(fetchLooms);
+  const { items: looms } = loomsResource;
+  const loomCounts = useMemo(() => countLoomsBySeries(looms), [looms]);
 
   const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
@@ -94,22 +100,8 @@ export default function Pipeline() {
   useEffect(() => { universeIdRef.current = form.universeId; }, [form.universeId]);
 
   useEffect(() => {
-    Promise.all([
-      listPipelineSeriesSummaries({ silent: true }).catch(() => []),
-      // Universes are optional — failing the fetch should still let the user
-      // create a series without one. Surface the error as a quiet toast.
-      listUniverseNames({ silent: true }).catch((err) => {
-        toast.error(err.message || 'Failed to load universes');
-        return [];
-      }),
-      // Loom summaries are a side quest for the row badge — a failure here must
-      // not toast over the series list or block it.
-      listLooms({ silent: true }).catch(() => []),
-    ]).then(([s, w, looms]) => {
-      setSeries(Array.isArray(s) ? s : []);
-      setWorlds(Array.isArray(w) ? w : []);
-      setLoomCounts(countLoomsBySeries(looms));
-      setLoading(false);
+    listUniverseNames({ silent: true }).then(setWorlds).catch((err) => {
+      toast.error(err.message || 'Failed to load universes');
     });
   }, []);
 
@@ -533,8 +525,10 @@ export default function Pipeline() {
         </form>
       )}
 
-      {loading ? (
+      {seriesResource.state === 'loading' ? (
         <div className="text-gray-500 text-sm">Loading series…</div>
+      ) : seriesResource.state === 'error' ? (
+        <ListLoadError what="series" error={seriesResource.error} onRetry={seriesResource.retry} />
       ) : series.length === 0 ? (
         <div className="text-gray-500 text-sm">No series yet. Click <span className="text-port-accent">New Series</span> to start.</div>
       ) : (
@@ -613,6 +607,9 @@ export default function Pipeline() {
           })}
         </ul>
       )}
+      {loomsResource.state === 'error' ? (
+        <ListLoadError what="branching narrative badges" error={loomsResource.error} onRetry={loomsResource.retry} className="mt-3" />
+      ) : null}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 
@@ -32,6 +33,7 @@ const api = vi.hoisted(() => ({
   reconcileStorySession: vi.fn(),
   storyStepProgressSseUrl: vi.fn((id, stepId) => `/api/story-builder/${id}/steps/${stepId}/progress`),
   setStoryIssueLock: vi.fn(),
+  generateStoryIssues: vi.fn(),
   getUniverse: vi.fn(),
   getPipelineSeries: vi.fn(),
   listPipelineIssues: vi.fn(),
@@ -141,6 +143,7 @@ beforeEach(() => {
   api.generateStoryStep.mockResolvedValue({ result: {} });
   api.refineStoryStep.mockResolvedValue({ result: {}, changes: [] });
   api.setStoryIssueLock.mockResolvedValue({});
+  api.generateStoryIssues.mockResolvedValue({ createdIssues: [], seasons: [] });
   // The sync/reconcile routes return the recomputed view (staleSteps + syncDrift),
   // not just the record — toggling sync or reconciling can shift staleness.
   api.setStorySessionSync.mockImplementation(async (_id, sync) => ({ id: 'stb-1', sync, staleSteps: [], syncDrift: false }));
@@ -517,6 +520,38 @@ describe('StoryBuilder — index', () => {
 });
 
 describe('StoryBuilder — detail stepper', () => {
+  it('keeps a failed pipeline-issue read distinct from an empty issue list', async () => {
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Example story', currentStep: 'issues', steps: mkSteps(), seriesId: 's1',
+    });
+    api.listPipelineIssues.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    renderAt('/story-builder/stb-1/issues');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load pipeline issues');
+    expect(screen.queryByText(/No issues yet/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/No issues yet/)).toBeInTheDocument();
+  });
+
+  it('refreshes the issue list after generating issues without leaving the step', async () => {
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Example story', currentStep: 'issues', steps: mkSteps(), seriesId: 's1',
+    });
+    api.getPipelineSeries.mockResolvedValue({
+      id: 's1', seasons: [{ id: 'season-1' }], arc: { logline: 'AL', summary: 'AS' },
+    });
+    api.listPipelineIssues.mockResolvedValueOnce([]).mockResolvedValue([
+      { id: 'issue-1', number: 1, title: 'Generated issue', status: 'open' },
+    ]);
+    api.generateStoryIssues.mockResolvedValue({ createdIssues: [{ id: 'issue-1' }], seasons: [] });
+    const user = userEvent.setup();
+    renderAt('/story-builder/stb-1/issues');
+
+    await user.click(await screen.findByRole('button', { name: 'Generate issues from arc' }));
+    expect(await screen.findByText(/#1 Generated issue/)).toBeInTheDocument();
+    expect(api.listPipelineIssues).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ['a server failure', Object.assign(new Error('Service unavailable'), { status: 503 })],
     ['a network failure', new Error('Network is down')],
