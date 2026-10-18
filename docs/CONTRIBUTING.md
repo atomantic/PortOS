@@ -120,6 +120,18 @@ that was validated — untracked and uncommitted files included, so a later
 commit of that state yields the same `HEAD^{tree}`. A green summary never
 claims a suite it skipped; required CI checks still apply.
 
+After the push, `node scripts/pregate-attest.js` posts that receipt as a
+`pregate` commit status on the pushed head, bound to the validated tree, and
+the pull request's impact planner skips the stages it attests to (only stages
+that ran and passed; never Windows, Linux containment or the Node-minimum
+check). It refuses — saying what to rerun — when the receipt did not pass,
+the tree changed after pregate, the commit is not on the upstream remote yet,
+or nothing attestable ran; a refusal just means CI runs everything as before.
+`--dry-run` prints the status without posting it. Only a repository writer
+can create the status and only the repository owner's counts, so fork and
+Dependabot pull requests are unaffected. Contract and inspection:
+[Pregate attestation](GITHUB_ACTIONS.md#pregate-attestation).
+
 PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
 and on the release PR. To check them on a rendering PR before merging, run
 `node scripts/browser-fidelity.js --pr NUMBER` from the clean published head. See
@@ -264,7 +276,9 @@ state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
 [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md#test-memo).
 
 Pull requests into `main` run the tests for affected feature directories, with
-conservative fallbacks to the runner's related-test mode or the complete suite. The
+conservative fallbacks to the runner's related-test mode or the complete suite; a
+same-repository pull request whose pushed head carries a pregate attestation
+skips the stages that receipt proved (see the Git Workflow section). The
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
 run nothing — the pull request gate already covered that tree. Release
