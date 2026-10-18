@@ -89,7 +89,7 @@ export default function CleanupStage({ board }) {
         {finals.length > 0 && <ul className="space-y-2" aria-label="Older final renders">
           {finals.map(file => <li key={file.id} className="break-words rounded border border-port-border p-3 text-sm">
             <p>{file.createdAt ? formatDateTime(file.createdAt) : 'Older final'} · {formatBytes(file.bytes)}</p>
-            <p className="text-port-text-muted">{file.reason ? `Kept: ${file.reason}` : 'Superseded — safe to remove'}</p>
+            <p className="text-port-text-muted">{file.reason ? `Kept: ${file.reason}` : file.pending ? 'Cleanup incomplete — retry to remove remaining files' : 'Superseded — safe to remove'}</p>
           </li>)}
         </ul>}
       </>}

@@ -5,7 +5,14 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 
 const root = () => lazyTempDataRoot('mv-render-cleanup-');
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: root }));
-const state = { project: null, others: [], collections: [], timelines: [], director: [], active: false };
+const state = { project: null, others: [], collections: [], timelines: [], director: [], active: false, failHistory: false };
+vi.mock('../../lib/fileUtils.js', async load => {
+  const actual = await load();
+  return { ...actual, atomicWrite: async (path, data) => {
+    if (state.failHistory && path.endsWith('video-history.json')) throw new Error('History write failed');
+    return actual.atomicWrite(path, data);
+  } };
+});
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => state.project), listProjects: vi.fn(async () => [state.project, ...state.others]),
   withProjectMediaMutation: async work => work({}),
@@ -31,7 +38,7 @@ beforeEach(async () => {
   mkdirSync(PATHS.videos, { recursive: true });
   mkdirSync(PATHS.videoThumbnails, { recursive: true });
   state.project = { id: 'example-project', renderHistoryId: 'current' };
-  state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false;
+  state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false; state.failHistory = false;
   vi.clearAllMocks();
   assertSegmentCleanupIdle.mockReset();
   await saveHistory([]);
@@ -79,6 +86,19 @@ describe('derived render retention', () => {
     expect(unindexVideo).toHaveBeenCalledTimes(2);
   });
 
+  it('retains recovery metadata and all video bytes if history publication fails', async () => {
+    await seed([entry('current'), entry('old')]);
+    state.failHistory = true;
+    await expect(cleanupSupersededFinals('example-project')).rejects.toThrow('History write failed');
+    expect((await loadHistory()).map(item => item.id)).toContain('old');
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+    expect((await getRenderCleanup('example-project')).finals).toEqual([expect.objectContaining({ id: 'old', pending: true })]);
+    state.failHistory = false;
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+    expect(existsSync(join(PATHS.videos, '.music-video-render-cleanup.json'))).toBe(false);
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current']);
+  });
+
   it('keeps the previous final when its replacement failed to become the current render, or its file is missing', async () => {
     await seed([entry('current'), entry('new')]);
     expect(await cleanupSupersededFinals('example-project', { replacementId: 'new' })).toBe(0);
@@ -104,13 +124,18 @@ describe('derived render retention', () => {
     expect(() => assertRenderCleanupIdle('example-project')).not.toThrow();
   });
 
-  it('reports deletion and unreadable-history failures without claiming cleanup or deleting the current final', async () => {
-    await seed([entry('current'), entry('old')]);
+  it('reconciles a partially deleted batch without leaving broken history rows, and reports unreadable history', async () => {
+    await seed([entry('current'), entry('retired'), entry('old')]);
     rmSync(join(PATHS.videoThumbnails, 'old.jpg'));
     mkdirSync(join(PATHS.videoThumbnails, 'old.jpg'));
     await expect(cleanupSupersededFinals('example-project')).rejects.toThrow();
-    expect((await loadHistory()).map(item => item.id)).toContain('old');
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current']);
+    expect(existsSync(join(PATHS.videos, 'retired.mp4'))).toBe(false);
+    expect((await getRenderCleanup('example-project')).finals).toEqual([expect.objectContaining({ id: 'old', pending: true })]);
     expect(existsSync(join(PATHS.videos, 'current.mp4'))).toBe(true);
+    rmSync(join(PATHS.videoThumbnails, 'old.jpg'), { recursive: true });
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+    expect((await getRenderCleanup('example-project')).finals).toEqual([]);
     writeFileSync(join(PATHS.data, 'video-history.json'), '{invalid');
     await expect(cleanupSupersededFinals('example-project')).rejects.toThrow();
     expect(existsSync(join(PATHS.videos, 'current.mp4'))).toBe(true);

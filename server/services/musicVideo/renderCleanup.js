@@ -1,12 +1,29 @@
 /** Retire regenerable renders without touching source takes or the cutting-room floor. */
 import { unlink, stat } from 'node:fs/promises';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { join } from 'node:path';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, listProjects, withProjectMediaMutation } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from '../videoGen/history.js';
+
+// Filesystem recovery metadata is local to these generated videos, never federated.
+const JOURNAL = join(PATHS.videos, '.music-video-render-cleanup.json');
+const cleanupWrites = createFileWriteQueue();
+async function readPending() {
+  const journal = await readJSONFile(JOURNAL, { version: 1, entries: [] }, { strict: true });
+  if (journal?.version !== 1 || !Array.isArray(journal.entries)
+    || journal.entries.some(entry => !entry || typeof entry.id !== 'string' || typeof entry.filename !== 'string')) {
+    throw new ServerError('Render cleanup recovery metadata is unreadable', { status: 409, code: 'RENDER_CLEANUP_JOURNAL_INVALID' });
+  }
+  return journal.entries;
+}
+const savePending = pending => pending.size
+  ? atomicWrite(JOURNAL, { version: 1, entries: [...pending.values()] }) : remove(JOURNAL);
+const retirementEntries = (history, pending) => [...new Map([...pending, ...history].map(entry => [entry.id, entry])).values()];
 
 const cleaning = new Set();
 export function assertRenderCleanupIdle(projectId) {
@@ -30,7 +47,7 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
   ...Array.from({ length: 9 }, (_, i) => safeUnder(PATHS.videoThumbnails, `${entry.id}-f${i + 1}.jpg`)),
 ].filter(Boolean);
 
-async function finalInventory(projectId, history) {
+async function finalInventory(projectId, history, pending = []) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const [{ listCollections }, timeline, director] = await Promise.all([
@@ -45,45 +62,63 @@ async function finalInventory(projectId, history) {
   const current = history.find(entry => entry.id === project.renderHistoryId);
   const hasCurrent = current && await size(safeUnder(PATHS.videos, current.filename)) > 0;
   const finals = [];
-  for (const entry of history) {
+  const pendingIds = new Set(pending.map(entry => entry.id));
+  for (const entry of retirementEntries(history, pending)) {
     // Only the full-render pipeline owns this tag. Source clips use musicVideo.projectId.
     if (entry.musicVideoProjectId !== projectId || !['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse'].includes(entry.modelId) || entry.id === project.renderHistoryId) continue;
     const ids = new Set([entry.id, entry.filename]);
     const referenced = owners.some(owner => references(owner, ids))
-      || history.some(other => other !== entry && references(other, ids));
+      || history.some(other => other.id !== entry.id && references(other, ids));
     const reason = !hasCurrent ? 'No completed replacement' : referenced ? 'Referenced by saved media or production records' : null;
-    finals.push({ id: entry.id, filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
+    finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
   }
   return { project, finals };
 }
 
 /** Called only after the replacement has been published. Failed writes keep old renders. */
 export async function cleanupSupersededFinals(projectId, { replacementId = null } = {}) {
-  return withBackupAssetPublication(() => withProjectMediaMutation(async () => {
-    const deleted = [];
-    await mutateVideoHistory(async history => {
-      const { project, finals } = await finalInventory(projectId, history);
-      if (replacementId && project.renderHistoryId !== replacementId) return HISTORY_UNCHANGED;
-      const eligible = new Set(finals.filter(entry => !entry.reason).map(entry => entry.id));
-      const retainedFiles = new Set(history.filter(entry => !eligible.has(entry.id)).flatMap(renderFiles));
-      const index = eligible.size ? await import('../mediaAssetIndex/index.js') : null;
-      for (const entry of history) {
-        if (!eligible.has(entry.id)) continue;
-        if (!safeUnder(PATHS.videos, entry.filename)) throw new ServerError('Invalid render filename', { status: 409, code: 'INVALID_VIDEO_PATH' });
-        // Leave the row and bytes available to retry if its derived index cannot settle.
-        await index.unindexVideo(entry.id, { strict: true });
-        for (const path of renderFiles(entry)) if (!retainedFiles.has(path)) await remove(path);
-        deleted.push(entry.id);
-      }
-      return deleted.length ? history.filter(entry => !eligible.has(entry.id)) : HISTORY_UNCHANGED;
-    });
-    if (deleted.length) musicVideoEvents.emit('render-cleanup', { projectId });
-    return deleted.length;
-  }));
+  // One writer owns the shared journal across history commits and file retirement.
+  return cleanupWrites(() => withBackupAssetPublication(() => withProjectMediaMutation(async () => {
+    const pending = new Map((await readPending()).map(entry => [entry.id, entry]));
+    let retiring = [];
+    let retainedFiles;
+    let removed = 0;
+    return (async () => {
+      await mutateVideoHistory(async history => {
+        const entries = retirementEntries(history, [...pending.values()]);
+        const { project, finals } = await finalInventory(projectId, history, [...pending.values()]);
+        if (replacementId && project.renderHistoryId !== replacementId) return HISTORY_UNCHANGED;
+        const eligible = new Set(finals.filter(entry => !entry.reason).map(entry => entry.id));
+        retiring = entries.filter(entry => eligible.has(entry.id));
+        if (!retiring.length) return HISTORY_UNCHANGED;
+        retainedFiles = new Set(entries.filter(entry => !eligible.has(entry.id)).flatMap(renderFiles));
+        for (const entry of retiring) {
+          if (!safeUnder(PATHS.videos, entry.filename)) throw new ServerError('Invalid render filename', { status: 409, code: 'INVALID_VIDEO_PATH' });
+          pending.set(entry.id, entry);
+        }
+        // Recovery evidence precedes every index/history/byte mutation. The
+        // history stops advertising a render before any of its bytes disappear.
+        await savePending(pending);
+        const { unindexVideo } = await import('../mediaAssetIndex/index.js');
+        for (const entry of retiring) await unindexVideo(entry.id, { strict: true });
+        return history.filter(entry => !eligible.has(entry.id));
+      });
+      if (!retiring.length) return 0;
+      await (async () => {
+        for (const entry of retiring) {
+          for (const path of renderFiles(entry)) if (!retainedFiles.has(path)) await remove(path);
+          pending.delete(entry.id);
+          removed += 1;
+        }
+      })().finally(() => savePending(pending));
+      return removed;
+    })().finally(() => { if (retiring.length) musicVideoEvents.emit('render-cleanup', { projectId }); });
+  })));
 }
 
 export async function getRenderCleanup(projectId) {
-  const { finals } = await finalInventory(projectId, await loadHistory());
+  const [history, pending] = await Promise.all([loadHistory(), readPending()]);
+  const { finals } = await finalInventory(projectId, history, pending);
   const { getSegmentCleanup } = await import('./shotSegments.js');
   return { finals, segments: await getSegmentCleanup(projectId) };
 }
