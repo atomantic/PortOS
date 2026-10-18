@@ -574,6 +574,9 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
       {job.status === 'failed' && job.error && (
         <div role="status" className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
       )}
+      {job.status === 'queued' && job.statusMsg && (
+        <div role="status" className="text-xs text-port-warning-text mt-2 truncate" title={job.statusMsg}>{job.statusMsg}</div>
+      )}
       {job.status === 'running' && (
         <div className="mt-2 space-y-1">
           <div className="flex items-center justify-between gap-2 text-xs text-port-text-muted">
