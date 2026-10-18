@@ -32,4 +32,20 @@ describe('useModelInputPreview', () => {
     await act(async () => { vi.advanceTimersByTime(500); });
     expect(result.current).toEqual({ preview: null, error: 'Codex Imagegen is disabled' });
   });
+
+  it('hides the preview when disabled and drops an in-flight refusal', async () => {
+    vi.useFakeTimers();
+    let rejectPreview;
+    const fetchPreview = vi.fn(() => new Promise((_resolve, reject) => { rejectPreview = reject; }));
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useModelInputPreview(fetchPreview, { prompt: 'a fox' }, { enabled }),
+      { initialProps: { enabled: true } },
+    );
+    await act(async () => { vi.advanceTimersByTime(500); });
+    rerender({ enabled: false });
+    expect(result.current).toEqual({ preview: null, error: null });
+    await act(async () => { rejectPreview(new Error('stale refusal')); });
+    rerender({ enabled: true });
+    expect(result.current).toEqual({ preview: null, error: null });
+  });
 });
