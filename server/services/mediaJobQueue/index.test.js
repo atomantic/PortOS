@@ -692,6 +692,60 @@ describe('mediaJobQueue', () => {
     await flush();
   });
 
+  it('reports cancellation staged during admission without announcing an enqueue', async () => {
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let releaseAdmission;
+    let releaseCancellation;
+    const admissionGate = new Promise(resolve => { releaseAdmission = resolve; });
+    const cancellationGate = new Promise(resolve => { releaseCancellation = resolve; });
+    atomicWriteSpy.mockImplementationOnce(async (...args) => {
+      await admissionGate;
+      return realWrite(...args);
+    });
+    atomicWriteSpy.mockImplementationOnce(async (...args) => {
+      await cancellationGate;
+      return realWrite(...args);
+    });
+    const enqueued = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('enqueued', enqueued);
+    const frames = [];
+    const admission = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    let cancellation;
+    try {
+      await waitFor(() => atomicWriteSpy.mock.calls.length >= 1);
+      const job = mediaJobQueue.listJobs()[0];
+      expect(mediaJobQueue.attachSseClient(job.id, {
+        writeHead: () => {},
+        write: message => {
+          for (const line of message.split('\n')) {
+            if (line.startsWith('data: ')) frames.push(JSON.parse(line.slice(6)));
+          }
+        },
+        end: () => {},
+        req: { on: () => {} },
+      })).toBe(true);
+      // Discard the subscription's initial status replay; observe admission's fan-out.
+      frames.length = 0;
+      cancellation = mediaJobQueue.cancelQueuedJobs();
+      releaseAdmission();
+      await expect(admission).resolves.toMatchObject({ jobId: job.id, status: 'canceled' });
+      expect(enqueued).not.toHaveBeenCalled();
+      expect(frames.some(frame => frame.type === 'queued')).toBe(false);
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+
+      releaseCancellation();
+      await expect(cancellation).resolves.toEqual({ canceled: 1 });
+      expect(mediaJobQueue.getJob(job.id).status).toBe('canceled');
+      expect(frames.some(frame => frame.type === 'canceled')).toBe(true);
+    } finally {
+      releaseAdmission();
+      releaseCancellation();
+      await Promise.allSettled([admission, cancellation]);
+      mediaJobQueue.mediaJobEvents.off('enqueued', enqueued);
+      atomicWriteSpy.mockImplementation(realWrite);
+    }
+  });
+
   it('cancelQueuedJobs respects a kind filter', async () => {
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
