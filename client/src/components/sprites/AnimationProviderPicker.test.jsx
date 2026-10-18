@@ -95,4 +95,12 @@ describe('AnimationProviderPicker', () => {
     renderPicker({ disabled: true });
     expect(screen.getByLabelText(/Render on/)).toBeDisabled();
   });
+
+  it('renders ListLoadError when error is present', () => {
+    const onRetry = vi.fn();
+    renderPicker({ error: new Error('Failed to load providers'), onRetry });
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load animation providers — Failed to load providers');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });

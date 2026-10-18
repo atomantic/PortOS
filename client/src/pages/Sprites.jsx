@@ -4,7 +4,9 @@ import { PersonStanding, LayoutGrid, Images, Scissors, Film } from 'lucide-react
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import EmptyState from '../components/EmptyState';
+import ListLoadError from '../components/ui/ListLoadError.jsx';
 import toast from '../components/ui/Toast';
+import useListResource from '../hooks/useListResource.js';
 import {
   listSpriteRecords, getSpriteRecord,
   generateSpriteWalk, generateSpriteTrack, generateSpriteReference, listSpriteThumbnails,
@@ -46,10 +48,23 @@ import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
 
 const SPRITE_EVENTS = ['sprites:changed'];
 
+const loadSpriteRecords = () => listSpriteRecords({ silent: true });
+const loadAnimationProviders = async () => {
+  const res = await listSpriteAnimationProviders({ silent: true });
+  return Array.isArray(res?.providers) ? res.providers : [];
+};
+const loadImageBackends = async () => {
+  const settings = await getSettings({ silent: true });
+  return deriveAvailableBackends(settings, { excludeExternal: true });
+};
+
 export default function Sprites() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [records, setRecords] = useState(null);
+  const spriteResource = useListResource(loadSpriteRecords);
+  const {
+    items: records, state: recordsState, error: recordsError, retry: retryRecords, setItems: setRecords,
+  } = spriteResource;
   const {
     data: detail, error: detailError, refetch: refreshDetail, updateData: setDetail,
   } = useSocketResource(
@@ -66,10 +81,8 @@ export default function Sprites() {
   const goto = useCallback((rid) => navigate(`/sprites/${rid}`), [navigate]);
 
   const refresh = useCallback(() => {
-    // request() already toasted; settle to an empty list so the header/catalog
-    // don't spin forever.
-    listSpriteRecords().then(setRecords).catch(() => setRecords([]));
-  }, []);
+    retryRecords();
+  }, [retryRecords]);
 
   // Catalog thumbnails are only shown on the Library view (`!id`), and
   // listSpriteThumbnails is an O(records) disk scan — so fetch them when the
@@ -112,8 +125,6 @@ export default function Sprites() {
     refresh();
     return refreshDetail();
   }, [refresh, refreshDetail]);
-
-  useEffect(() => { refresh(); }, [refresh]);
 
   // In-flight render tracking is owned HERE rather than inside each workflow
   // (#2931): the asset collection's Regenerate buttons fire the same two
@@ -207,39 +218,27 @@ export default function Sprites() {
   // MiniMax H3 one. Page state for the same reason `duration` is: a Regenerate
   // fired from an asset card must use the lane the user picked in the walk
   // panel, not a second copy that drifted from it.
-  //
-  // `null` = not fetched yet, `[]` = fetched and this install offers none —
-  // distinct on purpose, so a failed fetch never renders as "grok is gone".
-  // The selection stays on the server's own default until the list arrives,
-  // which keeps the pre-#4876 behavior for the first paint and for any install
-  // whose readiness probe fails.
-  const [animationProviders, setAnimationProviders] = useState(null);
+  const animProvidersResource = useListResource(loadAnimationProviders);
+  const {
+    items: animationProviders, error: animProvidersError, retry: retryAnimProviders,
+  } = animProvidersResource;
   const [animationProvider, setAnimationProvider] = useState('grok');
-  useEffect(() => {
-    listSpriteAnimationProviders({ silent: true })
-      .then((res) => setAnimationProviders(Array.isArray(res?.providers) ? res.providers : []))
-      .catch(() => setAnimationProviders([]));
-  }, []);
 
   // Image-backend availability + the selected backend `mode` are page-owned
   // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor
   // Regenerate must read ONE mode, or a card re-roll would use a different
-  // backend than the one the user picked in the workflow. `null` = settings not
-  // loaded yet; `[]` = loaded with no image backend configured.
-  const [imageBackends, setImageBackends] = useState(null);
+  // backend than the one the user picked in the workflow.
+  const imageBackendsResource = useListResource(loadImageBackends);
+  const {
+    items: imageBackends, state: imageBackendsState, error: imageBackendsError, retry: retryImageBackends,
+  } = imageBackendsResource;
   const [imageMode, setImageMode] = useState('');
+
   useEffect(() => {
-    getSettings({ silent: true })
-      .then((settings) => {
-        const available = deriveAvailableBackends(settings, { excludeExternal: true });
-        setImageBackends(available);
-        // Prefer the configured dispatcher default when it's available, else
-        // the first list entry — matching ReferenceWorkflow's prior logic.
-        const configured = available.find((b) => b.id === settings?.imageGen?.mode)?.id;
-        setImageMode((m) => m || configured || available[0]?.id || '');
-      })
-      .catch(() => setImageBackends([]));
-  }, []);
+    if (imageBackendsState === 'ready' && imageBackends.length > 0) {
+      setImageMode((m) => m || imageBackends[0]?.id || '');
+    }
+  }, [imageBackendsState, imageBackends]);
   const hasImageBackend = Array.isArray(imageBackends) && imageBackends.length > 0;
 
   // Seed the page-owned backend picker from an opened record's persisted
@@ -396,10 +395,12 @@ export default function Sprites() {
       providers={animationProviders}
       provider={animationProvider}
       onProviderChange={setAnimationProvider}
+      providersError={animProvidersError}
+      onRetryProviders={retryAnimProviders}
     />
   )), [
     detail?.tracks, detail?.record, detail?.reference, generateTrack, onWorkflowChanged, corrections,
-    animationProviders, animationProvider,
+    animationProviders, animationProvider, animProvidersError, retryAnimProviders,
   ]);
 
 
@@ -482,7 +483,7 @@ export default function Sprites() {
         <section className="min-w-0">
           {!id ? (
             // The bare /sprites route IS the Library catalog now.
-            records === null ? (
+            recordsState === 'loading' ? (
               <PageSkeleton
                 header="none"
                 label="Loading sprite library"
@@ -490,6 +491,8 @@ export default function Sprites() {
                 cards={10}
                 gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
               />
+            ) : recordsState === 'error' ? (
+              <ListLoadError what="sprites" error={recordsError} onRetry={retryRecords} />
             ) : records.length === 0 ? (
               <EmptyState
                 icon={PersonStanding}
@@ -571,6 +574,8 @@ export default function Sprites() {
                         onModeChange={setImageMode}
                         onChanged={onWorkflowChanged}
                         onForked={(rec) => { refresh(); navigate(`/sprites/${rec.id}`); }}
+                        backendsError={imageBackendsError}
+                        onRetryBackends={retryImageBackends}
                       />
                       <WalkWorkflow
                         record={detail.record}
@@ -587,6 +592,8 @@ export default function Sprites() {
                         onChanged={onWorkflowChanged}
                         corrections={corrections}
                         onCorrectionChange={setCorrections}
+                        providersError={animProvidersError}
+                        onRetryProviders={retryAnimProviders}
                       />
                       {trackSections}
                       {/* Keyed by record so form state and an armed publish/overwrite

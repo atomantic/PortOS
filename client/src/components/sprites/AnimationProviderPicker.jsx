@@ -17,9 +17,14 @@
  * lane exists or what would make it work, and per the repo's UI rules a warning
  * that lives only in a `title` is missed on touch.
  */
+import ListLoadError from '../ui/ListLoadError.jsx';
+
 export default function AnimationProviderPicker({
-  id, providers, provider, onChange, disabled = false,
+  id, providers, provider, onChange, disabled = false, error = null, onRetry = null,
 }) {
+  if (error) {
+    return <ListLoadError what="animation providers" error={error} onRetry={onRetry} />;
+  }
   // `null` = not fetched yet (distinct from `[]` = fetched and empty), so a
   // slow or failed probe never flashes a picker that then disappears.
   if (!Array.isArray(providers) || providers.length < 2) return null;

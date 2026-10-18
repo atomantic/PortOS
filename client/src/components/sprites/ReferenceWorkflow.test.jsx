@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { typeSettled } from '../../test/settledInput';
 
@@ -42,7 +42,10 @@ const renders = {
   cancelSubmit: vi.fn(),
 };
 
-const renderWorkflow = ({ turnaround, trackDefinitions } = {}) => render(
+const renderWorkflow = ({
+  turnaround, trackDefinitions, backends = [{ id: 'codex', label: 'Codex' }],
+  backendsError = null, onRetryBackends = null,
+} = {}) => render(
   <ReferenceWorkflow
     record={{ id: 'example-pioneer', name: 'Example Pioneer', chromaKey: '#FF00FF' }}
     reference={{
@@ -66,7 +69,9 @@ const renderWorkflow = ({ turnaround, trackDefinitions } = {}) => render(
     renders={renders}
     corrections={{}}
     onCorrectionChange={vi.fn()}
-    backends={[{ id: 'codex', label: 'Codex' }]}
+    backends={backends}
+    backendsError={backendsError}
+    onRetryBackends={onRetryBackends}
     trackDefinitions={trackDefinitions}
     mode="codex"
     onModeChange={vi.fn()}
@@ -272,5 +277,17 @@ describe('main-reference correction note (#3134)', () => {
     const main = screen.getByRole('region', { name: 'Main reference' });
     await user.click(within(main).getByRole('button', { name: 'Generate candidate' }));
     expect(generateSpriteReference.mock.calls[0][1]).not.toHaveProperty('correctionPrompt');
+  });
+
+  it('renders ListLoadError when backendsError is present and empty warning only when backends is empty with no error', () => {
+    const onRetryBackends = vi.fn();
+    renderWorkflow({ backendsError: new Error('Settings unavailable'), onRetryBackends, backends: [] });
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load image backends — Settings unavailable');
+    expect(screen.queryByText(/No image backend configured/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryBackends).toHaveBeenCalledTimes(1);
+
+    renderWorkflow({ backendsError: null, backends: [] });
+    expect(screen.getByText(/No image backend configured/)).toBeInTheDocument();
   });
 });

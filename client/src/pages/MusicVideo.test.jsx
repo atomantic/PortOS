@@ -3705,4 +3705,28 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     act(() => routerNavigate(-1));
     await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'New music video' })).not.toBeInTheDocument());
   });
+
+  it('renders ListLoadError with retry when universe names fail to load in create project drawer', async () => {
+    const { listUniverseNames } = await import('../services/apiUniverseBuilder.js');
+    listUniverseNames.mockReset();
+    listUniverseNames.mockRejectedValueOnce(new Error('Universes offline'));
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+
+    render(
+      <MemoryRouter initialEntries={['/music-video?new=project']}>
+        {MV_ROUTES}
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'New music video' })).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load universes/)).toBeInTheDocument();
+
+    listUniverseNames.mockResolvedValueOnce([{ id: 'u1', name: 'Cyberverse' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not load universes/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('option', { name: 'Cyberverse' })).toBeInTheDocument();
+  });
 });

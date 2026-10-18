@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router';
 import Pill from '../ui/Pill.jsx';
+import ListLoadError from '../ui/ListLoadError.jsx';
 const GalleryImagePicker = lazy(() => import('../imageGen/GalleryImagePicker'));
 
 const selectClass = 'w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
@@ -336,17 +337,17 @@ function ArtworkCard({
   onPublish,
   onUnbind,
 }) {
-  const [label, setLabel] = useState(binding.label);
-  const [role, setRole] = useState(binding.role);
-  const [destinationPath, setDestinationPath] = useState(binding.destinationPath);
+  const [label, setLabel] = useState(binding.label || '');
+  const [role, setRole] = useState(binding.role || '');
+  const [destinationPath, setDestinationPath] = useState(binding.destinationPath || '');
   useEffect(() => {
-    setLabel(binding.label);
-    setRole(binding.role);
-    setDestinationPath(binding.destinationPath);
+    setLabel(binding.label || '');
+    setRole(binding.role || '');
+    setDestinationPath(binding.destinationPath || '');
   }, [binding]);
-  const dirty = label.trim() !== binding.label
+  const dirty = (label || '').trim() !== (binding.label || '')
     || role !== binding.role
-    || destinationPath.trim() !== binding.destinationPath;
+    || (destinationPath || '').trim() !== (binding.destinationPath || '');
   const publicationCurrent = health?.publicationStatus === 'current';
   return (
     <article className="overflow-hidden rounded-xl border border-port-border bg-port-bg/55">
@@ -446,6 +447,8 @@ export default function GameBindings({
   sprites,
   tracks,
   gallery = [],
+  galleryError = null,
+  onRetryGallery = null,
   integrity,
   busy,
   onBindSprite,
@@ -619,6 +622,15 @@ export default function GameBindings({
             Generate for this role
           </Link>
         </div>
+
+        {galleryError && (
+          <ListLoadError
+            what="artwork images"
+            error={galleryError}
+            onRetry={onRetryGallery}
+            className="mt-4"
+          />
+        )}
 
         <div className="mt-4 grid gap-3 rounded-xl border border-port-border bg-port-bg/35 p-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(180px,.7fr)]">
           <div className="grid gap-3 sm:grid-cols-2">

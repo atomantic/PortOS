@@ -1,31 +1,30 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Film, Trash2, Clock } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
+import useListResource from '../hooks/useListResource';
 import * as api from '../services/api';
 import { formatDurationSec } from '../utils/formatters';
 import { projectSummary, historySourceDuration } from '../lib/videoTimelineModel';
 
+const loadTimelineProjects = () => api.listTimelineProjects({ silent: true });
+const loadVideoHistory = () => api.listVideoHistory({ silent: true });
+
 export default function VideoTimeline() {
   const navigate = useNavigate();
-  const [projects, setProjects] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const projectsResource = useListResource(loadTimelineProjects);
+  const {
+    items: projects, state: projectsState, error: projectsError, retry: retryProjects, setItems: setProjects,
+  } = projectsResource;
+  const historyResource = useListResource(loadVideoHistory);
+  const {
+    items: history, state: historyState, error: historyError, retry: retryHistory,
+  } = historyResource;
+  const loading = projectsState === 'loading' || historyState === 'loading';
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
-
-  const refresh = async () => {
-    const [list, hist] = await Promise.all([
-      api.listTimelineProjects().catch(() => []),
-      api.listVideoHistory().catch(() => []),
-    ]);
-    setProjects(list);
-    setHistory(hist);
-    setLoading(false);
-  };
-
-  useEffect(() => { refresh(); }, []);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -47,7 +46,7 @@ export default function VideoTimeline() {
     setProjects((prev) => prev.filter((p) => p.id !== project.id));
     await api.deleteTimelineProject(project.id, { silent: true }).catch((err) => {
       toast.error(`Failed to delete: ${err.message}`);
-      refresh();
+      retryProjects();
     });
   };
 
@@ -81,14 +80,22 @@ export default function VideoTimeline() {
 
       {loading && <PageSkeleton header="none" label="Loading timeline projects" layout="grid" cards={3} gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />}
 
-      {!loading && projects.length === 0 && (
+      {projectsState === 'error' && (
+        <ListLoadError what="timeline projects" error={projectsError} onRetry={retryProjects} />
+      )}
+
+      {historyState === 'error' && (
+        <ListLoadError what="video history" error={historyError} onRetry={retryHistory} />
+      )}
+
+      {!loading && projectsState === 'ready' && projects.length === 0 && (
         <div className="text-center py-12 text-gray-500">
           <Film className="w-10 h-10 mx-auto mb-3 opacity-40" />
           <p className="text-sm">No timeline projects yet. Create one above to start compositing clips.</p>
         </div>
       )}
 
-      {!loading && projects.length > 0 && (
+      {!loading && projectsState === 'ready' && projects.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {projects.map((project) => {
             const { totalSec, blockCount, firstThumb } = projectStats.get(project.id) || { totalSec: 0, blockCount: 0, firstThumb: null };
