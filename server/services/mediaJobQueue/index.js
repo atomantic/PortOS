@@ -1103,6 +1103,13 @@ function startLaneJob(job, { lane }) {
   }
   if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
   if (lane === 'remote') {
+    // Reconciliation occupies the peer slot while it waits for admission. Read
+    // the live queue: an in-process requeue can land mid-pass, after the
+    // drain loop built its candidate list.
+    const reconciling = job.params?.remoteMedia?.reconcile ? null : queue.find((pending) => pending !== job
+      && pending.status === 'queued' && pending.params?.remoteMedia?.reconcile
+      && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId);
+    if (reconciling) { holdForPeer(job, reconciling.id); return false; }
     const blocker = archive.find((entry) => entry.id !== job.id && entry.params?.remotePeerReservation === true
       && entry.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId);
     if (blocker) {
@@ -1311,10 +1318,6 @@ async function drainLoop() {
       if (slots[lane] <= 0) continue;
       // One GPU job per peer initially. Different peers and this Mac remain
       // independent. Reconciliation occupies the same slot until settled.
-      if (lane === 'remote' && !job.params?.remoteMedia?.reconcile) {
-        const reconciling = candidates.find((pending) => pending.status === 'queued' && pending.params?.remoteMedia?.reconcile && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId);
-        if (reconciling) { holdForPeer(job, reconciling.id); continue; }
-      }
       if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;

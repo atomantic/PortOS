@@ -3084,6 +3084,24 @@ describe('durable remote source-audio settlement', () => {
     videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
   });
 
+  it('keeps every later job to the peer waiting while its reservation reconciles', async () => {
+    const first = await startAudioJob();
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    stubs.generateVideoRemote.mockClear();
+    const later = [];
+    for (let i = 0; i < 2; i += 1) later.push(await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } }));
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    await flush();
+    expect(stubs.generateVideoRemote.mock.calls.map(([params]) => params.jobId)).toEqual([first.jobId]);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === later[0].jobId));
+    videoGenEvents.emit('completed', { generationId: later[0].jobId, remoteInputsDisposable: true });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === later[1].jobId));
+    videoGenEvents.emit('completed', { generationId: later[1].jobId, remoteInputsDisposable: true });
+  });
+
   it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {
     const { first, maintenance } = await restoreUnsettledAudioJob(true);
     const journal = () => JSON.parse(readFileSync(join(maintenance.directory, 'state.json'), 'utf8'));
