@@ -19,6 +19,9 @@ describe('production cleanup', () => {
   it('removes derived renders while keeping comparisons by default, then offers explicit look purging', async () => {
     render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
     const cleanup = await screen.findByRole('button', { name: 'Remove superseded renders' });
+    const onShot = socket.on.mock.calls.find(([event]) => event === 'music-video:shot-render')[1];
+    await act(async () => { onShot({ projectId: 'example-project', state: 'rendering', progress: 0.5 }); });
+    expect(getMusicVideoRenderCleanup).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Source takes, stills, and cutting-room content stay in Assets/)).toBeInTheDocument();
     expect(screen.getByText(/Kept: Referenced/)).toBeInTheDocument();
     fireEvent.click(cleanup);

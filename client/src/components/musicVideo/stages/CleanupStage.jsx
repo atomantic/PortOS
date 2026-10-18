@@ -35,14 +35,15 @@ export default function CleanupStage({ board }) {
     setLoadError(null);
     refresh.current();
     const onChange = event => { if (event.projectId === project.id) refresh.current(); };
+    const onShotSettled = event => { if (event.state !== 'rendering') onChange(event); };
     const onConnect = () => refresh.current();
     socket.on('music-video:render-cleanup', onChange);
-    socket.on('music-video:shot-render', onChange);
+    socket.on('music-video:shot-render', onShotSettled);
     socket.on('connect', onConnect);
     return () => {
       generation.current += 1;
       socket.off('music-video:render-cleanup', onChange);
-      socket.off('music-video:shot-render', onChange);
+      socket.off('music-video:shot-render', onShotSettled);
       socket.off('connect', onConnect);
     };
   }, [project.id, project.renderHistoryId, project.updatedAt]);
