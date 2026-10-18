@@ -34,9 +34,9 @@ default branch and no live owner, claim binding or manual completion handoff.
 
 Before any mutation, every unique byte is archived under
 `data/cos/held-checkout-archives/`: commits not on the default branch, the
-tracked diff, verbatim copies of untracked and ignored files (hash-verified),
-and symlink targets. A nested repository, an oversized file or a write during
-archiving fails the archive, which leaves the checkout, its lock and its
+staged and unstaged diffs, verbatim copies of untracked and ignored files
+(hash-verified), and symlink targets. A nested repository, unmerged or hidden
+index entries, an oversized file or a write during archiving fails the archive, which leaves the checkout, its lock and its
 branch untouched and removes the partial archive. The lock is released only
 after a second fresh match, and ownership, HEAD and content are rechecked
 immediately before removal; if that recheck refuses, the original lock is

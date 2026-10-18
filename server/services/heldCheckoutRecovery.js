@@ -11,9 +11,9 @@
  *
  * Before any mutation every unique byte is archived under
  * `data/cos/held-checkout-archives/`: commits not on the default branch, the
- * tracked diff, and verbatim copies of untracked AND ignored files (symlinks as
- * recorded targets). The archive is verified by hash against the checkout, and
- * the checkout's content fingerprint must not move between archive and
+ * staged and unstaged diffs, and verbatim copies of untracked AND ignored files
+ * (symlinks as recorded targets). The archive is verified by hash against the
+ * checkout, and the checkout's content hashes must not move between archive and
  * removal. A live owner, manual completion handoff, unreadable state or archive
  * failure leaves the checkout, its lock and its branch exactly as found.
  */
@@ -44,23 +44,39 @@ const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : 
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).then(r => r.stdout || '');
 
-/** Untracked and ignored paths, excluding nothing but Git's own metadata. */
-const otherPaths = async (path) => zLines(await git(['ls-files', '--others', '-z'], path));
-
 /**
- * One hash over everything the archive preserves, so a write that lands after
- * the archive (or during it) is detected before removal.
+ * Everything the archive must preserve, read in one pass: the staged and
+ * unstaged diffs (separately, so a staged blob whose working copy is gone
+ * survives) and every untracked or ignored file by content hash, symlinks by
+ * target. Throws on anything that cannot be archived faithfully, before any
+ * copy is made. The fingerprint is compared again immediately before removal.
  */
-async function contentFingerprint(path) {
-  const hash = createHash('sha256');
-  hash.update(await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=none'], path));
-  hash.update('\0diff\0');
-  hash.update(await git(['diff', 'HEAD', '--binary'], path));
-  for (const rel of await otherPaths(path)) {
-    const info = await lstat(join(path, rel));
-    hash.update(`\0${rel}\0${info.size}\0${info.mtimeMs}\0${info.isSymbolicLink()}`);
+async function snapshotContent(path) {
+  if ((await git(['ls-files', '-u', '-z'], path)).length) throw new Error('unmerged index entries cannot be archived');
+  // Assume-unchanged (lowercase tag) and skip-worktree (S) entries hide edits from diff.
+  const hidden = zLines(await git(['ls-files', '-v', '-z'], path)).find(line => /^[a-zS]/.test(line));
+  if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
+  const indexDiff = await git(['diff', '--cached', '--binary'], path);
+  const worktreeDiff = await git(['diff', '--binary'], path);
+  const others = [];
+  let total = 0;
+  for (const rel of zLines(await git(['ls-files', '--others', '-z'], path))) {
+    // `ls-files --others` names a nested repository as `dir/` without its files.
+    if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
+    const source = join(path, rel);
+    const info = await lstat(source);
+    if (info.isSymbolicLink()) {
+      others.push({ path: rel, symlink: await readlink(source) });
+      continue;
+    }
+    if (!info.isFile()) throw new Error(`${rel} is not a regular file`);
+    total += info.size;
+    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
+    others.push({ path: rel, bytes: info.size, sha256: await sha256File(source) });
   }
-  return hash.digest('hex');
+  const fingerprint = createHash('sha256').update(indexDiff).update('\0').update(worktreeDiff).update('\0')
+    .update(JSON.stringify(others)).digest('hex');
+  return { indexDiff, worktreeDiff, others, fingerprint };
 }
 
 /**
@@ -78,50 +94,37 @@ async function archiveCheckout(input) {
 }
 
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release }) {
-  const fingerprint = await contentFingerprint(tree.path);
+  const snapshot = await snapshotContent(tree.path);
   await ensureDir(dir);
 
   const commits = await git(['format-patch', `${defaultBranch}..${tree.head}`, '--stdout', '--binary'], repoPath);
-  if (commits.trim()) await writeFileGuarded(join(dir, 'commits.patch'), commits);
-  const diff = await git(['diff', 'HEAD', '--binary'], tree.path);
-  if (diff.trim()) await writeFileGuarded(join(dir, 'worktree.diff'), diff);
+  if (commits) await writeFileGuarded(join(dir, 'commits.patch'), commits);
+  if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
+  if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
-  const files = [];
-  const symlinks = [];
-  let total = 0;
-  for (const rel of await otherPaths(tree.path)) {
-    // `ls-files --others` names a nested repository as `dir/` without its files.
-    if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
-    const source = join(tree.path, rel);
-    const info = await lstat(source);
-    if (info.isSymbolicLink()) {
-      symlinks.push({ path: rel, target: await readlink(source) });
-      continue;
-    }
-    if (!info.isFile()) throw new Error(`${rel} is not a regular file`);
-    total += info.size;
-    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
-    const destination = join(dir, 'files', rel);
+  const files = snapshot.others.filter(entry => entry.symlink === undefined);
+  const symlinks = snapshot.others.filter(entry => entry.symlink !== undefined).map(({ path, symlink }) => ({ path, target: symlink }));
+  for (const file of files) {
+    const destination = join(dir, 'files', file.path);
     await ensureDir(dirname(destination));
-    await copyFileGuarded(source, destination);
-    const [expected, actual] = await Promise.all([sha256File(source), sha256File(destination)]);
-    if (expected !== actual) throw new Error(`archived copy of ${rel} does not match`);
-    files.push({ path: rel, bytes: info.size, sha256: actual });
+    await copyFileGuarded(join(tree.path, file.path), destination);
+    if (await sha256File(destination) !== file.sha256) throw new Error(`archived copy of ${file.path} does not match`);
   }
-  if (await contentFingerprint(tree.path) !== fingerprint) throw new Error('checkout content changed while archiving');
+  if ((await snapshotContent(tree.path)).fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
   await atomicWrite(join(dir, 'manifest.json'), {
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
     release, archivedAt: new Date().toISOString(),
-    captured: { commitsPatch: Boolean(commits.trim()), worktreeDiff: Boolean(diff.trim()), files, symlinks },
+    captured: { commitsPatch: Boolean(commits), indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
     restore: [
       `git -C <repo> worktree add <checkout> ${tree.head}`,
-      diff.trim() ? 'git -C <checkout> apply worktree.diff' : null,
+      snapshot.indexDiff ? 'git -C <checkout> apply --index index.diff' : null,
+      snapshot.worktreeDiff ? 'git -C <checkout> apply worktree.diff' : null,
       files.length ? 'cp -R files/. <checkout>/' : null,
       symlinks.length ? 'recreate manifest.captured.symlinks with ln -s' : null,
     ].filter(Boolean),
   });
-  return { dir, fingerprint };
+  return { dir, fingerprint: snapshot.fingerprint };
 }
 
 const isAncestor = (repoPath, sha, ref) => execGit(['merge-base', '--is-ancestor', sha, ref], repoPath, { ignoreExitCode: true })
@@ -204,7 +207,8 @@ async function retireHeldCheckout({ repoPath, release }, { cosDir = PATHS.cos, r
       if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
       const reason = await ownerReason({ repoPath, tree, branch, readAgents });
       if (reason) return reason;
-      return await contentFingerprint(tree.path).catch(() => null) === archive.fingerprint ? null : 'checkout-content-changed';
+      const current = await snapshotContent(tree.path).catch(() => null);
+      return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
     };
     const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
       label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,

@@ -13,17 +13,18 @@ const held = {
 const outcomes = { 'app-1': { status: 'incomplete', observedAt: '2026-10-01T00:00:00Z', remaining: [held, { branch: 'other', reason: 'actionable' }] } };
 
 function open() {
-  render(<BranchReconcileOutcome outcomes={outcomes} apps={[{ id: 'app-1', name: 'Example App' }]} />);
+  const view = render(<BranchReconcileOutcome outcomes={outcomes} apps={[{ id: 'app-1', name: 'Example App' }]} />);
   fireEvent.click(screen.getByText(/Example App · Incomplete · 2 remaining/));
   fireEvent.click(screen.getByRole('button', { name: 'Archive and retire checkout…' }));
+  return view;
 }
 
 describe('BranchReconcileOutcome checkout retirement', () => {
   beforeEach(() => { retire.mockReset(); });
 
-  it('sends the exact inventory row as the scoped release and drops the row once retired', async () => {
+  it('sends the exact inventory row as the scoped release and hides the row until a fresh inventory arrives', async () => {
     retire.mockResolvedValue({ ok: true, archiveDir: '/example/archive', branchDeleted: true });
-    open();
+    const { rerender } = open();
     expect(screen.getByText(/Release this exact checkout and its lock\?/)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Yes, archive and retire' }));
 
@@ -33,6 +34,10 @@ describe('BranchReconcileOutcome checkout retirement', () => {
     }, { silent: true });
     expect(screen.getByText(/Example App · Incomplete · 1 remaining/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Archive and retire checkout…' })).toBeNull();
+
+    // A checkout recreated at the same path is new evidence, not the retired row.
+    rerender(<BranchReconcileOutcome outcomes={{ ...outcomes }} apps={[{ id: 'app-1', name: 'Example App' }]} />);
+    expect(screen.getByText('/example/held')).toBeVisible();
   });
 
   it('keeps the row and shows why the server kept the checkout', async () => {

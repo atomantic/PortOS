@@ -80,8 +80,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
 
-  it('archives tracked, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
+  it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     const { path, release } = await heldCheckout('detached-held');
+    // Only the index holds this file once its working copy is gone.
+    await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
+    await execGit(['add', 'staged-only.txt'], path);
+    await rm(join(path, 'staged-only.txt'));
 
     const result = await retire(release);
 
@@ -94,6 +98,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(manifest.captured.symlinks).toEqual(SYMLINKS ? [{ path: 'linked', target: '../shared-target' }] : []);
     expect(await readFile(join(result.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await readFile(join(result.archiveDir, 'worktree.diff'), 'utf8')).toContain('+tracked edit');
+    expect(await readFile(join(result.archiveDir, 'index.diff'), 'utf8')).toContain('+staged work');
   });
 
   it('retires a merged branch checkout and its branch, and drops it from the persisted inventory', async () => {
@@ -155,6 +160,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await lockText(release.path)).toBe('handoff pending');
     for (const name of ['initial.txt', 'untracked.txt', 'ignored.txt']) expect(existsSync(join(path, name))).toBe(true);
     expect(existsSync(join(result.archiveDir, 'manifest.json'))).toBe(true);
+  });
+
+  it('keeps the checkout when its content changes between the archive and removal', async () => {
+    const { path, release } = await heldCheckout('rewritten');
+    let reads = 0;
+    // Same length, so only a content hash can tell the archived copy is stale.
+    const readAgents = async () => {
+      if (++reads === 2) await writeFile(join(path, 'ignored.txt'), 'IGNORED WORK\n');
+      return [];
+    };
+
+    expect(await retire(release, { readAgents })).toMatchObject({ ok: false, reason: 'checkout-content-changed' });
+    expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('IGNORED WORK\n');
+    expect(await lockText(release.path)).toBe('synthetic external owner');
   });
 
   it('keeps everything and leaves no partial archive when the archive cannot be completed', async () => {

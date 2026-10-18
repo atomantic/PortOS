@@ -7,6 +7,8 @@ const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: '
 // Only a post-cleanup inventory row carries the exact checkout identity a
 // scoped release must name; branch-only holds have nothing to release.
 const isInventoriedCheckout = entry => Boolean(entry.path && entry.head && typeof entry.locked === 'boolean');
+const checkoutKey = (appId, entry) => `${appId}\0${entry.path}\0${entry.head}`;
+const NONE = new Set();
 
 // The confirmation IS the scoped release: it names this row's path, HEAD,
 // branch and lock text, and the server refuses if any of them changed since.
@@ -26,7 +28,7 @@ function RetireCheckout({ appId, entry, onRetired }) {
       setState('idle');
       return;
     }
-    onRetired(entry.path);
+    onRetired(checkoutKey(appId, entry));
   };
   if (state === 'idle') {
     return (
@@ -55,14 +57,18 @@ function RetireCheckout({ appId, entry, onRetired }) {
 // A persisted scan describes convergence independently of coordinator success.
 // Paths and lock text are display data, never executable recovery instructions.
 export default function BranchReconcileOutcome({ outcomes, apps }) {
-  // Hides a retired row at once; the schedule socket event replaces the outcome.
-  const [retiredPaths, setRetiredPaths] = useState(() => new Set());
+  // Hides a retired row at once. Scoped to the outcomes it was retired from:
+  // the schedule event's fresh inventory is authoritative once it arrives.
+  const [retired, setRetired] = useState({ source: outcomes, keys: NONE });
+  const retiredKeys = retired.source === outcomes ? retired.keys : NONE;
   if (!outcomes || !Object.keys(outcomes).length) return null;
-  const markRetired = path => setRetiredPaths(current => new Set(current).add(path));
+  const markRetired = key => setRetired(current => ({
+    source: outcomes, keys: new Set(current.source === outcomes ? current.keys : NONE).add(key),
+  }));
   return (
     <div className="mx-4 mb-3 space-y-2 text-xs">
       {Object.entries(outcomes).map(([appId, outcome]) => {
-        const remaining = Array.isArray(outcome.remaining) ? outcome.remaining.filter(entry => !retiredPaths.has(entry.path)) : null;
+        const remaining = Array.isArray(outcome.remaining) ? outcome.remaining.filter(entry => !retiredKeys.has(checkoutKey(appId, entry))) : null;
         return (
           <details key={appId} className="rounded border border-port-border p-2">
             <summary className="cursor-pointer text-gray-300">
