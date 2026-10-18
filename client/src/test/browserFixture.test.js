@@ -100,6 +100,16 @@ describe('startBrowserFixture', () => {
     });
   });
 
+  it('serves a static page: file watching and HMR stay off so unrelated edits cannot remount it (#12230)', async () => {
+    const { createServer } = fakeVite();
+    const chromium = { launch: vi.fn().mockResolvedValue(fakeBrowser()) };
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const fixture = await startBrowserFixture({ name: 'example', createServer, chromium, phaseMs: PHASE_MS,
+      viteConfig: () => ({ ...SCOPED, server: { host: '127.0.0.1', port: 0 } }) });
+    expect(createServer.mock.calls[0][0].server).toEqual({ host: '127.0.0.1', port: 0, watch: null, hmr: false });
+    await fixture.close();
+  });
+
   it('uses the retried launch and closes the first one when it arrives late', async () => {
     const { server, createServer } = fakeVite();
     const stalled = fakeBrowser();
