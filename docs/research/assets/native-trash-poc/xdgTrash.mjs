@@ -1,7 +1,7 @@
 // Proposed PortOS-owned Linux adapter (issue #12231 study): freedesktop.org Trash specification 1.0,
 // built on node:fs only. One file per call; the caller owns batching and
 // post-operation verification, exactly like the macOS/Windows helpers.
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -80,20 +80,27 @@ const pad = n => String(n).padStart(2, '0');
 const deletionDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
 
-// Name inside files/: the original basename, `stem.N.ext` on collision, and the
-// stem shortened by whole code points when `<name>.trashinfo` would exceed
-// NAME_MAX. The complete original path always survives in the info file.
+// Name inside files/: the original basename, `stem.N.ext` on collision, shortened
+// by whole code points when `<name>.trashinfo` would exceed NAME_MAX — the stem
+// first (the extension keeps the file recognisable), then the extension itself.
+// The complete original path always survives in the info file.
 function trashName(base, attempt) {
-  const ext = extname(base);
   const suffix = attempt === 0 ? '' : `.${attempt}`;
-  const budget = NAME_MAX_BYTES - Buffer.byteLength(INFO_SUFFIX) - Buffer.byteLength(suffix) - Buffer.byteLength(ext);
+  const budget = NAME_MAX_BYTES - Buffer.byteLength(INFO_SUFFIX) - Buffer.byteLength(suffix);
+  let ext = extname(base);
   const stem = Array.from(base.slice(0, base.length - ext.length));
-  while (stem.length > 1 && Buffer.byteLength(stem.join('')) > budget) stem.pop();
+  while (stem.length > 1 && Buffer.byteLength(stem.join('') + ext) > budget) stem.pop();
+  while (Buffer.byteLength(stem.join('') + ext) > budget) ext = Array.from(ext).slice(0, -1).join('');
   return `${stem.join('')}${suffix}${ext}`;
 }
 
 export async function trashXdg(path) {
-  const absPath = resolve(path);
+  // Device and mount-point discovery need the physical parent: through a directory
+  // symlink into another volume, lexical ancestors would place the volume trash
+  // below the real mount root where no trash tool looks. The final component is
+  // kept as given so a source that is itself a symlink is what gets recycled.
+  const given = resolve(path);
+  const absPath = join(await realpath(dirname(given)), basename(given));
   const { dir, topDir } = await trashLocation(absPath);
   const uid = process.getuid();
   const filesDir = join(dir, 'files');

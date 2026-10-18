@@ -88,9 +88,9 @@ PortOS-owned design proven/specified below.
 | Concern | pkg (`lib/linux.js`) | own (`nativeTrashXdg.js`, `node:fs` only — proven as `assets/native-trash-poc/xdgTrash.mjs`) |
 |---------|----------------------|--------------------------------------------------------------------------------------------|
 | Spec | freedesktop Trash 1.0 | same; output byte-compatible with GLib's `gio trash` (§3.2) |
-| Trash directory | `~/.local/share/Trash` for the home device; `$topdir/.Trash/$uid` (sticky check) or `$topdir/.Trash-$uid` via procfs mountinfo + `df` | same selection, with the home trash serving the device the home trash *directory* lives on (`XDG_DATA_HOME` may sit on another volume; its nearest existing ancestor decides); mount point found by walking up until `st_dev` changes — no procfs/df parsing |
+| Trash directory | `~/.local/share/Trash` for the home device; `$topdir/.Trash/$uid` (sticky check) or `$topdir/.Trash-$uid` via procfs mountinfo + `df` | same selection, with the home trash serving the device the home trash *directory* lives on (`XDG_DATA_HOME` may sit on another volume; its nearest existing ancestor decides); mount point found by walking up the *physical* parent (`realpath` of the directory, final component kept as given) until `st_dev` changes — no procfs/df parsing, and a directory symlink into another volume cannot place the trash below that volume's real root |
 | Trash directory validation | `mkdir -p` of whatever is there | the trash dir and its `files/` / `info/` must be non-symlink directories owned by the caller, re-checked after creation; anything else is a `TRASH_DIR_UNSAFE` refusal, so a `.Trash-$uid` symlink planted on a shared volume cannot redirect the move |
-| Name in `files/` | random UUID | original name, `stem.N.ext` on collision; `info/` entry opened `O_EXCL` as the reservation; an orphan in `files/` is never overwritten; the stem is shortened by code points when `<name>.trashinfo` would exceed NAME_MAX (255 bytes), the full original path staying in the info file |
+| Name in `files/` | random UUID | original name, `stem.N.ext` on collision; `info/` entry opened `O_EXCL` as the reservation; an orphan in `files/` is never overwritten; when `<name>.trashinfo` would exceed NAME_MAX (255 bytes) the stem is shortened by code points first and then the extension, the full original path staying in the info file |
 | `.trashinfo` | `encodeURI`, absolute `Path=` always | RFC 2396 escaping (verified identical to GLib for space, `#`, `%`, `?`, UTF-8), `Path=` relative to `$topdir` in a volume trash as the spec requires |
 | Cross-device | copy + delete | **refuse** (`EXDEV`/`EACCES`) and remove the reservation — same posture as GLib, which also refuses when no per-volume trash can be created |
 | Restore | file manager / `trash-cli` | identical — `trash-list` and `trash-restore` verified against our entries |
@@ -131,7 +131,7 @@ exit code and the per-file report agree.
 ### 3.2 Linux — executed
 
 Container: `node:22-bookworm`, uid 1000, GLib 2.74.6 (`gio`), trash-cli
-0.17.1.14; four tmpfs volumes for the mount-point cases. The harness exits 1 on any failed assertion; the run recorded here is the second one, after the review hardening (directory validation, home-trash device rule, NAME_MAX bound): `PASS`, 0 failures. Scripts:
+0.17.1.14; four tmpfs volumes for the mount-point cases. The harness exits 1 on any failed assertion; the run recorded here is the second one, after the review hardening (directory validation, home-trash device rule, physical-parent discovery, NAME_MAX bound): `PASS`, 0 failures. Scripts:
 [`xdgTrash.mjs`](assets/native-trash-poc/xdgTrash.mjs) (the proposed adapter),
 [`linux-poc.mjs`](assets/native-trash-poc/linux-poc.mjs),
 [`linux-docker-run.sh`](assets/native-trash-poc/linux-docker-run.sh).
@@ -146,9 +146,11 @@ Container: `node:22-bookworm`, uid 1000, GLib 2.74.6 (`gio`), trash-cli
 | Root-owned 755 topdir (no trash dir creatable) | `EACCES` refusal, file untouched, no stray `.trashinfo` |
 | Root-planted `.Trash-1000 -> /tmp/evil` symlink on a volume | `TRASH_DIR_UNSAFE` refusal, file untouched, link target stays empty |
 | 254-byte basename | recycled under a 241-byte stem + `.txt` so the `.trashinfo` name fits NAME_MAX; the info file carries the complete original path |
+| `a.` + 250-character extension; 125 × `ü` + `.txt` (254 bytes) | both recycled within NAME_MAX with valid UTF-8 names (extension shortened for the first, stem by code points for the second) and the full original path recorded |
+| `~/linkdir -> /mnt/vol/linked`, file trashed through the link | lands in `/mnt/vol/.Trash-1000/files/`, `Path=linked/via-link.txt` — the volume's own trash, not a `.Trash-1000` under the link |
 | `XDG_DATA_HOME` on the second volume | a file on that volume lands in `/mnt/vol/xdg/Trash` — the home trash directory's device decides, not `$HOME`'s |
 | Missing path | `ENOENT` before anything is written |
-| Interop | `trash-list` showed all eleven entries with decoded original paths across the home, `.Trash-1000`, `.Trash/1000` and `XDG_DATA_HOME` trashes; `trash-restore` restored one back to `~/poc-src/` |
+| Interop | `trash-list` showed all fourteen entries with decoded original paths across the home, `.Trash-1000`, `.Trash/1000` and `XDG_DATA_HOME` trashes; `trash-restore` restored one back to `~/poc-src/` |
 
 ### 3.3 Windows — designed, not executed
 
@@ -159,7 +161,10 @@ derived from the package's own helper (`recycle-bin.c`) and the documented shell
 flags. The harness asserts every check and exits non-zero for anything but
 `PASS`; the two refusal scenarios need operator-supplied inputs
 (`PORTOS_POC_NO_BIN_DIR`, `PORTOS_POC_OVER_CAPACITY_BYTES`) and the run reports
-`INCOMPLETE` without them — an incomplete run is not a pass. Before the Windows
+`INCOMPLETE` without them — an incomplete run is not a pass. Its cleanup runs in a
+`finally` block and matches owned `$I`/`$R` pairs by exact original path plus body
+or byte size, so a failed run still removes its artifacts without ever reading
+the oversized probe. Before the Windows
 adapter ships, that script must pass on a real interactive Windows session (the
 `windows-latest` CI job may or may not expose a Recycle Bin to the runner
 account — establish that first):
@@ -224,7 +229,9 @@ Mocked-dispatch tests (CI on Linux; `pinPlatform` from `testHelper.js`):
   `lstat` shapes (sticky dir → `.Trash/<uid>`; symlink / non-sticky / absent →
   `.Trash-<uid>`); a pre-existing symlink or foreign-owned trash directory (or
   `files/` / `info/`) → `TRASH_DIR_UNSAFE` with nothing moved; a 255-byte
-  basename recycled under a shortened name with the full path in `Path=`;
+  basename, a 250-character extension and a multibyte stem each recycled under
+  a shortened, valid-UTF-8 name with the full path in `Path=`; a source reached
+  through a directory symlink into another volume uses that volume's trash;
   `XDG_DATA_HOME` on a different device than `$HOME` → a file on the data-home
   device uses the home trash.
 - `trashFiles.test.js` is already the contract for rejected / false-success /

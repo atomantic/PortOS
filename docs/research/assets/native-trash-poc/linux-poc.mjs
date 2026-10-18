@@ -2,7 +2,7 @@
 // linux-docker-run.sh, which provides the extra volumes it expects. Exits 1 when
 // any assertion fails so a broken adapter cannot produce a passing-looking report.
 import { trashXdg } from './xdgTrash.mjs';
-import { mkdir, writeFile, readFile, readdir, lstat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, lstat, symlink } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
@@ -34,6 +34,17 @@ await writeFile(join(src, longName), 'long');
 out.longName = await trashXdg(join(src, longName)).then(r => ({ trashedBase: r.trashedPath.split('/').pop(), infoHasFullPath: false, r }), e => ({ error: e.code }));
 if (out.longName.r) { out.longName.infoHasFullPath = (await readFile(out.longName.r.infoPath, 'utf8')).includes(longName); delete out.longName.r; }
 check('long name: recycled with full original path recorded', out.longName.infoHasFullPath === true);
+// Long extension ('a.' + 250 chars) and a multibyte stem (125 x 'ü' + '.txt' = 254 bytes): both must fit NAME_MAX
+// without splitting a code point, with the full original path in the info file.
+out.longVariants = {};
+for (const [label, n] of [['longExt', 'a.' + 'x'.repeat(250)], ['multibyteStem', 'ü'.repeat(125) + '.txt']]) {
+  await writeFile(join(src, n), label);
+  out.longVariants[label] = await trashXdg(join(src, n)).then(async r => {
+    const trashedBase = r.trashedPath.split('/').pop();
+    return { trashedBytes: Buffer.byteLength(trashedBase), validUtf8: Buffer.from(trashedBase).toString() === trashedBase, infoHasFullPath: (await readFile(r.infoPath, 'utf8')).includes(encodeURIComponent(n)) };
+  }, e => ({ error: e.code }));
+  check(`${label}: recycled within NAME_MAX with full path recorded`, out.longVariants[label].trashedBytes <= 245 && out.longVariants[label].validUtf8 && out.longVariants[label].infoHasFullPath);
+}
 // Reference implementation: GLib `gio trash`, then compare the info file it writes.
 await writeFile(join(src, 'ref ü#.txt'), 'ref');
 out.gioTrash = await sh('gio', ['trash', join(src, 'ref ü#.txt')]);
@@ -45,6 +56,13 @@ out.volume = await trashXdg('/mnt/vol/clips/clip.mp4').catch(e => ({ error: e.co
 out.volumeInfo = out.volume.infoPath ? await readFile(out.volume.infoPath, 'utf8') : null;
 check('volume: .Trash-uid with relative Path', out.volumeInfo?.includes('Path=clips/clip.mp4') === true);
 out.volumeTrashMode = out.volume.infoPath ? (await lstat(`/mnt/vol/.Trash-${uid}`)).mode.toString(8) : null;
+// Directory symlink from home into the other volume: the trash must be the volume's own, not below the link.
+await mkdir('/mnt/vol/linked', { recursive: true });
+await symlink('/mnt/vol/linked', join(homedir(), 'linkdir'));
+await writeFile(join(homedir(), 'linkdir', 'via-link.txt'), 'linked');
+out.dirSymlink = await trashXdg(join(homedir(), 'linkdir', 'via-link.txt')).catch(e => ({ error: e.code || e.message }));
+out.dirSymlinkInfo = out.dirSymlink.infoPath ? await readFile(out.dirSymlink.infoPath, 'utf8') : null;
+check('directory symlink into another volume: that volume\'s trash, Path relative to its root', out.dirSymlink.trashedPath === `/mnt/vol/.Trash-${uid}/files/via-link.txt` && out.dirSymlinkInfo?.includes('Path=linked/via-link.txt') === true);
 // XDG_DATA_HOME on that other volume: a file there is now on the home trash's device and goes there.
 await writeFile('/mnt/vol/clips/same-dev.mp4', 'video');
 process.env.XDG_DATA_HOME = '/mnt/vol/xdg';

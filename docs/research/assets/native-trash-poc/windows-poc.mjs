@@ -127,76 +127,89 @@ const root = join(tmpdir(), `portos-trash-poc-${Date.now()}`);
 await mkdir(root, { recursive: true });
 const names = ['a sp ace.txt', 'scene[1].png', "it's.txt", 'ünïcödé émoji 🎬.txt', 'plain.txt'];
 const paths = names.map(n => join(root, n));
-for (const p of paths) await writeFile(p, `payload:${basename(p)}`);
 const report = { host: { windows: process.env.OS, node: process.version, powershell: POWERSHELL } };
-
-// 1 + 5 + 6: batch of awkward names, one PowerShell process.
-report.batch = await powershellRecycle(paths);
-check('batch: exit 0', report.batch.ok);
-check('batch: originals gone', (await Promise.all(paths.map(p => exists(p)))).every(v => v === false));
-check('batch: inside deadline with margin (<10 s)', report.batch.ms < 10_000);
-let records = await recycleBinRecords(parse(root).root);
-report.restoreMetadata = Object.fromEntries(paths.map(p => [basename(p), records.some(r => sameFile(r.original, p))]));
-check('batch: every file has a $I record naming its original path', Object.values(report.restoreMetadata).every(Boolean));
-
-// 4: missing path alone, and beside a real one (partial success).
-report.missing = await powershellRecycle([join(root, 'does-not-exist.txt')]);
-check('missing: non-zero exit with a per-file code', !report.missing.ok && report.missing.results?.[0]?.code === 2);
-const partialOk = join(root, 'partial-ok.txt'); await writeFile(partialOk, 'p');
-report.partial = await powershellRecycle([join(root, 'nope.txt'), partialOk]);
-check('partial: real file recycled, missing one reported', !report.partial.ok && !(await exists(partialOk)) && report.partial.results?.some(r => r.recycled));
-
-// Collision: the shell assigns a fresh $I/$R id; both copies must be in the bin.
-await writeFile(paths[4], 'second plain');
-report.collision = await powershellRecycle([paths[4]]);
-records = await recycleBinRecords(parse(root).root);
-check('collision: two $I records for the same original path', records.filter(r => sameFile(r.original, paths[4])).length === 2);
-
-// 2: a volume with no Recycle Bin must be refused, file intact. Requires an operator-supplied directory.
+// Everything this run may leave in the Recycle Bin, keyed by original path: a small text
+// body to compare, or an exact byte size for the oversized probe, which is never read.
+const owned = new Map();
+const own = async (path, body) => { await writeFile(path, body); owned.set(path.toLowerCase(), { body }); };
 const noBinDir = process.env.PORTOS_POC_NO_BIN_DIR;
-if (noBinDir) {
-  const bait = join(noBinDir, `portos-poc-no-bin-${Date.now()}.txt`);
-  await writeFile(bait, 'bait');
-  report.noRecycleBinVolume = await powershellRecycle([bait]);
-  const intact = (await readFile(bait, 'utf8').catch(() => null)) === 'bait';
-  check('no-bin volume: refused', !report.noRecycleBinVolume.ok);
-  check('no-bin volume: file intact (never permanently deleted)', intact);
-  if (intact) await unlink(bait);
-} else {
-  incomplete.push('no-bin volume (set PORTOS_POC_NO_BIN_DIR)');
-}
-
-// 3: a file larger than the bin's MaxCapacity must be refused, file intact.
 const overBytes = Number(process.env.PORTOS_POC_OVER_CAPACITY_BYTES);
-if (Number.isFinite(overBytes) && overBytes > 0) {
-  const huge = join(root, 'over-capacity.bin');
-  await execFileAsync('fsutil', ['file', 'createnew', huge, String(overBytes)], { windowsHide: true });
-  report.overCapacity = await powershellRecycle([huge]);
-  const stat = await lstat(huge).catch(() => null);
-  check('over-capacity: refused', !report.overCapacity.ok);
-  check('over-capacity: file intact with its full size', stat?.size === overBytes);
-  if (stat) await unlink(huge);
-} else {
-  incomplete.push('over-capacity file (set PORTOS_POC_OVER_CAPACITY_BYTES)');
-}
+const bait = noBinDir ? join(noBinDir, `portos-poc-no-bin-${Date.now()}.txt`) : null;
+const huge = join(root, 'over-capacity.bin');
 
-// Restore: move the $R payload of the first file back where it came from, drop its $I.
-const first = records.find(r => sameFile(r.original, paths[0]));
-if (first) { await rename(first.payloadFile, paths[0]); await unlink(first.infoFile); }
-report.restore = { restored: await exists(paths[0]), content: first ? await readFile(paths[0], 'utf8') : null };
-check('restore: byte-identical content back at the original path', report.restore.content === `payload:${names[0]}`);
+try {
+  for (const p of paths) await own(p, `payload:${basename(p)}`);
 
-// Cleanup: remove every PoC payload still in the bin (content-checked), then the run dir.
-let removed = 0;
-for (const r of await recycleBinRecords(parse(root).root)) {
-  if (!r.original.toLowerCase().startsWith(root.toLowerCase())) continue;
-  const body = await readFile(r.payloadFile, 'utf8').catch(() => null);
-  if (body !== null && /^(payload:|p$|second plain$)/.test(body)) { await unlink(r.payloadFile); await unlink(r.infoFile); removed++; }
+  // 1 + 5 + 6: batch of awkward names, one PowerShell process.
+  report.batch = await powershellRecycle(paths);
+  check('batch: exit 0', report.batch.ok);
+  check('batch: originals gone', (await Promise.all(paths.map(p => exists(p)))).every(v => v === false));
+  check('batch: inside deadline with margin (<10 s)', report.batch.ms < 10_000);
+  let records = await recycleBinRecords(parse(root).root);
+  report.restoreMetadata = Object.fromEntries(paths.map(p => [basename(p), records.some(r => sameFile(r.original, p))]));
+  check('batch: every file has a $I record naming its original path', Object.values(report.restoreMetadata).every(Boolean));
+
+  // 4: missing path alone, and beside a real one (partial success).
+  report.missing = await powershellRecycle([join(root, 'does-not-exist.txt')]);
+  check('missing: non-zero exit with a per-file code', !report.missing.ok && report.missing.results?.[0]?.code === 2);
+  const partialOk = join(root, 'partial-ok.txt'); await own(partialOk, 'p');
+  report.partial = await powershellRecycle([join(root, 'nope.txt'), partialOk]);
+  check('partial: real file recycled, missing one reported', !report.partial.ok && !(await exists(partialOk)) && report.partial.results?.some(r => r.recycled));
+
+  // Collision: the shell assigns a fresh $I/$R id; both copies must be in the bin.
+  await own(paths[4], 'second plain');
+  report.collision = await powershellRecycle([paths[4]]);
+  records = await recycleBinRecords(parse(root).root);
+  check('collision: two $I records for the same original path', records.filter(r => sameFile(r.original, paths[4])).length === 2);
+
+  // 2: a volume with no Recycle Bin must be refused, file intact. Requires an operator-supplied directory.
+  if (bait) {
+    await own(bait, 'bait');
+    report.noRecycleBinVolume = await powershellRecycle([bait]);
+    check('no-bin volume: refused', !report.noRecycleBinVolume.ok);
+    check('no-bin volume: file intact (never permanently deleted)', (await readFile(bait, 'utf8').catch(() => null)) === 'bait');
+  } else {
+    incomplete.push('no-bin volume (set PORTOS_POC_NO_BIN_DIR)');
+  }
+
+  // 3: a file larger than the bin's MaxCapacity must be refused, file intact.
+  if (Number.isFinite(overBytes) && overBytes > 0) {
+    await execFileAsync('fsutil', ['file', 'createnew', huge, String(overBytes)], { windowsHide: true });
+    owned.set(huge.toLowerCase(), { size: overBytes });
+    report.overCapacity = await powershellRecycle([huge]);
+    const stat = await lstat(huge).catch(() => null);
+    check('over-capacity: refused', !report.overCapacity.ok);
+    check('over-capacity: file intact with its full size', stat?.size === overBytes);
+  } else {
+    incomplete.push('over-capacity file (set PORTOS_POC_OVER_CAPACITY_BYTES)');
+  }
+
+  // Restore: move the $R payload of the first file back where it came from, drop its $I.
+  const first = records.find(r => sameFile(r.original, paths[0]));
+  if (first) { await rename(first.payloadFile, paths[0]); await unlink(first.infoFile); }
+  report.restore = { restored: await exists(paths[0]), content: first ? await readFile(paths[0], 'utf8') : null };
+  check('restore: byte-identical content back at the original path', report.restore.content === `payload:${names[0]}`);
+} finally {
+  // Cleanup runs even when a check threw: remove every owned $I/$R pair (matched by exact
+  // original path and by body or by size, never by reading an oversized payload), then
+  // whatever is still at the original paths, then the run directory.
+  let removed = 0;
+  for (const r of await recycleBinRecords(parse(root).root).catch(() => [])) {
+    const expected = owned.get(r.original.toLowerCase());
+    if (!expected) continue;
+    const stat = await lstat(r.payloadFile).catch(() => null);
+    if (!stat) continue;
+    const mine = 'size' in expected
+      ? stat.size === expected.size
+      : stat.size < 1024 && (await readFile(r.payloadFile, 'utf8').catch(() => null)) === expected.body;
+    if (mine) { await unlink(r.payloadFile); await unlink(r.infoFile); removed++; }
+  }
+  if (bait) await unlink(bait).catch(() => {});
+  await rm(root, { recursive: true, force: true });
+  report.cleanup = { removed };
+  report.failures = failures;
+  report.incomplete = incomplete;
+  report.status = failures.length ? 'FAIL' : incomplete.length ? 'INCOMPLETE' : 'PASS';
+  console.log(JSON.stringify(report, null, 2));
 }
-report.cleanup = { removed };
-await rm(root, { recursive: true, force: true });
-report.failures = failures;
-report.incomplete = incomplete;
-report.status = failures.length ? 'FAIL' : incomplete.length ? 'INCOMPLETE' : 'PASS';
-console.log(JSON.stringify(report, null, 2));
 process.exit(report.status === 'PASS' ? 0 : 1);
