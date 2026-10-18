@@ -234,6 +234,7 @@ This policy governs code comments, not user-facing guides or product copy.
 
 ## Code Conventions
 
+- **Live Node inspector cleanup** — do not schedule dynamic `import()` from an inspector-evaluated callback; it can reject with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` outside the evaluation's promise. Use `process.getBuiltinModule('node:inspector')` for builtin access, inspect the protocol response before disconnecting, and verify the listener closed. See [safe inspector cleanup](docs/TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling).
 - **Error handling** — in Express request handlers, let errors bubble to centralized middleware instead of wrapping each handler in try/catch. Client code uses the shared error/save boundaries in `client/src/AGENTS.md`. **Process-boundary exception:** PTY/child-process/`setTimeout`/`setInterval` callbacks and any code running *outside* the Express request lifecycle, where an uncaught throw crashes the Node process. At those boundaries, wrap hook invocation in try/catch and log via the emoji-prefixed `console.error` style. Async event handlers that mutate shared module-level state (e.g. the TUI spawner's `handleData`) must also be serialized — chain them onto a per-session/per-actor `Promise.resolve()` queue rather than firing concurrently.
 - **Functional programming** — no classes; use hooks in React.
 - **Zod validation** — all route inputs validated via `lib/validation.js`.
