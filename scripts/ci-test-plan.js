@@ -294,6 +294,10 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/direct-invocation-drift.test.js',
   'scripts/ensure-deps.test.js',
   'scripts/migrations/promptBumpMigrations.guard.test.js',
+  'scripts/migrations/shippedPromptHistory.guard.test.js',
+  // Sweeps every migration export against independent prompt-hash baselines;
+  // migration files have no import edge back to this guard.
+  'scripts/setup-data-drift.test.js',
   'scripts/node-version-drift.test.js',
   // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
   // in prose with no import edge back to this test (#11851).
