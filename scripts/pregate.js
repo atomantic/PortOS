@@ -12,24 +12,37 @@
  * a log. They are all static and take seconds to answer here.
  *
  * This runs CI's hidden-content scan and hands the SAME planner's plan to the
- * SAME runners (`run-ci-lint.js`, `run-ci-tests.js`), so a green pregate means those Linux
- * jobs are green for the same reasons — never a second, drifting opinion about
- * which tests matter.
+ * SAME runners (`run-ci-lint.js`, `run-ci-tests.js`, the client build, the
+ * boot smoke, the browser suites and the serial `portos_test` suite), so a
+ * green pregate means the Linux jobs are green for the same reasons — never
+ * a second, drifting opinion about which tests matter. Stages run in CI's
+ * dependency order, with the DB suite last and alone: it is serial and its
+ * per-case budgets assume no concurrent suite (docs/CONTRIBUTING.md).
  *
  *   node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
+ *                           [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
  *
- *   --base <ref>  compare against <ref> instead of the remote default branch
- *   --full        actually run the complete suite when the plan demands it
- *                 (without this, a full plan runs the always-run guards only)
- *   --skip-lint   skip linting in both client and server workspaces
- *   --plan-only   print the plan and the stages, run nothing
+ *   --base <ref>    compare against <ref> instead of the remote default branch
+ *   --full          actually run the complete suite when the plan demands it
+ *                   (without this, a full plan runs the always-run guards only
+ *                   and reports the resource suites as not run)
+ *   --skip-lint     skip linting in both client and server workspaces
+ *   --skip-db, --skip-browser, --skip-build, --skip-smoke
+ *                   leave that suite to CI; it is reported as not run
+ *   --plan-only     print the plan and the stages, run nothing
  *
- * What it deliberately does NOT cover, because each needs a resource this
- * checkout does not have: the DB suites (a provisioned `portos_test` —
- * `npm run setup:db:test && npm run test:db`), the Windows job (a Windows
- * runner), the Linux worker-containment job (bubblewrap namespaces), and the
- * client build / boot smoke. The summary names the ones the
- * plan flagged so they are a decision rather than a surprise.
+ * A resource suite whose prerequisite this machine lacks (no reachable test
+ * Postgres; no Chrome, ffmpeg or client bundler) is reported the same way, with
+ * the remedy, and the run continues. The summary and the receipt both name
+ * every suite that was NOT run, so a green result never claims a suite it
+ * skipped. The Windows job and the Linux worker-containment job (bubblewrap
+ * namespaces) are the suites only CI can prove.
+ *
+ * The receipt (`.cache/pregate/report.json`, see scripts/lib/pregateReport.js)
+ * records the plan, each stage's outcome and duration, the skipped suites, the
+ * base and HEAD commits, and the hash of the exact working tree validated —
+ * untracked and uncommitted files included — so a later attestation can match
+ * it to the commit that ships.
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -38,29 +51,64 @@ import { constants } from 'os';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
+import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const IS_WIN32 = process.platform === 'win32';
 
 /**
- * Suites the plan can request that this machine cannot honestly run.
- *
- * Keyed by the plan field, valued by what the operator would have to run
- * instead. Reported rather than silently dropped: a pregate that stayed quiet
- * about a DB-risk diff would read as "CI is covered" while the one suite that
- * can destroy real data went unmentioned.
+ * Suites CI runs that a local run may have to leave to CI, each valued by what
+ * the operator can do about it. Reported rather than silently dropped: a
+ * pregate that stayed quiet about a DB-risk diff would read as "CI is covered"
+ * while the one suite that can destroy real data went unmentioned.
  */
 export const UNCOVERED_SUITES = Object.freeze({
-  db: 'npm run setup:db:test && npm run test:db (never against the real `portos` database)',
-  windows: 'a Windows runner — no local equivalent; CI is the only proof',
-  linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
-  build: 'npm run build',
+  db: 'needs a reachable test Postgres: npm run setup:db:test && npm run test:db (never against the real `portos` database)',
+  browser: 'needs Chrome, ffmpeg and the client bundler; run `npm run pregate --full` once they are installed',
+  build: 'npm run build && npm run test --prefix client -- ApiExplorer.bundle',
   smoke: 'npm run smoke',
+  windows: 'CI is the only proof',
+  linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
 });
+
+/** Does the plan select this suite at all? `browser` is a file list, the rest flags. */
+export function suiteSelected(plan, suite) {
+  return suite === 'browser' ? (plan.browser?.files?.length ?? 0) > 0 : Boolean(plan[suite]);
+}
+
+/**
+ * Every suite CI would run that this run does not, with the reason.
+ *
+ * Pure. A `--skip-*` flag outranks a downgraded full plan, which outranks a
+ * failed prerequisite probe (`prerequisites[suite].ok === false`), so the
+ * reason names the operator's own choice first. Windows and the Linux
+ * containment job are always here when selected: neither has a local runner.
+ */
+export function uncoveredSuites(plan, { options = {}, downgraded = false, prerequisites = {} } = {}) {
+  const flags = { db: options.skipDb, browser: options.skipBrowser, build: options.skipBuild, smoke: options.skipSmoke };
+  const uncovered = [];
+  for (const suite of ['build', 'smoke', 'browser', 'db']) {
+    if (!suiteSelected(plan, suite)) continue;
+    let reason = null;
+    if (flags[suite]) reason = `skipped by --skip-${suite}`;
+    else if (downgraded) reason = 'full plan downgraded; pass --full to run it';
+    else if (prerequisites[suite]?.ok === false) reason = `prerequisite missing: ${prerequisites[suite].reason}`;
+    if (reason) uncovered.push({ suite, reason, remedy: UNCOVERED_SUITES[suite] });
+  }
+  if (suiteSelected(plan, 'windows')) {
+    uncovered.push({ suite: 'windows', reason: 'a Windows runner has no local equivalent', remedy: UNCOVERED_SUITES.windows });
+  }
+  if (suiteSelected(plan, 'linuxContainment')) {
+    uncovered.push({ suite: 'linuxContainment', reason: 'needs a Linux host with bubblewrap namespaces', remedy: UNCOVERED_SUITES.linuxContainment });
+  }
+  return uncovered;
+}
 
 /**
  * Plan lines for the cross-workspace browser selection CI consumes
@@ -89,50 +137,121 @@ export function pregateWorkerEnv(env) {
 }
 
 /**
+ * The child environment for one stage. A stage value of `undefined` REMOVES
+ * the variable (the DB stages drop `TEST_DB_OK` this way), which is the only
+ * way an inherited escape hatch can be kept away from a runner.
+ */
+export function stageSpawnEnv(baseEnv, stageEnv) {
+  const env = { ...pregateWorkerEnv(baseEnv) };
+  for (const [name, value] of Object.entries(stageEnv)) {
+    if (value === undefined) delete env[name];
+    else env[name] = value;
+  }
+  return env;
+}
+
+/** Human spelling of a stage's command for plan output and the receipt. */
+export function describeStageCommand(stage) {
+  return stage.npm ? `npm ${stage.npm.join(' ')}` : `node scripts/${stage.script}${stage.args.length ? ` ${stage.args.join(' ')}` : ''}`;
+}
+
+/**
  * The ordered stages to run for a plan, each a spawnable command.
  *
- * Pure, so the plan -> stage mapping is testable without spawning Vitest.
- * The hidden-content scan always runs first, even if lint/tests select no work.
+ * Pure, so the plan -> stage mapping is testable without spawning anything.
+ * The hidden-content scan always runs first, even if lint/tests select no
+ * work, and the shipped prompt-history guard (CI's `prompt-history` job: one
+ * git-history read, seconds locally) follows it when selected. Order after
+ * that follows CI's own dependency order: lint, unit tests, the client build
+ * and its bundle pin, the boot smoke, the browser suites, and the DB suite
+ * last and alone. `skip` holds the suites that stay with CI
+ * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
+ * environment from scripts/lib/pregateResources.js.
  */
-export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
+export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, databaseEnv = {} } = {}) {
+  const base = baseSha ? { CI_BASE_SHA: baseSha } : {};
   const stages = [{
     name: 'hidden-content scan',
+    suite: 'scan',
     script: 'scan-diff-hidden-content.js',
     args: ['--base', baseSha, '--worktree'],
     env: {},
   }];
 
+  if (plan.promptHistory) {
+    stages.push({ name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
+  }
+
   if (!skipLint && plan.lint.mode !== 'skip') {
     stages.push({
       name: 'client/server lint',
+      suite: 'lint',
       script: 'run-ci-lint.js',
       args: [],
       env: { CI_LINT_MODE: plan.lint.mode, CI_LINT_FILES: JSON.stringify(plan.lint.files) },
     });
   }
 
+  // Same env the Linux unit jobs set: the registered browser suites belong to
+  // the browser stage below, and passing output stays signal-dense.
+  const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
   ['server', 'client'].forEach((scope) => {
     const scoped = plan[scope];
     if (scoped.mode === 'skip') return;
     stages.push({
       name: `${scope} tests`,
+      suite: scope,
       script: 'run-ci-tests.js',
       args: [scope],
       env: {
+        ...scopeEnv[scope],
         CI_TEST_MODE: scoped.mode,
         CI_TEST_FILES: JSON.stringify(scoped.files),
         CI_TEST_SOURCES: JSON.stringify(scoped.sources),
         // Same base the planner just used. The import-growth guard fails
         // closed without it; omitting it here would make pregate compare
         // against a different ref than CI.
-        ...(baseSha ? { CI_BASE_SHA: baseSha } : {}),
+        ...base,
       },
     });
   });
 
-  // CI's `prompt-history` job: one git-history read, seconds locally.
-  if (plan.promptHistory) {
-    stages.push({ name: 'shipped prompt history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
+  if (plan.build && !skip.build) {
+    stages.push(
+      { name: 'client build', suite: 'build', npm: ['run', 'build', '--prefix', 'client'], args: [], env: {} },
+      // The Scalar-removal pin only sees dist/ after a real build.
+      { name: 'API Explorer bundle pin', suite: 'build', npm: ['run', 'test', '--prefix', 'client', '--', 'ApiExplorer.bundle'], args: [], env: {} },
+    );
+  }
+
+  if (plan.smoke && !skip.smoke) {
+    stages.push({ name: 'boot smoke', suite: 'smoke', script: 'smoke-boot.js', args: [], env: {} });
+  }
+
+  if (suiteSelected(plan, 'browser') && !skip.browser) {
+    stages.push({
+      name: 'browser suites',
+      suite: 'browser',
+      script: 'run-ci-tests.js',
+      args: ['server'],
+      env: {
+        CI_TEST_MODE: 'files',
+        CI_TEST_FILES: JSON.stringify(plan.browser.files),
+        CI_TEST_SOURCES: '[]',
+        // PRs run the smoke profile; the guards fail closed instead of skipping.
+        PORTOS_BROWSER_TEST_PROFILE: 'smoke',
+        PORTOS_REQUIRE_BROWSER_SUITES: '1',
+        PORTOS_TEST_QUIET: '1',
+        ...base,
+      },
+    });
+  }
+
+  if (plan.db && !skip.db) {
+    stages.push(
+      { name: 'DB provision (portos_test)', suite: 'db', npm: ['run', 'setup:db:test', '--prefix', 'server'], args: [], env: databaseEnv },
+      { name: 'DB suite (portos_test)', suite: 'db', npm: ['run', 'test:db:ci', '--prefix', 'server'], args: [], env: databaseEnv },
+    );
   }
 
   return stages;
@@ -145,7 +264,8 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
  * correct there and unusable here — the complete suite is far longer than
  * anyone runs before a push, so the honest local default is the subset that
  * catches always-run and diff-selected structural guards, plus a line saying
- * what was dropped. `--full` opts back in.
+ * what was dropped. The resource flags stay as the planner set them so the
+ * summary can still name what CI will run; `--full` opts back in.
  */
 export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const tracked = new Set(trackedFiles);
@@ -226,16 +346,26 @@ function defaultBaseRef() {
 }
 
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
+                              [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
 
-  --base <ref>  compare against <ref> instead of the remote default branch
-  --full        run the complete suite when the plan demands it
-  --skip-lint   skip linting in both client and server workspaces
-  --plan-only   print the plan and stages without running them
-  -h, --help    display this usage`;
+  --base <ref>    compare against <ref> instead of the remote default branch
+  --full          run the complete suite when the plan demands it
+  --skip-lint     skip linting in both client and server workspaces
+  --skip-db       leave the portos_test DB suite to CI (reported as not run)
+  --skip-browser  leave the cross-workspace browser suites to CI (reported as not run)
+  --skip-build    leave the client build and its bundle pin to CI (reported as not run)
+  --skip-smoke    leave the server boot smoke to CI (reported as not run)
+  --plan-only     print the plan and stages without running them
+  -h, --help      display this usage`;
+
+const SKIP_FLAGS = { '--skip-db': 'skipDb', '--skip-browser': 'skipBrowser', '--skip-build': 'skipBuild', '--skip-smoke': 'skipSmoke' };
 
 /** Parse argv before doing any Git inspection or starting a child process. */
 export function parseArgs(argv) {
-  const options = { base: null, full: false, skipLint: false, planOnly: false, help: false };
+  const options = {
+    base: null, full: false, skipLint: false, planOnly: false, help: false,
+    skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     switch (flag) {
@@ -251,21 +381,33 @@ export function parseArgs(argv) {
       case '--plan-only': options.planOnly = true; break;
       case '--help':
       case '-h': options.help = true; break;
-      default: throw new Error(`Unknown option: ${flag}.`);
+      default:
+        if (SKIP_FLAGS[flag]) { options[SKIP_FLAGS[flag]] = true; break; }
+        throw new Error(`Unknown option: ${flag}.`);
     }
   }
   return options;
 }
 
+/** Spawn target for a stage: a repo script under node, or npm itself. */
+function stageSpawn(stage, env) {
+  if (!stage.npm) return { command: process.execPath, args: [join(REPO_ROOT, 'scripts', stage.script), ...stage.args] };
+  // A bare `npm` is a `.cmd` shim on Windows; resolve and wrap it the way every
+  // other npm spawn in this tree does (server/lib/bufferedSpawn.js).
+  return prepareWindowsSafeSpawn(resolveWindowsExecutable('npm', IS_WIN32, env) || 'npm', stage.npm, IS_WIN32);
+}
+
 /** Wait asynchronously so owner signals can be attributed during a stage. */
 function runStage(stage) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [join(REPO_ROOT, 'scripts', stage.script), ...stage.args], {
+    const env = stageSpawnEnv(process.env, stage.env);
+    const { command, args } = stageSpawn(stage, env);
+    const child = spawn(command, args, {
       cwd: REPO_ROOT,
       stdio: 'inherit',
-      env: { ...pregateWorkerEnv(process.env), ...stage.env },
+      env,
       // A separate group lets cancellation reach only this stage's descendants.
-      detached: process.platform !== 'win32',
+      detached: !IS_WIN32,
     });
     const handlers = new Map();
     const cleanup = () => {
@@ -277,7 +419,7 @@ function runStage(stage) {
         writeSync(2, `❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${child.pid ?? 'unavailable'} received_signal=${signal}.\n`);
         cleanup();
         try {
-          if (process.platform === 'win32') child.kill(signal);
+          if (IS_WIN32) child.kill(signal);
           else if (child.pid) process.kill(-child.pid, signal);
         } catch (error) {
           if (error.code !== 'ESRCH') writeSync(2, `❌ Stage cancellation failed: ${error.code ?? 'unknown'}.\n`);
@@ -296,6 +438,40 @@ function runStage(stage) {
       resolve({ status, signal, pid: child.pid });
     });
   });
+}
+
+const formatDuration = (ms) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(1)}s`);
+
+function announceUncovered(uncovered) {
+  uncovered.forEach(({ suite, reason, remedy }) => {
+    console.log(`ℹ️ CI will also run: ${suite} — not run here (${reason}); ${remedy}`);
+  });
+}
+
+/** Probe what the selected resource suites need; a failed probe keeps that suite with CI. */
+async function probeResourceSuites(plan, { options, downgraded }) {
+  const prerequisites = {};
+  let databaseEnv = {};
+  const wants = (suite, flag) => suiteSelected(plan, suite) && !flag && !downgraded;
+  const wantsDb = wants('db', options.skipDb);
+  const wantsBrowser = wants('browser', options.skipBrowser);
+  if (!wantsDb && !wantsBrowser) return { prerequisites, databaseEnv };
+  // Reaches `pg`, `playwright-core` and server modules: loaded only when needed.
+  const resources = await import('./lib/pregateResources.js');
+  if (wantsDb) {
+    databaseEnv = resources.resolveTestDatabaseStageEnv(REPO_ROOT, process.env);
+    prerequisites.db = await resources.probeTestDatabase(databaseEnv, { repoRoot: REPO_ROOT });
+    if (prerequisites.db.ok) {
+      console.log(`🗄️ Test database ${prerequisites.db.endpoint} ${prerequisites.db.provision ? 'will be provisioned' : 'is reachable'}.`);
+    } else {
+      console.warn(`⏭️ Test database ${prerequisites.db.endpoint}: ${prerequisites.db.reason}.`);
+    }
+  }
+  if (wantsBrowser) {
+    prerequisites.browser = await resources.probeBrowserPrerequisites(plan.browser.files, { repoRoot: REPO_ROOT });
+    if (!prerequisites.browser.ok) console.warn(`⏭️ Browser suites: ${prerequisites.browser.reason}.`);
+  }
+  return { prerequisites, databaseEnv };
 }
 
 async function main() {
@@ -373,25 +549,30 @@ async function main() {
     smoke: raw.smoke,
     promptHistory: raw.prompt_history,
     linuxContainment: raw.linux_containment,
+    suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
-  if (plan.full && !options.full) {
+  const downgraded = plan.full && !options.full;
+  if (downgraded) {
     plan = downgradeFullPlan(plan, git(['ls-files']).split('\n').filter(Boolean), changedFiles);
-    console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything.');
+    console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything, including the build, smoke, browser and DB suites.');
   }
 
-  const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha });
-  const uncovered = Object.keys(UNCOVERED_SUITES).filter((key) => plan[key]);
-  uncovered.forEach((key) => {
-    console.log(`ℹ️ CI will also run: ${key} — not covered here; run ${UNCOVERED_SUITES[key]}`);
-  });
+  describeBrowserSelection(plan.browser.files).forEach((line) => console.log(line));
 
-  describeBrowserSelection(plan.browser?.files ?? []).forEach((line) => console.log(line));
+  /** Stages for the suites that stay here, after the uncovered ones are announced. */
+  const planStages = (prerequisites, databaseEnv) => {
+    const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
+    announceUncovered(uncovered);
+    const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
+    return { uncovered, stages: resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv }) };
+  };
 
   if (options.planOnly) {
-    stages.forEach((stage) => {
-      console.log(`• ${stage.name}: ${stage.script} ${stage.args.join(' ')}`);
+    // Prerequisites are probed at run time; here every selected suite is a stage.
+    planStages({}, {}).stages.forEach((stage) => {
+      console.log(`• ${stage.name}: ${describeStageCommand(stage)}`);
     });
     process.exit(0);
   }
@@ -409,25 +590,99 @@ async function main() {
   }
   console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
 
-  for (const stage of stages) {
-    console.log(`▶️ ${stage.name}`);
-    const result = await runStage(stage);
-    if (result.error) {
-      console.error(`❌ ${stage.name} could not start: ${result.error.message}`);
-      process.exit(1);
+  const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
+  const { uncovered, stages } = planStages(prerequisites, databaseEnv);
+
+  const headSha = git(['rev-parse', 'HEAD']);
+  // The receipt hashes the tree the stages validate. It is taken once the
+  // hidden-content scan has passed: that scan is what proves every untracked
+  // path is readable (an uncommitted nested repository fails both, and the
+  // scan's diagnosis is the one the operator should read).
+  let tree = null;
+  const hashTree = () => {
+    if (tree !== null) return;
+    tree = validatedTreeHash(REPO_ROOT);
+    console.log(`🌳 Validating working tree ${tree.slice(0, 12)} at HEAD ${headSha.slice(0, 9)}.`);
+  };
+
+  const startedAt = new Date().toISOString();
+  const results = stages.map((stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 }));
+  let exitCode = 0;
+  let failure = null;
+  for (const result of results) {
+    if (failure) break;
+    if (result.suite !== 'scan') {
+      try {
+        hashTree();
+      } catch (error) {
+        failure = `❌ Cannot hash the working tree for the receipt: ${error.message}`;
+        exitCode = 2;
+        break;
+      }
     }
-    if (result.signal) {
-      console.error(`❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${result.pid} child_signal=${result.signal}.`);
-      process.exit(constants.signals[result.signal] ? 128 + constants.signals[result.signal] : 1);
-    }
-    if (result.status !== 0) {
-      console.error(`❌ ${stage.name} failed — fix it before pushing (CI would fail the same way).`);
-      process.exit(result.status ?? 1);
+    console.log(`▶️ ${result.name}`);
+    const started = Date.now();
+    const outcome = await runStage(result);
+    result.durationMs = Date.now() - started;
+    if (outcome.error) {
+      result.status = 'failed';
+      failure = `❌ ${result.name} could not start: ${outcome.error.message}`;
+      exitCode = 1;
+    } else if (outcome.signal) {
+      result.status = 'failed';
+      result.signal = outcome.signal;
+      failure = `❌ Pregate incomplete: stage="${result.name}" owner_pid=${process.pid} child_pid=${outcome.pid} child_signal=${outcome.signal}.`;
+      exitCode = constants.signals[outcome.signal] ? 128 + constants.signals[outcome.signal] : 1;
+    } else if (outcome.status !== 0) {
+      result.status = 'failed';
+      result.exitCode = outcome.status;
+      failure = `❌ ${result.name} failed after ${formatDuration(result.durationMs)} — fix it before pushing (CI would fail the same way).`;
+      exitCode = outcome.status ?? 1;
+    } else {
+      result.status = 'passed';
+      result.exitCode = 0;
+      console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
     }
   }
 
-  const caveat = uncovered.length > 0 ? ` (${uncovered.join(', ')} still only provable in CI)` : '';
-  console.log(`✅ Pregate passed: ${stages.map((stage) => stage.name).join(', ')}${caveat}.`);
+  let treeAfterRun = null;
+  try {
+    if (!failure) hashTree();
+    if (tree !== null) treeAfterRun = validatedTreeHash(REPO_ROOT);
+  } catch (error) {
+    failure ??= `❌ Cannot hash the working tree for the receipt: ${error.message}`;
+    if (exitCode === 0) exitCode = 2;
+  }
+  const report = buildPregateReport({
+    plan,
+    options: { base: baseRef, full: options.full, skipLint: options.skipLint, skipDb: options.skipDb, skipBrowser: options.skipBrowser, skipBuild: options.skipBuild, skipSmoke: options.skipSmoke },
+    base: { ref: baseRef, sha: baseSha },
+    head: { sha: headSha },
+    tree,
+    treeAfterRun,
+    stages: results,
+    skipped: uncovered,
+    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers: pregateWorkerEnv(process.env).PORTOS_PREGATE_MAX_WORKERS },
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  });
+  writePregateReport(REPO_ROOT, report);
+  if (tree !== null && !report.treeStable) {
+    console.warn(`⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.`);
+  }
+
+  if (failure) {
+    console.error(failure);
+    console.error(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
+    process.exit(exitCode);
+  }
+
+  const ran = results.map((stage) => stage.name).join(', ');
+  console.log(`✅ Pregate passed: ${ran}.`);
+  if (uncovered.length > 0) {
+    console.log(`⚠️ Not run here (CI still proves them): ${uncovered.map(({ suite, reason }) => `${suite} (${reason})`).join(', ')}.`);
+  }
+  console.log(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
