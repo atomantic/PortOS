@@ -17,7 +17,7 @@
  * frozen migrations being rewritten to consume it.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, mkdirSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -144,6 +144,26 @@ describe('applyPromptReplaceMigration opt-ins', () => {
       expect(result).toEqual({ updated: 1, alreadyCurrent: 1, skipped: 1, created: 0, retired: 0 });
       expect(readFileSync(join(stagesDir, 'pipeline-a.md'), 'utf-8')).toBe(BODY_NEW);
       expect(readFileSync(join(stagesDir, 'pipeline-c.md'), 'utf-8')).toBe(BODY_CUSTOM);
+    });
+
+    it('replaces an updated prompt by temp-file rename rather than truncating it in place', async () => {
+      // A crash mid-write of an in-place `writeFile` leaves a half-written
+      // prompt whose hash matches neither table, so the next pass would call
+      // it "customized" and keep the truncated body forever. A rename swap
+      // lands a fresh inode, so the pre-existing file either survives whole or
+      // is replaced whole — observable as an inode change with no temp file
+      // left behind.
+      const target = join(stagesDir, 'pipeline-a.md');
+      writeFileSync(target, BODY_OLD);
+      writeFileSync(join(sampleDir, 'pipeline-a.md'), BODY_NEW);
+      const inodeBefore = statSync(target).ino;
+
+      const result = await applyPromptReplaceMigration({ rootDir, ...multiOpts });
+
+      expect(result.updated).toBe(1);
+      expect(readFileSync(target, 'utf-8')).toBe(BODY_NEW);
+      expect(statSync(target).ino).not.toBe(inodeBefore);
+      expect(readdirSync(stagesDir)).toEqual(['pipeline-a.md']);
     });
 
     it('updates every file when all are at the accepted-old hash', async () => {
