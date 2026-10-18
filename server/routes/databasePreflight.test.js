@@ -26,6 +26,7 @@ vi.mock('../lib/childProcess.js', async importOriginal => ({
 // The detached cutover worker is launched only after acceptance; never here.
 vi.mock('../lib/detachedSpawn.js', async importOriginal => ({
   ...await importOriginal(),
+  snapshotProcesses: vi.fn(),
   spawnDatabaseMaintenanceWorker: vi.fn(async () => ({ on() {} })),
 }));
 
@@ -33,12 +34,13 @@ import databaseRoutes from './database.js';
 import { PATHS } from '../lib/paths.js';
 import { POOL_CONFIG, query } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
+import { createDatabaseWriterRegistry } from '../lib/databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { acquireBackupSnapshotCut, withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { getSystemActivity } from '../services/activeProcessing.js';
 import { countActiveCosAgents, getPersistentMindImageWorkGuard } from '../services/updatePreflight.js';
-import { spawnDatabaseMaintenanceWorker } from '../lib/detachedSpawn.js';
+import { snapshotProcesses, spawnDatabaseMaintenanceWorker } from '../lib/detachedSpawn.js';
 import { hostControlRouteGate } from '../services/authGate.js';
 
 const idle = () => ({
@@ -56,6 +58,7 @@ const accept = (body = { source: 'native', target: 'docker' }) => request(app).p
 
 beforeEach(() => {
   vi.clearAllMocks();
+  snapshotProcesses.mockReset().mockResolvedValue([]);
   for (const [key, value] of Object.entries({ PGHOST: 'localhost', PGPORT: '5432', PORTOS_NATIVE_PGPORT: '5432', PGPORT_DOCKER: '5561', PGUSER: 'example_role', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' })) vi.stubEnv(key, value);
   Object.assign(POOL_CONFIG, { host: 'localhost', port: 5432, user: 'example_role', database: 'example_test' });
   copyEcosystemConfig(PATHS.installRoot);
@@ -68,6 +71,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(join(PATHS.data, 'database-maintenance'), { recursive: true, force: true });
   rmSync(join(PATHS.data, 'database-maintenance-cancelled'), { recursive: true, force: true });
+  rmSync(join(PATHS.data, 'database-writers'), { recursive: true, force: true });
   expect(execFile).not.toHaveBeenCalled();
   expect(spawn).not.toHaveBeenCalled();
   expect(query).not.toHaveBeenCalled();
@@ -85,6 +89,41 @@ describe('database maintenance preflight HTTP contract', () => {
     expect(result.body).toEqual({ source, target, advisory: true, accepted: false });
     expect(createDatabaseMaintenanceJournal(PATHS.data).read()).toBeNull();
     expect(readFileSync(join(PATHS.installRoot, '.env'), 'utf8')).toBe(`PGMODE=${source}\n`);
+  });
+
+  it.each(['pending', 'ambiguous', 'orphaned'])('refuses a %s writer before advice or acceptance closes admission', async verdict => {
+    const writer = createDatabaseWriterRegistry().reserve(join(PATHS.data, 'example-control'));
+    if (verdict === 'ambiguous') writer.launched(4242);
+    if (verdict === 'orphaned') {
+      writer.launcher(4242);
+      snapshotProcesses.mockResolvedValue([{ pid: 4243, pgid: 4242, startedAt: Date.now() }]);
+    }
+    for (const call of [preflight, accept]) {
+      const result = await call();
+      expect(result.status).toBe(409);
+      expect(result.body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+      expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+      expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('sanitizes an unavailable process snapshot without fencing the server', async () => {
+    snapshotProcesses.mockRejectedValue(new Error('example private process command'));
+    const result = await accept();
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    expect(result.body.error).not.toContain('example private');
+    expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unreadable writer inventory with bounded diagnostics', async () => {
+    mkdirSync(join(PATHS.data, 'database-writers'), { recursive: true });
+    writeFileSync(join(PATHS.data, 'database-writers', 'example-private-file'), 'unknown');
+    const result = await accept();
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    expect(result.body.error).not.toContain('example-private-file');
+    expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -221,6 +260,45 @@ describe('database cutover acceptance HTTP contract', () => {
     // Acceptance itself never changes the saved mode.
     expect(readFileSync(join(PATHS.installRoot, '.env'), 'utf8')).toBe(`PGMODE=${source}\n`);
     expect((await accept({ source, target })).status).toBe(503);
+  });
+
+  it('accepts never-started writers and harmless registry dotfiles', async () => {
+    createDatabaseWriterRegistry().reserve(join(PATHS.data, 'example-abandoned')).abandoned();
+    writeFileSync(join(PATHS.data, 'database-writers', '.DS_Store'), 'finder');
+    expect((await accept()).status).toBe(202);
+    await vi.waitFor(() => expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1));
+  });
+
+  it.skipIf(process.platform === 'win32')('allows a verified running writer for the worker to terminate after acceptance', async () => {
+    const writer = createDatabaseWriterRegistry().reserve(join(PATHS.data, 'example-running'));
+    writer.launcher(4242);
+    writer.launched(4243);
+    snapshotProcesses.mockResolvedValue([{ pid: 4243, pgid: 4242, startedAt: Date.now() }]);
+    expect((await accept()).status).toBe(202);
+    await vi.waitFor(() => expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1));
+  });
+
+  it.skipIf(process.platform === 'win32')('rechecks writers after draining and releases the cut without publishing an unsafe fence', async () => {
+    const registry = createDatabaseWriterRegistry();
+    snapshotProcesses.mockResolvedValueOnce([]).mockImplementationOnce(async () => {
+      registry.reserve(join(PATHS.data, 'example-late-control'));
+      return [];
+    });
+    expect((await accept()).body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+    expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+    (await acquireBackupSnapshotCut())();
+  });
+
+  it.skipIf(process.platform === 'win32')('cancels before worker launch when a writer becomes unprovable under the fence', async () => {
+    const writer = createDatabaseWriterRegistry().reserve(join(PATHS.data, 'example-racing-control'));
+    writer.launcher(4242);
+    snapshotProcesses.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { pid: 4243, pgid: 4242, startedAt: Date.now() },
+    ]);
+    expect((await accept()).body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+    expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 
   it('refuses stale and reversed requests without publishing an operation', async () => {
