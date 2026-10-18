@@ -11,6 +11,9 @@
 node_modules
 
 # Reusable tool caches belong to the checkout, outside shared dependency links.
+# The root cache also holds the pregate receipt (.cache/pregate/report.json),
+# which must stay out of the tree it hashes.
+/.cache/
 /client/.cache/
 /server/.cache/
 
