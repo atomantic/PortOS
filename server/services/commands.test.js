@@ -11,6 +11,10 @@ vi.mock('./history.js', () => ({ logAction: vi.fn() }));
 import { logAction } from './history.js';
 import { executeCommand, stopCommand, STOP_GRACE_MS } from './commands.js';
 
+// On Windows killProcessTree is already a forced tree kill, so
+// terminateWithEscalation has nothing to escalate to and sends one signal.
+const ESCALATES = process.platform !== 'win32';
+
 // A child that only dies when the caller says so: `kill` records the signal
 // and the test decides when `close` fires, which is exactly the shape of an
 // npm wrapper or docker compose ignoring SIGTERM (#12021).
@@ -52,8 +56,12 @@ describe('executeCommand stop and timeout lifecycle (#12021)', () => {
     vi.advanceTimersByTime(STOP_GRACE_MS - 1);
     expect(child.kill).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
-    expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignored SIGTERM'));
+    if (ESCALATES) {
+      expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignored SIGTERM'));
+    } else {
+      expect(child.kill).toHaveBeenCalledTimes(1);
+    }
     expect(onComplete).not.toHaveBeenCalled();
 
     child.signalCode = 'SIGKILL';
@@ -91,7 +99,8 @@ describe('executeCommand stop and timeout lifecycle (#12021)', () => {
     vi.advanceTimersByTime(1);
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     vi.advanceTimersByTime(STOP_GRACE_MS);
-    expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+    expect(child.kill).toHaveBeenLastCalledWith(ESCALATES ? 'SIGKILL' : 'SIGTERM');
+    expect(child.kill).toHaveBeenCalledTimes(ESCALATES ? 2 : 1);
 
     child.emit('close', null, 'SIGKILL');
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
