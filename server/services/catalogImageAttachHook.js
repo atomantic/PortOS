@@ -125,4 +125,5 @@ export const __testing = {
     hook.__testing.reset();
     portraitGuard.clear();
   },
+  settled: hook.__testing.settled,
 };

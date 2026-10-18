@@ -27,7 +27,10 @@
  *     whose `job.queuedAt` is older than the newest already applied to that
  *     scene slot — read+written inside the serialize section so it never races);
  *   - best-effort error logging (a bookkeeping miss is logged, never thrown);
- *   - `__testing.reset()` (off the listener, clear the queue + guard).
+ *   - `__testing.reset()` (off the listener, clear the queue + guard) and
+ *     `__testing.settled()` (resolves once every completion the listener has
+ *     accepted has finished, so a test proves "nothing was written" without a
+ *     real sleep — #12047).
  *
  * What each hook supplies via config:
  *   - `label`        — used in the failure / crash log lines.
@@ -104,6 +107,9 @@ export function createMediaJobImageHook(config) {
 
   let completedHandler = null;
   let terminalHandlers = null;
+  // Every accepted completion's work, so tests can await the outcome instead
+  // of sleeping past it. Entries remove themselves when they settle.
+  const inFlight = new Set();
 
   // The tag → identity half of `decode`, shared with the terminal path (a
   // failed job carries no result to extract).
@@ -138,7 +144,7 @@ export function createMediaJobImageHook(config) {
     completedHandler = (job) => {
       // Admitted synchronously (before any await) so the attach — a durable
       // row write that points at the render's file — is never split by a backup cut.
-      void withBackupAssetPublication(async () => {
+      const work = withBackupAssetPublication(async () => {
         const ctx = decode(job);
         if (!ctx) return;
         const sKey = sceneKey ? sceneKey(ctx) : null;
@@ -169,6 +175,8 @@ export function createMediaJobImageHook(config) {
         // Last-resort net for synchronous throws (unexpected job shape, etc).
         console.log(`⚠️ ${label} hook crashed: ${err?.message || err}`);
       });
+      inFlight.add(work);
+      work.finally(() => inFlight.delete(work));
     };
 
     mediaJobEvents.on('completed', completedHandler);
@@ -203,6 +211,11 @@ export function createMediaJobImageHook(config) {
       }
       serialize.clear();
       guard.clear();
+    },
+    // Loops because a settling attach may not be the last: a completion
+    // emitted while an earlier one was in flight joins the set late.
+    settled: async () => {
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },
   };
 

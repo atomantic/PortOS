@@ -95,9 +95,17 @@ describe('ShotFinalRender', () => {
     expect(await screen.findByText('Shot 3: the selected clip file is missing')).toBeTruthy();
     unmount();
     getMusicVideoShotRenders.mockClear();
-    const { container } = render(<ShotFinalRender project={{ ...project, composition: { mode: 'concat' } }} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
-    await new Promise((r) => setTimeout(r, 700));
-    expect(getMusicVideoShotRenders).not.toHaveBeenCalled();
-    expect(container.innerHTML).toBe('');
+    // The read is debounced 600ms; fake time runs past that debounce exactly
+    // instead of sleeping and hoping a loaded worker kept up (#12047).
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<ShotFinalRender project={{ ...project, composition: { mode: 'concat' } }} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(getMusicVideoShotRenders).not.toHaveBeenCalled();
+      expect(container.innerHTML).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
