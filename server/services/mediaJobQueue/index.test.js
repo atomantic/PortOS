@@ -1454,6 +1454,11 @@ describe('mediaJobQueue', () => {
       prompt: 'delayed dispatch', videoProduction: { projectId: 'example', attemptId: 'example-attempt' },
     } });
     let hold;
+    const ready = Promise.withResolvers();
+    const onMaintenanceChanged = status => {
+      if (status.state === 'ready') ready.resolve();
+    };
+    maintenance.events.on('changed', onMaintenanceChanged);
     try {
       await vi.waitFor(() => expect(checkEntered).toBe(true), { interval: 1 });
       ({ hold } = maintenance.begin({ reason: 'Drain pending preparation', owner: 'Operator' }));
@@ -1461,10 +1466,14 @@ describe('mediaJobQueue', () => {
       await vi.waitFor(() => expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed'));
       expect(maintenance.status().state).toBe('draining');
       dispatchCheck.resolve();
-      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      // Finalization performs real file I/O; await its actual readiness signal
+      // instead of a wall-clock poll that also advances the fake flush deadline.
+      await ready.promise;
+      expect(maintenance.status().state).toBe('ready');
       expect(stubs.generateVideo).not.toHaveBeenCalled();
       expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
     } finally {
+      maintenance.events.off('changed', onMaintenanceChanged);
       dispatchCheck.resolve();
       await flush();
       if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
