@@ -1,4 +1,4 @@
-export const DEFAULT_THEME_ID = 'classic-midnight';
+export const DEFAULT_THEME_ID = 'kestrel-neon';
 
 const baseStatusColors = {
   '--port-success': '34 197 94',
@@ -84,8 +84,8 @@ const kestrelShellTokens = {
 };
 
 export const THEMES = {
-  [DEFAULT_THEME_ID]: {
-    id: DEFAULT_THEME_ID,
+  'classic-midnight': {
+    id: 'classic-midnight',
     label: 'Classic Midnight',
     shortLabel: 'Classic',
     concept: 'The existing PortOS interface, kept as the stable baseline.',
@@ -1013,7 +1013,7 @@ export const THEME_LIST = THEME_IDS.map(id => THEMES[id]);
 export const DEFAULT_AVATAR_COLOR = THEMES[DEFAULT_THEME_ID].accent;
 
 export const LEGACY_THEME_ALIASES = {
-  midnight: DEFAULT_THEME_ID,
+  midnight: 'classic-midnight',
   phosphor: 'black-ice-terminal',
   ember: 'blueprint-ops',
   arctic: 'lumen-glass',

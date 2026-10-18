@@ -1450,6 +1450,13 @@ html[data-port-theme-mode="day"] .always-dark [class~="hover:text-slate-100"]:ho
   background-color: rgb(var(--port-text) / 0.2);
 }
 
+/* === Classic Midnight === */
+/* Classic Midnight card fill is explicit so both classic variants share the
+   contract even when classic-midnight is not the default theme. */
+html[data-port-theme="classic-midnight"] .bg-port-card {
+  background-color: rgb(var(--port-card) / var(--port-card-alpha));
+}
+
 /* === Classic Noon === */
 /* Classic Noon uses the classic card surface directly; keeping the selector
    explicit makes the day variant's card fill part of the theme contract. */
