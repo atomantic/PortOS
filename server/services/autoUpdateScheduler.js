@@ -292,7 +292,13 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   const read = await checkUpdateRepoReadiness({ fetch: true })
     .catch((err) => ({ ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] }));
   if (!read.ready && !isRepairableOnly(read)) {
-    if (read.needsAgent && config.resolveBlockersWithAgent && repairDispatchDue(runtime, config.minIntervalMs, now)) {
+    // A live owner (or an unreadable owner registry) means the repair agent could
+    // only stand down — the claim-ownership coordinator refuses it while another
+    // agent holds the checkout. Dispatching anyway would burn the repair cooldown
+    // on a run that cannot act; defer so the first tick after the owners release
+    // the checkout enqueues the repair instead.
+    const ownerHoldsCheckout = read.reasons?.includes('agent-at-work') || read.reasons?.includes('agent-check-unreadable');
+    if (read.needsAgent && !ownerHoldsCheckout && config.resolveBlockersWithAgent && repairDispatchDue(runtime, config.minIntervalMs, now)) {
       const task = await queueRepoRepairTask(read);
       // Stamp only on a REAL dispatch. `addTask`'s dedup (cosTaskStore.js)
       // only collapses repeat ticks onto one task while that task stays open
