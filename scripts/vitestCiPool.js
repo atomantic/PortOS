@@ -20,6 +20,8 @@
  *
  * Vitest 5 exposes `maxWorkers` only — there is no `minWorkers` / `minThreads`.
  */
+import { readFileSync } from 'node:fs';
+
 export function vitestCiPool({ maxWorkers = 4 } = {}) {
   if (process.env.CI) {
     // The Windows server job lowers the cap (#10114): one process per test file
@@ -73,8 +75,46 @@ const EXCLUSIVE_TESTS = [
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
 
-export function vitestCaptureProjects(test, { cacheDir } = {}) {
+/**
+ * The runner's explicit file selection, when `scripts/run-ci-tests.js` wrote
+ * one. `PORTOS_CI_TEST_SELECTION` names a JSON file
+ * `{ include: string[]|null, exclude: string[] }` of workspace-relative posix
+ * paths: `include` replaces the config's globs (null keeps them), `exclude`
+ * is appended. A file rather than CLI selectors because a closure-selected
+ * related set or a memo-trimmed full run can name thousands of files, past
+ * the Windows command-line limit. A malformed file throws: a selection the
+ * config cannot read must never silently widen to the whole suite.
+ */
+export function vitestRunnerSelection(env = process.env) {
+  const path = env.PORTOS_CI_TEST_SELECTION;
+  if (!path) return { include: null, exclude: [] };
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  const list = (value, name) => {
+    if (!Array.isArray(value) || !value.every(entry => typeof entry === 'string' && entry.length > 0)) {
+      throw new Error(`PORTOS_CI_TEST_SELECTION ${name} must be a list of workspace-relative paths`);
+    }
+    return value;
+  };
+  return {
+    include: parsed.include === null || parsed.include === undefined ? null : list(parsed.include, 'include'),
+    exclude: parsed.exclude === undefined ? [] : list(parsed.exclude, 'exclude'),
+  };
+}
+
+/** `test` with the runner selection applied to its include/exclude globs. */
+export function applyRunnerSelection(test, selection) {
+  const applied = { ...test, include: selection.include ?? test.include };
+  // Leave an absent `exclude` absent: setting it to [] would drop Vitest's own defaults.
+  if (test.exclude !== undefined || selection.exclude.length > 0) applied.exclude = [...(test.exclude ?? []), ...selection.exclude];
+  return applied;
+}
+
+export function vitestCaptureProjects(test, { cacheDir, selection = { include: null, exclude: [] } } = {}) {
   const { include, exclude, ...shared } = test;
+  // An explicit selection narrows the capture group too; its fixed include
+  // would otherwise run every exclusive suite on every scoped plan.
+  const captureInclude = selection.include === null
+    ? EXCLUSIVE_TESTS : EXCLUSIVE_TESTS.filter(file => selection.include.includes(file));
   // Vite concatenates inherited include arrays: extending the broad root
   // glob would also run EVERY unit file in the capture project. Copy shared
   // worker settings explicitly and leave run-wide ownership at the root.
@@ -100,7 +140,7 @@ export function vitestCaptureProjects(test, { cacheDir } = {}) {
       test: {
         ...shared,
         name: 'capture',
-        include: EXCLUSIVE_TESTS,
+        include: captureInclude,
         exclude,
         fileParallelism: false,
         sequence: { groupOrder: 1 },
