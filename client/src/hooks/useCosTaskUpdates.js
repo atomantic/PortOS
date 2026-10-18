@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 
 /**
  * Subscribes a surface to the shared CoS task lifecycle and forwards each task
@@ -9,8 +10,9 @@ export function useCosTaskUpdates(onTaskUpdate) {
   const onTaskUpdateRef = useRef(onTaskUpdate);
   onTaskUpdateRef.current = onTaskUpdate;
 
+  useSocketSubscription('cos');
+
   useEffect(() => {
-    const subscribe = () => socket.emit('cos:subscribe');
     const emitTaskUpdate = task => {
       if (task) onTaskUpdateRef.current?.(task);
     };
@@ -33,8 +35,6 @@ export function useCosTaskUpdates(onTaskUpdate) {
       }
     };
 
-    subscribe();
-    socket.on('connect', subscribe);
     socket.on('cos:tasks:changed', handleTaskChanged);
     socket.on('cos:tasks:user:changed', handleTaskListChanged);
     socket.on('cos:tasks:user:completed', handleTaskCompleted);
@@ -42,7 +42,6 @@ export function useCosTaskUpdates(onTaskUpdate) {
     socket.on('cos:agent:completed', handleAgentCompleted);
 
     return () => {
-      socket.off('connect', subscribe);
       socket.off('cos:tasks:changed', handleTaskChanged);
       socket.off('cos:tasks:user:changed', handleTaskListChanged);
       socket.off('cos:tasks:user:completed', handleTaskCompleted);

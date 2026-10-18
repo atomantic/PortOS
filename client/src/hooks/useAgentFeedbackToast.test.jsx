@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, cleanup } from '@testing-library/react';
+import { renderHook, cleanup, act } from '@testing-library/react';
 
 // Capture the `cos:agent:completed` handler so tests can drive completions.
 const handlers = new Map();
+const emitted = [];
 vi.mock('../services/socket', () => ({
   default: {
+    connected: true,
     on: (event, fn) => { handlers.set(event, fn); },
     off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
-    emit: () => {},
+    emit: (event, payload) => { emitted.push([event, payload]); },
   },
 }));
 
@@ -26,8 +28,22 @@ const completed = (overrides = {}) => ({
 });
 
 describe('useAgentFeedbackToast', () => {
-  beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
+  beforeEach(() => { handlers.clear(); emitted.length = 0; toastSpy.mockClear(); });
   afterEach(cleanup);
+
+  // The server clears its per-socket subscriber Set on disconnect, so with no
+  // sibling cos:* consumer mounted this hook must re-subscribe on its own
+  // (#12033) or a completion after the first reconnect toasts nothing.
+  it('re-subscribes to cos:* on reconnect with only this hook mounted, and still toasts', () => {
+    renderHook(() => useAgentFeedbackToast());
+    expect(emitted.filter(([e]) => e === 'cos:subscribe')).toHaveLength(1);
+
+    act(() => { handlers.get('connect')?.(); });
+    expect(emitted.filter(([e]) => e === 'cos:subscribe')).toHaveLength(2);
+
+    fire(completed());
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+  });
 
   it('prompts for a rating when a manual user task completes', () => {
     renderHook(() => useAgentFeedbackToast());
