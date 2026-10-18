@@ -1,4 +1,4 @@
-import { useState, memo } from 'react';
+import { useState, useId, memo } from 'react';
 import { Link } from 'react-router';
 import {
   CheckCircle,
@@ -130,6 +130,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);
+  const recentTasksId = useId();
   // Tick every minute so the client-side `timeAgo(task.completedAt)` labels
   // recompute against the latest wall-clock time across unchanged snapshots.
   useTimeTick(60000);
@@ -263,7 +264,10 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
       {recentTasks?.tasks?.length > 0 && (
         <div className="mt-4 pt-4 border-t border-port-border">
           <button
+            type="button"
             onClick={() => setTasksExpanded(!tasksExpanded)}
+            aria-expanded={tasksExpanded}
+            aria-controls={recentTasksId}
             className="flex items-center justify-between w-full text-left mb-2 group"
           >
             <div className="flex items-center gap-2">
@@ -279,8 +283,11 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
             />
           </button>
 
-          {tasksExpanded && (
-            <div className="space-y-2">
+          {/* Outcome is never colour alone: each row carries a glyph that differs
+              by outcome plus a visually-hidden word, so colour-blind and
+              screen-reader users get the same success/failure signal (#12035). */}
+          {tasksExpanded ? (
+            <div id={recentTasksId} className="space-y-2">
               {recentTasks.tasks.map((task) => (
                 <Link
                   key={task.id}
@@ -288,10 +295,11 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
                   className="flex items-start gap-2 p-2 bg-port-bg/30 rounded-lg hover:bg-port-bg/50 transition-colors"
                 >
                   {task.success ? (
-                    <CheckCircle size={14} className="text-port-success mt-0.5 shrink-0" />
+                    <CheckCircle size={14} aria-hidden="true" className="text-port-success mt-0.5 shrink-0" />
                   ) : (
-                    <XCircle size={14} className="text-port-error mt-0.5 shrink-0" />
+                    <XCircle size={14} aria-hidden="true" className="text-port-error mt-0.5 shrink-0" />
                   )}
+                  <span className="sr-only">{task.success ? 'succeeded' : 'failed'}:</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-gray-300 truncate">
                       {task.description}
@@ -319,18 +327,23 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
                 </Link>
               ))}
             </div>
-          )}
-
-          {!tasksExpanded && (
-            <div className="flex gap-1">
+          ) : (
+            <ul id={recentTasksId} className="flex gap-1 list-none p-0 m-0">
               {recentTasks.tasks.slice(0, 5).map((task) => (
-                <div
+                <li
                   key={task.id}
-                  className={`w-2 h-2 rounded-full ${task.success ? 'bg-port-success' : 'bg-port-error'}`}
+                  className="flex"
                   title={`${task.description.substring(0, 50)}... (${timeAgo(task.completedAt)})`}
-                />
+                >
+                  {task.success ? (
+                    <CheckCircle size={12} aria-hidden="true" className="text-port-success" />
+                  ) : (
+                    <XCircle size={12} aria-hidden="true" className="text-port-error" />
+                  )}
+                  <span className="sr-only">{task.description}: {task.success ? 'succeeded' : 'failed'}</span>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       )}
