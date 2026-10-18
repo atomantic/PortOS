@@ -6,6 +6,7 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema, moltworldQueueFailBodySchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
@@ -15,6 +16,8 @@ import { createMoltworldClient } from '../integrations/moltworld/index.js';
 import * as moltworldQueue from '../services/moltworldQueue.js';
 
 const router = Router();
+
+const accountQuerySchema = z.object({ accountId: z.string().min(1).max(200) });
 
 /**
  * Get an authenticated Moltworld client for an account
@@ -193,10 +196,7 @@ router.post('/say', asyncHandler(async (req, res) => {
 
 // GET /status — Agent position, balance, nearby agents
 router.get('/status', asyncHandler(async (req, res) => {
-  const { accountId } = req.query;
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(accountQuerySchema, req.query);
 
   console.log(`🌍 GET /api/agents/tools/moltworld/status account=${accountId}`);
 
@@ -211,10 +211,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 
 // GET /balance — SIM token balance
 router.get('/balance', asyncHandler(async (req, res) => {
-  const { accountId } = req.query;
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(accountQuerySchema, req.query);
 
   console.log(`💰 GET /api/agents/tools/moltworld/balance account=${accountId}`);
 
@@ -225,10 +222,7 @@ router.get('/balance', asyncHandler(async (req, res) => {
 
 // GET /rate-limits — Rate limit status
 router.get('/rate-limits', asyncHandler(async (req, res) => {
-  const { accountId } = req.query;
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(accountQuerySchema, req.query);
 
   console.log(`⏱️ GET /api/agents/tools/moltworld/rate-limits account=${accountId}`);
 

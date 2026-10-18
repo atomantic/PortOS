@@ -46,6 +46,9 @@ const evaluateStorySchema = z.object({
   providerId: z.string().optional()
 });
 
+const nextPromptQuerySchema = z.object({ exclude: z.string().min(1).max(200).optional() });
+const storiesQuerySchema = z.object({ theme: z.string().min(1).max(100).optional() });
+
 const updateConfigSchema = z.object({
   enabled: z.boolean().optional(),
   intervalHours: z.number().min(1).max(168).optional(),
@@ -107,7 +110,8 @@ router.get('/themes', asyncHandler(async (req, res) => {
  * Get the next prompt
  */
 router.get('/prompt', asyncHandler(async (req, res) => {
-  const prompt = await autobiographyService.getNextPrompt(req.query.exclude || undefined);
+  const { exclude } = validateRequest(nextPromptQuerySchema, req.query);
+  const prompt = await autobiographyService.getNextPrompt(exclude);
   res.json(prompt);
 }));
 
@@ -141,7 +145,8 @@ router.get('/prompt/:id', asyncHandler(async (req, res) => {
  * Get all stories, optionally filtered by theme
  */
 router.get('/stories', asyncHandler(async (req, res) => {
-  const stories = await autobiographyService.getStories(req.query.theme || null);
+  const { theme } = validateRequest(storiesQuerySchema, req.query);
+  const stories = await autobiographyService.getStories(theme ?? null);
   res.json(stories);
 }));
 
