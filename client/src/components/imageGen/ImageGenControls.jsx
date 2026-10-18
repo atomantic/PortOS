@@ -17,6 +17,7 @@ import { formatCount } from '../../utils/formatters';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -29,6 +30,13 @@ const QUANTIZE_OPTIONS = [
 export default function ImageGenControls({
   mode,
   models = [],
+  // `useListResource` state of the local model catalog. `null` (the default
+  // for callers that hand in a resolved list) renders as before; 'error' and
+  // an empty 'ready' list get their own rows so a failed read never looks
+  // like "no models".
+  modelsState = null,
+  modelsError = null,
+  onRetryModels,
   modelId, onModelChange,
   width, height, onResolutionChange,
   steps, onStepsChange,
@@ -88,6 +96,14 @@ export default function ImageGenControls({
 
   return (
     <div className={className}>
+      {showModel && isLocal && modelsState === 'error' && (
+        <ListLoadError className="col-span-2 sm:col-span-3" what="the local model catalog" error={modelsError} onRetry={onRetryModels} />
+      )}
+      {showModel && isLocal && modelsState === 'ready' && models.length === 0 && (
+        <p role="status" className="col-span-2 sm:col-span-3 text-xs text-port-warning">
+          No local image models are compatible with this machine.
+        </p>
+      )}
       {showModel && isLocal && models.length > 0 && (
         <FormField label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select

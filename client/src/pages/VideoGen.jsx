@@ -82,6 +82,8 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
@@ -123,6 +125,9 @@ const MODES = [
   // remix mode appears in the mode bar automatically.
   ...IC_LORA_MODES.map((m) => ({ id: m.mode, label: m.label, icon: SlidersHorizontal, desc: m.description })),
 ];
+
+// Stable fetcher for useListResource — the hook re-runs on identity change.
+const loadLoraLibrary = () => listLorasFull({ silent: true });
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -211,9 +216,10 @@ export default function VideoGen() {
   }, []);
 
   // Installed LoRA library — the picker filters this to the current model's
-  // video family. Silent: a failure just hides the picker.
-  const [availableLoras, setAvailableLoras] = useState([]);
-  useEffect(() => { listLorasFull().then((l) => setAvailableLoras(Array.isArray(l) ? l : [])).catch(() => {}); }, []);
+  // video family. A failed read is shown as such, with Retry, never as an
+  // empty library.
+  const loraLibrary = useListResource(loadLoraLibrary);
+  const availableLoras = loraLibrary.items;
 
   // Federated render target (#4348). Picking a peer replaces the local runtime
   // outright — the clip is rendered there and imported back — so it feeds the
@@ -1739,6 +1745,17 @@ export default function VideoGen() {
             {/* Video LoRAs — only on runtimes with a compatible video family
                 (loraFamily non-null) and when at least one matching LoRA is
                 installed (videoLoras is the strict family subset; see hook). */}
+            {loraFamily && loraLibrary.state === 'error' && (
+              <ListLoadError
+                className="col-span-2 sm:col-span-3"
+                what="the LoRA library"
+                error={loraLibrary.error}
+                onRetry={loraLibrary.retry}
+              />
+            )}
+            {loraFamily && loraLibrary.state === 'ready' && videoLoras.length === 0 && (
+              <p className="col-span-2 sm:col-span-3 text-xs text-gray-500">No installed LoRAs match this model&apos;s video family.</p>
+            )}
             {loraFamily && videoLoras.length > 0 && (
               <div className="col-span-2 sm:col-span-3">
                 <LoraPicker

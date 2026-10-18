@@ -89,6 +89,7 @@ export default function SetupStage({ board }) {
           <TrackPanel
             project={project}
             tracks={tracks}
+            trackLibrary={board.trackLibrary}
             trackName={trackName}
             audioFilename={audioFilename}
             youtube={youtube}

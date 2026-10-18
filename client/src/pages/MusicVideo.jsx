@@ -50,6 +50,7 @@ import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
 import useAutonomousMusicVideo from '../hooks/useAutonomousMusicVideo.js';
 import useDrawerTab from '../hooks/useDrawerTab.js';
+import useListResource from '../hooks/useListResource.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -146,6 +147,9 @@ const STAGE_VIEWS = {
 
 
 
+// Stable fetcher for useListResource — the hook re-runs on identity change.
+const loadTracks = () => listTracks({ silent: true });
+
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
   // (/music-video/:projectId) rather than local state, so a project's
@@ -185,7 +189,10 @@ export default function MusicVideo() {
   // it mid-flight (a job finishing) can refetch instead of being folded into a
   // response that may predate it.
   const fetchingIdRef = useRef(null);
-  const [tracks, setTracks] = useState([]);
+  // The music library the pickers read. A failed read is shown as such, with
+  // Retry, never as an empty library; an import appends to it locally.
+  const trackLibrary = useListResource(loadTracks);
+  const { items: tracks, setItems: setTracks } = trackLibrary;
   const [universes, setUniverses] = useState(null);
   // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
   // treat it as the index until the summaries resolve, then redirect to the newest project at that stage.
@@ -417,7 +424,6 @@ export default function MusicVideo() {
   };
 
   useEffect(() => {
-    listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
     listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
   }, []);
 
@@ -592,6 +598,7 @@ export default function MusicVideo() {
         form={form}
         onFormChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
         tracks={tracks}
+        trackLibrary={trackLibrary}
         universes={universes}
         trackName={trackName}
         youtube={youtube}
@@ -712,6 +719,7 @@ export default function MusicVideo() {
             key={selected.id}
             selected={selected}
             tracks={tracks}
+            trackLibrary={trackLibrary}
             trackName={trackName}
             youtube={youtube}
             separation={separation}
@@ -752,7 +760,7 @@ export default function MusicVideo() {
  * binds to its project by id.
  */
 function ProjectWorkspace({
-  selected, tracks, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
+  selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
   onRename, renameForm, deletion,
 }) {
@@ -1537,6 +1545,7 @@ function ProjectWorkspace({
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
+    trackLibrary,
     onForkSong: () => onClone({}, {}, true),
     trackName,
     audioFilename,
