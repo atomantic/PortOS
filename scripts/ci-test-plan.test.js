@@ -2067,7 +2067,11 @@ describe('pregate attestation', () => {
     expect(untouched.suiteReasons.attestation).toBe('not honored: head repository someone/widget is not acme/widget');
   });
 
-  it('emits the attestation through the planner CLI and ci.yml gates the impact job on it', () => {
+  // Not on Windows: libuv resolves a bare `gh` to the runner's installed
+  // gh.exe ahead of any `.cmd` shim on PATH, so the fake below never runs there
+  // and the real CLI answers without a token. The in-process cases above cover
+  // the decision logic on every platform; this one proves the CLI wiring.
+  it.skipIf(process.platform === 'win32')('emits the attestation through the planner CLI', () => {
     // A merge-ref checkout (HEAD^2 is the pull request head) with a fake `gh`
     // on PATH, so the whole wiring — env in, statuses API, plan outputs — runs
     // exactly as the impact job does.
@@ -2099,11 +2103,10 @@ describe('pregate attestation', () => {
       mkdirSync(bin, { recursive: true });
       writeFileSync(join(bin, 'gh.js'), 'process.stdout.write(process.env.FAKE_GH_STATUSES);\n');
       writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
-      writeFileSync(join(bin, 'gh.cmd'), `@"${process.execPath}" "%~dp0gh.js" %*\r\n`);
       const statuses = JSON.stringify([status({ description: encodeAttestation({ tree: headTree, stages: ['scan', 'lint', 'server', 'smoke', 'client', 'build'] }) })]);
       const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
         cwd: root, encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
       }));
 
       const honored = plan({});
@@ -2119,7 +2122,9 @@ describe('pregate attestation', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
 
+  it('ci.yml gates the impact job on the attestation inputs and prints the decision', () => {
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
     // Reading statuses needs the scope; nothing in the impact job may write one.
     expect(jobs.impact).toMatch(/\n    permissions:\n      contents: read\n      statuses: read\n/);
