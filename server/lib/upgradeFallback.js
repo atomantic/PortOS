@@ -70,6 +70,12 @@ export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIM
       if (socket.bytesWritten > 0) return;
       socket.on('error', () => {});
       socket.end();
+      const destroyTimer = setTimeout(() => {
+        if (!socket.destroyed) {
+          socket.destroy();
+        }
+      }, 100);
+      destroyTimer.unref?.();
     }, timeoutMs);
 
     timer.unref?.();
