@@ -802,7 +802,7 @@ export async function forceSpawnTask(taskId) {
  * immediately instead of waiting out its liveness grace, which on the periodic
  * pass is what stops the sweep stealing a task mid-cleanup.
  */
-async function resetOrphanedTasks({ bootRecovery = false } = {}) {
+export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   const state = await loadState();
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
@@ -841,16 +841,6 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
         (Date.now() - new Date(a.completedAt).getTime()) < RECENT_COMPLETION_GRACE_MS)
       .map(a => a.taskId)
   );
-
-  // Track tasks whose agents completed successfully — if handleAgentCompletion's
-  // updateTask call failed silently (e.g., file write race after server restart),
-  // we should complete the task here rather than treating it as orphaned.
-  const successfullyCompletedTaskIds = new Map();
-  for (const agent of Object.values(state.agents)) {
-    if (agent.status === 'completed' && agent.result?.success) {
-      successfullyCompletedTaskIds.set(agent.taskId, agent.id);
-    }
-  }
 
   emitLog('debug', `Running agents: ${runningAgentTaskIds.length}, recently completed: ${recentlyCompletedTaskIds.size}`, { taskIds: runningAgentTaskIds });
 
@@ -925,9 +915,10 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
         emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
         continue;
       }
-      // If the agent completed successfully but task wasn't updated (silent updateTask failure),
-      // complete the task now instead of treating it as orphaned
-      const successAgentId = successfullyCompletedTaskIds.get(task.id);
+      // Only the latest run can settle a missed task update. An older success
+      // must not hide a failed rerun that needs orphan recovery.
+      const lastAgent = lastAgentByTask.get(task.id);
+      const successAgentId = lastAgent?.status === 'completed' && lastAgent.result?.success ? lastAgent.id : null;
       if (successAgentId) {
         emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
         await updateTask(task.id, { status: 'completed' }, task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user'));

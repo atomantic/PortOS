@@ -25,6 +25,7 @@ afterAll(() => {
 // The file record backend writes every row through atomicWrite, so holding that
 // write holds the row commit.
 let beforeRowWrite = async () => {};
+let afterRunWrite = async () => {};
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   Object.assign(actual.PATHS, {
@@ -37,7 +38,9 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
     ...actual,
     atomicWrite: async (path, ...args) => {
       if (path.endsWith('sprite-records.json')) await beforeRowWrite();
-      return actual.atomicWrite(path, ...args);
+      const result = await actual.atomicWrite(path, ...args);
+      if (path.endsWith('animation-run.json')) await afterRunWrite(path, args[0]);
+      return result;
     },
   };
 });
@@ -194,6 +197,7 @@ async function finalizedCharacter() {
 
 beforeEach(() => {
   beforeRowWrite = async () => {};
+  afterRunWrite = async () => {};
   executeTuiRun.mockReset();
   executeTuiRun.mockImplementation(() => new Promise(() => {}));
   runWalkPostprocess.mockClear();
@@ -392,6 +396,11 @@ describe('grok TUI attach lane', () => {
     await clipWritten.promise;
     const runStatus = async () => (await readJson(spritePath(id, `runs/${runId}/animation-run.json`))).status;
 
+    const terminalWrite = deferred();
+    afterRunWrite = async (path, content) => {
+      if (path === spritePath(id, `runs/${runId}/animation-run.json`) &&
+          ['candidate', 'error'].includes((typeof content === 'string' ? JSON.parse(content) : content).status)) terminalWrite.resolve();
+    };
     const release = await acquireBackupSnapshotCut();
     try {
       sessionEnds.resolve();
@@ -401,8 +410,18 @@ describe('grok TUI attach lane', () => {
     } finally {
       release();
     }
-    await vi.waitFor(async () => expect(await runStatus()).toBe('candidate'));
-    expect(runWalkPostprocess).toHaveBeenCalledOnce();
+    // Join the durable terminal write rather than racing filesystem work against
+    // vi.waitFor's polling timeout. The next cut also joins the attachment's
+    // publication finalizer before this fixture can be torn down.
+    await terminalWrite.promise;
+    const releaseSettledCut = await acquireBackupSnapshotCut();
+    try {
+      expect(await runStatus()).toBe('candidate');
+      expect(runWalkPostprocess).toHaveBeenCalledOnce();
+    } finally {
+      releaseSettledCut();
+      afterRunWrite = async () => {};
+    }
   });
 });
 
