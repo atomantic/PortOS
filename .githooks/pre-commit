@@ -10,50 +10,12 @@ if [ -z "$STAGED" ]; then
   exit 0
 fi
 
-run_client=false
-run_server=false
-
-while IFS= read -r file; do
-  [ -z "$file" ] && continue
-  case "$file" in
-    client/*)
-      run_client=true
-      ;;
-    server/*)
-      run_server=true
-      ;;
-    package.json|package-lock.json)
-      run_client=true
-      run_server=true
-      ;;
-  esac
-done <<< "$STAGED"
-
-if [ "$run_server" = false ] && [ "$run_client" = false ]; then
-  exit 0
-fi
-
-printf -- "\n🔎 pre-commit: validating staged PortOS changes\n"
-
-if [ "$run_server" = true ]; then
-  printf -- "- running server tests...\n"
-  # NODE_ENV=test is what points the suite at the file storage backend instead
-  # of the developer's live Postgres. server/vitest.config.js now forces it, but
-  # a commit fired from a PortOS-spawned shell inherits NODE_ENV=development
-  # from PM2, so state it here too — the hook must be correct on its own (#4554).
-  # Match the supported local suite budget, preserving a smaller caller cap.
-  case "${PORTOS_PREGATE_MAX_WORKERS:-}" in
-    [1-4]) ;;
-    *) PORTOS_PREGATE_MAX_WORKERS=4 ;;
-  esac
-  PORTOS_PREGATE_MAX_WORKERS="$PORTOS_PREGATE_MAX_WORKERS" NODE_ENV=test npm test --prefix server
-fi
-
-if [ "$run_client" = true ]; then
-  printf -- "- running client lint...\n"
-  npm run lint --prefix client
-  printf -- "- running client build...\n"
-  npm run build --prefix client
-fi
+# The same planner and runners CI uses (scripts/pregate.js), bounded to the
+# changed files and the always-run guards. The hook deliberately runs nothing
+# else: it used to run the whole server suite and `npm run build --prefix
+# client`, which publishes the branch's build into the dist the running
+# install serves (#12045). Validation never swaps what `npm start` serves.
+printf -- "\n🔎 pre-commit: running pregate on the staged PortOS changes\n"
+node scripts/pregate.js
 
 printf -- "✅ pre-commit checks passed\n"
