@@ -8,7 +8,12 @@ import { join } from 'node:path';
 import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { OWNER_FILE, killTestProcessesUnder } from './lib/vitestStaleRunRoots.js';
 
-export function setup() {}
+export function setup({ vitest }) {
+  const root = process.env.PORTOS_TEST_TEMP_ROOT;
+  // Vitest runs global teardown before closing its worker pool. Its close hook
+  // runs after pool.close(), so live runner workers are not mistaken for leaks.
+  vitest.onClose(() => cleanupRunTempRoot(root));
+}
 
 // Vitest's nanoid transform scratch still exists when global teardown runs.
 // Exclude it only inside our owned root; never sweep arbitrary host directories.
@@ -67,12 +72,18 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function teardown() {
-  const root = process.env.PORTOS_TEST_TEMP_ROOT;
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT) {
   if (!root) return;
   // A process a suite failed to tear down would outlive the run (#10840).
-  const processes = process.platform === 'win32' ? 0 : killTestProcessesUnder(root);
+  const kinds = new Map();
+  const processes = process.platform === 'win32' ? 0 : killTestProcessesUnder(root, {
+    onKilled: ({ kind, parent }) => {
+      const key = `kind=${kind} parent=${parent}`;
+      kinds.set(key, (kinds.get(key) ?? 0) + 1);
+    },
+  });
   if (processes) console.warn(`⚠️ test process leak: stopped ${processes} process${processes === 1 ? '' : 'es'} still running under the run temp root`);
+  for (const [kind, count] of kinds) console.warn(`⚠️ stopped owned test processes: ${kind} count=${count}`);
   let entries;
   try {
     entries = readdirSync(root);

@@ -2,7 +2,7 @@
  * Owner-aware sweep of run-scoped temp roots (#9113, #9804).
  *
  * Workspace configs and the CI launcher stamp `.owner.pid` in each root. A
- * killed run never reaches `teardown()` in `runTempRoot.js`, so its root is
+ * killed run never reaches its runner close hook, so its root is
  * left behind; the next config load calls `sweepStaleRunRoots()` to reclaim
  * it for the caller's exact prefix (default `pvt-`). A recorded owner that is provably gone frees the root immediately, an
  * owner that is alive keeps it however old it is (a >6h run must not be swept
@@ -102,6 +102,21 @@ function rootIsOrphaned(root, probe, now) {
   } catch (error) { return error.code === 'ENOENT'; }
 }
 
+// Only fixed categories leave the private process snapshot; never argv or env.
+function processKind({ args = [] }) {
+  const executable = basename(args[0] ?? '').toLowerCase();
+  if (executable === 'esbuild') return 'esbuild';
+  if (/^(node|nodejs)(\.exe)?$/.test(executable)) {
+    if (args.some(arg => /[/\\]tinypool[/\\]/.test(arg))) return 'tinypool';
+    if (args.some(arg => /[/\\]vitest[/\\]/.test(arg))) return 'vitest';
+    return 'node';
+  }
+  if (/^(chrome|chromium|google chrome|google chrome helper)(\.exe)?$/.test(executable)) return 'browser';
+  if (/^(sh|bash|zsh)$/.test(executable)) return 'shell';
+  if (/^python[0-9.]*$/.test(executable)) return 'python';
+  return 'other';
+}
+
 function ownedSnapshot(parent, prefix, read) {
   const records = read();
   if (!Array.isArray(records)) return null;
@@ -110,7 +125,7 @@ function ownedSnapshot(parent, prefix, read) {
   const owned = records.flatMap(record => {
     if (!Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
     const root = testProcessRoot(record, parent, prefix);
-    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root }] : [];
+    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root, kind: processKind(record), parent: ancestors.has(record.ppid) ? 'runner' : 'descendant' }] : [];
   });
   return { ancestors, owned };
 }
@@ -135,7 +150,7 @@ export function terminatePid(record, { valid, kill = (pid, signal) => process.ki
 
 /** Only individually proven processes are signalled; an unowned group member is never collateral cleanup. */
 export function killTestProcessesUnder(root, { read = readTestProcesses, probe = isOwnerAlive,
-  kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+  kill = (pid, signal) => process.kill(pid, signal), onKilled = () => {} } = {}) {
   let rootExists = true;
   try { if (!lstatSync(root).isDirectory()) return 0; } catch (error) {
     if (error.code !== 'ENOENT') return 0;
@@ -156,7 +171,8 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
   let killed = 0;
   for (const record of snapshot.owned) {
     if (record.root !== root || !stillOwned(record, snapshot, parent, prefix, read)) continue;
-    try { kill(record.pid, 'SIGKILL'); killed++; } catch { /* already gone */ }
+    try { kill(record.pid, 'SIGKILL'); killed++; } catch { continue; /* already gone */ }
+    onKilled({ kind: record.kind, parent: record.parent });
   }
   return killed;
 }

@@ -96,7 +96,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       writeFileSync(path, source);
     };
     put('vitest.setup.js', "if (process.env.NODE_ENV !== 'test') throw Error('unsafe worker env');");
-    put('test/runTempRoot.js', `export { setup, teardown } from ${JSON.stringify(new URL('../server/test/runTempRoot.js', import.meta.url).href)};`);
+    put('test/runTempRoot.js', `export { setup } from ${JSON.stringify(new URL('../server/test/runTempRoot.js', import.meta.url).href)};`);
     const common = `
       import { test, expect } from 'vitest';
       import { appendFileSync, existsSync, openSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
