@@ -14,8 +14,8 @@ import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js
 import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
-  currentCommit, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, passedTestFiles, planTestMemo,
-  readVitestDependencies, recordTestMemo, writeSelectionFile,
+  clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
+  memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 
@@ -116,15 +116,28 @@ export function toRunnerPath(scope, path) {
 }
 
 /**
- * Vitest selector flags for this runner's slice of the selected suite. `CI_SHARD` is
- * `<index>/<count>` from the job matrix (ci.yml). A single shard passes nothing,
- * so the one-runner invocation stays identical to a local `npm run test:ci`.
+ * This runner's slice of the job matrix. `CI_SHARD` is `<index>/<count>`
+ * (ci.yml); a single shard is no shard, so the one-runner invocation stays
+ * identical to a local `npm run test:ci`. The slice is taken by the runner
+ * itself (scripts/lib/testMemoRunner.js vitestShardSlice), never by Vitest:
+ * each shard subtracts a different memo state, and a `--shard` applied after
+ * that subtraction could leave a file to no shard at all.
  */
-export function shardArgs(shard) {
-  if (!shard) return [];
+export function parseShard(shard) {
+  if (!shard) return null;
   const match = /^(\d+)\/(\d+)$/.exec(shard);
   if (!match) throw new Error(`CI_SHARD must look like <index>/<count>, got "${shard}"`);
-  return match[2] === '1' ? [] : [`--shard=${shard}`];
+  return match[2] === '1' ? null : { index: Number(match[1]), count: Number(match[2]) };
+}
+
+/** The run-level report `scripts/vitestRunDiagnostics.js` wrote: `{ reason, errorCount }`, or null. */
+function readRunReport(runReportPath) {
+  try {
+    const run = JSON.parse(readFileSync(runReportPath, 'utf8'));
+    return typeof run?.reason === 'string' && Number.isInteger(run.errorCount) ? { reason: run.reason, errorCount: run.errorCount } : null;
+  } catch {
+    return null;
+  }
 }
 
 export function recordVitestDuration(scope, label, startedAt) {
@@ -216,8 +229,12 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
       console.error(`Test launcher cleanup unverified; diagnostics retained at ${reportDir}`);
       return { ...launched, diagnosticsPath: reportDir };
     }
-    // Per-file outcomes feed the test memo; an interrupted run proves nothing.
-    const result = { ...launched, fileResults: launched.interrupted ? [] : fileResultsFromReport(reportPath) };
+    // Per-file outcomes and the run-level verdict feed the test memo; an interrupted run proves nothing.
+    const result = {
+      ...launched,
+      fileResults: launched.interrupted ? [] : fileResultsFromReport(reportPath),
+      runReport: launched.interrupted ? null : readRunReport(join(reportDir, 'run.json')),
+    };
     const profile = env.PORTOS_BROWSER_TEST_PROFILE;
     if (profile !== undefined && result.status === 0) {
       try {
@@ -362,7 +379,8 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   // reproduces or was a one-off runner fault.
   console.warn(`⚠️ Vitest worker crashed natively on ${relPath} — retrying that file once`);
   const retryStartedAt = Date.now();
-  const retry = await run(scope, script, [selector, ...profileArgs]);
+  // The retry keeps the run's flags (recording, pass-with-no-tests); only the selectors shrink to the crashed file.
+  const retry = await run(scope, script, [selector, ...profileArgs, ...extraArgs.filter(arg => arg.startsWith('--'))]);
   recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
   onResult(retry);
   if (!retry.error && retry.status === 0) {
@@ -422,8 +440,8 @@ async function main() {
     return;
   }
 
-  const shard = shardArgs(process.env.CI_SHARD);
-  const label = mode === 'full' ? (shard.length ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
+  const shard = parseShard(process.env.CI_SHARD);
+  const label = mode === 'full' ? (shard ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
     : mode === 'files' ? 'selected tests' : 'related and contract tests';
   // process.exitCode, not process.exit(): the runner streams the child's
   // output through this process's own stdout/stderr, and process.exit() can
@@ -431,8 +449,8 @@ async function main() {
   // finish flushing. Setting exitCode lets Node drain normally once main()
   // returns.
   const memoDir = resolveMemoDir();
-  if (mode === 'full' && !memoDir) {
-    process.exitCode = await spawnNpm(scope, 'test:ci', shard, label);
+  if (mode === 'full' && !memoDir && !shard) {
+    process.exitCode = await spawnNpm(scope, 'test:ci', [], label);
     return;
   }
 
@@ -443,7 +461,8 @@ async function main() {
   // the set here is what lets the memo subtract the files a trusted green
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot });
+  if (memoDir) clearVitestDependencies(repoRoot, scope);
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, toolVersion: createToolVersionResolver({ repoRoot }) });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
@@ -451,21 +470,18 @@ async function main() {
     }
   }
   if (plan.run.length === 0) {
-    console.log(`No ${scope} tests left to run.`);
+    console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
     process.exitCode = 0;
     return;
   }
-  const skipped = plan.skipped.map(({ test }) => test);
-  const selection = writeSelectionFile({ scope, include: mode === 'full' ? null : plan.run, exclude: mode === 'full' ? skipped : [] });
+  const selection = writeSelectionFile({ scope, include: plan.run, exclude: [] });
   process.env.PORTOS_CI_TEST_SELECTION = selection.path;
-  // A memo-trimmed selection can leave one shard of the matrix empty, which
-  // Vitest otherwise reports as a failure.
-  const extraArgs = [...shard, ...(skipped.length ? ['--passWithNoTests'] : []), ...(memoDir ? ['--experimental.recordDependencies'] : [])];
+  const extraArgs = memoDir ? ['--experimental.recordDependencies'] : [];
   const passed = [];
   try {
     process.exitCode = await spawnNpm(scope, 'test:ci', extraArgs, label, {
       onResult: (result) => passed.push(...passedTestFiles(result.fileResults ?? [], {
-        repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined,
+        repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
       })),
     });
   } finally {

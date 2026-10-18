@@ -14,8 +14,8 @@ import {
   planCrashRetry,
   recordVitestDuration,
   repoRelativeFromCrashPath,
+  parseShard,
   requiresSourceFiles,
-  shardArgs,
   spawnNpm,
   toRunnerPath,
 } from './run-ci-tests.js';
@@ -23,6 +23,8 @@ import { killProcessTree } from '../server/lib/bufferedSpawn.js';
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
+import { vitestShardSlice } from './lib/testMemoRunner.js';
+import { toWorkspacePath } from './lib/workspaceTests.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -47,13 +49,13 @@ const FIXTURE_CONFIG = `
 
 const WORKFLOW = readFileSync(join(import.meta.dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
 
-describe('shardArgs', () => {
-  it('passes a slice selector only when the matrix actually split the suite', () => {
-    expect(shardArgs(undefined)).toEqual([]);
-    expect(shardArgs('')).toEqual([]);
-    expect(shardArgs('1/1')).toEqual([]);
-    expect(shardArgs('2/3')).toEqual(['--shard=2/3']);
-    expect(() => shardArgs('2')).toThrow(/<index>\/<count>/);
+describe('parseShard', () => {
+  it('reads a slice only when the matrix actually split the suite', () => {
+    expect(parseShard(undefined)).toBeNull();
+    expect(parseShard('')).toBeNull();
+    expect(parseShard('1/1')).toBeNull();
+    expect(parseShard('2/3')).toEqual({ index: 2, count: 3 });
+    expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
   });
 });
 
@@ -68,7 +70,7 @@ function installFakeNpm(fixture, body) {
 const REPORTING_NPM = 'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), '
   + 'selection: JSON.parse(require("fs").readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8")) }) + "\\n");';
 
-it('forwards the scoped matrix slice as an argument and the selection as a file through the real launcher', () => {
+it('hands Vitest the selection as a file, sliced by the runner for the matrix shard, never as --shard', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
   try {
     installFakeNpm(fixture, REPORTING_NPM);
@@ -76,26 +78,30 @@ it('forwards the scoped matrix slice as an argument and the selection as a file 
     // each must hand Vitest its slice rather than run the whole selection twice.
     // Related selection is closure-based: this runner imports
     // scripts/lib/directInvocation.js, so the runner's own test is related to it.
-    for (const [mode, sources, expected] of [
-      ['related', ['scripts/lib/directInvocation.js'], ['../scripts/run-ci-tests.test.js']],
-      ['files', [], []],
+    const files = ['server/lib/example.test.js', 'scripts/example.test.js'];
+    for (const [mode, shard, sources, expected] of [
+      ['related', '', ['scripts/lib/directInvocation.js'], ['../scripts/run-ci-tests.test.js', 'lib/example.test.js', '../scripts/example.test.js']],
+      ['files', '', [], ['lib/example.test.js', '../scripts/example.test.js']],
+      // Two explicit files split three ways: shard 2 of 3 gets exactly one of them.
+      ['files', '2/3', [], [vitestShardSlice(files, { repoRoot: join(import.meta.dirname, '..'), scope: 'server', index: 2, count: 3 })].flat().map((rel) => toWorkspacePath('server', rel))],
     ]) {
       const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-          CI_TEST_MODE: mode, CI_SHARD: '2/3', PORTOS_TEST_MEMO: 'off',
+          CI_TEST_MODE: mode, CI_SHARD: shard, PORTOS_TEST_MEMO: 'off',
           CI_TEST_SOURCES: JSON.stringify(sources),
-          CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
+          CI_TEST_FILES: JSON.stringify(files),
           GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       const { args, selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-      expect(args.slice(0, 6), mode).toEqual(['run', 'test:ci', '--prefix', 'server', '--', '--shard=2/3']);
+      expect(args.slice(0, 5), mode).toEqual(['run', 'test:ci', '--prefix', 'server', '--']);
+      expect(args.some(arg => arg.startsWith('--shard')), mode).toBe(false);
       expect(args, mode).not.toContain('--experimental.recordDependencies');
       expect(selection.exclude, mode).toEqual([]);
-      expect(selection.include, mode).toEqual(expect.arrayContaining([...expected, 'lib/example.test.js', '../scripts/example.test.js']));
-      if (mode === 'files') expect(selection.include).toHaveLength(2);
+      expect(selection.include, `${mode} ${shard}`).toEqual(expect.arrayContaining(expected));
+      if (mode === 'files') expect(selection.include, shard).toHaveLength(expected.length);
     }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
@@ -116,6 +122,8 @@ describe('test memo through the real runner', () => {
         `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
         'const testResults = selection.include.map(rel => ({ name: require("path").resolve(repo, "server", rel), status: "passed", assertionResults: [{ status: "passed" }] }));',
         'fs.writeFileSync(out, JSON.stringify({ testResults }));',
+        // The run-level report scripts/vitestRunDiagnostics.js would write; PORTOS_FAKE_LATE_ERROR simulates a rejection after the last test.
+        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: process.env.PORTOS_FAKE_LATE_ERROR ? 1 : 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
       ].join('\n'));
       const test = 'scripts/lib/releaseTitle.test.js';
@@ -125,6 +133,12 @@ describe('test memo through the real runner', () => {
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
+      // A green-looking report with a run-level error records nothing.
+      const tainted = run({ PORTOS_FAKE_LATE_ERROR: '1' });
+      expect(tainted.status, tainted.stderr).toBe(0);
+      expect(tainted.stdout).toContain('RAN ');
+      expect(tainted.stdout).not.toContain('recorded');
+
       const first = run();
       expect(first.status, first.stderr).toBe(0);
       expect(first.stdout).toContain('🧠 Test memo: skipped 0 of 1 selected files (closure unchanged); running 1.');
@@ -445,9 +459,10 @@ describe('native crash diagnostics before retry/cancellation (#8152)', () => {
       return { status: 1, output };
     });
     const diagnose = vi.fn(async () => { order.push('diagnose'); });
-    expect(await spawnNpm('server', 'test:ci', ['--shard=3/3'], 'fixture', { run, diagnose })).toBe(1);
+    expect(await spawnNpm('server', 'test:ci', ['--experimental.recordDependencies'], 'fixture', { run, diagnose })).toBe(1);
     expect(order).toEqual(['run', 'diagnose', 'run', 'diagnose']);
-    expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js']]);
+    // The retry narrows the selectors to the crashed file but keeps the run's flags, so its record is taken too.
+    expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js', '--experimental.recordDependencies']]);
   });
 
   it('refuses an explicitly empty browser profile before invoking tests', async () => {
@@ -520,12 +535,19 @@ describe('structured failure diagnostics', () => {
       delete env.PORTOS_TEST_TEMP_ROOT;
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
         `import { runNpm } from ${JSON.stringify(runnerUrl)};
+         import { passedTestFiles } from ${JSON.stringify(new URL('./lib/testMemoRunner.js', import.meta.url).href)};
          const result = await runNpm('server', 'test:ci', ${JSON.stringify(args)});
+         console.log('MEMO ' + JSON.stringify({ status: result.status, runReport: result.runReport, files: result.fileResults.map(f => f.status),
+           passed: passedTestFiles(result.fileResults, { repoRoot: ${JSON.stringify(fixture)}, status: result.status, runReport: result.runReport }) }));
          process.exitCode = result.status;`,
       ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
       expect(stripVTControlCharacters(result.stdout)).toMatch(/Test Files\s+1 passed/);
+      // The JSON report calls the file passed; the process and run-level report say otherwise, and the memo believes them.
+      const memo = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('MEMO ')).slice(5));
+      expect(memo).toMatchObject({ status: 1, files: ['passed'], passed: [] });
+      expect(memo.runReport.errorCount).toBe(1);
       const diagnostic = result.stderr.slice(result.stderr.indexOf('Test launcher exited:'));
       expect(diagnostic).toContain('code=1, signal=none');
       expect(diagnostic).toContain('unhandledErrors=1');

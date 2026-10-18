@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readMemoEntry, readMemoRecord, resolveMemoDir, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
+import { MAX_ENTRY_AGE_MS, readMemoEntry, readMemoRecord, resolveMemoDir, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 
 const KEY = 'a'.repeat(64);
 const META = { test: 'server/lib/a.test.js', workspace: 'server', source: 'local', commit: 'abc' };
@@ -26,6 +26,9 @@ describe('test memo store', () => {
     expect(readMemoEntry(dir, KEY, META)).toMatchObject({ ...META, verifiedAt: expect.any(String) });
     expect(readMemoEntry(dir, KEY, { ...META, test: 'server/lib/other.test.js' })).toBeNull();
     expect(readMemoEntry(dir, 'not-a-key', META)).toBeNull();
+    // An entry ages out so a nightly re-verifies what it keeps skipping.
+    expect(readMemoEntry(dir, KEY, { ...META, now: Date.now() + MAX_ENTRY_AGE_MS + 1 })).toBeNull();
+    expect(readMemoEntry(dir, KEY, { ...META, now: Date.now() + MAX_ENTRY_AGE_MS - 60_000 })).not.toBeNull();
     expect(readdirSync(join(dir, 'entries', 'aa')).filter((name) => name.endsWith('.tmp'))).toEqual([]);
 
     writeFileSync(join(dir, 'entries', 'aa', `${KEY}.json`), '{ corrupt');
