@@ -136,6 +136,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // or the tab reloads. Distinct from `ui-bugs` (one click on a fresh page) and
   // `error-handling` (per-call failure handling).
   'workflow-recovery',
+  // Executes migrations and a backup restore against scratch installs built
+  // from fixture shapes, then boots the result. Distinct from `data-safety`,
+  // which reads the same code statically.
+  'upgrade-rehearsal',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence

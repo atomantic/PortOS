@@ -623,6 +623,25 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'workflow-recovery finding(s)',
     }),
   },
+  // Executes the upgrade path and a backup restore against scratch roots built
+  // from fixture shapes. `data-safety` reads migrations and backup code
+  // statically; the failures that reached installs (#6182, #12044, #12046,
+  // #12049) were visible only on the executed path.
+  'upgrade-rehearsal': {
+    quotaBurnId: null,
+    label: 'Upgrade & restore rehearsal',
+    description: 'Upgrade and restore rehearsal (runs migrations over synthetic older installs and a backup restore in scratch directories, never the live data) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'upgrade-rehearsal-',
+      label: 'upgrade-rehearsal-audit',
+      // Same category as the static read; the metric label separates what an
+      // executed rehearsal found from what a read of the code found.
+      issueLabel: 'data-safety',
+      labelDescription: 'Proposed from an upgrade and restore rehearsal',
+      noun: 'upgrade-rehearsal finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
@@ -897,7 +916,7 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
   'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
-  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security', 'infrastructure', 'data-integrity'],
+  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'upgrade-rehearsal', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
   ux: ['ux', 'mobile-responsive', 'copy', 'feature-completeness'],
@@ -970,6 +989,9 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   reliability: Object.freeze(['error-handling']),
   'workflow-recovery': Object.freeze(['error-handling']),
   'cost-efficiency': Object.freeze(['performance']),
+  // The executed rehearsal follows the static read, so it spends its scratch
+  // boots on the hazards the read could not see.
+  'upgrade-rehearsal': Object.freeze(['data-safety']),
 });
 
 // WHY each audit sits where it does in the order above — rationale only. The
@@ -1000,4 +1022,5 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'cost-efficiency': 'Follows performance, because a latency fix often changes what the path costs; measure spend on the shape that survived.',
   'feature-completeness': 'Runs before simplify sweeps unreferenced code, so an unfinished feature is decided (finish, hide, or remove) rather than silently deleted.',
   'workflow-recovery': 'Follows call-level failure handling: once each step fails safely, check that a workflow stopped between steps still offers the user a way to finish or cancel it.',
+  'upgrade-rehearsal': 'Follows the static data-safety read: once the hazards a read can see are fixed, execute migrations and a backup restore against scratch installs to catch what only running them shows.',
 });

@@ -186,11 +186,24 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it.each([
     ['feature-completeness', ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
     ['workflow-recovery', ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it']],
+    ['upgrade-rehearsal', ['Build a synthetic older install', 'Restore a backup', 'One issue per root cause']],
   ])('%s v1 states what makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(1);
     expect(current).toContain('{modeInstructions}');
     for (const marker of markers) expect(current, key).toContain(marker);
+  });
+
+  // The rehearsal EXECUTES migrations and a restore, so the scratch-only rule
+  // has to be the first thing the agent reads, before any step it could run
+  // against the install it was spawned from (#12091).
+  it('upgrade-rehearsal opens with the scratch-only rule and forbids the live install', () => {
+    const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
+    const opening = current.slice(0, current.indexOf('Repository: {repoPath}'));
+    for (const marker of ['never the live `data/`', 'never the real Postgres', '`MEMORY_BACKEND=file`', '`NODE_ENV=test`', 'port']) {
+      expect(opening).toContain(marker);
+    }
+    expect(opening).toMatch(/out of\nbounds even when it only reads/);
   });
 
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {

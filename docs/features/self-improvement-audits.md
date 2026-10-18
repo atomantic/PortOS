@@ -106,6 +106,7 @@ the operator's live checkout.
 | `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
 | `feature-completeness` | Work started and never finished, offered to users anyway | `bug`, `incomplete` | file | |
 | `workflow-recovery` | Multi-step workflows that strand their record between steps | `bug`, `workflow` | file | |
+| `upgrade-rehearsal` | Executed migrations, backup restore and boot against scratch installs | `data-safety`, `upgrade-rehearsal` | file | |
 
 ## Why the boundaries are explicit
 
@@ -147,6 +148,13 @@ problem:
   keeps only check-then-act races on in-memory module state (#12082).
   `error-handling` likewise cedes sensitive detail leaking through an error path
   to `privacy` and partial writes to `data-integrity` (#12086).
+- **Upgrade safety is split by read versus run.** `data-safety` reads
+  migrations, seeds and backup code for missing safety nets. `upgrade-rehearsal`
+  executes them: it builds scratch installs from the fixture shapes the
+  migration tests carry, runs the seed step and the migration runner, boots to
+  the health endpoint, and restores a backup into a second scratch root — never
+  the live `data/` or the real Postgres — and files only what the executed path
+  broke, one issue per root cause (#12091).
 - **Defects are split four ways.** `better-runtime-safety` reads source for
   latent defects; `console-errors` collects what actually errors at runtime;
   `error-handling` owns the failure path once something goes wrong; and

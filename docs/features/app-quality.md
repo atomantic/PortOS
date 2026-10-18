@@ -139,6 +139,12 @@ breaking changes, idempotency keys, pagination bounds), `observability`
 (correlation, alertable metrics, truthful health, audit trails) and
 `data-safety` (backup restorability, bulk/backfill safety, retention reach).
 
+`upgrade-rehearsal` is `data-safety`'s executed counterpart: it builds scratch
+installs from migration-test fixture shapes, runs the migration runner and a
+backup restore against them, and boots the result, so a failure only an
+executed path shows (#6182, #12044, #12046, #12049) is caught without touching
+live data.
+
 Two gap lenses cover defects every page-walking and code-shape audit reads as
 intentional or never reaches:
 
