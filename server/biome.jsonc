@@ -1,5 +1,5 @@
 {
-  "$schema": "../client/node_modules/@biomejs/biome/configuration_schema.json",
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "root": true,
   "files": { "includes": ["**/*.js", "**/*.mjs", "!node_modules", "!native", "!coverage"] },
   "formatter": { "enabled": false },
