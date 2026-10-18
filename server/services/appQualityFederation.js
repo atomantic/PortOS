@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { AUDIT_TASK_TYPE_LIST, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { auditQualityReportSchema, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
+import { auditQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
@@ -16,8 +16,11 @@ import { releaseTieId } from './appQualitySnapshotFormat.js';
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const sharedSummary = 'Numeric assessment shared by a federated instance; evidence remains on the source machine.';
 const hash = value => createHash('sha256').update(value).digest('hex');
+// A stored v2 (slice-scored) report travels as the v1 numeric shape: the wire
+// contract is unchanged, so a peer that predates v2 reads the run score it
+// already expects, and the slice text never leaves this machine (#12076).
 const numericReportSchema = z.preprocess(value => value && typeof value === 'object'
-  ? { ...value, summary: sharedSummary } : value, auditQualityReportSchema)
+  ? { ...numericQualityReport(value), summary: sharedSummary } : value, auditQualityReportSchema)
   .transform(({ summary: _summary, ...report }) => report);
 const measurementSchema = z.object({
   measurementId: z.string().regex(/^[a-f0-9]{64}$/),

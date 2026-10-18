@@ -51,11 +51,11 @@ This contract overrides narrower slice-selection or ranking advice in the missio
 2. Category search: ${AUDIT_DISCOVERY[category]}
 3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable.
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
-5. Assess the PRE-FIX codebase for this category on 0–100 (higher is healthier): 90–100 no material defect found after broad evidence; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Score the category, not the agent's performance or issue count. Explain the score using severity, prevalence and concrete evidence. Do not award points merely for filing or fixing this run. Use score:null for unavailable or inapplicable assessment; zero is a real score.
+5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 no material defect found in the slice after real inspection; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Keep ordinary completion/PR instructions and summaries too.
-QUALITY_AUDIT_JSON: {"version":1,"category":"${category}","score":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
-Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use score:null when the inspected evidence cannot support a category score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, score must be null and explain why. Even a zero-finding audit returns this assessment.`;
+QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
+Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.`;
 }
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });
@@ -68,20 +68,52 @@ export const appListQuerySchema = appQualityQuerySchema.extend({
   view: z.enum(['nav', 'probe']).optional(),
 });
 
-export const auditQualityReportSchema = z.object({
-  version: z.literal(1),
-  category: z.string().transform(normalizeAuditTaskType)
-    .refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value)),
-  score: z.number().int().min(0).max(100).nullable(),
+const scoreSchema = z.number().int().min(0).max(100).nullable();
+const categorySchema = z.string().transform(normalizeAuditTaskType)
+  .refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value));
+// Key order is the stored JSON order; keep the score fields where v1 wrote them.
+const reportFields = {
   worstSeverity: z.number().int().min(0).max(10),
   coverage: z.enum(['broad', 'partial', 'unavailable', 'not-applicable']),
   confidence: z.enum(['low', 'medium', 'high']),
   summary: z.string().trim().min(1).max(2000),
   scannedFiles: z.number().int().nonnegative(),
   totalFiles: z.number().int().nonnegative(),
-}).strict().refine(r => r.scannedFiles <= r.totalFiles)
-  .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? r.score === null : r.scannedFiles > 0 && (r.coverage === 'partial' || r.score !== null))
+};
+
+/**
+ * Two report shapes are stored side by side (#12076). v1 carried a category-wide
+ * `score` the agent extrapolated from a bounded slice, which moved with the slice
+ * it happened to pick. v2 names the `slice` and rates only it (`sliceScore`); the
+ * category figure is derived server-side from a rolling window of run scores
+ * (`summarizeAppQuality`). Both shapes stay parseable forever: stored v1 rows and
+ * older peers keep rendering, and the run score is read from either.
+ */
+export const auditQualityReportSchema = z.discriminatedUnion('version', [
+  z.object({ version: z.literal(1), category: categorySchema, score: scoreSchema, ...reportFields }).strict(),
+  z.object({ version: z.literal(2), category: categorySchema, slice: z.string().trim().min(1).max(500), sliceScore: scoreSchema, ...reportFields }).strict(),
+]).refine(r => r.scannedFiles <= r.totalFiles)
+  .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? qualityRunScore(r) === null : r.scannedFiles > 0 && (r.coverage === 'partial' || qualityRunScore(r) !== null))
   .refine(r => r.coverage !== 'broad' || (r.totalFiles > 0 && r.scannedFiles === r.totalFiles));
+
+/** The one run's 0–100 assessment from either report shape; `null` when unscored. */
+function qualityRunScore(report) {
+  if (!report || typeof report !== 'object') return null;
+  return (report.version === 2 ? report.sliceScore : report.score) ?? null;
+}
+
+/**
+ * The numeric wire/file shape (`PORTOS_SCHEMA_VERSIONS.appQuality` v1, the
+ * `.quality.json` row) for any stored report: a v2 run score travels in the v1
+ * `score` field, so an older peer reads it as the per-run score it already
+ * expects, and the `slice` text — which names repository paths — never leaves
+ * the machine. The result is still validated by its consumer's schema.
+ */
+export function numericQualityReport(report) {
+  if (!report || typeof report !== 'object' || report.version !== 2) return report;
+  const { category, worstSeverity, coverage, confidence, scannedFiles, totalFiles } = report;
+  return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles, totalFiles };
+}
 
 export function parseAuditQualityReport(summary, category) {
   if (typeof summary !== 'string') return null;
@@ -91,7 +123,7 @@ export function parseAuditQualityReport(summary, category) {
   // An agent that scanned only part of the inventory but labelled it "broad"
   // (the common slip) still measured something real. Record it as the partial
   // assessment it honestly is rather than dropping the whole run's measurement.
-  const claim = raw && typeof raw === 'object' && raw.coverage === 'broad' && raw.score !== null
+  const claim = raw && typeof raw === 'object' && raw.coverage === 'broad' && qualityRunScore(raw) !== null
     && Number.isFinite(raw.scannedFiles) && Number.isFinite(raw.totalFiles)
     && raw.scannedFiles > 0 && raw.scannedFiles < raw.totalFiles
     ? { ...raw, coverage: 'partial' } : raw;
@@ -134,8 +166,43 @@ export function isFreshAssessment(assessedAt, now = Date.now()) {
   return Number.isFinite(age) && age >= 0 && age <= AUDIT_FRESHNESS_MS;
 }
 
+/** How many recent run scores a category's dashboard figure averages (#12076). */
+export const QUALITY_WINDOW_RUNS = 5;
+// A low-confidence run never contributes; the window weights the rest so a
+// hedged assessment moves the figure half as far as a confident one.
+const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
+
+/** Whether one run's parsed report qualifies for the category window: fresh, broad signal scan, not hedged, scored. */
+function qualifiesForWindow(run, now) {
+  return run.valid && isFreshAssessment(run.record.assessedAt, now) && run.report.coverage === 'broad'
+    && run.report.confidence !== 'low' && qualityRunScore(run.report) !== null;
+}
+
+/** Confidence-weighted mean of the window's run scores, rounded; `null` for an empty window. */
+function windowScore(window) {
+  if (!window.length) return null;
+  const weighted = window.reduce((acc, run) => {
+    const weight = CONFIDENCE_WEIGHT[run.report.confidence];
+    return { sum: acc.sum + weight * qualityRunScore(run.report), weight: acc.weight + weight };
+  }, { sum: 0, weight: 0 });
+  return Math.round(weighted.sum / weighted.weight);
+}
+
 /**
- * Roll the newest measurement per category into the app's quality summary.
+ * Roll each category's recent measurements into the app's quality summary.
+ *
+ * A category's `score` is the confidence-weighted mean of its newest
+ * `QUALITY_WINDOW_RUNS` qualifying runs (fresh, broad coverage, medium/high
+ * confidence, scored); `window` reports how many runs fed it and the worst
+ * severity any of them found. One run's slice score is slice noise — a 20-point
+ * swing between consecutive runs carried no information — so the newest run
+ * alone no longer decides the figure, and a newer partial run does not erase a
+ * fresh scored one. With no qualifying run the row falls back to the newest
+ * run's own score, shown beside its stale/partial/low-confidence evidence as
+ * before, and does not contribute. Everything else about the row (coverage,
+ * confidence, slice, `runScore`, summary, provenance, staleness) describes the
+ * newest run.
+ * The overall score stays the equal-weight mean of the contributing categories.
  *
  * `inapplicable` maps category → reason for categories this repository cannot
  * have findings for (from `resolveQualityChecks`; the caller supplies it only
@@ -147,26 +214,37 @@ export function isFreshAssessment(assessedAt, now = Date.now()) {
  * `totalCategories` keeps its catalog-size meaning for existing readers.
  */
 export function summarizeAppQuality(records = [], now = Date.now(), { inapplicable = {} } = {}) {
-  const normalizedRecords = records.map(record => ({
-    ...record,
-    category: normalizeAuditTaskType(record.category),
-  }));
+  const runsByCategory = new Map();
+  for (const record of records) {
+    const category = normalizeAuditTaskType(record.category);
+    const report = auditQualityReportSchema.safeParse(record.report);
+    const valid = report.success && report.data.category === category;
+    if (!runsByCategory.has(category)) runsByCategory.set(category, []);
+    runsByCategory.get(category).push({ record, valid, report: valid ? report.data : null });
+  }
   const categories = Object.entries(AUDIT_DEFINITIONS).map(([id, definition]) => {
-    const record = normalizedRecords.find(row => row.category === id);
-    const report = auditQualityReportSchema.safeParse(record?.report);
-    const valid = report.success && report.data.category === id;
+    const runs = (runsByCategory.get(id) || []).sort((a, b) => compareQualityRecords(b.record, a.record));
+    const latest = runs[0];
+    const record = latest?.record;
+    const valid = Boolean(latest?.valid);
     const assessedAt = record?.assessedAt;
     const stale = valid && !isFreshAssessment(assessedAt, now);
-    const contributes = valid && !stale && report.data.coverage === 'broad' && report.data.confidence !== 'low' && report.data.score !== null;
+    const window = runs.filter(run => qualifiesForWindow(run, now)).slice(0, QUALITY_WINDOW_RUNS);
+    const contributes = window.length > 0;
     // Only this install's own ruling, as the dispatch gate reads it: a peer's
     // or a release snapshot's describes a different checkout of the repository.
     const local = !record?.sourcePeerId && !record?.sourcePeerName;
-    const reportedNotApplicable = valid && !stale && local && report.data.coverage === 'not-applicable';
+    const reportedNotApplicable = valid && !stale && local && latest.report.coverage === 'not-applicable';
     const detectedReason = Object.hasOwn(inapplicable, id) ? inapplicable[id] : null;
     const applicable = contributes || !(reportedNotApplicable || detectedReason);
     const inapplicableReason = applicable ? null
       : detectedReason || 'the latest audit reported this category as not applicable';
-    return { id, label: definition.label, ...(valid ? report.data : { score: null, coverage: 'unavailable' }), assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason };
+    const { version: _version, category: _category, score: _score, sliceScore: _sliceScore, slice, ...latestFields } = latest?.report || {};
+    const runScore = valid ? qualityRunScore(latest.report) : null;
+    return { id, label: definition.label, ...(valid ? latestFields : { coverage: 'unavailable' }),
+      score: contributes ? windowScore(window) : runScore, runScore, slice: valid ? slice ?? null : null,
+      window: { runs: window.length, worstSeverity: window.length ? Math.max(...window.map(run => run.report.worstSeverity)) : null },
+      assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason };
   });
   const rated = categories.filter(c => c.contributes);
   return {
@@ -180,14 +258,17 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
 
 export const appQualityHistoryQuerySchema = z.object({ days: z.enum(['30', '90', '365']).default('90').transform(Number) });
 
-/** Daily UTC snapshots of evidence available then; never backfill past scores. */
+/**
+ * Daily UTC snapshots of evidence available then; never backfill past scores.
+ * Each point applies the same rolling derivation as the live summary to the
+ * runs known by that day, so the chart and the breakdown agree.
+ */
 export function buildAppQualityHistory(records, days, now = Date.now()) {
   const dayMs = 86400000;
   const today = Math.floor(now / dayMs) * dayMs;
-  const sorted = records.filter(r => Number.isFinite(Date.parse(r.assessedAt)))
-    .map(record => ({ ...record, category: normalizeAuditTaskType(record.category) }))
-    .sort(compareQualityRecords);
+  const sorted = dailyQualityRecords(records.filter(r => Number.isFinite(Date.parse(r.assessedAt))));
   const latest = new Map();
+  let known = [];
   let cursor = 0;
   const points = [];
   for (let day = today - (days - 1) * dayMs; day <= today; day += dayMs) {
@@ -195,8 +276,12 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
     while (cursor < sorted.length && Date.parse(sorted[cursor].assessedAt) <= asOf) {
       const record = sorted[cursor++];
       latest.set(record.category, record);
+      known.push(record);
     }
-    const summary = summarizeAppQuality([...latest.values()], asOf);
+    // A run older than the freshness window can no longer feed any category's
+    // rolling figure; only the newest per category still matters, as its evidence row.
+    known = known.filter(record => Date.parse(record.assessedAt) >= asOf - AUDIT_FRESHNESS_MS || latest.get(record.category) === record);
+    const summary = summarizeAppQuality(known, asOf);
     points.push({ date: new Date(day).toISOString().slice(0, 10), score: summary.score,
       ratedCategories: summary.ratedCategories,
       categories: Object.fromEntries(summary.categories.map(c => [c.id, {
@@ -206,14 +291,23 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
   return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, points };
 }
 
-/** One newest measurement per category, with a stable run tie-break across all installs. */
-export function latestQualityRecords(records) {
-  const latest = new Map();
+/**
+ * One measurement per category per UTC day — the newest run that day, with a
+ * stable run tie-break across all installs — in ascending order. The same run
+ * can reach a reader twice: as the local row and again through the release
+ * snapshot it was published into, which keeps only the day. Collapsing to the
+ * day is what stops the rolling window counting that run twice, and matches the
+ * daily winners the history query and the wire export already select.
+ */
+export function dailyQualityRecords(records) {
+  const byDay = new Map();
   for (const record of [...records].sort(compareQualityRecords)) {
     const normalized = { ...record, category: normalizeAuditTaskType(record.category) };
-    latest.set(normalized.category, normalized);
+    const time = Date.parse(normalized.assessedAt);
+    const day = Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : String(normalized.assessedAt);
+    byDay.set(`${normalized.category}|${day}`, normalized);
   }
-  return [...latest.values()];
+  return [...byDay.values()].sort(compareQualityRecords);
 }
 
 export function compareQualityRecords(a, b) {

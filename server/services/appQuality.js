@@ -4,7 +4,7 @@ import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
+import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt, deepDiscoveryComplete = false }, deps = {}) {
@@ -41,10 +41,17 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
  */
 export async function enrichAppsWithQuality(apps, deps = {}) {
   if (!apps.length) return apps;
-  // One app-scoped query per list, not one per tile or transcript scan.
+  // One app-scoped query per list, not one per tile or transcript scan. Every
+  // run inside the freshness window feeds a category's rolling figure; the
+  // newest run per category is kept past it as the row's evidence (#12076).
+  const now = deps.now ?? Date.now();
   const result = await (deps.query || query)(
-    `SELECT DISTINCT ON (app_id, category) app_id, category, agent_id, assessed_at, report FROM app_quality_measurements WHERE app_id = ANY($1::text[]) ORDER BY app_id, category, assessed_at DESC, agent_id DESC`,
-    [apps.map(app => app.id)]
+    `SELECT app_id, category, agent_id, assessed_at, report FROM (
+       SELECT app_id, category, agent_id, assessed_at, report,
+         row_number() OVER (PARTITION BY app_id, category ORDER BY assessed_at DESC, agent_id DESC) AS run_rank
+       FROM app_quality_measurements WHERE app_id = ANY($1::text[])) runs
+     WHERE run_rank = 1 OR assessed_at >= $2`,
+    [apps.map(app => app.id), new Date(now - AUDIT_FRESHNESS_MS)]
   ).catch(err => {
     console.error(`❌ App quality unavailable: ${err.message}`);
     return null;
@@ -60,10 +67,10 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
       deps.resolveApplicability ? deps.resolveApplicability(app).catch(() => ({})) : {},
     ]);
     return { ...app,
-      quality: result ? { ...summarizeAppQuality(latestQualityRecords([
+      quality: result ? { ...summarizeAppQuality(dailyQualityRecords([
         ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
         ...shared.records, ...releases[index],
-      ]), deps.now ?? Date.now(), { inapplicable }), federation: shared.federation }
+      ]), now, { inapplicable }), federation: shared.federation }
         : { ...summarizeAppQuality(), unavailable: true },
     };
   }));

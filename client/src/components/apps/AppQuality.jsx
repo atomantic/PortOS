@@ -110,9 +110,9 @@ export default function AppQuality({ app, detail = false }) {
             <h3 className="flex items-center gap-1.5 font-semibold text-white">
               {label}
               <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
-                <p>Equal-weight mean of broad, medium/high-confidence assessments from the last 30 days. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
-                <p className="mt-1.5">Scores are the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
-                {federation && <p className="mt-1.5">Unified score: the newest assessment per category across this install and sync peers with the same repository. Offline peers do not contribute.</p>}
+                <p>Equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
+                <p className="mt-1.5">Each run rates only the slice it deep-reviewed, as the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
+                {federation && <p className="mt-1.5">Unified score: the recent runs per category across this install and sync peers with the same repository, one per day. Offline peers do not contribute.</p>}
                 {score == null && !hasAssessments && <p className="mt-1.5">Maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively.</p>}
               </InfoTooltip>
             </h3>
@@ -192,7 +192,9 @@ export default function AppQuality({ app, detail = false }) {
 }
 
 function CategoryRow({ category, below, runLink }) {
-  const details = category.summary || category.totalFiles > 0 || category.id === 'better-dependency-freedom';
+  const details = category.summary || category.slice || category.totalFiles > 0 || category.id === 'better-dependency-freedom';
+  // Pre-#12076 servers send no window; a row with one shows how many runs fed its score.
+  const windowRuns = category.window?.runs ?? 0;
   const menuItems = [
     { id: 'settings', label: 'Runner settings', to: `/cos/schedule?task=${encodeURIComponent(category.id)}` },
     ...(!category.sourcePeerId && category.agentId ? [{ id: 'run', label: 'View audit run', to: `/cos/agents/${category.agentId}` }] : []),
@@ -203,6 +205,7 @@ function CategoryRow({ category, below, runLink }) {
     {category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence}`}
     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}
     {category.sourcePeerId || category.sourcePeerName ? ` · ${category.sourcePeerName || 'federated peer'}` : ''}
+    {windowRuns > 0 && ` · ${pluralize(windowRuns, 'run')}`}
   </>;
   return (
     <tr className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 py-2.5 px-2 sm:px-0 sm:py-0 border-t border-port-border rounded-lg sm:rounded-none sm:table-row sm:align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
@@ -211,6 +214,8 @@ function CategoryRow({ category, below, runLink }) {
           {category.label}
           {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" width={288} panelClassName="font-normal">
             {category.summary && <p className="break-words">{category.summary}</p>}
+            {category.slice && <p className="mt-1 break-words">Latest slice: {category.slice}{category.runScore != null && ` · rated ${category.runScore}/100`}</p>}
+            {windowRuns > 0 && <p className="mt-1">Score: mean of the last {pluralize(windowRuns, 'qualifying run')}{category.window.worstSeverity != null && ` · worst severity in window: ${category.window.worstSeverity}/10`}</p>}
             {category.totalFiles > 0 && <p className="mt-1">{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</p>}
             {category.id === 'better-dependency-freedom' && <p className="mt-1">Assesses whether packages earn their place; dependency count carries no automatic penalty.</p>}
           </InfoTooltip>}

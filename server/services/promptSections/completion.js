@@ -500,7 +500,7 @@ export function buildAuditOutputCompletionSection(task, sentinelPath) {
 Before writing the completion sentinel, prepare the validated QUALITY_AUDIT_JSON report described in the audit instructions for category "${category}".
 Write your human summary AND exactly one single-line QUALITY_AUDIT_JSON: {...} report together to \`${sentinelPath}\`, then stop. This applies to every provider, including agents that normally finish by exiting.
 The report is required even when no issues are filed or no code changes are needed. A successful issue or PR does not supply a quality assessment. A final response alone is not enough: PortOS reads the sentinel file to save the dashboard score.
-Preserve the report when following the summary template above; the template's length guidance does not replace this required output. If assessment is unavailable, use score:null and explain the missing evidence rather than inventing a score.`;
+Preserve the report when following the summary template above; the template's length guidance does not replace this required output. If assessment is unavailable, use sliceScore:null and explain the missing evidence rather than inventing a score.`;
 }
 
 /**
