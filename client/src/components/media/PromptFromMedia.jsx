@@ -414,6 +414,7 @@ export default function PromptFromMedia({
         onSelect={(item) => { setSource(sourceFromItem(item)); setResult(null); }}
       />
       <GalleryVideoPicker
+        uploadToGallery
         open={videoPickerOpen}
         onClose={() => setVideoPickerOpen(false)}
         allowUpload

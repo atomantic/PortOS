@@ -25,7 +25,8 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, ensureDir, atomicWrite, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
-import { generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
+import { generateThumbnail, probeVideoDuration, probeMediaTags } from '../lib/ffmpeg.js';
+import { extractGenerationMetadataEntries } from '../lib/pngMetadata.js';
 import { mutateVideoHistory } from './videoGen/history.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -112,15 +113,23 @@ async function persistGalleryVideo(header, originalName, size, write) {
       await write(outPath);
       // Both best-effort: a missing ffmpeg/ffprobe degrades to a thumbnail-less
       // entry (normalizeVideo renders a no-preview tile), never a failed upload.
-      const [thumbnail, durationSec] = await Promise.all([
+      const [thumbnail, durationSec, tags] = await Promise.all([
         generateThumbnail(outPath, id).catch(() => null),
         probeVideoDuration(outPath).catch(() => null),
+        probeMediaTags(outPath).catch(() => null),
       ]);
       if (!thumbnail) await unlinkGuarded(join(PATHS.videoThumbnails, `${id}.jpg`)).catch(() => {});
       const title = typeof originalName === 'string' && originalName.trim()
         ? originalName.trim().slice(0, 200)
         : '';
-      const entry = buildUploadHistoryEntry({ id, filename, thumbnail, durationSec, title });
+      const metadata = extractGenerationMetadataEntries(Object.entries(tags || {}).map(([keyword, text]) => ({ keyword, text })));
+      const entry = {
+        ...buildUploadHistoryEntry({ id, filename, thumbnail, durationSec, title }),
+        ...metadata,
+        ...(metadata.model ? { modelId: metadata.model } : {}),
+        ...(metadata.cfgScale != null ? { guidanceScale: metadata.cfgScale } : {}),
+        ...(tags === null ? { importWarnings: ['Embedded prompt metadata could not be inspected (ffprobe unavailable or invalid media).'] } : {}),
+      };
       await mutateVideoHistory((history) => { history.unshift(entry); return history; });
       return entry;
     } catch (err) {

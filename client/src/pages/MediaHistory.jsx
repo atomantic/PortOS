@@ -1,3 +1,4 @@
+import MediaBatchImport from '../components/media/MediaBatchImport';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 /**
  * Media History — unified timeline of generated images + videos with filter
@@ -207,6 +208,13 @@ export default function MediaHistory() {
           )}
         </div>
       </div>
+
+      <MediaBatchImport onImported={item => {
+        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly) {
+          page.setItems(previous => [item, ...previous.filter(row => !(row.kind === item.kind && row.data.filename === item.data.filename))]);
+        }
+        refresh();
+      }} />
 
       {page.error && items.length === 0 && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
       {loading && items.length === 0 ? (

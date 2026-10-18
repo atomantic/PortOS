@@ -1126,3 +1126,17 @@ export const optimizeForStreaming = async (videoPath) => {
   const installed = await installEncodedVideo(tmpPath, videoPath, 'streaming-optimized');
   if (!installed.ok) console.log(`⚠️ ${installed.reason} (at ${videoPath})`);
 };
+
+// null means inspection failed; {} means the file was inspected and had no tags.
+export async function probeMediaTags(mediaPath) {
+  const stdout = await runFfprobe([
+    '-v', 'error', '-show_entries', 'format_tags:stream_tags', '-of', 'json', mediaPath,
+  ]);
+  if (!stdout) return null;
+  try {
+    const result = JSON.parse(stdout);
+    return Object.assign({}, ...(result.streams || []).map(stream => stream.tags || {}), result.format?.tags || {});
+  } catch {
+    return null;
+  }
+}

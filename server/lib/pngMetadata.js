@@ -273,15 +273,25 @@ export function parseStableDiffusionParameters(value) {
  * remains usable; sharp remains the authoritative image-format validator.
  */
 export function extractPngGenerationMetadata(value) {
+  return extractGenerationMetadataEntries(readTextChunks(value));
+}
+
+// Container adapters supply bounded text entries; projection and field policy
+// stay identical for PNG uploads and video tags.
+export function extractGenerationMetadataEntries(entries) {
   const result = {};
-  for (const chunk of readTextChunks(value)) {
+  for (const chunk of entries) {
+    if (typeof chunk.keyword !== 'string' || typeof chunk.text !== 'string' || chunk.text.length > MAX_TEXT_BYTES) continue;
     const key = chunk.keyword.toLowerCase();
     let candidate = {};
     if (key === 'parameters') {
       candidate = parseStableDiffusionParameters(chunk.text);
-    } else if (METADATA_KEYS.has(key)) {
+    } else if (METADATA_KEYS.has(key) || key === 'comment' || key === 'description') {
       const json = parseJsonObject(chunk.text);
-      candidate = json ? normalizeGenerationMetadata(json) : normalizeGenerationMetadata({ [key]: chunk.text });
+      candidate = json ? normalizeGenerationMetadata(json)
+        : /^(comment|description)$/.test(key) && /(?:^|\n)Steps:\s*\d+/i.test(chunk.text)
+          ? parseStableDiffusionParameters(chunk.text)
+          : normalizeGenerationMetadata({ [key]: chunk.text });
     }
     for (const [field, fieldValue] of Object.entries(candidate)) {
       if (result[field] === undefined || result[field] === null || result[field] === '') result[field] = fieldValue;
