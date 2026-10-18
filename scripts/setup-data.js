@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, renameSync, rmdirSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, renameSync, rmdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { md5, buildPromptDriftTables } from './migrations/_lib.js';
-import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
+import { seedDataDir } from './lib/seedDataDir.js';
 import { mergeJsonStarterTargets } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
@@ -12,14 +12,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 const dataDir = join(rootDir, 'data');
 const referenceDir = join(rootDir, 'data.reference');
-
-// Absolute data.reference paths this script must never copy: a migration builds
-// each of them from the install's own records, and setup-data runs BEFORE
-// run-migrations — so seeding one makes the migration see its output as already
-// present, no-op, and leave shipped defaults where the user's settings were.
-// See scripts/migrations/340-cos-config-seed-repair.js for the case that
-// prompted it.
-const isSeedable = isSeedableReferencePath(referenceDir);
 
 console.log('📁 Setting up data directory...');
 
@@ -54,40 +46,11 @@ const rewritePortosRootPlaceholder = () => {
   }
 };
 
-if (!existsSync(dataDir)) {
-  console.log('📁 Creating data directory from data.reference...');
-  mkdirSync(dataDir, { recursive: true });
-  cpSync(referenceDir, dataDir, { recursive: true, filter: isSeedable });
-  rewritePortosRootPlaceholder();
-  console.log('✅ Data directory created');
-} else {
-  // Ensure all subdirectories and files exist without overwriting existing files
-  const ensureSampleContent = (srcDir, destDir) => {
-    const items = readdirSync(srcDir);
-    for (const item of items) {
-      const srcPath = join(srcDir, item);
-      if (!isSeedable(srcPath)) continue;
-      const destPath = join(destDir, item);
-      const stat = statSync(srcPath);
-
-      if (stat.isDirectory()) {
-        if (!existsSync(destPath)) {
-          console.log(`📁 Creating missing directory: ${item}`);
-          mkdirSync(destPath, { recursive: true });
-        }
-        ensureSampleContent(srcPath, destPath);
-      } else if (!existsSync(destPath)) {
-        console.log(`📄 Creating missing file: ${destPath.replace(dataDir + '/', '')}`);
-        cpSync(srcPath, destPath);
-      }
-    }
-  };
-
-  ensureSampleContent(referenceDir, dataDir);
-  rewritePortosRootPlaceholder();
-
-  console.log('✅ Data directory already exists, ensured subdirectories and files');
-}
+const { created } = seedDataDir({ referenceDir, dataDir, log: console.log });
+rewritePortosRootPlaceholder();
+console.log(created
+  ? '✅ Data directory created'
+  : '✅ Data directory already exists, ensured subdirectories and files');
 
 // Merge new top-level entries from data.reference's structured JSON files into
 // the user's existing copies, leaving customized entries untouched. Without
