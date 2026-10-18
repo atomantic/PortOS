@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';
+import useMounted from './useMounted';
 import * as api from '../services/api';
 
 export function useNotifications() {
@@ -8,7 +9,9 @@ export function useNotifications() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
+  const mountedRef = useMounted();
   const countGeneration = useRef(0);
+  const listGeneration = useRef(0);
 
   // The total covers the full store, not just the loaded page. A socket total
   // or newer request supersedes any count request already in flight.
@@ -21,37 +24,32 @@ export function useNotifications() {
     });
   }, []);
 
-  const refresh = useCallback(async () => {
-    const [notifs] = await Promise.all([
-      api.getNotifications({ limit: 50 }),
-      refreshCount()
-    ]);
-    setNotifications(notifs);
-  }, [refreshCount]);
+  // The one list loader, shared by mount, reconnect and the public refresh:
+  // a response that lands after unmount or behind a newer load is dropped,
+  // and a failure logs instead of surfacing as an unhandled rejection (#12042).
+  const loadNotifications = useCallback(async (initial = false) => {
+    const generation = ++listGeneration.current;
+    const fresh = () => mountedRef.current && generation === listGeneration.current;
+    if (initial) setLoading(true);
+    try {
+      const [notifs] = await Promise.all([
+        api.getNotifications({ limit: 50 }),
+        refreshCount()
+      ]);
+      if (fresh()) setNotifications(notifs);
+    } catch (err) {
+      if (fresh()) console.error(`❌ Failed to load notifications: ${err.message}`);
+    } finally {
+      if (initial && fresh()) setLoading(false);
+    }
+  }, [refreshCount, mountedRef]);
 
-  // Fetch initial notifications
+  const refresh = useCallback(() => loadNotifications(), [loadNotifications]);
+
   useEffect(() => {
-    let cancelled = false;
-    const fetchNotifications = async () => {
-      setLoading(true);
-      try {
-        const [notifs] = await Promise.all([
-          api.getNotifications({ limit: 50 }),
-          refreshCount()
-        ]);
-        if (cancelled) return;
-        setNotifications(notifs);
-      } catch (err) {
-        if (cancelled) return;
-        console.error(`❌ Failed to load notifications: ${err.message}`);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    fetchNotifications();
-    return () => { cancelled = true; countGeneration.current++; };
-  }, [refreshCount]);
+    loadNotifications(true);
+    return () => { listGeneration.current++; countGeneration.current++; };
+  }, [loadNotifications]);
 
   // Namespace subscription: this is the sole `notifications:*` consumer
   // (mounted once, high in the tree, from Layout.jsx) now that OpenWorld's

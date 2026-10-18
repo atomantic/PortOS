@@ -122,6 +122,56 @@ describe('reconnect resubscribes and refetches (#8110)', () => {
   });
 });
 
+describe('guarded reconnect refetch (#12042)', () => {
+  const connect = () => {
+    const handler = socket.on.mock.calls.find(([name]) => name === 'connect')?.[1];
+    expect(handler).toBeTypeOf('function');
+    return handler;
+  };
+  const loadFailures = (spy) => spy.mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith('❌ Failed to load notifications'));
+
+  it('logs a failed resubscribe refetch instead of rejecting, and keeps the list', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = await loadedHook();
+    api.getNotifications.mockRejectedValueOnce(new Error('boom'));
+
+    // An unhandled rejection here would fail the run; the hook must absorb it.
+    await act(async () => { connect()(); });
+
+    expect(loadFailures(errorSpy)).toEqual(['❌ Failed to load notifications: boom']);
+    expect(result.current.notifications).toEqual([NOTIFICATION]);
+    errorSpy.mockRestore();
+  });
+
+  it('ignores a resubscribe response that lands after unmount', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { unmount } = await loadedHook();
+    const late = deferred();
+    api.getNotifications.mockReturnValueOnce(late.promise);
+    act(() => { connect()(); });
+    unmount();
+
+    // The only observable trace of an unguarded late response is its failure
+    // log — React drops the setState silently — so reject it and expect silence.
+    await act(async () => { late.reject(new Error('too late')); await late.promise.catch(() => {}); });
+    expect(loadFailures(errorSpy)).toEqual([]);
+    errorSpy.mockRestore();
+  });
+
+  it('lets a newer load supersede a slower one', async () => {
+    const slow = deferred();
+    api.getNotifications.mockReturnValueOnce(slow.promise);
+    const { result } = renderHook(() => useNotifications());
+    const newer = { ...NOTIFICATION, id: 'n2', title: 'Newer notification' };
+    api.getNotifications.mockResolvedValueOnce([newer]);
+    await act(async () => { connect()(); });
+    expect(result.current.notifications).toEqual([newer]);
+
+    await act(async () => { slow.resolve([NOTIFICATION]); await slow.promise; });
+    expect(result.current.notifications).toEqual([newer]);
+  });
+});
+
 describe('authoritative unread totals', () => {
   it.each(['socket-first', 'http-first'])('keeps the remaining unread badge and row with %s delivery', async (order) => {
     const second = { ...NOTIFICATION, id: 'n2', title: 'Remaining notification' };
