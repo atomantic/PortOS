@@ -462,7 +462,7 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   if (memoDir) clearVitestDependencies(repoRoot, scope);
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, toolVersion: createToolVersionResolver({ repoRoot }) });
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
