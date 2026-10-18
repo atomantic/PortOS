@@ -1,6 +1,6 @@
 /** Read-only workspace/dependency ownership shared by startup and pregate. */
-import { lstatSync, readFileSync, realpathSync } from 'fs';
-import { join } from 'path';
+import { lstatSync, readFileSync, realpathSync, readlinkSync } from 'fs';
+import { join, resolve } from 'path';
 
 export function dependencyWorkspaces(root) {
   return ['root', 'client', 'server', 'autofixer'].map(label => ({
@@ -31,6 +31,7 @@ export function inspectWorkspaceDependencies({ dir, label }) {
   let owner = dir;
   try {
     linked = hasLinkedDependencies(dir);
+    if (linked) owner = join(resolve(dir, readlinkSync(join(dir, 'node_modules'))), '..');
     owner = join(realpathSync(join(dir, 'node_modules')), '..');
   } catch (error) {
     issues.push(`node_modules ${error.code === 'ENOENT' ? 'missing' : 'unreadable'} (${error.code})${linked ? ' — linked target unavailable' : ''}`);
