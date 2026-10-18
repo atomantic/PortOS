@@ -53,6 +53,25 @@ it('reserves one slot synchronously and keeps default progress/terminal behavior
   expect(onComplete).toHaveBeenCalledTimes(1);
 });
 
+it('re-renders exactly once per progress frame and keeps no frame history', async () => {
+  let renders = 0;
+  const { result } = renderHook(() => {
+    renders += 1;
+    return useSseJobSlot({ eventsUrl: (id) => `/events/${id}` });
+  });
+  act(() => { result.current.attach('job-1', 'target'); });
+  const before = renders;
+  act(() => { lastEventSource().emit({ type: 'progress', percent: 10, stage: 'a' }); });
+  expect(renders - before).toBe(1);
+  const mid = renders;
+  // One act per frame: frames arrive as separate browser events, never batched.
+  for (let i = 0; i < 100; i += 1) {
+    act(() => { lastEventSource().emit({ type: 'progress', percent: i, stage: 'b' }); });
+  }
+  expect(renders - mid).toBe(100);
+  expect(result.current).toMatchObject({ percent: 99, stage: 'b' });
+});
+
 describe('unmounted kickoff ownership', () => {
   it.each(['resolve', 'reject'])('ignores a late %s and refuses starts through an unmounted callback', async (outcome) => {
     let resolveKickoff;
