@@ -98,6 +98,7 @@ import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import Layout from './Layout';
 import { isFullWidthRoute } from '../lib/layoutRoutes.js';
+import { RECONNECTING_PILL_DELAY_MS } from './SocketReconnectingPill.jsx';
 import {
   NAV_PRESENTATION,
   SECTIONS_BEFORE_GOALS,
@@ -129,6 +130,29 @@ const renderLayout = async (initialPath = '/brain/inbox') => {
 // without depending on the heading's DOM nesting (a benign style refactor of the
 // label shouldn't break these tests). Returns null when the section isn't rendered.
 const pinnedSection = () => screen.queryByTestId('pinned-section');
+
+describe('Layout — socket reconnecting pill', () => {
+  // Plain fake timers: renderLayout settles on microtasks only, and auto-advance
+  // would fire Layout's own timers outside act() between assertions.
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows "Reconnecting…" after the shared socket has been down for the delay and hides it on connect', async () => {
+    // The mocked socket reports no `connected` flag, i.e. disconnected from mount.
+    await renderLayout();
+    expect(screen.queryByText('Reconnecting…')).toBeNull();
+
+    act(() => { vi.advanceTimersByTime(RECONNECTING_PILL_DELAY_MS); });
+    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
+
+    // Every 'connect' handler Layout's hooks registered fires here, and some
+    // of them refetch (mocked, resolving on microtasks) — settle inside act.
+    await act(async () => {
+      for (const [event, handler] of socket.on.mock.calls) if (event === 'connect') handler();
+    });
+    expect(screen.queryByText('Reconnecting…')).toBeNull();
+  });
+});
 
 describe('Layout — manifest-derived sidebar structure', () => {
   it.each([false, true])('keeps global unread notifications off CoS navigation (collapsed: %s)', async (collapsed) => {
