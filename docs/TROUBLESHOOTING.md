@@ -92,6 +92,44 @@ npm run pm2:restart
 
 **Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
 
+### Dynamic import callback missing after profiling
+
+**Symptom**: `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`, followed by an unhandled
+rejection whose original stack names `Timeout._onTimeout (<anonymous>:…)`, near
+`Debugger attached` / `Debugger ending` messages.
+
+Inspect the original stderr stack, not only the normalized `ServerError` stack.
+A profiler cleanup expression injected through Node's inspector can cause this:
+
+```js
+setTimeout(() => import('node:inspector').then(m => m.close()), 500);
+```
+
+The timer's dynamic import can run without an import callback in that evaluation
+context. Its rejected promise escapes the timer, and the inspector stays open.
+An acknowledged `Runtime.evaluate` request only proves the timer was scheduled;
+even `awaitPromise: true` cannot await a promise that the timer callback later
+creates. This pattern alone does not indicate a broken application import.
+See Node's [VM import callback documentation](https://nodejs.org/api/vm.html#when-the-importmoduledynamically-option-is-not-specified-or-undefined).
+
+**Solution**: after stopping your profiling session, use synchronous builtin
+access in the inspector's `Runtime.evaluate` expression:
+
+```js
+setTimeout(() => process.getBuiltinModule('node:inspector').close(), 500);
+'cleanup scheduled';
+```
+
+`process.getBuiltinModule` is available on PortOS's supported Node versions and
+does not depend on the evaluation context's ESM loader. Check the response with
+the matching protocol request ID for both a protocol `error` and
+`result.exceptionDetails` before disconnecting your debugger socket. After the
+delay, verify that the same loopback inspector listener is closed and the server
+remains healthy with no new rejection. Closing the debugger socket alone leaves
+the inspector listener running. Close only the inspector session you own; do not
+restart the live server or change application VM sandbox loaders to repair a
+profiling expression.
+
 ## Connection Issues
 
 ### Cannot Access from Other Devices
