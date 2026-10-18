@@ -20,6 +20,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   return {
     ...actual,
     mkdir: vi.fn((...args) => actual.mkdir(...args)),
+    open: vi.fn((...args) => actual.open(...args)),
     readFile: vi.fn((...args) => actual.readFile(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
     writeFile: vi.fn((...args) => actual.writeFile(...args)),
@@ -102,7 +103,7 @@ describe('importFileToDir', () => {
 });
 
 const restoreFsMocks = () => {
-  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat', 'writeFile', 'chmod']) {
+  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat', 'writeFile', 'chmod', 'open']) {
     fsPromises[name].mockReset();
     fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
   }
@@ -1356,6 +1357,52 @@ describe('fileUtils', () => {
       expect(await readFile(target, 'utf8')).toBe('{"x":1}\n');
     });
 
+    // Crash durability (#12025): the bytes reach the disk before the rename
+    // publishes them, and the directory entry reaches the disk after. The
+    // ordering is observed through the fs seam because a real power loss
+    // cannot be staged in a unit test.
+    it('fsyncs the temp file before the rename and the parent directory after it', async () => {
+      const target = join(tmpRoot, 'durable.json');
+      const calls = [];
+      fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+        calls.push(['writeFile', options?.flush]);
+        return realFsPromises.writeFile(path, data, options);
+      });
+      fsPromises.rename.mockImplementationOnce(async (...args) => {
+        calls.push(['rename']);
+        return realFsPromises.rename(...args);
+      });
+      fsPromises.open.mockImplementationOnce(async (path, flags) => {
+        const handle = await realFsPromises.open(path, flags);
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { calls.push(['dirSync', path]); return sync(); };
+        return handle;
+      });
+
+      await atomicWrite(target, { durable: true });
+
+      expect(calls).toEqual([['writeFile', true], ['rename'], ['dirSync', tmpRoot]]);
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ durable: true });
+    });
+
+    it('keeps a published write when the directory cannot be fsynced, warning once per directory', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const target = join(tmpRoot, 'netfs.json');
+        const failure = Object.assign(new Error('synthetic directory fsync failure'), { code: 'EINVAL' });
+        fsPromises.open.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+
+        await atomicWrite(target, { v: 1 });
+        await atomicWrite(target, { v: 2 });
+
+        expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('EINVAL');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('removes a partially written temp file after ENOSPC and allows a later retry', async () => {
       const target = join(tmpRoot, 'state.json');
       writeFileSync(target, 'original');
@@ -1511,6 +1558,18 @@ describe('Windows swap-window retries (#4095)', () => {
   });
 
   describe('atomicWrite', () => {
+    it('fsyncs the temp file but skips the directory sync, which Windows cannot open a handle for (#12025)', async () => {
+      const target = join(tmpRoot, 'state.json');
+      fakePlatform('win32');
+      fsPromises.open.mockClear();
+
+      await atomicWrite(target, { v: 1 });
+
+      expect(fsPromises.writeFile).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ flush: true }));
+      expect(fsPromises.open).not.toHaveBeenCalled();
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
+    });
+
     it('retries the atomic rename on a transient lock instead of opening the destination-missing window', async () => {
       const target = join(tmpRoot, 'state.json');
       writeFileSync(target, JSON.stringify({ v: 1 }));
