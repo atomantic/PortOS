@@ -76,4 +76,10 @@ describe('isOwnerAlive', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     expect(isOwnerAlive({ pid: process.pid, startMs: 1 })).toBe(true);
   });
+
+  it('treats a zombie process as dead', () => {
+    if (process.platform === 'win32') return;
+    const exec = () => 'Z+   Sun Oct 18 02:55:38 2026\n';
+    expect(isOwnerAlive({ pid: process.pid, startMs: Date.now() }, { exec })).toBe(false);
+  });
 });

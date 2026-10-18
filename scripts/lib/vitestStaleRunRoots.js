@@ -27,21 +27,34 @@ export function writeOwnerFile(root) {
   writeFileSync(join(root, OWNER_FILE), `${process.pid} ${startMs}\n`);
 }
 
-/** Start time of a live pid in ms, or null when it cannot be read (always null on win32). */
-function readProcessStartMs(pid) {
+/** Process state and start time of a live pid, or null when it cannot be read (always null on win32). */
+function readProcessInfo(pid, { exec = execFileSync } = {}) {
   if (process.platform === 'win32') return null;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const out = exec('ps', ['-o', 'stat=,lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: { ...process.env, LC_ALL: 'C' },
     }).trim();
-    const ms = Date.parse(out);
-    return Number.isNaN(ms) ? null : ms;
+    if (!out) return null;
+    const match = /^(\S+)\s+(.+)$/.exec(out);
+    if (!match) return null;
+    const stat = match[1];
+    const ms = Date.parse(match[2].trim());
+    return {
+      zombie: stat.startsWith('Z'),
+      startMs: Number.isNaN(ms) ? null : ms,
+    };
   } catch {
     return null;
   }
+}
+
+/** Start time of a live pid in ms, or null when it cannot be read or is a zombie. */
+function readProcessStartMs(pid, options) {
+  const info = readProcessInfo(pid, options);
+  return info?.zombie ? null : (info?.startMs ?? null);
 }
 
 /**
@@ -49,14 +62,23 @@ function readProcessStartMs(pid) {
  * `process.kill(pid, 0)` throws ESRCH for a missing pid and EPERM for a live
  * pid owned by someone else (alive).
  */
-export function isOwnerAlive({ pid, startMs }) {
+export function isOwnerAlive({ pid, startMs }, { exec = execFileSync } = {}) {
   try {
     process.kill(pid, 0);
   } catch (err) {
     if (err.code === 'ESRCH') return false;
     if (err.code !== 'EPERM') return null;
   }
-  const liveStart = readProcessStartMs(pid);
+  const info = readProcessInfo(pid, { exec });
+  if (info?.zombie) return false;
+  if (!info && process.platform !== 'win32') {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      if (err.code === 'ESRCH') return false;
+    }
+  }
+  const liveStart = info?.startMs ?? null;
   if (liveStart === null || !Number.isFinite(startMs)) return true;
   return Math.abs(liveStart - startMs) <= START_TOLERANCE_MS;
 }

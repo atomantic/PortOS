@@ -695,6 +695,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
         killProcessTree({ pid: doomedPids.group }, 'SIGKILL', { processGroup: true });
       }
       await doomed.closed;
+      await waitFor(() => !alive(doomed.child.pid), 'doomed launcher survived SIGKILL');
       expect(existsSync(deadRoot)).toBe(true);
       const next = launch(host, 'success');
       runs.push(next);
