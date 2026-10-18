@@ -236,20 +236,48 @@ export function preserveAutomatedShotLocks(before, after, source) {
   const locks = shotLocks(before) || {};
   const locked = (before.scenes || []).filter(scene => locks[scene.sceneId] === 'locked');
   if (!locked.length) return { project: after, rejected: false };
+  const textId = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const isAllowedStillFill = (scene, proposed) => {
+    if (source !== 'generation-completion' || !proposed) return false;
+    const refBefore = textId(scene.referenceImageId);
+    const refAfter = textId(proposed.referenceImageId);
+    const endBefore = textId(scene.endImageId);
+    const endAfter = textId(proposed.endImageId);
+    const fillsRef = !refBefore && Boolean(refAfter);
+    const fillsEnd = !endBefore && Boolean(endAfter);
+    if (!fillsRef && !fillsEnd) return false;
+    if (refBefore && refBefore !== refAfter) return false;
+    if (endBefore && endBefore !== endAfter) return false;
+    const synthetic = { ...scene, referenceImageId: proposed.referenceImageId, endImageId: proposed.endImageId };
+    return shotApprovalBasis(before, synthetic) === shotApprovalBasis(after, proposed);
+  };
   const rejected = locked.filter(scene => {
     const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
     // Repair notes feed generation too, but stay outside the persisted approval
     // hash so existing shot locks keep their cross-version meaning.
     const repairBasis = shot => hash({ stillFixes: shot.stillFixes, clipFixes: shot.clipFixes });
-    return !proposed || shotApprovalBasis(before, scene) !== shotApprovalBasis(after, proposed)
-      || repairBasis(scene) !== repairBasis(proposed)
-      || (clipLocked(before, scene.sceneId) && proposed.videoHistoryId !== scene.videoHistoryId);
+    if (!proposed) return true;
+    if (repairBasis(scene) !== repairBasis(proposed)) return true;
+    if (clipLocked(before, scene.sceneId) && proposed.videoHistoryId !== scene.videoHistoryId) return true;
+    if (shotApprovalBasis(before, scene) === shotApprovalBasis(after, proposed)) return false;
+    return !isAllowedStillFill(scene, proposed);
   });
   // Materialize legacy whole-board locks before an open shot's edit can stale
   // that approval. No new approval is granted: these shots were already locked.
+  // When a generated still fills an empty slot on a locked shot, re-bind that
+  // shot's lock to the new basis so it stays locked.
   const shotApprovals = { ...after.productionReview?.shotApprovals };
-  for (const scene of locked) shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
-    || stillLock(before, scene, { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true });
+  for (const scene of locked) {
+    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
+    const priorApproval = before.productionReview?.shotApprovals?.[scene.sceneId]
+      || { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true };
+    if (!rejected.length && proposed && isAllowedStillFill(scene, proposed)) {
+      shotApprovals[scene.sceneId] = stillLock(after, proposed, priorApproval);
+    } else {
+      shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
+        || stillLock(before, scene, priorApproval);
+    }
+  }
   let next = { ...after, productionReview: { ...after.productionReview, shotApprovals } };
   if (!rejected.length) return { project: next, rejected: false };
   // A merge/re-plan may replace IDs or spans. Refuse the whole board mutation
