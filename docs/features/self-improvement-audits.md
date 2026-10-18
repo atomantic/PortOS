@@ -100,7 +100,7 @@ the operator's live checkout.
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 | `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
 | `infrastructure` | Deployment, container, IaC and CI configuration | `infrastructure` | file | |
-| `data-integrity` | Ingestion, idempotency, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
+| `data-integrity` | Ingestion, idempotency, lost updates, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
 | `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
 | `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
 | `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
@@ -121,7 +121,19 @@ problem:
 - **Duplication is split two ways.** `simplify` owns copy-paste and dead code.
   `better-structural-drift` owns a derived artifact or hand-synced registry acting
   as a second source of truth, which is a different fix (derive it, or add the
-  parity check).
+  parity check). It also owns **behaviour twins** — two code paths implementing
+  one concern for different callers (an operator lane and an unattended lane, a
+  modal and a drawer) where a guard or contract check landed in only one; the
+  proof is `git log -S` on the one-sided fix, and the resolution is a shared
+  primitive or a parity test, never a copied patch (#12092). File splits and
+  responsibility boundaries stay with `module-hygiene`, which `simplify` cedes
+  by name (#12083).
+- **Read-modify-write races have one owner.** `data-integrity` owns lost
+  updates and read-modify-write races on a persisted record or file;
+  `data-safety` and `better-runtime-safety` cede them by name, and runtime-safety
+  keeps only check-then-act races on in-memory module state (#12082).
+  `error-handling` likewise cedes sensitive detail leaking through an error path
+  to `privacy` and partial writes to `data-integrity` (#12086).
 - **Defects are split four ways.** `better-runtime-safety` reads source for
   latent defects; `console-errors` collects what actually errors at runtime;
   `error-handling` owns the failure path once something goes wrong; and
@@ -163,7 +175,11 @@ characters and hyphens.
 `fileIssues` decides the deliverable, and the banner injected at
 `{modeInstructions}` is what enforces it — overriding any instruction in the
 body. In file-issues mode the dispatch also stamps `noCodeOutput`, so a run that
-produces no diff is not scored as a failure.
+produces no diff is not scored as a failure. The banners also own the rules
+every lane shares — redact before publishing (`AUDIT_REDACTION_RULE`), read the
+repository's `AGENTS.md` first, and, in do-work mode only, resolve every
+accepted finding — so a mission body never restates them; `auditCatalog.test.js`
+fails on a restatement (#12080).
 
 Findings go to whichever tracker the app resolves to — a `PLAN.md` checklist
 item, a GitHub or GitLab issue, or a JIRA ticket — via `{trackerInstructions}`.

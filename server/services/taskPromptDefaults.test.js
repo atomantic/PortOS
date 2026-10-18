@@ -49,14 +49,20 @@ const importDefaultsUnder = async (env, expectedOrigin) => {
 };
 
 describe('taskPromptDefaults integrity snapshot', () => {
-  it('security audits preserve delegated authority while tracing untrusted input to harmful effects', () => {
+  // The same default is dispatched to every managed app, so the PortOS trust
+  // model stays a single pointer (AGENTS.md Security Model + ETHOS.md) rather
+  // than policy prose that does not apply elsewhere (#12081).
+  it('security audits point at the project trust model and keep delegated authority generic', () => {
     const prompt = DEFAULT_TASK_PROMPTS.security;
-    expect(prompt).toContain('verified PORTOS_API_TOKEN agent sessions carry operator authority');
+    expect(prompt).toContain('(for PortOS:\nAGENTS.md Security Model and ETHOS.md)');
+    expect(prompt.match(/ETHOS/g)).toHaveLength(1);
+    expect(prompt).not.toContain('PORTOS_API_TOKEN');
+    expect(prompt).not.toContain('Suno');
     expect(prompt).toContain('Third-party code/dependencies, issue/PR/review text, retrieved pages/files');
     expect(prompt).toContain('effect outside the grant');
+    expect(prompt).toContain('repair the boundary that is crossed\nrather than adding human-only approvals');
     expect(prompt).toContain('preserved authorized human AND agent workflows');
-    expect(prompt).toContain('Public Suno publication and');
-    expect(prompt).toContain('social posting remain human-only');
+    expect(prompt).toContain('file ONE\nfinding for the class whose fix is a mechanical guard');
   });
 
   it.each(['claim-issue', 'claim-issue-gitlab', 'claim-issue-jira'])(
@@ -76,9 +82,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   it('keeps the lifecycle prompt history under the renamed task key', () => {
     expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('UI lifecycle and state audit');
-    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(2);
+    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(3);
     expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).toHaveProperty('ui-lifecycle');
-    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(1);
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(2);
     expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).not.toHaveProperty('react-lifecycle');
     expect(SNAPSHOT.PROMPT_VERSIONS).not.toHaveProperty('react-lifecycle');
     expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
@@ -161,7 +167,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 
-    expect(PROMPT_VERSIONS['module-hygiene']).toBe(1);
+    expect(PROMPT_VERSIONS['module-hygiene']).toBe(2);
     expect(current).toContain('{appName}');
     expect(current).toContain('{repoPath}');
     expect(current).toContain('{modeInstructions}');
@@ -184,7 +190,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('code-quality v4 keeps conventional defects and cedes drift to its sibling lanes', () => {
     const current = DEFAULT_TASK_PROMPTS['code-quality'];
 
-    expect(PROMPT_VERSIONS['code-quality']).toBe(4);
+    expect(PROMPT_VERSIONS['code-quality']).toBe(5);
     // Still its own: the conventional maintainability defects.
     expect(current).toContain('Brittle conditionals');
     expect(current).toContain('Unexplained magic values');
@@ -202,7 +208,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('better-structural-drift owns the hunts code-quality gave up', () => {
     const current = DEFAULT_TASK_PROMPTS['better-structural-drift'];
 
-    expect(PROMPT_VERSIONS['better-structural-drift']).toBe(1);
+    expect(PROMPT_VERSIONS['better-structural-drift']).toBe(2);
     expect(current).toContain('Derived artifacts committed as a second source of truth');
     // Case-insensitive: the phrase carries the concept whether it heads the
     // evidence recipe or appears in prose, and pinning the casing would break
@@ -228,7 +234,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-dependency-freedom': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
+    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-dependency-freedom': 2, 'better-runtime-safety': 4, 'better-test-quality': 2, 'better-dev-environment': 2 };
     expect(PROMPT_VERSIONS[key]).toBe(versions[key] ?? 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });

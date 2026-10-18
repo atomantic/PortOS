@@ -41,6 +41,13 @@ const filing = ({ slugPrefix, label, issueLabel, labelDescription, noun }) => {
 };
 
 /**
+ * The one redaction rule every audit dispatch carries. Both mode banners own
+ * it; a mission body must not restate it (auditCatalog.test.js, #12080) — the
+ * same goes for "read AGENTS.md first", which the banners also own.
+ */
+export const AUDIT_REDACTION_RULE = 'Never paste a secret, credential, token, hostname, IP address, account id, absolute path containing a username, or any personal record into a title or body — describe its shape and location instead.';
+
+/**
  * The half of every audit dispatch that is about HOW to run, not WHAT to
  * look for. Injected at generation time so a customized stored prompt still
  * honors the chosen mode — this banner overrides any later "fix and commit"
@@ -51,8 +58,6 @@ export const FILE_ISSUES_MODE_CONTRACT = `## Mode: file issues, change nothing
 This banner OVERRIDES any later instruction to edit source, commit, open a PR, create a branch, or \`git checkout\`/\`switch\`. You are standing in the user's live checkout of this repository — an edit or a branch change is felt immediately by whoever is working in it.
 
 Your deliverable is tracker items, not code. The run must end with the same \`git status\` and the same branch it started on.
-
-Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
 
 ## Where to record findings
 
@@ -69,7 +74,7 @@ Every accepted finding requires resolution regardless of severity; warnings and 
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
-6. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
+6. **Redact before you publish.** An issue is world-readable the moment it is filed. ${AUDIT_REDACTION_RULE}
 7. **Report at the end**: the slice and paths reviewed, each item you filed, candidates you deliberately did not file and why, any unreviewed inventory, and the reason you stopped.
 
 Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering the slice) before you start, and honor its conventions and its explicitly declared non-issues.`;
@@ -86,7 +91,7 @@ This banner OVERRIDES any later instruction to stop after one fix, forbid deferr
 
 Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
 
-Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
+Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. Redact before you publish — a filed item is world-readable the moment it lands. ${AUDIT_REDACTION_RULE} A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
 
 ## Where to track deferred findings
 
