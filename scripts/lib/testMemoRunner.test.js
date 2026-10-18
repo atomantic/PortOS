@@ -140,16 +140,17 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null }).skipped).toEqual([]);
   });
 
-  it('hashes the root-relative path with the platform\'s own separator, like Vitest', () => {
-    // POSIX: `/lib/x.test.js`; Windows: `\\lib\\x.test.js` (path.resolve builds a backslash path).
+  it('hashes the forward-slashed root-relative path on every platform, like Vitest', () => {
+    // pathe's resolve slashes before the slice, so a Windows root yields the same tail as a POSIX one.
     expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('/lib/x.test.js');
     expect(vitestShardHashInput('scripts/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('s/x.test.js');
-    expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('\\lib\\x.test.js');
-    expect(vitestShardHashInput('scripts/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('s\\x.test.js');
-    // The two separators hash differently, so a slice computed for the other platform is not this platform's slice.
+    expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('/lib/x.test.js');
+    expect(vitestShardHashInput('scripts/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('s/x.test.js');
+    // So the partition is the same on both platforms for the same repository layout.
     const files = ['server/lib/a.test.js', 'server/lib/b.test.js', 'server/lib/c.test.js', 'scripts/d.test.js', 'scripts/e.test.js'];
     const slices = (path, repoRoot) => [1, 2].map((index) => vitestShardSlice(files, { repoRoot, scope: 'server', index, count: 2, path }));
-    for (const [a, b] of [slices(posix, '/repo'), slices(win32, 'D:\\a\\repo')]) expect([...a, ...b].sort()).toEqual([...files].sort());
+    expect(slices(win32, 'D:\\a\\repo')).toEqual(slices(posix, '/repo'));
+    expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
   });
 
   it('slices shards exactly like Vitest\'s sequencer', () => {
