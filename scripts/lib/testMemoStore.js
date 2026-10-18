@@ -26,6 +26,9 @@ import { join } from 'node:path';
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
 
+/** An entry older than this is a miss, so the nightly re-verifies what it keeps skipping. */
+export const MAX_ENTRY_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
 /** Where the store lives for `env`, or null when the memo is disabled. */
 export function resolveMemoDir(env = process.env, home = homedir()) {
   if (env.PORTOS_TEST_MEMO === 'off') return null;
@@ -53,11 +56,13 @@ function writeJsonAtomic(path, value) {
   }
 }
 
-/** The green entry for `key` when it names `test` in `workspace`; null on any miss or corruption. */
-export function readMemoEntry(dir, key, { test, workspace }) {
+/** The green entry for `key` when it names `test` in `workspace` and is young enough; null on any miss or corruption. */
+export function readMemoEntry(dir, key, { test, workspace, now = Date.now() }) {
   if (!dir || !KEY_PATTERN.test(String(key))) return null;
   const entry = readJson(entryPath(dir, key));
   if (!entry || entry.test !== test || entry.workspace !== workspace || typeof entry.verifiedAt !== 'string') return null;
+  const age = now - Date.parse(entry.verifiedAt);
+  if (!Number.isFinite(age) || age < 0 || age > MAX_ENTRY_AGE_MS) return null;
   return entry;
 }
 
