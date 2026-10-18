@@ -38,6 +38,7 @@ import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
+import socket from '../services/socket';
 import { previewImagePrompt } from '../services/apiImageVideo';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
@@ -60,6 +61,8 @@ import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
+import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
+import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
@@ -178,6 +181,8 @@ export default function CatalogIngredient() {
   const [record, setRecord] = useState(null);
   const [mergeVersion, setMergeVersion] = useState(0);
   const [mergeBusy, setMergeBusy] = useState(false);
+  const identityReadOnly = record?.sharedIdentity?.writable === false;
+  const identityReason = identityReadOnly ? 'This shared identity is read-only here. Inspect its ownership notice and agreement.' : null;
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [tags, setTags] = useState([]);
@@ -225,7 +230,7 @@ export default function CatalogIngredient() {
           return;
         }
         const r = d.ingredient;
-        setRecord({ ...r, refs: d.refs, sources: d.sources });
+        setRecord({ ...r, refs: d.refs, sources: d.sources, sharedIdentity: d.sharedIdentity || null });
         setName(r.name || '');
         setTags(Array.isArray(r.tags) ? r.tags : []);
         setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
@@ -247,10 +252,30 @@ export default function CatalogIngredient() {
     return () => { cancelled = true; };
   }, [id, navigate, backPath, mergeVersion]);
 
+  // Keep ownership fences current without discarding an unsaved creative draft.
+  // The original route ID is intentional: a retained-source URL must stay read-only.
+  useEffect(() => {
+    let active = true;
+    let request = 0;
+    const refreshIdentity = () => {
+      const current = ++request;
+      getCatalogIngredientDetails(id, { silent: true }).then(details => {
+        if (!active || current !== request || !details?.ingredient) return;
+        setRecord(previous => previous ? { ...previous, sharedIdentity: details.sharedIdentity || null } : previous);
+      }).catch(() => { if (active) toast.error('Unable to refresh shared identity status. Reload before editing.'); });
+    };
+    const changed = event => {
+      if ([event?.sourceId, event?.survivorId].includes(id)) refreshIdentity();
+    };
+    socket.on('catalog:identity-changed', changed);
+    socket.on('connect', refreshIdentity);
+    return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('connect', refreshIdentity); };
+  }, [id]);
+
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
   const handleAddRelation = async (target, kind) => {
-    if (!record || !target?.id) return;
+    if (!record || identityReadOnly || !target?.id) return;
     if (target.id === record.id) { toast.error('Cannot relate an ingredient to itself'); return; }
     const ok = await linkCatalogIngredientRelation(record.id, { toId: target.id, kind }, { silent: true })
       .then(() => true)
@@ -274,7 +299,7 @@ export default function CatalogIngredient() {
   // Remove an outbound edge. Inbound edges are owned by the OTHER ingredient,
   // so the panel only deletes outbound ones (filter is by toId + kind).
   const handleRemoveRelation = async (toId, kind) => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     const ok = await unlinkCatalogIngredientRelation(record.id, { toId, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to remove relation'); return false; });
@@ -304,7 +329,7 @@ export default function CatalogIngredient() {
   // to 'reference' for drag-drop / picker; the "set portrait" path routes
   // through handleSetPortrait instead. Optimistic — prepend then reconcile.
   const handleAttachMedia = async (mediaKey, kind = 'reference') => {
-    if (!record || !mediaKey) return;
+    if (!record || identityReadOnly || !mediaKey) return;
     const ok = await attachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to attach media'); return false; });
@@ -314,7 +339,7 @@ export default function CatalogIngredient() {
   };
 
   const handleSetPortrait = async (mediaKey) => {
-    if (!record || !mediaKey) return;
+    if (!record || identityReadOnly || !mediaKey) return;
     const ok = await setCatalogIngredientPortrait(record.id, { mediaKey }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
@@ -324,7 +349,7 @@ export default function CatalogIngredient() {
   };
 
   const handleDetachMedia = async (mediaKey, kind) => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     const ok = await detachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to detach media'); return false; });
@@ -336,7 +361,7 @@ export default function CatalogIngredient() {
   // it onto this ingredient. First image becomes the portrait (so it shows as
   // the card thumbnail immediately); later ones attach as references.
   const handleGeneratedImage = useCallback(async (filename) => {
-    if (!record || !filename) return;
+    if (!record || identityReadOnly || !filename) return;
     const hasPortrait = media.some((m) => m.kind === 'portrait');
     const ok = await (hasPortrait
       ? attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference' }, { silent: true })
@@ -345,13 +370,13 @@ export default function CatalogIngredient() {
     if (!ok) return;
     refreshMedia();
     toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
-  }, [record, media, refreshMedia]);
+  }, [record, media, refreshMedia, identityReadOnly]);
 
   // Upload a dropped/picked file straight onto the ingredient. The server picks
   // the media kind (image→reference, audio, video) from the MIME and stores the
   // bytes in the matching federating library dir. Reconcile via refreshMedia.
   const handleUploadFile = useCallback(async (file) => {
-    if (!record || !file) return false;
+    if (!record || identityReadOnly || !file) return false;
     try {
       const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
       await uploadCatalogIngredientMediaFile(
@@ -366,12 +391,12 @@ export default function CatalogIngredient() {
       toast.error(err?.message || 'Upload failed');
       return false;
     }
-  }, [record, refreshMedia]);
+  }, [record, refreshMedia, identityReadOnly]);
 
   // Attach a recorded voice memo — the server transcribes it via Whisper and
   // stores the transcript in the audio row's caption.
   const handleRecordVoiceMemo = useCallback(async (clip) => {
-    if (!record || !clip?.audioBase64) return;
+    if (!record || identityReadOnly || !clip?.audioBase64) return;
     const ok = await recordCatalogIngredientVoiceMemo(
       record.id,
       { audioBase64: clip.audioBase64, mimeType: clip.mimeType },
@@ -380,13 +405,13 @@ export default function CatalogIngredient() {
     if (!ok) return;
     refreshMedia();
     toast.success('Voice memo attached');
-  }, [record, refreshMedia]);
+  }, [record, refreshMedia, identityReadOnly]);
 
   // Re-attach an existing media row under a new role (mark/unmark a plate, add
   // an image to a look). The attach endpoint upserts role/caption on the
   // (ingredient, key, kind) row, so the caption is passed back unchanged.
   const handleSetMediaRole = useCallback(async (m, role, message) => {
-    if (!record || !m?.mediaKey) return false;
+    if (!record || identityReadOnly || m?.readOnly || !m?.mediaKey) return false;
     const updated = await attachCatalogIngredientMedia(
       record.id,
       { mediaKey: m.mediaKey, kind: m.kind, role, caption: m.caption ?? null },
@@ -398,26 +423,26 @@ export default function CatalogIngredient() {
     )));
     toast.success(message || (role ? 'Marked as plate' : 'Plate unmarked'));
     return true;
-  }, [record]);
+  }, [record, identityReadOnly]);
 
   // A finished catalog-only sheet render: attach it under its `sheet:<variant>`
   // role right away (the server-side attach hook files the same row and is
   // idempotent against this), then reconcile the media list.
   const handleSheetFile = useCallback(async (filename, role, readyMessage = 'Reference sheet ready') => {
-    if (!record || !filename) return;
+    if (!record || identityReadOnly || !filename) return;
     const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference', role }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to attach the rendered image'); return false; });
     refreshMedia();
     if (ok) toast.success(readyMessage);
-  }, [record, refreshMedia]);
+  }, [record, refreshMedia, identityReadOnly]);
   const handleLookFile = useCallback((filename, role) => handleSheetFile(filename, role, 'Look ready'), [handleSheetFile]);
 
   // Save the Looks tab's wardrobe list straight onto the SAVED payload, then
   // copy just `wardrobes` into the draft so unsaved profile edits stay intact
   // and exactly as dirty as they were.
   const handleSaveWardrobes = useCallback(async (wardrobes) => {
-    if (!record) return false;
+    if (!record || identityReadOnly) return false;
     const submittedId = record.id;
     const nextPayload = { ...ingredientPayload(record.payload), wardrobes };
     setLookSaving(true);
@@ -430,7 +455,7 @@ export default function CatalogIngredient() {
     setPayload((cur) => ({ ...cur, wardrobes: persisted.wardrobes }));
     refreshRevisions();
     return true;
-  }, [record, refreshRevisions]);
+  }, [record, refreshRevisions, identityReadOnly]);
 
   // A universe-delegated sheet landed as a canon pointer, which the canon→catalog
   // projection already copied onto this row. Pull just the pointer fields into
@@ -457,7 +482,7 @@ export default function CatalogIngredient() {
   }, [id]);
 
   const handleSave = async () => {
-    if (!record || unlocking) return;
+    if (!record || identityReadOnly || unlocking) return;
     const submittedId = record.id;
     const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
@@ -500,7 +525,7 @@ export default function CatalogIngredient() {
   };
 
   const handleRestore = async (revisionId) => {
-    if (!record) return false;
+    if (!record || identityReadOnly) return false;
     const updated = await restoreCatalogIngredientRevision(record.id, revisionId, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Restore failed'); return null; });
     if (!updated) return false;
@@ -516,7 +541,7 @@ export default function CatalogIngredient() {
   };
 
   const confirmDelete = async () => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     setArmedDelete(false);
     const ok = await deleteCatalogIngredient(record.id, { silent: true })
       .then(() => true)
@@ -607,6 +632,7 @@ export default function CatalogIngredient() {
   const wardrobes = record.type === 'character' && Array.isArray(ingredientPayload(record.payload).wardrobes)
     ? record.payload.wardrobes
     : [];
+  const protectMedia = (item) => ({ ...item, readOnly: identityReadOnly || item.retained === true || !!record.sharedIdentity && (item.ingredientId === record.sharedIdentity.sourceId || item.role?.startsWith('archive:identity')) });
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
   const coverUrl = ingredientCoverUrl({
@@ -614,7 +640,7 @@ export default function CatalogIngredient() {
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || record.thumbnailKey,
     payload,
   }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey });
-  const renderBlockedReason = (subject) => (record.payload?.locked === true
+  const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving
     ? `Saving — the ${subject} renders from the saved record.`
@@ -653,7 +679,7 @@ export default function CatalogIngredient() {
             <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -670,7 +696,7 @@ export default function CatalogIngredient() {
             {armedDelete ? (
               <span className="inline-flex items-center gap-1 text-sm">
                 <span className="text-gray-400 px-1">Delete this ingredient?</span>
-                <button type="button" onClick={confirmDelete}
+                <button type="button" onClick={confirmDelete} disabled={identityReadOnly}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-port-error/20 text-port-error hover:bg-port-error/30 font-medium">
                   <Trash2 size={14} aria-hidden="true" /> Yes, delete
                 </button>
@@ -680,7 +706,7 @@ export default function CatalogIngredient() {
                 </button>
               </span>
             ) : (
-              <button type="button" onClick={() => setArmedDelete(true)}
+              <button type="button" onClick={() => setArmedDelete(true)} disabled={identityReadOnly}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-400 hover:text-port-error"
                 aria-label="Delete ingredient" title="Delete">
                 <Trash2 size={14} /> Delete
@@ -688,6 +714,8 @@ export default function CatalogIngredient() {
             )}
           </div>
         </header>
+
+        <CatalogIdentityNotice identity={record.sharedIdentity} type={record.type} />
 
         {tabs && (
           <TabPills
@@ -710,7 +738,7 @@ export default function CatalogIngredient() {
                     <figcaption className="text-xs text-gray-400 p-2">Cover image · select to enlarge</figcaption>
                   </figure>
                 )}
-                <div className="min-w-0 space-y-4">
+                <fieldset disabled={identityReadOnly} className="min-w-0 space-y-4">
                   <div>
                     <label htmlFor="ingredient-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
                     <input id="ingredient-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={200}
@@ -723,9 +751,9 @@ export default function CatalogIngredient() {
                     <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
                       placeholder="mentor, antagonist, season-1" />
                   </div>
-                </div>
+                </fieldset>
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+              <fieldset disabled={identityReadOnly} className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
                 {isUserType
                   ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
                   : sections
@@ -737,14 +765,14 @@ export default function CatalogIngredient() {
                       <SheetField key={key} fieldKey={key} label={label} kind={kind}
                         value={payload[key] ?? ''} onChange={updatePayload} />
                     ))}
-              </div>
+              </fieldset>
 
               {/* Structured array-field editors (aliases / color palette / stats).
                   Driven by the type's registry-declared `editableListFields`; the
                   same durable catalog row the Universe Builder canon surface edits.
                   Light/user types declare none and skip this entirely. */}
               {!isUserType && Array.isArray(typeDef.editableListFields) && typeDef.editableListFields.length > 0 && (
-                <EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} />
+                <fieldset disabled={identityReadOnly}><EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} /></fieldset>
               )}
             </div>
 
@@ -772,6 +800,7 @@ export default function CatalogIngredient() {
               record={record}
               relations={relations}
               evidence={payload?.evidence}
+              readOnly={identityReadOnly} retainedSourceId={record.sharedIdentity?.sourceId}
               onAdd={handleAddRelation}
               onRemove={handleRemoveRelation}
             />
@@ -779,7 +808,7 @@ export default function CatalogIngredient() {
         )}
 
         <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
-          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving} onPendingChange={setUnlocking}
+          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || identityReadOnly} onPendingChange={setUnlocking}
             onUnlocked={(updated) => {
               setRecord((current) => current?.id === updated.id
                 ? { ...current, updatedAt: updated.updatedAt, payload: { ...current.payload, locked: false } } : current);
@@ -792,9 +821,9 @@ export default function CatalogIngredient() {
             ingredientId={record.id}
             payload={payload}
             universeRef={universeRef}
-            sheetMedia={media.filter(isSheetMedia)}
+            sheetMedia={media.filter(isSheetMedia).map(protectMedia)}
             missingMedia={missingMedia}
-            onDetach={handleDetachMedia}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
             blockedReason={renderBlockedReason('sheet')}
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
@@ -806,39 +835,40 @@ export default function CatalogIngredient() {
           <CatalogLooksPanel
             ingredientId={record.id}
             wardrobes={wardrobes}
-            lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m)))}
-            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m))}
+            lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
             missingMedia={missingMedia}
-            editLocked={saving || unlocking}
+            editLocked={saving || unlocking || identityReadOnly}
             blockedReason={renderBlockedReason('look')}
             savedStamp={record.updatedAt || null}
             onSaveWardrobes={handleSaveWardrobes}
-            onSetRole={handleSetMediaRole}
-            onDetach={handleDetachMedia}
+            onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
             onLookFile={handleLookFile}
           />
         )}
 
         {activeTab === 'plates' && (
           <CatalogPlatesPanel
-            plates={media.filter(isPlateMedia)}
-            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m))}
+            plates={media.filter(isPlateMedia).map(protectMedia)}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
             missingMedia={missingMedia}
-            onSetRole={handleSetMediaRole}
-            onDetach={handleDetachMedia}
+            onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
           />
         )}
 
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
-            media={tabs ? media.filter(isReferenceTabRow) : media}
+            readOnly={identityReadOnly}
+            media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
             primaryImageRef={payload.primaryImageRef}
             missingMedia={missingMedia}
             onAttach={handleAttachMedia}
             onSetPortrait={handleSetPortrait}
-            onDetach={handleDetachMedia}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
             onUploadFile={handleUploadFile}
             onRecordVoice={handleRecordVoiceMemo}
             genIngredientId={record.id}
@@ -861,12 +891,18 @@ export default function CatalogIngredient() {
 
         {activeTab === 'profile' && (
           <CatalogMergePanel record={record}
-            disabledReason={saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before consolidating.' : null}
+            disabledReason={identityReason || (saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before consolidating.' : null)}
             onPendingChange={setMergeBusy} onChanged={() => setMergeVersion((version) => version + 1)} />
         )}
 
+        {activeTab === 'profile' && <CatalogIdentityPanel record={record}
+          disabledReason={saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before managing identity.' : null}
+          onPendingChange={setMergeBusy} onChanged={() => setMergeVersion((version) => version + 1)} />}
+
         {activeTab === 'profile' && (
           <RevisionsPanel
+            readOnly={identityReadOnly}
+            retainedSourceId={record.sharedIdentity?.sourceId}
             revisions={revisions}
             current={record}
             fields={fields}
@@ -1082,7 +1118,7 @@ function StatListEditor({ field, value, onChange }) {
 // "Relations" panel — ingredient↔ingredient edges. Outbound edges (this
 // ingredient → other) are user-editable here; inbound edges (other → this
 // ingredient) are read-only because the owning ingredient is the other end.
-function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
+function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly = false, retainedSourceId }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [kind, setKind] = useState(RELATION_KINDS[0].id);
   const [armedRelation, setArmedRelation] = useState(null);
@@ -1116,11 +1152,11 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
         <h2 className="text-sm font-semibold text-white">Relations</h2>
         <div className="flex items-center gap-2">
           <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
-          <select id="relation-kind" value={kind} onChange={(e) => setKind(e.target.value)}
+          <select id="relation-kind" disabled={readOnly} value={kind} onChange={(e) => setKind(e.target.value)}
             className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
             {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
-          <button type="button" onClick={() => setPickerOpen(true)}
+          <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">
             <Plus size={12} aria-hidden="true" /> Add relation
           </button>
@@ -1148,7 +1184,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
                         {chip(r.other)}
-                        {armedRelation === relationKey ? (
+                        {!readOnly && !(retainedSourceId && [r.fromId, r.toId].includes(retainedSourceId)) && (armedRelation === relationKey ? (
                           <ConfirmButtonPair
                             prompt="Remove?"
                             confirmText="Remove"
@@ -1169,8 +1205,9 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
                             className="text-gray-500 hover:text-port-error">
                             <X size={12} aria-hidden="true" />
                           </button>
-                        )}
+                        ))}
                       </div>
+                      {retainedSourceId && [r.fromId, r.toId].includes(retainedSourceId) && <p className="text-xs text-gray-500">Retained source relation · read-only</p>}
                       {evidenceSnippet && (
                         <p className="text-[11px] text-gray-400 italic pl-3 border-l border-port-border">
                           “{evidenceSnippet}”
@@ -1417,7 +1454,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1436,7 +1473,7 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
   const canonImages = [...new Set(canonImageRefs.filter((ref) => typeof ref === 'string' && ref.trim()))];
 
   const doUpload = async (file) => {
-    if (!file || busy) return;
+    if (!file || busy || readOnly) return;
     setBusy(true);
     try {
       await onUploadFile(file);
@@ -1447,6 +1484,7 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
 
   const onDrop = (e) => {
     e.preventDefault();
+    if (readOnly) return;
     setDragOver(false);
     // In-app gallery DnD: the dragged tile carries its filename as text.
     const key = (e.dataTransfer.getData('text/plain') || '').trim();
@@ -1487,7 +1525,7 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
-        <div className="flex items-center gap-2 flex-wrap">
+        {!readOnly && <div className="flex items-center gap-2 flex-wrap">
           <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
@@ -1508,10 +1546,10 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
               <Square size={12} aria-hidden="true" /> Stop &amp; transcribe
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
-      <div
+      {!readOnly && <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
@@ -1520,7 +1558,7 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
         {busy
           ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Working…</span>)
           : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
-      </div>
+      </div>}
 
       {portrait && (
         <div className="mb-3">
@@ -1783,7 +1821,7 @@ function diffRevisionAgainstCurrent(revision, current, fields) {
   return out;
 }
 
-function RevisionsPanel({ revisions, current, fields, onRestore }) {
+function RevisionsPanel({ revisions, current, fields, onRestore, readOnly = false, retainedSourceId }) {
   const [openId, setOpenId] = useState(null);
   const [restoring, setRestoring] = useState(null);
   const [pendingRestore, setPendingRestore] = useState(null);
@@ -1830,7 +1868,7 @@ function RevisionsPanel({ revisions, current, fields, onRestore }) {
                     {rev.actor && <span className="text-[10px] text-gray-500 truncate">· {rev.actor}</span>}
                     <span className="text-[10px] text-gray-500 whitespace-nowrap ml-auto">{timeAgo(rev.createdAt)}</span>
                   </button>
-                  {!isLatest && (
+                  {!isLatest && !readOnly && !(retainedSourceId && rev.ingredientId === retainedSourceId) && (
                     pendingRestore === rev.id ? (
                       <ConfirmButtonPair
                         prompt="Replace current form?"

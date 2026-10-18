@@ -42,7 +42,7 @@ describe('getIngredientTimestamps (#3941)', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].sql).toBe(
-      'SELECT requested.id, i.updated_at FROM unnest($1::text[]) AS requested(id) JOIN catalog_ingredients i ON i.id = catalog_resolve_ingredient_id(requested.id) AND i.deleted = false',
+      'SELECT requested.id, i.updated_at FROM unnest($1::text[]) AS requested(id) JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false',
     );
     expect(calls[0].params).toEqual([['ing-1', 'ing-2']]);
     expect(map.get('ing-1')).toBe('2026-02-01T00:00:00.000Z');

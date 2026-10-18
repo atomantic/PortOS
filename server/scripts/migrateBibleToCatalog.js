@@ -1,3 +1,4 @@
+import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 /**
  * Backfill embedded universe canon into the Creative Ingredients Catalog.
  *
@@ -104,6 +105,7 @@ async function promoteEntry({ universeId, universeName, entry, kind, role }) {
 
   const targetId = entry.ingredientId || deterministicIngredientId(universeId, kind, entry.id);
 
+  if (await getCatalogIdentityAccess(targetId)) return { skipped: true, reason: 'shared-identity-context' };
   const existing = await catalogDB.getIngredient(targetId);
   if (existing) {
     await catalogDB.linkIngredientToRef(targetId, 'universe', universeId, role);

@@ -44,6 +44,8 @@ export const PEER_API_SURFACE = Object.freeze([
   { path: '/api/brain/reconcile/manifest', methods: READ },
   { path: '/api/memory/sync', methods: READ },
   { path: '/api/catalog/sync', methods: READ },
+  { path: '/api/catalog/identity/peer/snapshot', methods: READ },
+  { path: '/api/catalog/identity/peer/status', methods: READ },
   { prefix: '/api/sync/', methods: READ },
   // Record push/pull (sharing/*): reads, plus the one inbound push.
   { prefix: '/api/peer-sync/', methods: READ },

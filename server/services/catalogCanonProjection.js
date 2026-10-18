@@ -40,6 +40,7 @@
  */
 
 import * as catalogDB from './catalogDB.js';
+import { getCatalogIdentityAccess } from './catalogDB/identityAccess.js';
 import { BIBLE_FIELD } from '../lib/storyBible.js';
 
 // Canon array keys, derived from the bible registry so a future kind added
@@ -90,6 +91,9 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
   if (!ingredientId || !updatedIngredient) return { universes: 0, written: 0, skipped: 0 };
 
   ingredientId = updatedIngredient.id || ingredientId;
+  // Cross-owner contextual canon stays an original snapshot. The catalog ID
+  // resolves current canon without silently rewriting a peer-owned universe.
+  if (await getCatalogIdentityAccess(ingredientId)) return { universes: 0, written: 0, skipped: 1 };
   const identityIds = new Set(await catalogDB.getIngredientIdentityIds(ingredientId));
 
   // Guard the originating ingredient so the updateUniverse → projectToCatalog

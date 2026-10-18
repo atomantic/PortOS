@@ -439,7 +439,9 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
         // pull re-request and re-apply it once the parent lands (re-applying the
         // page's already-succeeded rows is idempotent). A quiet/clean kind has
         // failed===0 and still advances normally.
-        if ((stats?.[kind]?.failed || 0) > 0) continue;
+        // A bilateral reservation has no durable row inbox. Retain this kind's
+        // cursor until it unfreezes so abort/recovery cannot lose a peer edit.
+        if ((stats?.[kind]?.failed || 0) > 0 || (stats?.[kind]?.identityPending || 0) > 0) continue;
         const v = data.maxSequences[kind];
         if (typeof v === 'string' && /^\d+$/.test(v)) catalogSeqs[kind] = v;
       }

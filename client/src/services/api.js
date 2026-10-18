@@ -20,6 +20,7 @@ export * from './apiLogs.js';
 export * from './apiCommands.js';
 export * from './apiGit.js';
 export * from './apiCatalog.js';
+export * from './apiCatalogIdentity.js';
 export * from './apiCatalogTypes.js';
 export * from './apiMedia.js';
 export * from './apiImageTo3d.js';

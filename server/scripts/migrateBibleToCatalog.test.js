@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null) }));
 /**
  * Idempotency tests for the bible→catalog backfill.
  *

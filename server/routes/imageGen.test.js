@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { resolveImageCleaners } from '../lib/imageCleanDefaults.js';
@@ -776,6 +777,13 @@ describe('Image Gen Routes', () => {
     // the page unmounts. The route collapses the raw fields into the tag and
     // drops them from params.
     describe('catalogAttach tag', () => {
+      it('refuses a retained target before provider preparation or enqueue', async () => {
+        const { assertCatalogIdentityWritable } = await import('../services/catalogDB/identityAccess.js');
+        assertCatalogIdentityWritable.mockRejectedValueOnce(Object.assign(new Error('Retained original'), { status: 409, code: 'CATALOG_IDENTITY_RETAINED' }));
+        const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'example', catalogIngredientId: 'retained-original' });
+        expect(response.status).toBe(409);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
       it('folds catalogIngredientId into a catalogAttach job tag and drops the raw field', async () => {
         getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
         mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat', position: 1, status: 'queued' });

@@ -1,3 +1,4 @@
+vi.mock('../catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { resolveLocalImageModel } = vi.hoisted(() => ({ resolveLocalImageModel: vi.fn() }));

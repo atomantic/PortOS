@@ -120,14 +120,14 @@ function LookCard({
   const role = `${LOOK_ROLE_PREFIX}${wardrobe.id}`;
 
   const setRole = async (m, nextRole, message) => {
-    if (busyKey) return;
+    if (busyKey || editLocked || !onSetRole || m.readOnly) return;
     setBusyKey(m.mediaKey);
     const ok = await onSetRole(m, nextRole, message);
     setBusyKey(null);
     if (ok && nextRole) setMode(null);
   };
   const roleButton = (m, nextRole, label, message, Icon) => (
-    <button type="button" onClick={() => setRole(m, nextRole, message)} disabled={!!busyKey}
+    <button type="button" onClick={() => setRole(m, nextRole, message)} disabled={!!busyKey || editLocked || !onSetRole || m.readOnly}
       title={label} aria-label={label}
       className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-accent disabled:opacity-50">
       {busyKey === m.mediaKey
@@ -144,10 +144,10 @@ function LookCard({
           {wardrobe.description && <p className="text-xs text-gray-400 whitespace-pre-wrap break-words mt-0.5">{wardrobe.description}</p>}
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
-          <button type="button" onClick={() => toggle('generate')} className={smallButton} aria-expanded={mode === 'generate'}>
+          <button type="button" onClick={() => toggle('generate')} disabled={editLocked} className={smallButton} aria-expanded={mode === 'generate'}>
             <Sparkles size={12} aria-hidden="true" /> Generate
           </button>
-          <button type="button" onClick={() => toggle('attach')} className={smallButton} aria-expanded={mode === 'attach'}>
+          <button type="button" onClick={() => toggle('attach')} disabled={editLocked} className={smallButton} aria-expanded={mode === 'attach'}>
             <ImagePlus size={12} aria-hidden="true" /> Attach image
           </button>
           <button type="button" onClick={() => toggle('edit')} disabled={editLocked} className={smallButton}
@@ -164,12 +164,12 @@ function LookCard({
       {mode === 'delete' && (
         <ConfirmButtonPair
           prompt={images.length ? 'Delete this look? Its images move to References.' : 'Delete this look?'}
-          confirmText="Delete look" ariaLabel={`Confirm deleting ${wardrobe.name}`} busy={savingList}
+          confirmText="Delete look" ariaLabel={`Confirm deleting ${wardrobe.name}`} busy={savingList || editLocked}
           onConfirm={async () => { if (await onDelete(wardrobe)) setMode(null); }}
           onCancel={() => setMode(null)} largeTouchTargets />
       )}
       {mode === 'edit' && (
-        <LookForm formId={`look-${wardrobe.id}`} initial={wardrobe} busy={savingList}
+        <LookForm formId={`look-${wardrobe.id}`} initial={wardrobe} busy={savingList || editLocked}
           onSubmit={async (fields) => { if (await onSave({ ...wardrobe, ...fields })) setMode(null); }}
           onCancel={() => setMode(null)} />
       )}
@@ -228,6 +228,7 @@ export default function CatalogLooksPanel({
   const candidateList = Array.isArray(candidates) ? candidates : [];
 
   const save = async (next) => {
+    if (editLocked) return false;
     setSavingList(true);
     const ok = await onSaveWardrobes(next);
     setSavingList(false);
@@ -253,9 +254,9 @@ export default function CatalogLooksPanel({
           </button>
         )}
       </div>
-      {editLocked && <p className="text-xs text-gray-500" role="status">Saving the profile — looks can be edited once it finishes.</p>}
+      {editLocked && <p className="text-xs text-gray-500" role="status">{blockedReason || 'Saving the profile — looks can be edited once it finishes.'}</p>}
       {adding && (
-        <LookForm formId="look-new" busy={savingList} onSubmit={handleAdd} onCancel={() => setAdding(false)} />
+        <LookForm formId="look-new" busy={savingList || editLocked} onSubmit={handleAdd} onCancel={() => setAdding(false)} />
       )}
       {list.length === 0 && !adding && (
         <p className="text-xs text-gray-500">No looks yet. Add one to describe an outfit, then generate or attach its images.</p>

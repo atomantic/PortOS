@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest';
 import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
 import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './db/schema/syncFeed.js';
 import { memorySearchDdl } from './db/schema/core.js';
+import { catalogIdentityDdl } from './db/schema/catalogIdentity.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -41,6 +42,8 @@ const INIT_SQL = readFileSync(join(HERE, '..', 'scripts', 'init-db.sql'), 'utf8'
 const SCHEMA_DIR = join(HERE, 'db', 'schema');
 const DB_JS = [
   readFileSync(join(HERE, 'db.js'), 'utf8'),
+  // Expand generated member triggers so parity checks their actual table targets.
+  catalogIdentityDdl.join(';\n'),
   ...readdirSync(SCHEMA_DIR)
     .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
     .map((f) => readFileSync(join(SCHEMA_DIR, f), 'utf8')),

@@ -25,6 +25,11 @@ vi.mock('../../lib/mediaModels.js', () => ({
 // createProject (via local.js) now imports catalogDB for the #1808 catalog-seed
 // path; mock it so the smoke test doesn't pull in the real Postgres/instances/
 // peer-sync chain (the smoke project passes no catalogIngredientIds).
+// Keep the new first-pass admission boundary inside the existing catalog mock.
+vi.mock('../catalogDB/identityAccess.js', () => ({
+  assertCatalogIdentityWritable: vi.fn(async id => id),
+}));
+
 vi.mock('../catalogDB.js', () => ({
   resolveIngredientsByIds: vi.fn(async () => []),
   linkIngredientsToCreativeDirector: vi.fn(async () => []),

@@ -71,7 +71,7 @@ async function lockState(client, ids, writing) {
     // Row locks alone therefore miss phantom attachments after the preview.
     // Short DB-only table locks cover those existing writers without imposing
     // a new lock protocol on every caller. No provider/file/peer work runs here.
-    await client.query(`LOCK TABLE ${Object.values(TABLES).map(([table]) => table).join(', ')}, catalog_ingredient_merges IN SHARE ROW EXCLUSIVE MODE`);
+    await client.query(`LOCK TABLE ${Object.values(TABLES).map(([table]) => table).join(', ')}, catalog_identity_operations, catalog_ingredient_merges IN SHARE ROW EXCLUSIVE MODE`);
   }
   await client.query('SELECT id FROM catalog_ingredients WHERE id = ANY($1) ORDER BY id FOR UPDATE', [ids]);
 }
@@ -87,6 +87,10 @@ export async function mergeIngredients(input) {
     const active = await client.query(`SELECT id FROM catalog_ingredient_merges
       WHERE restored_at IS NULL AND (source_id = ANY($1) OR survivor_id = ANY($1))`, [ids]);
     if (active.rowCount) fail('Recover the existing merge before merging either identity again');
+    const shared = await client.query(`SELECT id FROM catalog_identity_operations
+      WHERE state IN ('proposed', 'prepared', 'committed', 'recovery_prepared')
+        AND (source_id = ANY($1) OR survivor_id = ANY($1))`, [ids]);
+    if (shared.rowCount) fail('Complete or recover the shared identity operation before merging either identity', 'CATALOG_IDENTITY_OVERLAP');
     const before = await snapshot(client, ids);
     const source = before.ingredients.find(row => row.id === sourceId && !row.deleted);
     const survivor = before.ingredients.find(row => row.id === survivorId && !row.deleted);

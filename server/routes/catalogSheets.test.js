@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -76,6 +77,14 @@ beforeEach(() => {
 });
 
 describe('catalog sheet routes', () => {
+  it('refuses a foreign canonical target before rendering or looking up settings', async () => {
+    const { assertCatalogIdentityWritable } = await import('../services/catalogDB/identityAccess.js');
+    assertCatalogIdentityWritable.mockRejectedValueOnce(Object.assign(new Error('Canonical owner required'), { status: 409, code: 'CATALOG_IDENTITY_FOREIGN' }));
+    const res = await request(app).post('/api/catalog/ingredients/foreign-canonical/sheets').send({});
+    expect(res.status).toBe(409);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.getSettings).not.toHaveBeenCalled();
+  });
   it('lists the variants a type offers', async () => {
     mocks.getIngredient.mockResolvedValue(place);
     const res = await request(app).get('/api/catalog/ingredients/cat-plc-1/sheets/variants');

@@ -84,7 +84,10 @@ vi.mock('../services/socket', () => ({
   },
 }));
 
-vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
+vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn(), getSelfInstance: vi.fn(async () => ({ instanceId: 'canonical-owner' })), getInstances: vi.fn(async () => ({ peers: [{ instanceId: 'canonical-owner', host: 'canonical.example', port: 5555 }] })) }));
+vi.mock('../services/apiCatalogIdentity', () => ({
+  listCatalogIdentities: vi.fn(async () => ({ items: [], nextOffset: null })), getCatalogIdentity: vi.fn(), acceptCatalogIdentity: vi.fn(), abortCatalogIdentity: vi.fn(),
+}));
 vi.mock('../services/apiCatalogTypes', () => ({
   listCatalogTypes: vi.fn(async () => ({ types: [] })),
 }));
@@ -138,6 +141,7 @@ import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredien
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import { getCatalogIngredientDetails, listCatalogRelatedImages, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
 import toast from '../components/ui/Toast';
+import { getCatalogIdentity, acceptCatalogIdentity, abortCatalogIdentity } from '../services/apiCatalogIdentity';
 
 const renderPage = async (path = '/catalog/character/cat-chr-1') => {
   const router = createMemoryRouter([
@@ -164,6 +168,79 @@ beforeEach(() => {
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  it('aborts an uncommitted agreement without saving or discarding the existing creative draft', async () => {
+    const receipt = { id: 'example-abort-operation', sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, localOwner: 'canonical-owner', sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', state: 'proposed', planHash: 'example-hash',
+      plan: { sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', source: { ingredients: [{ id: 'example-source', type: 'character', name: 'Original subject' }] }, survivor: { ingredients: [CHAR_FIXTURE] }, proposed: { name: CHAR_FIXTURE.name } } };
+    getCatalogIdentity.mockResolvedValue(receipt);
+    abortCatalogIdentity.mockResolvedValue({ ...receipt, state: 'aborted' });
+    await renderPage('/catalog/character/cat-chr-1?identityOperation=example-abort-operation');
+    fireEvent.change(screen.getByLabelText('Name', { exact: true }), { target: { value: 'Unsaved creative name' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Abort uncommitted proposal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm coordinator abort' }));
+    await screen.findByText('Aborted · no canonical consolidation applied');
+    expect(screen.getByLabelText('Name', { exact: true })).toHaveValue('Unsaved creative name');
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  });
+
+  it('disables profile inputs for the duration of an owner acceptance so its refresh cannot discard newly typed edits', async () => {
+    const receipt = { id: 'example-pending-operation', sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, localOwner: 'canonical-owner', sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', state: 'proposed', planHash: 'example-hash',
+      plan: { sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', source: { ingredients: [{ id: 'example-source', type: 'character', name: 'Original subject' }] }, survivor: { ingredients: [CHAR_FIXTURE] }, proposed: { name: CHAR_FIXTURE.name } } };
+    getCatalogIdentity.mockResolvedValue(receipt);
+    let finishAcceptance;
+    acceptCatalogIdentity.mockImplementationOnce(() => new Promise(resolve => { finishAcceptance = resolve; }));
+    await renderPage('/catalog/character/cat-chr-1?identityOperation=example-pending-operation');
+    fireEvent.click(await screen.findByRole('checkbox', { name: /I accept this exact reviewed plan/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept as this owner' }));
+    await waitFor(() => expect(acceptCatalogIdentity).toHaveBeenCalled());
+    expect(screen.getByLabelText('Name', { exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(CHAR_FIXTURE), sharedIdentity: { ...receipt, operationId: receipt.id, writable: false, reason: 'CATALOG_IDENTITY_FENCED', state: 'prepared' } });
+    await act(async () => { finishAcceptance({ ...receipt, state: 'prepared' }); });
+    await screen.findByText(/This identity is reserved while the owners complete/);
+    expect(screen.getByLabelText('Name', { exact: true })).toBeDisabled();
+    expect(screen.getByLabelText('Name', { exact: true })).toHaveValue(CHAR_FIXTURE.name);
+  });
+
+  it('retains source-ID ownership restrictions after canonical resolution while keeping evidence and images inspectable', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      sharedIdentity: { operationId: 'shared-example', sourceId: 'retained-original', survivorId: CHAR_FIXTURE.id,
+        localOwner: 'source-owner', survivorOwner: 'canonical-owner', sourceOwner: 'source-owner', writable: false, reason: 'CATALOG_IDENTITY_RETAINED', state: 'committed' },
+      media: [{ ingredientId: 'retained-original', kind: 'reference', mediaKey: 'retained.png' }],
+      revisions: [{ id: 'latest', source: 'save', name: 'Current' }, { id: 'old', source: 'save', name: 'Old original' }],
+    }));
+    await renderPage('/catalog/character/retained-original');
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete ingredient' })).toBeDisabled();
+    expect(screen.getByLabelText('Name', { exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add relation' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Detach', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pick from gallery|Upload file|Record memo/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Open canonical owner' })).toHaveAttribute('href', 'https://canonical.example:5555/casting/cat-chr-1');
+    fireEvent.click(screen.getByRole('button', { name: /Old original/ }));
+    expect(screen.getByRole('button', { name: /Old original/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/Read-only provenance/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  });
+
+  it('keeps canonical editing available but retains source-only media and relations as immutable provenance', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      sharedIdentity: { operationId: 'shared-example', sourceId: 'retained-original', survivorId: CHAR_FIXTURE.id,
+        localOwner: 'canonical-owner', survivorOwner: 'canonical-owner', sourceOwner: 'source-owner', writable: true, state: 'committed' },
+      media: [{ ingredientId: 'retained-original', kind: 'reference', mediaKey: 'retained.png' }, { ingredientId: CHAR_FIXTURE.id, kind: 'reference', mediaKey: 'canonical.png' }],
+      relations: { outbound: [{ fromId: 'retained-original', toId: 'place-one', kind: 'lives_in', other: { id: 'place-one', name: 'Retained place', type: 'place' } }], inbound: [] },
+    }));
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Detach', exact: true })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Remove relation to Retained place' })).not.toBeInTheDocument();
+    expect(screen.getByText('Retained source relation · read-only')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Retained place/ })).toBeInTheDocument();
+  });
+
   it('reports a rejected file read and re-enables the upload control', async () => {
     await renderPage();
     const fileInput = document.querySelector('input[type="file"][accept="image/*,audio/*,video/*"]');

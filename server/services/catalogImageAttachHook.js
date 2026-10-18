@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog image-attach hook (issue #1359).
  *
@@ -43,6 +44,7 @@ const portraitGuard = createNewestWinsGuard();
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
 // error (caught by the factory).
 async function attachGeneratedImage({ ingredientId, kind, role, filename, queuedAt }) {
+  await assertCatalogIdentityWritable(ingredientId);
   // The ingredient can be deleted between enqueue and completion (a render
   // outlives its editor by minutes). `getIngredient` filters `deleted = false`,
   // so this skips a hard-deleted ingredient (FK would throw) AND a soft-deleted
