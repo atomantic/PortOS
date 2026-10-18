@@ -9,7 +9,7 @@ const ASSOCIATIONS = {
   revisions: ['catalog_ingredient_revisions', ['id']],
 };
 
-export const catalogIdentityViewsDdl = () => Object.entries(ASSOCIATIONS).map(([kind, [table, keys]]) => {
+export const buildCatalogIdentityViewsDdl = () => Object.entries(ASSOCIATIONS).map(([kind, [table, keys]]) => {
   const sourceMatch = kind === 'relations'
     ? '(live.from_id = o.source_id OR live.to_id = o.source_id)'
     : 'live.ingredient_id = o.source_id';

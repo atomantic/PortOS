@@ -11,7 +11,7 @@ import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
-import { catalogIdentityViewsDdl } from '../lib/db/schema/catalogIdentityViews.js';
+import { buildCatalogIdentityViewsDdl } from '../lib/db/schema/catalogIdentityViews.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
@@ -297,7 +297,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     // function through nullable NOT IN comparisons during an older restore.
     // Current identity read views depend on this resolver. Model an older
     // install lacking both views and function; never CASCADE unknown objects.
-    const identityViews = catalogIdentityViewsDdl().map(sql => /^CREATE OR REPLACE VIEW ([a-z_]+)/.exec(sql)[1]);
+    const identityViews = buildCatalogIdentityViewsDdl().map(sql => /^CREATE OR REPLACE VIEW ([a-z_]+)/.exec(sql)[1]);
     await query(`DROP VIEW IF EXISTS ${identityViews.map(name => `public.${name}`).join(', ')} RESTRICT`);
     await query('DROP FUNCTION public.catalog_resolve_ingredient_id(text) RESTRICT');
     try {

@@ -5,7 +5,7 @@ import * as db from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { catalogDdl } from '../../lib/db/schema/catalog.js';
 import { catalogIdentityDdl } from '../../lib/db/schema/catalogIdentity.js';
-import { catalogIdentityViewsDdl } from '../../lib/db/schema/catalogIdentityViews.js';
+import { buildCatalogIdentityViewsDdl } from '../../lib/db/schema/catalogIdentityViews.js';
 
 const context = new AsyncLocalStorage();
 const fixture = vi.hoisted(() => ({ runtime: null }));
@@ -56,7 +56,7 @@ beforeAll(async () => {
     await actual.query(`CREATE SCHEMA ${schema}`);
     await actual.withTransaction(async client => {
       await client.query(`SET LOCAL search_path TO ${schema}, public`);
-      for (const statement of [...catalogDdl, ...catalogIdentityDdl, ...catalogIdentityViewsDdl()]) await client.query(statement);
+      for (const statement of [...catalogDdl, ...catalogIdentityDdl, ...buildCatalogIdentityViewsDdl()]) await client.query(statement);
     });
   }
   fixture.runtime = {

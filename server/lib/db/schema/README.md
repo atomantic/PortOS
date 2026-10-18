@@ -35,7 +35,7 @@ init-db.sql, each with a one-line reason.
 | `peerExecution.js` | `peerExecutionDdl` | Receiver-local permanent execution consumption and generation floors; no grants or federation |
 | `catalog.js` | `catalogDdl`, `catalogUserTypesDdl`, `catalogPendingAppliesDdl` | Catalog scraps/ingredients/tags/media + user-defined types + receiver-local dependency inbox |
 | `catalogIdentity.js` | `catalogIdentityDdl` | Owner-coordinated identity receipts, durable mutation fences and canonical lookup functions |
-| `catalogIdentityViews.js` | `catalogIdentityViewsDdl()` | Read-only association and revision unions retaining authoritative owner evidence |
+| `catalogIdentityViews.js` | `buildCatalogIdentityViewsDdl()` | Read-only association and revision unions retaining authoritative owner evidence |
 | `media.js` | `mediaDdl` | Creative-director / music-video projects, mood boards, media assets, and Code Animation jobs |
 | `universes.js` | `universesDdl` | Universes, machine-local character voice profiles/renders, + universe run history |
 | `library.js` | `libraryDdl` | Authors, artists, albums, tracks |

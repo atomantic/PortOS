@@ -60,7 +60,7 @@ describe('db/schema barrel + composer (#2832)', () => {
     const expected = [
       ...schema.catalogDdl,
       ...schema.catalogIdentityDdl,
-      ...schema.catalogIdentityViewsDdl(),
+      ...schema.buildCatalogIdentityViewsDdl(),
       ...schema.mediaDdl,
       ...schema.catalogUserTypesDdl,
       ...schema.universesDdl,

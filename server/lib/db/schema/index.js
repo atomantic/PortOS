@@ -25,7 +25,7 @@ import { aiGraphDdl } from './aiGraph.js';
 import { peerExecutionDdl } from './peerExecution.js';
 import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
 import { catalogIdentityDdl } from './catalogIdentity.js';
-import { catalogIdentityViewsDdl } from './catalogIdentityViews.js';
+import { buildCatalogIdentityViewsDdl } from './catalogIdentityViews.js';
 import { mediaDdl } from './media.js';
 import { universesDdl } from './universes.js';
 import { libraryDdl } from './library.js';
@@ -54,7 +54,7 @@ export {
   peerExecutionDdl,
   catalogDdl,
   catalogIdentityDdl,
-  catalogIdentityViewsDdl,
+  buildCatalogIdentityViewsDdl,
   catalogUserTypesDdl,
   catalogPendingAppliesDdl,
   mediaDdl,
@@ -106,7 +106,7 @@ export function buildCatalogDdl() {
   return [
     ...catalogDdl,
     ...catalogIdentityDdl,
-    ...catalogIdentityViewsDdl(),
+    ...buildCatalogIdentityViewsDdl(),
     ...mediaDdl,
     ...catalogUserTypesDdl,
     ...universesDdl,
