@@ -383,6 +383,17 @@ export function installSubscriptionListener() {
   recordEvents.on('deleted', onDeleted);
 }
 
+/**
+ * Test-only: stop new re-exports (debounce timers, listeners) and wait for the
+ * ones already running. A fixture must await this before removing its bucket,
+ * or a late export recreates the directory after removal (#12288).
+ */
+export async function __settleForTests() {
+  __resetForTests();
+  while (inFlightExports.size) await Promise.all([...inFlightExports.values()]);
+  await queueStateWrite(async () => {});
+}
+
 /** Test-only: clear pending debounces and detach our own listeners. */
 export function __resetForTests() {
   for (const t of pendingTimers.values()) clearTimeout(t);
