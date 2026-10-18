@@ -204,11 +204,25 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     hasBranchMergeEvidence.mockResolvedValue(false);
     listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'abc123']]));
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled: true });
+    execGit.mockImplementation(async (args) => ({ exitCode: 0, stdout: args[0] === 'rev-parse' ? 'abc123\n' : '' }));
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled: true, headRefOid: 'abc123' });
     const result = await run();
     expect(result.issues).toEqual([]);
     expect(result.observed).toMatchObject({ prState: 'OPEN', autoMergeEnabled: true });
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['failed CI', false, 'abc123'],
+    ['unpublished local head', true, 'different-head'],
+  ])('retains recovery for an auto-merge request with %s', async (_name, autoMergeEnabled, headRefOid) => {
+    localBranch(true);
+    hasBranchMergeEvidence.mockResolvedValue(false);
+    execGit.mockImplementation(async (args) => ({ exitCode: 0, stdout: args[0] === 'rev-parse' ? 'abc123\n' : '' }));
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled, headRefOid });
+    const result = await run();
+    expect(result.issues.map(issue => issue.code)).toContain(REPO_STATE_ISSUES.PR_UNMERGED);
+    expect(addTask).toHaveBeenCalled();
   });
 
   it('reports an unmerged PR the agent left open', async () => {

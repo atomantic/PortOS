@@ -25,6 +25,8 @@ describe('review-enabled completion merge gate', () => {
     expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
     expect(section).toContain('allow_auto_merge: true');
     expect(section).toContain('autoMergeRequest.enabledAt');
+    expect(section).toContain('check admission immediately before');
+    expect(section).toContain('Release with outcome merged if MERGED, otherwise leave-open');
     expect(section).toContain('all configured reviews pass');
     expect(section).toContain('8. Write a short markdown summary');
   });

@@ -114,7 +114,23 @@ export function buildMergeGateReprompt(prUrl) {
   ].join('\n');
 }
 
+// A queued handoff is temporary ownership, not an indefinite exemption from
+// recovery. Unknown check shapes and hour-old requests fail closed.
+export function hasHealthyAutoMergeRequest(pr, now = Date.now()) {
+  const enabledAt = Date.parse(pr?.autoMergeRequest?.enabledAt);
+  if (pr?.state !== 'OPEN' || pr.isDraft !== false || !Number.isFinite(enabledAt)
+    || enabledAt > now || now - enabledAt >= 60 * 60 * 1000
+    || !Array.isArray(pr.statusCheckRollup) || pr.statusCheckRollup.length === 0) return false;
+  return pr.statusCheckRollup.every(check => {
+    if (check?.__typename === 'StatusContext') return ['SUCCESS', 'PENDING', 'EXPECTED'].includes(check.state);
+    if (check?.__typename !== 'CheckRun') return false;
+    return check.status === 'COMPLETED'
+      ? ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion)
+      : ['QUEUED', 'IN_PROGRESS', 'REQUESTED', 'WAITING', 'PENDING'].includes(check.status);
+  });
+}
+
 /** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
 export function buildAutoMergeHandoffInstructions(prRef) {
-  return `**GitHub auto-merge handoff (before waiting for CI):** After local validation and all configured reviews pass on the published head, inspect \`gh pr view ${prRef} --json state,isDraft,headRefOid,mergeable,statusCheckRollup,reviewDecision\` and \`gh api repos/{owner}/{repo}\` (use the PR's BASE repository). If that repository has \`allow_auto_merge: true\`, the PR is ready (not draft), conflict-free, reviews are satisfied, no check has failed, and CI is queued or running on that same head, enable GitHub auto-merge with \`gh pr merge ${prRef} --auto --merge --match-head-commit <published-head>\`. Use \`--squash\` or \`--rebase\` instead only when the repository disallows merge commits. Never use \`--admin\`, change branch protection, or enable repository auto-merge settings. Read back \`gh pr view ${prRef} --json state,headRefOid,autoMergeRequest\`: require the same published head and OPEN with a non-null \`autoMergeRequest.enabledAt\`, or confirm MERGED. A command's exit status alone is not proof. Verified auto-merge is a successful terminal HANDOFF: report the PR URL and head, explicitly say auto-merge enabled with CI pending, write the completion sentinel if required, and stop without waiting for MERGED. Preserve the unmerged branch; do not close its issue or claim the work landed. This handoff overrides subsequent in-session CI waits and MERGED-only completion instructions, including delegated slashdo workflows. GitHub enforces its required checks/reviews at the later merge instant, so this handoff does not acquire or hold local merge admission. If auto-merge is unavailable, rejected, or cannot be verified, follow the normal CI/merge gate below; failed checks still require a real fix.`;
+  return `**GitHub auto-merge handoff (before waiting for CI):** After local validation and all configured reviews pass on the published head, inspect \`gh pr view ${prRef} --json state,isDraft,headRefOid,mergeable,statusCheckRollup,reviewDecision\` and \`gh api repos/{owner}/{repo}\` (the PR's BASE repository). Require \`allow_auto_merge: true\`, a ready/non-draft conflict-free PR, satisfied reviews, no failed checks, and CI queued or running on that head. The next command can merge immediately: acquire repository merge admission with a valid token, re-read that same head and checks, and check admission immediately before \`gh pr merge ${prRef} --auto --merge --match-head-commit <published-head>\`. Follow the Repository merge admission acquire/check/release procedure; if unavailable or no registered parent identity was supplied, leave the PR open. Use \`--squash\` or \`--rebase\` only if merge commits are disallowed. Never use \`--admin\`, change branch protection, or enable repository auto-merge settings. Read back \`gh pr view ${prRef} --json state,headRefOid,autoMergeRequest\`: require the same published head and OPEN with a non-null \`autoMergeRequest.enabledAt\`, or confirm MERGED. Exit status alone is not proof. Release with outcome merged if MERGED, otherwise leave-open for a pending handoff or failure; require released:true. Never hold admission while waiting for CI. A verified pending handoff is successful: report the PR URL and head, explicitly say auto-merge enabled with CI pending, write the completion sentinel if required, and stop without waiting for MERGED. Preserve the unmerged branch; do not close its issue or claim it landed. This handoff overrides later in-session CI waits and MERGED-only completion instructions, including delegated slashdo workflows. GitHub enforces required checks/reviews at the later merge instant. If auto-merge is unavailable, rejected, or unverified, follow the normal CI/merge gate below; failed checks require a real fix.`;
 }

@@ -550,8 +550,10 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
   if (skipMerge) {
     const pr = await import('./prProbe.js').then(({ probePrForBranch }) =>
       probePrForBranch(sourceWorkspace, worktreeBranch)).catch(() => null);
-    if (pr?.readable && pr.prState === 'OPEN' && pr.autoMergeEnabled === true) {
-      emitLog('info', `🌳 Preserving pending GitHub auto-merge worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
+    if (pr?.readable && pr.prState === 'OPEN') {
+      // Failed CI or unpublished commits need recovery, which still needs this
+      // branch. Only a healthy handoff suppresses the post-cleanup audit.
+      emitLog('info', `🌳 Preserving ${pr.autoMergeEnabled === true ? 'pending GitHub auto-merge' : 'unmerged PR recovery'} worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
       return;
     }
   }

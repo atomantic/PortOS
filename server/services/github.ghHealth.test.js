@@ -260,13 +260,31 @@ describe('findPullRequestForBranch (#3358)', () => {
   });
 
   it.each([
-    [false, { enabledAt: '2026-10-18T00:00:00Z' }, true],
-    [true, { enabledAt: '2026-10-18T00:00:00Z' }, false],
-    [false, null, false],
-    [false, {}, false],
-  ])('reads auto-merge evidence for draft=%s request=%j', async (isDraft, autoMergeRequest, autoMergeEnabled) => {
-    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([{ number: 7, state: 'OPEN', isDraft, autoMergeRequest }]) }));
-    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled });
+    ['pending', { __typename: 'CheckRun', status: 'IN_PROGRESS' }, true],
+    ['successful', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }, true],
+    ['failed', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }, false],
+    ['cancelled', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'CANCELLED' }, false],
+    ['legacy pending', { __typename: 'StatusContext', state: 'PENDING' }, true],
+    ['legacy error', { __typename: 'StatusContext', state: 'ERROR' }, false],
+    ['unknown', {}, false],
+  ])('classifies a %s auto-merge handoff from live CI', async (_name, check, autoMergeEnabled) => {
+    const pr = { number: 7, state: 'OPEN', isDraft: false, headRefOid: 'published-head',
+      autoMergeRequest: { enabledAt: new Date().toISOString() }, statusCheckRollup: [check] };
+    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([pr]) }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled, headRefOid: 'published-head' });
+  });
+
+  it.each(['draft', 'missing request', 'malformed date', 'stalled', 'missing checks', 'empty checks'])('rejects a %s auto-merge handoff', async (kind) => {
+    const pr = { number: 7, state: 'OPEN', isDraft: kind === 'draft',
+      autoMergeRequest: { enabledAt: new Date().toISOString() },
+      statusCheckRollup: [{ __typename: 'CheckRun', status: 'IN_PROGRESS' }] };
+    if (kind === 'missing request') pr.autoMergeRequest = null;
+    if (kind === 'malformed date') pr.autoMergeRequest.enabledAt = 'invalid';
+    if (kind === 'stalled') pr.autoMergeRequest.enabledAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    if (kind === 'missing checks') delete pr.statusCheckRollup;
+    if (kind === 'empty checks') pr.statusCheckRollup = [];
+    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([pr]) }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled: false });
   });
 
   it('reports `none` for an ANSWERED empty list', async () => {
