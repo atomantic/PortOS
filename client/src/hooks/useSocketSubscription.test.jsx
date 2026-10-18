@@ -111,6 +111,40 @@ describe('useSocketSubscription', () => {
     expect(emitted.filter(([e]) => e === 'cos:subscribe')).toHaveLength(2);
   });
 
+  it('emits a payload consumer\'s mode at mount, on every reconnect, and its release at unmount', () => {
+    // ChiefOfStaff: the cos room is already held by Layout's toast hooks, so
+    // the refcount alone would never tell the server about the page's
+    // task-list mode — the mode is per server-side socket and outlives the
+    // page, so it must be released explicitly when the page goes away.
+    const cosSubscribes = () => emitted.filter(([e]) => e === 'cos:subscribe').map(([, p]) => p);
+    const layout = renderHook(() => useSocketSubscription('cos'));
+    const page = renderHook(() => useSocketSubscription('cos', {
+      payload: { taskLists: 'invalidate' }, releasePayload: { taskLists: 'full' },
+    }));
+    expect(cosSubscribes()).toEqual([undefined, { taskLists: 'invalidate' }]);
+
+    fire('connect');
+    // Bare resubscribe first, then the mode on top of it.
+    expect(cosSubscribes().slice(2)).toEqual([undefined, { taskLists: 'invalidate' }]);
+
+    page.unmount();
+    expect(cosSubscribes().at(-1)).toEqual({ taskLists: 'full' });
+    expect(emitted.some(([e]) => e === 'cos:unsubscribe')).toBe(false);
+
+    fire('connect');
+    expect(cosSubscribes().at(-1)).toBeUndefined();
+    layout.unmount();
+    expect(emitted.filter(([e]) => e === 'cos:unsubscribe')).toHaveLength(1);
+  });
+
+  it('releases a payload consumer\'s mode before the final unsubscribe', () => {
+    const { unmount } = renderHook(() => useSocketSubscription('cos', {
+      payload: { taskLists: 'invalidate' }, releasePayload: { taskLists: 'full' },
+    }));
+    unmount();
+    expect(emitted.slice(-2)).toEqual([['cos:subscribe', { taskLists: 'full' }], ['cos:unsubscribe', undefined]]);
+  });
+
   it('drops its connect listener once the last consumer unmounts', () => {
     const { unmount } = renderHook(() => useSocketSubscription('agents'));
     expect(handlers.get('connect')?.size ?? 0).toBe(1);

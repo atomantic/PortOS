@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { useSocket } from '../hooks/useSocket';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useValidTab } from '../hooks/useValidTab';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -35,6 +36,11 @@ import StatCard from '../components/cos/StatCard';
 import StatusBubble, { StatusPill, isGenericStatusMessage } from '../components/cos/StatusBubble';
 import EventLog from '../components/cos/EventLog';
 import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
+// cos:subscribe task-list modes (server/services/socket.js registerSubscriber):
+// the page fetches its own lists on invalidation; everyone else gets full lists.
+const COS_PAGE_SUBSCRIBE = { taskLists: 'invalidate' };
+const COS_PAGE_RELEASE = { taskLists: 'full' };
+
 const AgentsTab = lazy(() => import('../components/cos/tabs/AgentsTab'));
 
 // Task editing is not needed to view agents, so keep its forms and drag/drop
@@ -226,6 +232,10 @@ export default function ChiefOfStaff() {
   // overwrite a fresher optimistic mutation or fetchQueue result.
   const queueSeqRef = useRef(0);
   const socket = useSocket();
+  // The cos:* room, refcounted with the always-mounted Layout consumers, in the
+  // page's lighter "invalidate" task-list mode while it is open; the shared
+  // socket goes back to full task lists when it unmounts.
+  useSocketSubscription('cos', { payload: COS_PAGE_SUBSCRIBE, releasePayload: COS_PAGE_RELEASE });
 
   // Verified animated records for the avatar selector and rigged playback (#5894).
   const { records: riggedAvatars } = useAvatarCapabilities();
@@ -494,19 +504,8 @@ export default function ChiefOfStaff() {
   useEffect(() => {
     if (!socket) return;
 
-    // Subscribe when socket is connected (or already connected)
-    const subscribe = () => {
-      socket.emit('cos:subscribe', { taskLists: 'invalidate' });
-    };
-
-    // Subscribe now if already connected, AND always re-subscribe on every
-    // (re)connect — the server rebuilds an empty per-socket subscriber Set on
-    // reconnect, so registering the listener only in the else branch left
-    // cos:* events dead after a reconnect when the socket was already connected
-    // at mount. Cleanup below offs this listener.
-    if (socket.connected) subscribe();
+    // Reconnect recovery; the subscription itself lives in useSocketSubscription above.
     const reconnect = () => {
-      subscribe();
       appsReadRef.current = null;
       fetchData();
       setCompletedRevision(value => value + 1);
@@ -674,12 +673,7 @@ export default function ChiefOfStaff() {
     socket.on('cos:status:resumed', handleConfigChanged);
     socket.on('apps:changed', handleAppsChanged);
 
-    // Don't emit cos:unsubscribe — the cos:* namespace is shared with
-    // useOpenWorldData (OpenWorld), useAgentFeedbackToast, and other always-mounted
-    // consumers; the server's per-socket subscriber Set has no ref count.
-    // Unsubscribing here would yank events out from under them.
     return () => {
-      socket.emit('cos:subscribe', { taskLists: 'full' });
       socket.off('connect', reconnect);
       socket.off('providers:changed', handleProvidersChanged);
       socket.off('cos:config:changed', handleConfigChanged);
