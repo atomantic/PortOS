@@ -444,17 +444,29 @@ export const getTasks = getUserTasks;
 /**
  * Get a specific task by ID from any task source
  */
-export async function getTaskById(taskId) {
+/**
+ * One task and the queue it lives in: `{ task, source: 'user' | 'internal' }`,
+ * or null. The record is returned as stored (its own `taskType` intact), which
+ * is what a client merging it into a list it already holds needs.
+ */
+export async function findTaskWithSource(taskId) {
   const { config } = await loadState();
   // Keep user-first precedence, including legacy/custom IDs. Do not infer the
   // source from a prefix or prepare grouped copies of both queues for one ID.
   const userTask = await findTaskInFile(join(ROOT_DIR, config.userTasksFile), taskId);
-  if (userTask) return { ...userTask, taskType: 'user' };
+  if (userTask) return { task: userTask, source: 'user' };
 
   const cosTask = await findTaskInFile(join(ROOT_DIR, config.cosTasksFile), taskId);
-  if (cosTask) return { ...cosTask, taskType: 'internal' };
+  if (cosTask) return { task: cosTask, source: 'internal' };
 
   return null;
+}
+
+// Legacy shape: the source overwrites the record's `taskType`. Callers that
+// need the record as stored use findTaskWithSource.
+export async function getTaskById(taskId) {
+  const found = await findTaskWithSource(taskId);
+  return found ? { ...found.task, taskType: found.source } : null;
 }
 
 /**

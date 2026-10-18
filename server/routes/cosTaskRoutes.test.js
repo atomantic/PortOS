@@ -49,6 +49,7 @@ vi.mock('../services/cos.js', () => ({
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
   getTaskById: vi.fn(),
+  findTaskWithSource: vi.fn(),
   deleteTask: vi.fn(),
   reorderTasks: vi.fn(),
   approveTask: vi.fn(),
@@ -143,6 +144,32 @@ describe('CoS task collection selectors', () => {
 
     expect(res.status).toBe(200);
     expect(cos.deleteTask).toHaveBeenCalledWith('sys-example', 'internal');
+  });
+});
+
+describe('GET /api/cos/tasks/:id', () => {
+  it('returns the task as stored with its source queue', async () => {
+    const task = { id: 'task-old', description: 'Example archived task', status: 'completed', taskType: 'documentation' };
+    cos.findTaskWithSource.mockResolvedValue({ task, source: 'user' });
+
+    const res = await request(buildApp()).get('/api/cos/tasks/task-old');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ task, source: 'user' });
+    expect(cos.findTaskWithSource).toHaveBeenCalledWith('task-old');
+  });
+
+  it('is a 404 for an unknown id and never shadows the literal list routes', async () => {
+    cos.findTaskWithSource.mockResolvedValue(null);
+    cos.getUserTasks.mockResolvedValue({ tasks: [] });
+
+    const missing = await request(buildApp()).get('/api/cos/tasks/no-such-task');
+    expect(missing.status).toBe(404);
+    expect(missing.body.code).toBe('NOT_FOUND');
+
+    const list = await request(buildApp()).get('/api/cos/tasks/user');
+    expect(list.status).toBe(200);
+    expect(cos.findTaskWithSource).toHaveBeenCalledTimes(1);
   });
 });
 

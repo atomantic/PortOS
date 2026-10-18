@@ -242,6 +242,16 @@ router.get('/tasks/internal', asyncHandler(async (req, res) => {
   res.json(tasks);
 }));
 
+// GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
+// Staff page reads this when a selection lands outside the lists it already
+// holds, instead of re-reading the whole queue per click (#12032). Registered
+// after the literal /tasks/user and /tasks/internal routes so those still win.
+router.get('/tasks/:id', asyncHandler(async (req, res) => {
+  const found = await cos.findTaskWithSource(req.params.id);
+  if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(found);
+}));
+
 // POST /api/cos/tasks/refresh - Force refresh tasks
 router.post('/tasks/refresh', asyncHandler(async (req, res) => {
   const tasks = await taskWatcher.refreshTasks();

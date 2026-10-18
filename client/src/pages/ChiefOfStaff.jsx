@@ -130,6 +130,11 @@ export default function ChiefOfStaff() {
   const { tab } = useParams();
   const [searchParams] = useSearchParams();
   const selectedTask = searchParams.get('task') || undefined;
+  // The selection is read through a ref by the page-level reads and the socket
+  // handlers, so changing it changes none of their identities: a click on a
+  // task must not refetch the page or re-register fourteen listeners (#12032).
+  const selectedTaskRef = useRef(selectedTask);
+  selectedTaskRef.current = selectedTask;
   const navigate = useNavigate();
   const activeTab = useValidTab(TABS, 'tasks');
   const { isFeatureEnabled } = useInstanceFeatures();
@@ -141,7 +146,8 @@ export default function ChiefOfStaff() {
   const needsApps = needsProviders || activeTab === 'memory';
   const routeRef = useRef(activeTab);
   routeRef.current = activeTab;
-  const queryKey = `${activeTab}:${selectedTask || ''}`;
+  // Page-level reads are keyed on the tab alone; the selection is not a page.
+  const queryKey = activeTab;
   const queryRef = useRef(queryKey);
   queryRef.current = queryKey;
   const inFlight = useRef(null);
@@ -150,6 +156,8 @@ export default function ChiefOfStaff() {
 
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const [agents, setAgents] = useState([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [agentsError, setAgentsError] = useState(null);
@@ -365,7 +373,7 @@ export default function ChiefOfStaff() {
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
         api.getCosStatus().catch(() => null),
-        needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
+        needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
         readAgents(controller),
       ]);
       const healthObservation = healthObservationRef.current;
@@ -449,7 +457,7 @@ export default function ChiefOfStaff() {
       if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
+  }, [activeTab, queryKey, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -468,7 +476,7 @@ export default function ChiefOfStaff() {
       : Promise.resolve(null);
     request.promise = Promise.all([
       api.getCosStatus().catch(() => null),
-      needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : null,
+      needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
       readAgents(controller),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queryRef.current !== queryKey || queueSeqRef.current !== queueSeq) return;
@@ -481,7 +489,7 @@ export default function ChiefOfStaff() {
       if (request.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshQueueData();
     });
     return request.promise;
-  }, [queryKey, needsTasks, selectedTask, readAgents]);
+  }, [queryKey, needsTasks, readAgents]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
   // task invalidations must never trigger a health-check/socket feedback loop.
@@ -499,6 +507,29 @@ export default function ChiefOfStaff() {
     fetchData();
     return () => { inFlight.current?.controller.abort(); queuePending.current?.controller.abort(); };
   }, [fetchData]);
+
+  // The selection-dependent read. The mount read already carries `selected`,
+  // so a deep link costs nothing extra; a later selection that is not in the
+  // loaded lists (a historical task opened from a summary link) costs exactly
+  // one record read, merged into the list it belongs to.
+  useEffect(() => {
+    if (!selectedTask || !needsTasks) return undefined;
+    const { user, cos } = tasksRef.current;
+    if (!user && !cos) return undefined;
+    const loaded = [...(user?.tasks || []), ...(cos?.tasks || [])];
+    if (loaded.some(task => task.id === selectedTask)) return undefined;
+    let active = true;
+    api.getCosTask(selectedTask, { silent: true }).then((found) => {
+      if (!active || !found?.task) return;
+      const key = found.source === 'internal' ? 'cos' : 'user';
+      setTasks(prev => {
+        const list = prev[key];
+        if (!list) return prev;
+        return { ...prev, [key]: { ...list, tasks: [...(list.tasks || []).filter(task => task.id !== found.task.id), found.task] } };
+      });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [selectedTask, needsTasks]);
 
 
   useEffect(() => {
@@ -526,7 +557,7 @@ export default function ChiefOfStaff() {
 
     const handleTasksUserChanged = (data) => {
       if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, user: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTask), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
+      if (data?.tasks) setTasks(prev => ({ ...prev, user: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
       else refreshQueue();
     };
     socket.on('cos:tasks:user:changed', handleTasksUserChanged);
@@ -537,7 +568,7 @@ export default function ChiefOfStaff() {
     // around. Same full-list payload as the user event, so swap it in directly.
     const handleTasksCosChanged = (data) => {
       if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, cos: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTask), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
+      if (data?.tasks) setTasks(prev => ({ ...prev, cos: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
       else refreshQueue();
     };
     socket.on('cos:tasks:cos:changed', handleTasksCosChanged);
@@ -694,7 +725,7 @@ export default function ChiefOfStaff() {
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
-  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, selectedTask, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await api.startCos({ silent: true }).catch(err => {

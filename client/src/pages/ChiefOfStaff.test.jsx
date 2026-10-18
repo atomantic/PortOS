@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
 // only toast success after the request resolves, and must toast the error
@@ -9,6 +9,7 @@ vi.mock('../hooks/useAssignableInstances', () => ({ default: () => ({ instances:
 const api = vi.hoisted(() => ({
   getCosStatus: vi.fn(),
   getCosTasks: vi.fn(),
+  getCosTask: vi.fn(),
   getCosAgents: vi.fn(),
   getCosHealth: vi.fn(),
   getProviders: vi.fn(),
@@ -714,6 +715,55 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
 // running BEFORE flipping its task off `pending`, the fetch fired by
 // `cos:agent:spawned` always reads the task as still-queued, which is what left
 // the row showing as pending AND active for up to a poll interval.
+// #12032 — the selection is a URL param. Folding it into the page's query key
+// made every click re-run the full read fan-out and tear down and re-register
+// every socket listener. Selecting a task outside the loaded lists now costs
+// one record read and nothing else.
+describe('ChiefOfStaff task selection', () => {
+  function SelectProbe() {
+    const navigate = useNavigate();
+    return <button type="button" onClick={() => navigate('/cos/tasks?task=task-old&source=user')}>Select archived task</button>;
+  }
+
+  it('reads one record for a selection and leaves page reads and socket listeners alone', async () => {
+    api.getCosTasks.mockImplementation(async ({ view } = {}) => (view === 'completed'
+      ? { items: [], total: 1, nextCursor: null }
+      : { user: { tasks: [], grouped: {}, completedCount: 1 }, cos: { tasks: [], grouped: {}, completedCount: 0 } }));
+    api.getCosTask.mockResolvedValue({
+      task: { id: 'task-old', description: 'An archived example task', status: 'completed', metadata: {} },
+      source: 'user',
+    });
+    render(
+      <MemoryRouter initialEntries={['/cos/tasks']}>
+        <Routes>
+          <Route path="/cos/:tab" element={<><ChiefOfStaff /><SelectProbe /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitForPageShell();
+    await screen.findByRole('button', { name: 'Add test task' });
+    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+
+    const pageReads = () => [
+      api.getCosStatus, api.getCosAgents, api.getCosHealth, api.getProviders, api.getApps,
+      api.getCosLearningSummary, api.getCosActionableInsights,
+    ].map(fn => fn.mock.calls.length);
+    const queueReads = () => api.getCosTasks.mock.calls.filter(([args]) => args?.view === 'queue').length;
+    const before = { page: pageReads(), queue: queueReads(), on: socketStub.on.mock.calls.length, off: socketStub.off.mock.calls.length };
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select archived task' }));
+
+    await waitFor(() => expect(api.getCosTask).toHaveBeenCalledTimes(1));
+    expect(api.getCosTask).toHaveBeenCalledWith('task-old', expect.objectContaining({ silent: true }));
+    expect(await screen.findByText('An archived example task')).toBeInTheDocument();
+
+    expect(pageReads()).toEqual(before.page);
+    expect(queueReads()).toBe(before.queue);
+    expect(socketStub.on.mock.calls.length).toBe(before.on);
+    expect(socketStub.off.mock.calls.length).toBe(before.off);
+  });
+});
+
 describe('ChiefOfStaff task-change subscriptions', () => {
   const getSocketHandler = (event) => socketStub.on.mock.calls.find(([evt]) => evt === event)?.[1];
 
