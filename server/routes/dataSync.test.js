@@ -385,10 +385,27 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
     expect(res.status).toBe(403);
   });
 
-  it('leaves the write direction alone — apply is gated by its schema-version check, not this', async () => {
+  it('forwards populated sender metadata so apply can enforce its schema-version gate', async () => {
     applyRemote.mockResolvedValue({ applied: true, count: 1 });
-    const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({ data: { a: 1 } });
+    const portosMeta = { portosVersion: '9.9.9', schemaVersions: { digitalTwin: 99 } };
+    const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({ data: { a: 1 }, portosMeta });
     expect(res.status).toBe(200);
-    expect(applyRemote).toHaveBeenCalledWith('digitalTwin', { a: 1 }, { portosMeta: undefined });
+    expect(applyRemote).toHaveBeenCalledWith('digitalTwin', { a: 1 }, { portosMeta });
+  });
+
+  it('returns the schema block when apply rejects a newer sender schema', async () => {
+    const blockedBySchema = {
+      ahead: [{ category: 'digitalTwin', sender: 99, receiver: 1 }],
+      behind: [],
+      senderPortosVersion: '9.9.9',
+      receiverSchemaVersions: { digitalTwin: 1 },
+    };
+    applyRemote.mockResolvedValue({ applied: false, count: 0, blockedBySchema });
+    const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({
+      data: { a: 1 },
+      portosMeta: { portosVersion: '9.9.9', schemaVersions: { digitalTwin: 99 } },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ applied: false, count: 0, blockedBySchema });
   });
 });
