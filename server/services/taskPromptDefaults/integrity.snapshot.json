@@ -35,11 +35,11 @@
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
-    "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
+    "mobile-responsive": "a1ad3c87dc4c2fc55a3f041f0f61e726",
     "model-comparison-refresh": "f66e070fa08e30edda2c3020289f0c67",
     "module-hygiene": "e4ba7f0375bf816b85564bcc6545474d",
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
-    "performance": "8b297d723f9f39154c9cf6d501738494",
+    "performance": "4f8ddada54d7c6f31b7fb35aeb0f29db",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "5dd527c47e736094949c4605cfb2d973",
     "plan-task-claim": "7b87285534fc52cc99fa676ecf6939ba",
@@ -61,7 +61,7 @@
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "bb8670c1e6eb28434ad2d45b6dc62177",
+    "ux": "41b02e644f3dc5dcb713700c56a56454",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
   },
   "PROMPT_VERSIONS": {
@@ -99,11 +99,11 @@
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "media-render-research": 1,
-    "mobile-responsive": 3,
+    "mobile-responsive": 4,
     "model-comparison-refresh": 4,
     "module-hygiene": 2,
     "observability": 2,
-    "performance": 5,
+    "performance": 6,
     "plan-feature": 6,
     "plan-task": 21,
     "pr-reviewer": 5,
@@ -121,7 +121,7 @@
     "ui-bugs": 4,
     "ui-lifecycle": 3,
     "user-action-review": 2,
-    "ux": 6,
+    "ux": 7,
     "workflow-recovery": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 4,
@@ -370,7 +370,8 @@
     ],
     "mobile-responsive": [
       "636bdc17fa39ed2f2e27623284c8e04c",
-      "16d8e7f63a673a2de48994c0ac08ef3d"
+      "16d8e7f63a673a2de48994c0ac08ef3d",
+      "eb7f6b307bccd15199c74d7aff5c21c3"
     ],
     "model-comparison-refresh": [
       "dc1702b07c7fb8be6165feb776d5acb6",
@@ -388,7 +389,8 @@
       "4fea5eb3585bdc150980934b289016bc",
       "672bd3958b12afb0f382bcebb6dc3b33",
       "d7e3a80f42903fbf90be0efc9b559c0b",
-      "b69bf4cbd2b3c272b5650608c62cede3"
+      "b69bf4cbd2b3c272b5650608c62cede3",
+      "8b297d723f9f39154c9cf6d501738494"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
@@ -479,7 +481,8 @@
       "ac11f692eae40ffe8ddeaeaccbcf75e9",
       "b8c0bde4075685625443a405b2c70b50",
       "f90b5f38a7c6264e0d40919a2933ba4c",
-      "9f346b8be4408c5a8207d9a8b6080ff0"
+      "9f346b8be4408c5a8207d9a8b6080ff0",
+      "bb8670c1e6eb28434ad2d45b6dc62177"
     ]
   }
 }
