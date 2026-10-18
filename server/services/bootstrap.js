@@ -141,7 +141,7 @@ import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -964,6 +964,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // no-op it: the reconcile needs a database the hermetic root does not have.
     initLoraTraining,
     initMediaJobDependentHooks,
+    resumeMediaJobCompletions,
 
     // Sharing: attach chokidar watchers to every registered share bucket so
     // incoming manifests from peers are picked up live. Backlog processing

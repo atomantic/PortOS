@@ -653,7 +653,7 @@ function captureQueueSnapshot() {
   // other write (progress, enqueue, the shutdown flush, or one landing after a
   // completion's own retries gave up) keeps it `running` on disk and leaves it
   // to an admitted recovery commit, never publishing it in the middle of a cut.
-  const completionAdmitted = holdsBackupAssetPublication();
+  const completionAdmitted = !completionRecoveryDeferred && holdsBackupAssetPublication();
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
@@ -682,8 +682,20 @@ async function acknowledgeWrittenTransitions(transitions) {
 // hooks join the lease from the fan-out. Never awaited inside the persist
 // chain, so a cut draining an admitted write cannot deadlock on it.
 let completionRecovery = null;
+let completionRecoveryDeferred = false;
+
+// Boot restores the queue before wiring domain hooks. Open recovery only after
+// those listeners exist; keeping the receipt private also protects completions
+// from a newly dispatched job during that startup window.
+export function resumeMediaJobCompletions() {
+  completionRecoveryDeferred = false;
+  if ([...pendingTransitions.keys()].some(job => job.durabilityPending?.status === 'completed')) {
+    recoverCompletionsUnderAdmission();
+  }
+}
+
 function recoverCompletionsUnderAdmission() {
-  if (completionRecovery) return;
+  if (completionRecovery || completionRecoveryDeferred) return;
   // Tracked as a terminal operation so the shutdown flush drains it (and times
   // out, reporting failure, if an open cut still holds the commit).
   completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
@@ -717,8 +729,9 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
   runOutsideBackupAssetPublication(() => mediaJobEvents.emit(job.status, job));
 }
 
-export async function initMediaJobQueue() {
+export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
   if (initPromise) return initPromise;
+  completionRecoveryDeferred = deferCompletionRecovery;
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);
@@ -2060,6 +2073,7 @@ export function __resetForTests() {
   // jobs file would otherwise leave every later test's queue unable to persist.
   persistBlocked = false;
   completionRecovery = null;
+  completionRecoveryDeferred = false;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and

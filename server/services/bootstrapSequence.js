@@ -380,6 +380,7 @@ export const runPostRouteSequence = ({
   initMediaJobQueue,
   initLoraTraining,
   initMediaJobDependentHooks,
+  resumeMediaJobCompletions,
   initSharing,
   recoverCreativeDirectorProjects,
   runDatabasePhase: databasePhase,
@@ -396,9 +397,13 @@ export const runPostRouteSequence = ({
       bestEffort(recoverStuckClassifications(), logFailure('Brain recovery failed'));
       return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
     })
-    .then(() => initMediaJobQueue())
+    .then(() => initMediaJobQueue({ deferCompletionRecovery: true }))
     .then(() => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))
     .then(() => initMediaJobDependentHooks())
+    .then(() => {
+      // Recovery may wait behind a backup cut; arm it without blocking boot.
+      resumeMediaJobCompletions();
+    })
     .then(() => {
       // Sharing attaches chokidar watchers + drains the offline manifest
       // backlog. Fire-and-forget — a failed bucket shouldn't block boot.

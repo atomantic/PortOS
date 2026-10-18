@@ -3775,6 +3775,46 @@ describe('backup snapshot admission for media completion', () => {
       ? [expect.objectContaining({ resource: jobId, unsettled: true })] : []);
   });
 
+  it('waits for boot hook registration before recovering a receipt with admission already open', async () => {
+    const jobId = '00000000-0000-4000-8000-000000000092';
+    const result = { filename: `${jobId}.mp4` };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic' },
+      durabilityPending: { status: 'completed', result, completedAt: new Date().toISOString() },
+    }] }));
+    mediaJobQueue.mediaJobEvents.off('completed', onCompleted);
+    const completed = vi.fn();
+    const { runPostRouteSequence } = await import('../bootstrapSequence.js');
+    const noWork = async () => {};
+    const onFatal = vi.fn();
+    let beforeHooks;
+    await runPostRouteSequence({
+      startBackgroundServices: noWork, ensureSelf: noWork, initSyncLog: noWork,
+      recoverStuckClassifications: noWork, recoverInterruptedRepoClones: noWork,
+      initMediaJobQueue: mediaJobQueue.initMediaJobQueue,
+      initLoraTraining: async () => {
+        await mediaJobQueue.flushMediaJobQueue();
+        beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
+      },
+      initMediaJobDependentHooks: () => {
+        mediaJobQueue.mediaJobEvents.on('completed', onCompleted);
+        mediaJobQueue.mediaJobEvents.on('completed', completed);
+      },
+      resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
+      initSharing: noWork, recoverCreativeDirectorProjects: noWork,
+      runDatabasePhase: noWork, loadSeriesCoverBackfill: async () => noWork,
+      startListening: noWork, onFatal,
+    });
+    await flush();
+    await waitFor(() => rows.has(jobId));
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(beforeHooks).toMatchObject({ job: { status: 'running', durabilityPending: { result } }, rowCount: 0 });
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result });
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    mediaJobQueue.mediaJobEvents.off('completed', completed);
+  });
+
   it('drains a completion already publishing its queue row and hook rows before the cut', async () => {
     let finishWrite;
     const writeGate = new Promise((resolve) => { finishWrite = resolve; });
