@@ -76,6 +76,24 @@ const runGate = async (gate, req) => new Promise((resolve) => {
 });
 
 describe('authGate middleware', () => {
+  it('keeps health details password-gated while public health remains reachable', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+
+    const health = await runGate(authGate, { method: 'GET', path: '/api/system/health', headers: {} });
+    expect(health.called).toBe(true);
+
+    const details = await runGate(authGate, { method: 'GET', path: '/api/system/health/details', headers: {} });
+    expect(details.called).toBe(false);
+    expect(details.res.statusCode).toBe(401);
+    expect(details.res.body).toEqual({
+      error: 'Authentication required',
+      code: 'AUTH_REQUIRED',
+      timestamp: expect.any(Number),
+    });
+  });
+
   it('is a no-op when auth is disabled', async () => {
     const { authGate } = await import('./authGate.js');
     const req = { path: '/api/cos', headers: {} };
