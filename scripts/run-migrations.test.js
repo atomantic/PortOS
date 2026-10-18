@@ -4,7 +4,7 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { runMigrations, listPendingMigrations } from './run-migrations.js';
+import { runMigrations, listPendingMigrations, sourceDeclaresPurge } from './run-migrations.js';
 
 const fsMocks = vi.hoisted(() => ({ readFailures: new Map(), realRename: null }));
 
@@ -309,6 +309,26 @@ export default {
       .toEqual(['001-normal.js', '197-purge.js']);
   });
 
+  it('disarms a pending purge migration without importing its module (#12049)', async () => {
+    // A purge migration whose import graph cannot even load: the old probe
+    // imported every pending module to read `purge`, which on a fresh install
+    // pulled in dozens of live service graphs before boot. The static probe
+    // must disarm it from the source text alone.
+    writeFileSync(join(migrationsDir, '197-purge.js'), `
+import { neverInstalled } from 'portos-missing-dependency-for-test';
+export default {
+  purge: true,
+  async up() { neverInstalled(); }
+};
+`);
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping purge migration'));
+  });
+
   it('disarms purge migrations even when an earlier migration aborts the rebuilt-empty run', async () => {
     // The re-arm hole: a rebuilt-from-empty run that throws BEFORE reaching the
     // purge migration persists a partial ledger. The next boot's ledger no
@@ -447,6 +467,21 @@ export default {
 
     expect(ran).toBe(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('held for over 30 minutes'));
+  });
+});
+
+describe('sourceDeclaresPurge', () => {
+  it('reads the marker from the default export or a named export', () => {
+    expect(sourceDeclaresPurge('export default {\n  purge: true,\n  async up() {}\n};\n')).toBe(true);
+    expect(sourceDeclaresPurge('export default {\n  purge: true\n};\n')).toBe(true);
+    expect(sourceDeclaresPurge('export const purge = true;\nexport async function up() {}\n')).toBe(true);
+  });
+
+  it('ignores prose, data literals and other flags', () => {
+    expect(sourceDeclaresPurge('/*\n * opts into the purge class (purge: true)\n */\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('// purge: true\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('const SEED = {\n  retention: {\n    purge: true,\n  },\n};\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('export default {\n  autoPurge: true,\n  purge: false,\n  async up() {}\n};')).toBe(false);
   });
 });
 
