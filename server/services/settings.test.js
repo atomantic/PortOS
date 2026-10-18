@@ -35,7 +35,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { join as joinPath } from 'path';
 import { tmpdir } from 'os';
 import { atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, withLiveSettingsRestore, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
+import { recordUserAction } from './userActions.js';
+import { getSettings, updateSettings, updateSettingsWith, withLiveSettingsRestore, reloadSettings, settingsEvents, flushSettingsLedger, __resetSettingsCache, readSettingsStrict } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -274,6 +275,38 @@ describe('settings.js', () => {
       // its own patch applied to the base.
       expect(b).toEqual({ base: true, first: 1, second: 2 });
       expect(a).toEqual({ base: true, first: 1 });
+    });
+  });
+
+  describe('ledger write is detached from the save turn (#12018)', () => {
+    it('resolves the save and keeps the file write when the ledger rejects', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      recordUserAction.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+      try {
+        await expect(updateSettings({ theme: 'dark' }, { actor: 'user' })).resolves.toEqual({ theme: 'dark' });
+        expect(atomicWrite).toHaveBeenCalledTimes(1);
+        await flushSettingsLedger();
+        expect(recordUserAction).toHaveBeenCalledTimes(1);
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Settings ledger write failed for keys theme: connect ECONNREFUSED'));
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it('does not hold the write queue while a ledger write hangs', async () => {
+      let current = {};
+      tryReadFile.mockImplementation(async () => JSON.stringify(current));
+      atomicWrite.mockImplementation(async (_path, content) => { current = JSON.parse(content); });
+      // A ledger write that never settles (Postgres pool waiting on a dead host).
+      recordUserAction.mockReturnValueOnce(new Promise(() => {}));
+
+      await updateSettings({ first: 1 }, { actor: 'user' });
+      await expect(updateSettings({ second: 2 }, { actor: 'user' })).resolves.toEqual({ first: 1, second: 2 });
+      expect(current).toEqual({ first: 1, second: 2 });
+      // Both saves scheduled their row (the second's dispatch is a tick behind
+      // its resolved save); the first is still in flight.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(recordUserAction).toHaveBeenCalledTimes(2);
     });
   });
 
