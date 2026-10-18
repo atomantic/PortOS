@@ -36,6 +36,20 @@ describe('production review record growth', () => {
     expect(project.productionReview.approvalHistory.at(-1).basis).toBe(project.productionReview.approvals.art.basis);
   });
 
+  it('treats a refreshed snapshot as newest when timestamps tie', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    try {
+      let project = artProject('Grain 0');
+      const first = productionReadiness(project).basis.art;
+      project = approve(project);
+      for (let n = 1; n < 5; n++) project = approve(revise(project, n));
+      project = approve(revise(project, 0));
+      project = approve(revise(project, 5));
+      expect(Object.keys(project.productionReview.reviewedRevisions)).toContain(first);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps the snapshot an open comment points at, and drops it once resolved', () => {
     let project = artProject('Grain 0');
     const commentBasis = productionReadiness(project).basis.art;

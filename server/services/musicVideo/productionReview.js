@@ -908,7 +908,7 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
   }
   return { ...project, productionReview: { ...project.productionReview,
     approvalHistory: [...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY),
-    reviewedRevisions: pruneReviewedRevisions({ ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
+    reviewedRevisions: pruneReviewedRevisions({ ...omitKey(project.productionReview?.reviewedRevisions, basis), [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
     approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
 }
 
@@ -950,6 +950,8 @@ export function carryStoryboardApproval(before, after, reason) {
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }
 
+// A refreshed snapshot is re-inserted last so insertion order doubles as recency.
+const omitKey = (obj, key) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => k !== key));
 const MAX_APPROVAL_HISTORY = 50;
 const MAX_RECENT_REVISIONS = 5;
 
