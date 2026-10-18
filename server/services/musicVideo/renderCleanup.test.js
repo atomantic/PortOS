@@ -74,6 +74,17 @@ describe('derived render retention', () => {
     for (const id of [...ids.filter(id => id !== 'old'), 'source', 'other']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
   });
 
+  it('preserves canonical render URLs during automatic and explicit cleanup', async () => {
+    await seed([entry('current'), entry('path'), entry('url'), entry('unused')]);
+    state.others = [{ composition: { media: '/data/videos/path.mp4' } }];
+    state.collections = [{ items: [{ url: 'https://example.test/data/videos/url.mp4?download=1' }] }];
+    expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
+    const result = await cleanupRenders('example-project');
+    expect(result.finals.map(item => [item.id, !!item.reason])).toEqual([['path', true], ['url', true]]);
+    for (const id of ['current', 'path', 'url']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
+    expect(existsSync(join(PATHS.videos, 'unused.mp4'))).toBe(false);
+  });
+
   it('keeps history and bytes retryable when index removal fails, then settles them on retry', async () => {
     await seed([entry('current'), entry('old')]);
     unindexVideo.mockRejectedValueOnce(new Error('Index temporarily unavailable'));

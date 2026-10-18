@@ -31,8 +31,14 @@ export function assertRenderCleanupIdle(projectId) {
 }
 
 // Include legacy and nested references (takes, proof, kits, clone provenance).
-const references = (value, ids) => typeof value === 'string' ? ids.has(value)
-  : value && typeof value === 'object' && Object.values(value).some(child => references(child, ids));
+const references = (value, ids) => {
+  if (typeof value === 'string') {
+    if (ids.has(value)) return true;
+    const path = /^https?:\/\//.test(value) && URL.canParse(value) ? new URL(value).pathname : value.split(/[?#]/, 1)[0];
+    return ids.has(path);
+  }
+  return value && typeof value === 'object' && Object.values(value).some(child => references(child, ids));
+};
 const size = async path => path ? stat(path).then(info => info.size, error => {
   if (error.code === 'ENOENT') return 0;
   throw error;
@@ -66,7 +72,8 @@ async function finalInventory(projectId, history, pending = []) {
   for (const entry of retirementEntries(history, pending)) {
     // Only the full-render pipeline owns this tag. Source clips use musicVideo.projectId.
     if (entry.musicVideoProjectId !== projectId || !['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse'].includes(entry.modelId) || entry.id === project.renderHistoryId) continue;
-    const ids = new Set([entry.id, entry.filename]);
+    const ids = new Set([entry.id, entry.filename, safeUnder(PATHS.videos, entry.filename),
+      `/data/videos/${entry.filename}`, `/data/videos/${encodeURIComponent(entry.filename)}`]);
     const referenced = owners.some(owner => references(owner, ids))
       || history.some(other => other.id !== entry.id && references(other, ids));
     const reason = !hasCurrent ? 'No completed replacement' : referenced ? 'Referenced by saved media or production records' : null;
