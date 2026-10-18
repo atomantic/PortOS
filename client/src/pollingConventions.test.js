@@ -64,7 +64,6 @@ const TIMER_CALL = /\bsetInterval\s*\(/;
 const ALLOWED = {
   'src/components/BrailleSpinner.jsx': 'advances the spinner glyph; no I/O',
   'src/components/calendar/DayView.jsx': 'moves the "now" line down the day grid; no I/O',
-  'src/components/cos/tabs/AgentCard.jsx': 'elapsed-time clock tick (the card polls stats via useAutoRefetch)',
   'src/components/meatspace/post/PostDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/PostLlmDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/WordplayDrillUI.jsx': 'elapsed-time clock tick; no I/O',

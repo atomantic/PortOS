@@ -86,13 +86,17 @@ const releaseVisibilityIfIdle = () => {
  * @param {number} intervalMs - tick cadence. 60000 (one minute) is the right
  *   default for "X min ago" labels; bump to 3600000 for hourly "X hours ago"
  *   surfaces; 1000 only for true seconds-precision counters.
+ * @param {{ enabled?: boolean }} [options] - `enabled: false` leaves the
+ *   ticker unsubscribed (the returned snapshot freezes at its last value), for
+ *   a counter that only runs while its subject does, e.g. a finished agent's
+ *   card. Hooks cannot be called conditionally, so the gate lives here.
  * @returns {number} the latest `Date.now()` snapshot at the most recent tick.
  */
-export function useTimeTick(intervalMs = 60000) {
+export function useTimeTick(intervalMs = 60000, { enabled = true } = {}) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
+    if (typeof window === 'undefined' || !enabled) return undefined;
     let entry = tickers.get(intervalMs);
     if (!entry) entry = startTicker(intervalMs);
     entry.subscribers.add(setNow);
@@ -105,7 +109,7 @@ export function useTimeTick(intervalMs = 60000) {
         releaseVisibilityIfIdle();
       }
     };
-  }, [intervalMs]);
+  }, [intervalMs, enabled]);
 
   return now;
 }
