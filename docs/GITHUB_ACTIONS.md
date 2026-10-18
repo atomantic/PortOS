@@ -185,6 +185,65 @@ shipped prompt-history guard runs locally when selected; the Windows job and
 the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
 contract: `docs/CONTRIBUTING.md`.
 
+### Pregate attestation
+
+A green pregate on this machine runs the same planner, runners, environment
+and `portos_test` database the Linux jobs do, so repeating those stages in CI
+for the install's own pull requests buys queue time and nothing else (design
+record: `docs/plans/2026-10-18-ci-local-first-merge-gate.md`). After the push,
+`node scripts/pregate-attest.js` turns the receipt into a commit status on the
+pushed head, and the impact planner skips what it attests to:
+
+- **What is attested.** Only receipt stages that ran and passed: the
+  hidden-content scan, lint, server and client tests, the client build and its
+  bundle pin, the boot smoke, the browser suites and the DB suite, and the
+  shipped prompt-history guard. A suite pregate reported as not run — skipped
+  by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
+  prerequisite — is not attested, and a downgraded full plan never attests
+  its server or client stage (it ran the always-run guards, not CI's
+  selection). The vocabulary is `ATTESTABLE_STAGES` in
+  `scripts/lib/pregateAttestation.js`.
+- **The tree binding.** The status description is
+  `tree=<40-hex> stages=<list>`: the receipt's `git write-tree` hash of the
+  exact working tree pregate validated, untracked and uncommitted files
+  included. `pregate-attest.js` refuses unless `<commit>^{tree}` equals it —
+  anything changed after pregate means a rerun — and the planner compares it
+  with the head commit's tree on the PR. A SHA is never compared, for the same
+  reason `scripts/verify-ci-status.js` compares trees: the content is what was
+  tested. The commit must already be on the upstream remote (the one
+  `branch.<name>.remote` names); GitHub only accepts a status on a commit it
+  has, which is why attesting is a step after `git push`, not a pregate flag.
+- **Who can post one.** A commit status on this repository can only be created
+  by an actor with write access, and the planner honors only the newest
+  successful `pregate` status whose `creator.login` is the repository owner.
+  The `GITHUB_TOKEN` of a `pull_request` run from a fork is read-only and
+  cannot create one; a Dependabot pull request is refused by author; a status
+  by anyone else is ignored. The impact job holds `statuses: read` and nothing
+  more (`release.yml` grants the same scope to the called workflow). CI is
+  still the authority for every outsider.
+- **When it applies.** Only a same-repository pull request into a non-`release`
+  base that was not forced full. The planner verifies the merge-ref checkout's
+  second parent is the event's head (so the tree compared is the tree under
+  test) and reads `repos/{repo}/commits/{head}/statuses`. Any failure — API
+  error, unreadable description, tree mismatch, wrong creator — leaves the
+  plan exactly as computed and records the reason.
+- **What CI still runs.** The impact job and its hidden-content scan, the
+  Windows job, the Linux worker-containment job, the Node-minimum check and
+  the `CI Gate` itself always run as planned. The server job stays when its
+  boot smoke is selected but not attested, because the smoke runs on that job.
+  An attested run reports `full: false`, so `Full CI Gate` is never published
+  on the strength of a receipt. The planner reads the plan from the merge ref,
+  so a test added on `main` after the local run can still be selected and
+  then skipped under the attestation — the same class of gap the nightly
+  full run on `main` exists to catch.
+- **How to inspect it.** The impact job's summary prints a `Pregate
+  attestation` line (`attested`, the head and tree, the stages, or the reason
+  none applied) and `suite_reasons` names each skipped suite as attested.
+  On the commit: `gh api repos/<owner>/<repo>/commits/<sha>/statuses` lists
+  every `pregate` status with its creator, description and timestamp;
+  `node scripts/pregate-attest.js --dry-run` shows what would be posted for
+  the current receipt and HEAD without posting it.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
@@ -554,12 +613,15 @@ The selected work is split across parallel jobs:
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
   cancelled jobs when nothing actually failed — as far as the gate job itself
   runs, which a run-wide cancel prevents. See "External cancellation and one
-  automatic retry" below.
+  automatic retry" below. A job the planner skipped on a pregate attestation
+  counts as passing here like any other skipped job; the impact summary and
+  `suite_reasons` say which ones, and why (see "Pregate attestation").
 - **Full CI Gate** — published only when the plan chose the complete suite and
   full Windows coverage, with the full browser profile executed in hosted CI.
-  Ordinary PR smoke runs cannot publish it.
-  It mirrors `CI Gate`'s result. This is the check the release workflow looks for;
-  see "Reusing the release PR's CI run" below.
+  Ordinary PR smoke runs cannot publish it, and neither can a run that skipped
+  any stage on a pregate attestation — the planner reports `full: false` for
+  those. It mirrors `CI Gate`'s result. This is the check the release workflow
+  looks for; see "Reusing the release PR's CI run" below.
 
 ### Browser fidelity cases
 
