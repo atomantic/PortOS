@@ -342,11 +342,15 @@ scale the code actually sees. Say which one you have.
   import time that only one rare path needs.
 - **Cache misuse** — a cache that never invalidates, one that never hits because
   its key varies, or an unbounded one that is really a leak.
+- **Stable reference data re-downloaded** — a list that changes only on an
+  event (configuration, providers, a catalog) fetched on a timer or on every
+  visit instead of being invalidated by the event that changes it.
 
-## Required service and data-path coverage
+## Where present: service and data-path coverage
 
-For services, APIs, workers, and data pipelines, inspect the heaviest request
-and job paths as well as any UI:
+Apply the items that exist in this app and skip the rest silently. For
+services, APIs, workers, and data pipelines, inspect the heaviest request and
+job paths as well as any UI:
 
 - **Query plans** — read the plan (EXPLAIN or the engine's equivalent) for the
   most frequent and the most expensive queries rather than inferring index use
@@ -365,9 +369,10 @@ and job paths as well as any UI:
 - **Serialization and startup cost** — repeated encode/decode of the same
   payload, and cold-start work on a serverless or per-request path.
 
-## Required UI load and idle-network coverage
+## Where present: UI load and idle-network coverage
 
-For apps with a UI, inspect the shared shell and at least one high-volume
+Apply the items that exist in this app and skip the rest silently. For apps
+with a UI, inspect the shared shell and at least one high-volume
 collection route, plus a sibling tab that does not use that collection. Trace
 initial reads, mounted hidden panels, polling timers, websocket invalidations,
 and reconnect recovery. Include the app's largest growing collections (inboxes,
@@ -378,8 +383,7 @@ When browser tooling is available, capture a cold route load, navigation to the
 sibling tab, and at least 60 seconds of idle network activity. Report request
 counts and transferred/decoded bytes by endpoint, duplicate or overlapping
 requests, time until useful content renders, and idle bytes per minute. Include
-websocket payloads, not only fetch/XHR. Check apps/providers and other stable
-reference data are invalidated by events rather than repeatedly downloaded.
+websocket payloads, not only fetch/XHR.
 Distinguish expected live telemetry from whole-list polling; telemetry should
 be scoped to visible consumers. Use synthetic large collections to verify
 server page limits, compact list projections, lazy details, bounded rendered
@@ -803,6 +807,11 @@ tablet width, and a desktop width. Compare: a defect is usually something that
 works at one size and fails at another. If the interface is not reachable, exit
 cleanly and say so.
 
+This audit owns every layout defect at a viewport width ≤1024 and touch
+mechanics. A narrow container inside a desktop viewport — a dashboard widget,
+an embedded panel, a side panel — belongs to the UX work's reflow check, so do
+not file it here.
+
 ## Hunt for
 
 - **Horizontal overflow** — a fixed width, an unwrapped row, a wide table, or a
@@ -858,7 +867,7 @@ interface the same way and hold to the same checklist.
 Duplicate findings are noise. Do NOT file:
 
 - **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
-- **Touch-only mechanics** (hover-only controls and tap-target sizing) — \`mobile-responsive\` owns these. Responsive layout failures ARE part of this UX audit; deduplicate against findings from that sibling task.
+- **Phone and tablet viewports (1024 wide or narrower) and touch mechanics** — \`mobile-responsive\` owns overflow, clipping, breakpoint gaps, viewport-height assumptions, hover-only controls, and tap targets at those viewport widths. This audit's reflow check (item 8) is a narrow CONTAINER on a desktop viewport — a dashboard widget, an embedded panel, a side panel — never a narrow viewport.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
 - **The wording of a single string** (jargon, an ambiguous verb, broken plurals) — \`copy\` owns it. How MUCH text a screen spends explaining itself, and whether it repeats what the controls already say, is this audit's (checklist item 9).
 - **A workflow that cannot be resumed or cancelled after a failure or reload** — \`workflow-recovery\` owns it. Whether the page tells the user where a record stands is this audit's (checklist item 12).
@@ -888,10 +897,14 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    fresh or finished one. Rotate coverage: prefer routes and domains with no
    finding from this audit in the tracker in the last 30 days, and list the
    routes you chose and why. Describe records by their state, never by their
-   names or contents. Walk each chosen route with Playwright MCP. For every route:
-   - \`browser_navigate\` to it, then \`browser_snapshot\` to read the structure.
-   - \`browser_resize\` to **1440x900**, **1280x800**, **1024x768**, **768x1024**, **390x844**, and **320x812** and
-     snapshot at each — the fold differs, and a buried primary action is the
+   names or contents. Walk each chosen route with the browser automation
+   available to this run (a CDP tab, Playwright, or the host's browser tool);
+   if none is reachable, exit cleanly as step 2 says. For every route:
+   - Navigate to it and read the rendered structure (an accessibility snapshot
+     or the DOM), not only a screenshot.
+   - View it in three viewport classes — desktop (1280 wide or more), tablet
+     (roughly 768–1024), and phone (390 or narrower) — and read the structure
+     at each. The fold differs per class, and a buried primary action is the
      single most common finding.
 
    - Test with the navigation sidebar expanded and collapsed, and at 200% zoom.
@@ -923,7 +936,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    7. **Information hierarchy matches the user's task** — what they came for is
       the most prominent thing, not the densest table or the newest feature.
 
-   8. **Narrow-container reflow** — no overlapping cards, clipped controls, off-screen actions, or page-level horizontal scroll. Toolbars wrap, flexible children shrink, long strings wrap or have an accessible full-value path, and side panels stack before squeezing the primary work. Consult the app's design standard; for PortOS use docs/UX_DESIGN_GUIDE.md.
+   8. **Narrow-container reflow (desktop viewport, narrow container)** — a dashboard widget, embedded panel, or side panel resized to 240–480px wide inside a desktop viewport shows no overlapping cards, clipped controls, off-screen actions, or page-level horizontal scroll. Toolbars wrap, flexible children shrink, long strings wrap or have an accessible full-value path, and side panels stack before squeezing the primary work. The same defects at a phone or tablet viewport width belong to \`mobile-responsive\`. Consult the app's design standard; for PortOS use docs/UX_DESIGN_GUIDE.md.
    9. **Text earns its space.** A label, then at most one useful sentence, then
       optional detail behind a named disclosure. A finding is a paragraph that
       narrates what the visible controls already make obvious ("Click Repair to

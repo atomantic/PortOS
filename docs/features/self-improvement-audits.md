@@ -80,7 +80,7 @@ the operator's live checkout.
 | `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
 | `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
 | `ui-bugs` | Things that are broken in the running interface | `bug`, `ui-bug` | implement | |
-| `mobile-responsive` | Small-screen and touch usability | `mobile` | implement | |
+| `mobile-responsive` | Layout at viewport widths ≤1024 and touch mechanics | `mobile` | implement | |
 | `error-handling` | Failure paths, timeouts, retries, degraded fallback | `resilience` | implement | |
 | `typing` | Type contracts at boundaries | `code-quality`, `typing` | implement | |
 | `console-errors` | What the app actually emits while running | `bug`, `console` | implement | |
@@ -118,6 +118,11 @@ problem:
   that no metric captures — mixed abstraction levels, flag arguments, names that
   lie. `module-hygiene` owns responsibility boundaries and treats a complexity
   score only as a candidate signal, never as a finding.
+- **Layout is split by what is narrow.** `mobile-responsive` owns every layout
+  defect at a viewport width ≤1024 (phone and tablet) plus touch mechanics —
+  overflow, clipping, breakpoint gaps, tap targets. `ux` checklist item 8 keeps
+  only a narrow CONTAINER on a desktop viewport (a dashboard widget, an embedded
+  panel, a side panel); the two lanes name each other's side (#12084).
 - **Duplication is split two ways.** `simplify` owns copy-paste and dead code.
   `better-structural-drift` owns a derived artifact or hand-synced registry acting
   as a second source of truth, which is a different fix (derive it, or add the

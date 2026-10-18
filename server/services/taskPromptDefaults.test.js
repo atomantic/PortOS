@@ -115,7 +115,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(6);
+    expect(PROMPT_VERSIONS.ux).toBe(7);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
@@ -143,6 +143,33 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('Rotate coverage');
     expect(current).toContain('**A record page says where it stands.**');
     expect(current).toContain('**Same kind of page, same frame.**');
+  });
+
+  // v7: the harness provisions no Playwright MCP, so the walk names no tool and
+  // no exact viewport; the reflow item keeps only desktop-viewport containers
+  // and hands phone/tablet widths to mobile-responsive (#12077, #12084).
+  it('ux v7 uses whatever browser automation the run has and splits layout by viewport width', () => {
+    const ux = DEFAULT_TASK_PROMPTS.ux;
+    expect(ux).not.toMatch(/Playwright MCP|browser_[a-z]+/);
+    expect(ux).toContain('a CDP tab, Playwright, or the host');
+    expect(ux).toContain('three viewport classes');
+    expect(ux).toContain('(desktop viewport, narrow container)');
+    expect(ux).toContain('Phone and tablet viewports (1024 wide or narrower) and touch mechanics');
+    expect(ux).not.toContain('Responsive layout failures ARE part of this UX audit');
+    expect(PROMPT_VERSIONS['mobile-responsive']).toBe(4);
+    expect(DEFAULT_TASK_PROMPTS['mobile-responsive']).toContain('viewport width ≤1024 and touch');
+  });
+
+  // v6: 'Required' coverage sections made a single-process app pad its report
+  // with 'checked, not applicable' lines (#12078).
+  it('performance v6 scopes platform-specific coverage to what the app has', () => {
+    const perf = DEFAULT_TASK_PROMPTS.performance;
+    expect(PROMPT_VERSIONS.performance).toBe(6);
+    expect(perf).not.toMatch(/^## Required/m);
+    expect(perf.match(/^## Where present:/gm)).toHaveLength(2);
+    expect(perf.match(/skip the rest silently/g)).toHaveLength(2);
+    expect(perf).not.toContain('apps/providers');
+    expect(perf).toContain('**Stable reference data re-downloaded**');
   });
 
   it('ui-bugs v4 hunts unhappy paths and statically provable crashes', () => {
