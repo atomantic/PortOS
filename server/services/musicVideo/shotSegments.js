@@ -49,6 +49,8 @@ export const SHOT_SEGMENT_DIR = 'music-video-segments';
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
 const segmentOwnerWrites = createKeyCachedQueue();
+const pendingShotCleanup = new Map();
+const shotCleanupWrites = createKeyCachedQueue();
 const segmentOwnersFile = dir => join(dir, 'segments.json');
 
 async function rememberSegmentOwner(plan, segment) {
@@ -470,10 +472,14 @@ export async function pruneSegments(plan, { reserved = false, current = false, .
   return reserved ? prune() : withRenderCleanupReservation(plan.project.id, prune);
 }
 
-export function assertSegmentCleanupIdle(projectId) {
+function segmentCleanupBusy(projectId) {
   const dir = shotSegmentDir(projectId);
-  if ([...inFlight.keys(), ...previewBuilds.keys()].some(path => path.startsWith(`${dir}${sep}`))
-    || [...shotJobs.keys()].some(key => key.startsWith(`${projectId}:`))) {
+  return [...inFlight.keys(), ...previewBuilds.keys()].some(path => path.startsWith(`${dir}${sep}`))
+    || [...shotJobs.keys()].some(key => key.startsWith(`${projectId}:`));
+}
+
+export function assertSegmentCleanupIdle(projectId) {
+  if (segmentCleanupBusy(projectId)) {
     throw new ServerError('Wait for shot renders and preview builds to finish before cleanup.', { status: 409, code: 'SHOT_RENDER_ACTIVE' });
   }
 }
@@ -508,7 +514,10 @@ export async function cleanupShotSegments(projectId, { unusedLooks = false, rese
 }
 
 /** Remove a project's whole segment cache (the project was deleted). */
-export const removeProjectSegments = (projectId) => rm(shotSegmentDir(projectId), { recursive: true, force: true });
+export const removeProjectSegments = (projectId) => {
+  pendingShotCleanup.delete(projectId);
+  return rm(shotSegmentDir(projectId), { recursive: true, force: true });
+};
 
 /** Boot sweep: partial files from renders a restart interrupted. */
 export async function sweepPartialSegments() {
@@ -807,7 +816,10 @@ export async function buildRenderPreview(projectId, { light = false } = {}) {
   if (existsSync(path)) return result;
   let build = previewBuilds.get(path);
   if (!build) {
-    build = writePreview(plan, lead, path, { light }).finally(() => previewBuilds.delete(path));
+    build = writePreview(plan, lead, path, { light }).finally(async () => {
+      previewBuilds.delete(path);
+      await cleanupAfterShot(projectId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+    });
     previewBuilds.set(path, build);
   }
   await build;
@@ -837,17 +849,40 @@ async function writePreview(plan, lead, path, { light }) {
   }
 }
 
-async function cleanupAfterShot(projectId, sceneId) {
-  const { isProjectRenderActive } = await import('./render.js');
-  if (isProjectRenderActive(projectId)) return;
-  assertSegmentCleanupIdle(projectId);
-  const { withProjectMediaMutation } = await import('./projects.js');
-  await withProjectMediaMutation(async () => {
-    const { plan } = await planForLooks(projectId);
-    if (!plan || plan.error || isProjectRenderActive(projectId)) return;
-    const current = plan.segments.filter(segment => segment.sceneId === sceneId);
-    if (!current.length || !current.every(segmentRendered)) return;
-    assertSegmentCleanupIdle(projectId);
-    await pruneSegments(plan, { sceneId });
+async function cleanupAfterShot(projectId, sceneId = null) {
+  if (sceneId) {
+    const pending = pendingShotCleanup.get(projectId) || new Set();
+    pending.add(sceneId);
+    pendingShotCleanup.set(projectId, pending);
+  }
+  if (!pendingShotCleanup.get(projectId)?.size) return;
+  return shotCleanupWrites(projectId, async () => {
+    const pending = pendingShotCleanup.get(projectId);
+    if (!pending?.size) return;
+    const { isProjectRenderActive } = await import('./render.js');
+    if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
+    const { withProjectMediaMutation } = await import('./projects.js');
+    await withProjectMediaMutation(async () => {
+      if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
+      await withRenderCleanupReservation(projectId, async () => {
+        const { plan } = await planForLooks(projectId);
+        if (!plan || plan.error) return;
+        for (const id of [...pending]) {
+          const current = plan.segments.filter(segment => segment.sceneId === id);
+          // A later edit supersedes the completed render: wait for its new success.
+          if (current.length && current.every(segmentRendered)) await pruneSegments(plan, { sceneId: id, reserved: true });
+          pending.delete(id);
+        }
+        if (!pending.size) pendingShotCleanup.delete(projectId);
+      }, { notify: false });
+    });
   });
 }
+
+// A deferred batch also resumes after preview/full-render readers or another
+// cleanup release their ownership. Never poll or drop another completed shot.
+const resumeShotCleanup = ({ projectId }) => {
+  cleanupAfterShot(projectId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+};
+musicVideoEvents.on('render', resumeShotCleanup);
+musicVideoEvents.on('render-cleanup-idle', resumeShotCleanup);
