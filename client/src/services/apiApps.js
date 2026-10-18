@@ -20,6 +20,9 @@ export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
 };
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
+// Per-lane outcome of filed audit issues (#12088); the table renders its own
+// unavailable state, so the wrapper is silent.
+export const getAppLaneHealth = (id, options) => request(`/apps/${id}/lane-health`, { silent: true, ...options });
 // Land the app's numeric quality scores as `.quality.json` through an
 // immediately-merged pull request, so other PortOS installs running this app start
 // with the latest scores. Opt-in per app (`publishQualitySnapshot`) and

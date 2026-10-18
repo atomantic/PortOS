@@ -20,7 +20,50 @@ describe('taskDataInputs', () => {
       'open-pull-requests',
       'closed-unmerged-pull-requests',
       'audit-slice-history',
+      'lane-health',
     ]);
+  });
+
+  // #12088: the lane reads what became of its own findings before it files more.
+  it('renders the lane-health block for an audit lane through the resolved forge, and names a failed read', async () => {
+    const resolveTracker = vi.fn().mockResolvedValue({ forge: 'gh', host: 'github.com' });
+    const resolveTokenEnv = vi.fn().mockResolvedValue({ GH_TOKEN: 'test-token' });
+    const collectLaneHealth = vi.fn().mockResolvedValue({
+      ok: true, windowDays: 60, refileDays: 30, from: '2026-08-18T12:00:00.000Z', to: '2026-10-17T12:00:00.000Z', truncated: false, partial: [],
+      lanes: [{ id: 'better-complexity', label: 'Cyclomatic complexity', metricLabel: 'complexity', filed: 12, completed: 9, notPlanned: 2, open: 1, reverted: 1, refiled: 1, flaggedTotal: 3, flagged: [
+        { number: 31, title: 'Dispatcher branches on every provider', url: null, reasons: [{ kind: 're-filed', of: 20, path: 'server/services/dispatch.js' }] },
+        { number: 28, title: 'Contact alice@example.com about the hotspot', url: null, reasons: [{ kind: 'reverted', pullRequest: 90 }] },
+        { number: 25, title: 'Nested ternary', url: null, reasons: [{ kind: 'not-planned' }] },
+      ] }],
+    });
+    const options = { app: APP, taskType: 'better-complexity', dependencies: { resolveTracker, resolveTokenEnv, collectLaneHealth } };
+    const [section] = await resolveTaskDataInputs(['lane-health'], options);
+    expect(section.label).toBe('Lane health');
+    expect(collectLaneHealth).toHaveBeenCalledWith(APP, { forge: expect.objectContaining({ cli: 'gh', env: expect.objectContaining({ GH_TOKEN: 'test-token' }) }), taskType: 'better-complexity' });
+    expect(section.content).toContain('This lane (`complexity` issues) over the last 60 days: filed 12, completed 9, not planned 2, open 1, fixes reverted 1, re-filed within 30 days of a closed finding on the same file 1.');
+    expect(section.content).toContain('Findings this lane got wrong or repeated:');
+    expect(section.content).toContain('- #31 Dispatcher branches on every provider — re-filed after #20 on server/services/dispatch.js');
+    expect(section.content).toContain('- #28 Contact <email> about the hotspot — fix reverted (PR #90)');
+    expect(section.content).toContain('- #25 Nested ternary — closed as not planned');
+    expect(appendTaskDataInputs('Audit.', [section])).toContain('### Lane health');
+
+    collectLaneHealth.mockResolvedValueOnce({ ok: true, windowDays: 60, refileDays: 30, from: '2026-09-20T00:00:00.000Z', to: '2026-10-17T12:00:00.000Z', truncated: true, partial: ['commits'],
+      lanes: [{ id: 'better-complexity', metricLabel: 'complexity', filed: 0, completed: 0, notPlanned: 0, open: 0, reverted: 0, refiled: 0, flaggedTotal: 0, flagged: [] }] });
+    const [clean] = await resolveTaskDataInputs(['lane-health'], options);
+    expect(clean.content).toContain('the issue read was truncated; the window starts 2026-09-20');
+    expect(clean.content).toContain('Revert detection is incomplete this run (commits could not be read)');
+    expect(clean.content).toContain('No finding of this lane was closed as not planned, reverted, or re-filed in the window.');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    collectLaneHealth.mockResolvedValueOnce({ ok: false, reason: 'issues', error: 'gh: HTTP 502' });
+    const [failed] = await resolveTaskDataInputs(['lane-health'], options);
+    expect(failed.content).toContain('Lane health could not be preloaded (gh failed: gh: HTTP 502)');
+    expect(failed.content).toContain('Do not interpret this as an empty source');
+    warn.mockRestore();
+
+    expect((await resolveTaskDataInputs(['lane-health'], { ...options, taskType: 'plan-feature' }))[0].content).toContain('applies to audit lanes only');
+    resolveTracker.mockResolvedValueOnce({ forge: 'jira' });
+    expect((await resolveTaskDataInputs(['lane-health'], options))[0].content).toContain('repository forge is unavailable');
   });
 
   // #12090: the lane's recent slices are preloaded so it rotates coverage; an

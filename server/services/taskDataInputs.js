@@ -15,7 +15,8 @@ import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
 import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { isAuditTaskType } from '../lib/auditCatalog.js';
+import { isAuditTaskType, normalizeAuditTaskType } from '../lib/auditCatalog.js';
+import { describeLaneFlag, laneHealthFor } from '../lib/laneHealth.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { classifyGhProbe, execGh, ghRemedy } from './github.js';
 import { execGlabJson } from './gitlab.js';
@@ -128,7 +129,7 @@ export function renderForgeItems(items, { emptyMessage }) {
   return truncateWithNotice(lines.join('\n'), MAX_INPUT_CHARS);
 }
 
-async function runForgeCli(cli, args, { cwd, env } = {}) {
+export async function runForgeCli(cli, args, { cwd, env } = {}) {
   if (cli === 'gh') {
     let stderr = '';
     const stdout = await execGh(args, FORGE_TIMEOUT_MS, { cwd, env }).catch((err) => {
@@ -223,7 +224,7 @@ function forgeUnavailable(label, forge, result) {
   return unavailableMessage(label, reason);
 }
 
-async function resolveForgeContext(app, deps) {
+export async function resolveForgeContext(app, deps) {
   if (!app?.repoPath) return null;
   const tracker = await deps.resolveTracker(app);
   if (tracker?.forge !== 'gh' && tracker?.forge !== 'glab') return null;
@@ -244,6 +245,31 @@ async function resolveForgeContext(app, deps) {
     }
   }
   return { cli: tracker.forge, env, host: tracker.host };
+}
+
+/**
+ * The lane-health block (#12088): this lane's window numbers and the findings
+ * it got wrong or repeated, so the prompt can refuse to re-file them.
+ */
+function renderLaneHealth(report, taskType) {
+  const lane = laneHealthFor(report, normalizeAuditTaskType(taskType));
+  if (!lane) return unavailableMessage('Lane health', 'no lane matches this task');
+  const scope = report.truncated ? ` (the issue read was truncated; the window starts ${report.from.slice(0, 10)})` : '';
+  const lines = [
+    `This lane (\`${lane.metricLabel}\` issues) over the last ${report.windowDays} days${scope}: filed ${lane.filed}, completed ${lane.completed}, not planned ${lane.notPlanned}, open ${lane.open}, fixes reverted ${lane.reverted}, re-filed within ${report.refileDays} days of a closed finding on the same file ${lane.refiled}.`,
+  ];
+  if (report.partial?.length) lines.push(`Revert detection is incomplete this run (${report.partial.join(' and ')} could not be read); a reverted count of 0 is not evidence.`);
+  if (!lane.flagged.length) {
+    lines.push('No finding of this lane was closed as not planned, reverted, or re-filed in the window.');
+  } else {
+    const shown = lane.flaggedTotal > lane.flagged.length ? ` (newest ${lane.flagged.length} of ${lane.flaggedTotal})` : '';
+    lines.push(`Findings this lane got wrong or repeated${shown}:`);
+    for (const { number, title, reasons } of lane.flagged) {
+      const safeTitle = redactPii(scrubSecretTokens(title)).slice(0, 160);
+      lines.push(`- #${number} ${safeTitle} — ${reasons.map(describeLaneFlag).join('; ')}`);
+    }
+  }
+  return truncateWithNotice(lines.join('\n'), MAX_INPUT_CHARS);
 }
 
 const INPUT_LOADERS = {
@@ -302,6 +328,12 @@ const INPUT_LOADERS = {
     const lines = runs.map(({ assessedAt, slice }) => `- ${assessedAt.slice(0, 10)}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`);
     return truncateWithNotice(`Recently audited by this lane (prefer other areas unless evidence points here):\n${lines.join('\n')}`, MAX_INPUT_CHARS);
   },
+  'lane-health': async ({ app, deps, forge, taskType }) => {
+    if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no lane health applies to this task.';
+    if (!forge) return unavailableMessage('Lane health', 'repository forge is unavailable');
+    const result = await deps.collectLaneHealth(app, { forge, taskType });
+    return result.ok ? renderLaneHealth(result, taskType) : forgeUnavailable('Lane health', forge, result);
+  },
   'closed-unmerged-pull-requests': async ({ app, deps, forge }) => {
     if (!forge) return unavailableMessage('Closed unmerged pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'closed-unmerged' });
@@ -330,10 +362,14 @@ export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, 
       const { readRecentAuditSlices } = await import('./appQuality.js');
       return readRecentAuditSlices(...args);
     },
+    collectLaneHealth: async (...args) => {
+      const { collectLaneHealth } = await import('./appLaneHealth.js');
+      return collectLaneHealth(...args);
+    },
     environment: process.env,
     ...dependencies,
   };
-  const needsForge = selected.some((id) => id.includes('issues') || (id.includes('pull-requests')
+  const needsForge = selected.some((id) => id.includes('issues') || id === 'lane-health' || (id.includes('pull-requests')
     && !(taskType === 'pr-watcher' && id === 'open-pull-requests')));
   const forge = needsForge
     ? await resolveForgeContext(app, deps).catch(() => null)
