@@ -101,4 +101,12 @@ describe('PipelineEditorialChecks responsive switch (#1611)', () => {
     expect(catalogSection).not.toHaveClass('hidden');
     expect(findingsSection).toHaveClass('hidden');
   });
+
+  it('shows a retriable error when the series list fails to load', async () => {
+    listPipelineSeries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load series');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
 });

@@ -12,6 +12,7 @@ import {
   nicotineUpdateSchema,
   customNicotineProductSchema,
   customNicotineProductUpdateSchema,
+  dailyRangeQuerySchema,
 } from '../lib/meatspaceValidation.js';
 import * as nicotineService from '../services/meatspaceNicotine.js';
 
@@ -35,7 +36,8 @@ router.get('/nicotine', asyncHandler(async (req, res) => {
  * Daily nicotine entries with optional date range
  */
 router.get('/nicotine/daily', asyncHandler(async (req, res) => {
-  const entries = await nicotineService.getDailyNicotine(req.query.from, req.query.to);
+  const { from, to } = validateRequest(dailyRangeQuerySchema, req.query);
+  const entries = await nicotineService.getDailyNicotine(from, to);
   res.json(entries);
 }));
 

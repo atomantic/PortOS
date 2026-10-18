@@ -8,7 +8,7 @@
     "npm": ">=11.11.0"
   },
   "dependencies": {
-    "express": "5.2.1"
+    "express": "5.3.0"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",

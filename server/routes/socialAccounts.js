@@ -6,15 +6,21 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validate, validateRequest, socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/validation.js';
 import * as socialAccounts from '../services/socialAccounts.js';
 
 const router = Router();
 
+const listQuerySchema = z.object({
+  platform: z.string().min(1).max(50).optional(),
+  category: z.string().min(1).max(50).optional(),
+});
+
 // GET / - List all social accounts
 router.get('/', asyncHandler(async (req, res) => {
-  const { platform, category } = req.query;
+  const { platform, category } = validateRequest(listQuerySchema, req.query);
 
   let accounts;
   if (platform) {

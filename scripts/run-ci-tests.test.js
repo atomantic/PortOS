@@ -706,7 +706,9 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       expect(existsSync(liveRoot)).toBe(true);
       expect(alive(live.child.pid)).toBe(true);
       expect(existsSync(join(host, 'unrelated-old'))).toBe(true);
-      expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(false);
+      // Windows has no process snapshot reader: dead-owner evidence permits
+      // cleanup above, but age alone cannot prove a pid-less root is unused.
+      expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(process.platform === 'win32');
       expect(existsSync(join(host, 'portos-vitest-legacy-fresh'))).toBe(true);
     } finally {
       await Promise.allSettled(runs.map(run => run.cleanup()));

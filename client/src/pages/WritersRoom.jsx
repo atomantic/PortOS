@@ -14,14 +14,18 @@ import {
 } from '../services/apiWritersRoom';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { usePagedCollection } from '../hooks/usePagedCollection';
+import useListResource from '../hooks/useListResource';
 import useMounted from '../hooks/useMounted';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
 
 export default function WritersRoom() {
   const { workId } = useParams();
   const navigate = useNavigate();
-  const [folders, setFolders] = useState([]);
+  const fetchFolders = useCallback(() => listWritersRoomFolders({ silent: true }), []);
+  const foldersResource = useListResource(fetchFolders);
+  const { items: folders, setItems: setFolders } = foldersResource;
   const fetchWorks = useCallback(({ cursor, signal }) =>
     listWritersRoomWorks({ limit: 50, cursor }, { signal, silent: true }), []);
   const worksPage = usePagedCollection(fetchWorks);
@@ -43,13 +47,7 @@ export default function WritersRoom() {
   // page unmounts (rapid nav across pages).
   const mountedRef = useMounted();
 
-  const refreshLibrary = useCallback(async () => {
-    const foldersList = await listWritersRoomFolders().catch(() => []);
-    if (!mountedRef.current) return;
-    setFolders(foldersList);
-  }, []);
-
-  useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
+  const refreshLibrary = useCallback(() => foldersResource.retry(), [foldersResource.retry]);
 
   // Load the active work when the URL changes
   useEffect(() => {
@@ -179,6 +177,9 @@ export default function WritersRoom() {
           <div className="hidden md:block overflow-hidden min-w-0" />
         ) : (
           <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
+            {foldersResource.state === 'error' ? (
+              <ListLoadError what="folders" error={foldersResource.error} onRetry={foldersResource.retry} className="mb-3" />
+            ) : null}
             <LibraryPane
               folders={folders}
               works={works}

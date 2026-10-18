@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('../services/apiWritersRoom', async (importOriginal) => ({
@@ -11,9 +11,17 @@ vi.mock('../services/apiWritersRoom', async (importOriginal) => ({
 }));
 
 import WritersRoom from './WritersRoom';
-import { listWritersRoomWorks } from '../services/apiWritersRoom';
+import { listWritersRoomFolders, listWritersRoomWorks } from '../services/apiWritersRoom';
 
 describe('WritersRoom empty state', () => {
+  it('shows a retriable error when the folder list fails to load', async () => {
+    listWritersRoomFolders.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    render(<MemoryRouter><WritersRoom /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load folders');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
   it('opens the existing New work form from the unselected work pane', async () => {
     render(
       <MemoryRouter initialEntries={['/writers-room']}>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 // Spy on navigation so the "Remix into…" handoff can assert the target route +
@@ -489,6 +489,23 @@ describe('Catalog page', () => {
       'i-2', { refKind: 'universe', refId: 'u-1', role: 'cast-place' }, { silent: true },
     );
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Added 2 ingredients to Echo Saints/i));
+  });
+
+  it('shows and retries universe and series target read errors in the add menu', async () => {
+    listUniverseNames.mockRejectedValueOnce(new Error('universe offline')).mockResolvedValueOnce([]);
+    listPipelineSeriesNames.mockRejectedValueOnce(new Error('series offline')).mockResolvedValueOnce([]);
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    fireEvent.click(screen.getByRole('button', { name: /Add to universe\/series/i }));
+
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+    expect(screen.queryByText('No universes or series yet.')).toBeNull();
+    fireEvent.click(within(screen.getByText(/Could not load universes/).closest('[role="alert"]')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Could not load universes/)).toBeNull());
+    fireEvent.click(within(screen.getByText(/Could not load series/).closest('[role="alert"]')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(await screen.findByText('No universes or series yet.')).toBeInTheDocument();
   });
 
   it('scopes the Albums view to a single album when a universe is selected', async () => {
