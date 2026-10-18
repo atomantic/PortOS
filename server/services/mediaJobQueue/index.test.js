@@ -3062,6 +3062,28 @@ describe('durable remote source-audio settlement', () => {
     }
   });
 
+  it('reconciles a failed reservation in-process, explains the hold, then dispatches the next job to that peer', async () => {
+    const first = await startAudioJob();
+    stubs.generateVideoRemote.mockClear();
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    // No restart: the blocked peer re-enqueues the retained reservation as a reconcile run.
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    expect(stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0].remoteMedia.reconcile).toBe(true);
+    await waitFor(() => mediaJobQueue.getJob(next.jobId)?.peerHold);
+    expect(mediaJobQueue.getJob(next.jobId)).toMatchObject({
+      status: 'queued',
+      peerHold: { reason: 'peer-settling', blockingJobId: first.jobId },
+    });
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+    expect(mediaJobQueue.getJob(next.jobId)).not.toHaveProperty('peerHold');
+    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+  });
+
   it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {
     const { first, maintenance } = await restoreUnsettledAudioJob(true);
     const journal = () => JSON.parse(readFileSync(join(maintenance.directory, 'state.json'), 'utf8'));

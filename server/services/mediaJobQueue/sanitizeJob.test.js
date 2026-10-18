@@ -261,4 +261,14 @@ describe('sanitizeJob', () => {
     expect(sanitized.renderer).toBe('local');
     expect(sanitized.executionLane).toBe('cloud');
   });
+
+  it('explains a queued job held behind an unsettled earlier peer job, and only while queued', () => {
+    const peerHold = { reason: 'peer-settling', blockingJobId: 'job-earlier-example', internal: 'x' };
+    const held = sanitizeJob({ id: 'job-held-example', kind: 'video', status: 'queued', statusMsg: 'Queued', peerHold });
+    expect(held.peerHold).toEqual({ reason: 'peer-settling', blockingJobId: 'job-earlier-example' });
+    expect(held.statusMsg).toBe('Waiting for peer to settle an earlier job');
+    const running = sanitizeJob({ id: 'job-held-example', kind: 'video', status: 'running', statusMsg: 'Starting', peerHold });
+    expect(running).not.toHaveProperty('peerHold');
+    expect(running.statusMsg).toBe('Starting');
+  });
 });

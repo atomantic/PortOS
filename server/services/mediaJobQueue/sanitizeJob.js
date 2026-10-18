@@ -134,7 +134,10 @@ export function sanitizeJob(job) {
     completedAt: job.completedAt,
     position: job.position,
     progress: job.progress,
-    statusMsg: job.statusMsg,
+    // A queued remote job held behind an unsettled earlier job to its peer.
+    ...(job.status === 'queued' && job.peerHold
+      ? { peerHold: { reason: job.peerHold.reason, blockingJobId: job.peerHold.blockingJobId } } : {}),
+    statusMsg: job.status === 'queued' && job.peerHold ? 'Waiting for peer to settle an earlier job' : job.statusMsg,
     etaMs: job.etaMs,
     error: job.error,
     result: safeResult,

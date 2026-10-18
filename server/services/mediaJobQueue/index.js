@@ -105,6 +105,10 @@ const restoredParams = (job) => (isRemoteMediaJob(job)
   ? routedJobParams({ params: job.params })
   : job.params);
 
+// A reservation row whose own reconcile attempt failed again is retried when a
+// later job to the same peer is blocked behind it, but no faster than this.
+const RESERVATION_RECONCILE_RETRY_MS = 30_000;
+
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
@@ -1050,6 +1054,38 @@ function startWorker() {
   }).finally(() => { workerStarted = false; });
 }
 
+// Transient (never persisted): why a queued remote job is not dispatching.
+// Logged once per blocked job so a silent per-tick skip is still diagnosable.
+function holdForPeer(job, blockingJobId) {
+  if (job.peerHold?.blockingJobId === blockingJobId) return;
+  job.peerHold = { reason: 'peer-settling', blockingJobId };
+  console.log(`⏳ media-job [${job.id.slice(0, 8)}] waiting for peer to settle earlier job [${blockingJobId.slice(0, 8)}]`);
+}
+
+// A failed/canceled remote job that kept its peer reservation (no terminal peer
+// report) is reconciled in-process exactly as boot does, so the peer is not
+// blocked until the next restart. Returns whether the row was re-enqueued.
+function requeueRetainedReservation(entry) {
+  const idx = archive.indexOf(entry);
+  if (idx < 0 || entry.durabilityPending || !isRemoteMediaJob(entry)
+    || entry.params?.remotePeerReservation !== true || !['failed', 'canceled'].includes(entry.status)) return false;
+  const marker = entry.params?.remoteMedia;
+  archive.splice(idx, 1);
+  // Rebuild from persisted fields only, as boot does: the in-memory row carries
+  // transient terminal state (terminating, providerInvoked, ...) that would
+  // make the re-run look already settled.
+  const { id, kind, owner, queuedAt, startedAt, completedAt, result, error, progress, statusMsg, etaMs } = entry;
+  queue.push({
+    id, kind, owner, queuedAt, startedAt, completedAt, result, error, progress, statusMsg, etaMs,
+    status: 'queued',
+    cancelRequested: marker?.cancelRequested === true,
+    params: restoredParams({ ...entry, params: { ...entry.params, remoteMedia: { ...marker, reconcile: true } } }),
+  });
+  recomputeQueuePositions();
+  console.log(`🔁 media-job [${entry.id.slice(0, 8)}] remote ${entry.kind} ended without a terminal peer report — re-enqueued for reconciliation`);
+  return true;
+}
+
 // Every lane uses fire-and-forget so the poll loop is never blocked by a
 // running job in another lane.
 function startLaneJob(job, { lane }) {
@@ -1066,8 +1102,21 @@ function startLaneJob(job, { lane }) {
     return false;
   }
   if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
-  if (lane === 'remote' && archive.some((entry) => entry.id !== job.id && entry.params?.remotePeerReservation === true
-    && entry.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
+  if (lane === 'remote') {
+    const blocker = archive.find((entry) => entry.id !== job.id && entry.params?.remotePeerReservation === true
+      && entry.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId);
+    if (blocker) {
+      holdForPeer(job, blocker.id);
+      // The blocker settled failed/canceled without a terminal peer report;
+      // only a reconcile can release it, so do not wait for a restart.
+      // A prior reconcile run that failed again is retried at a bounded rate.
+      const retryDue = blocker.params.remoteMedia?.reconcile !== true
+        || Date.now() - new Date(blocker.completedAt || 0).getTime() >= RESERVATION_RECONCILE_RETRY_MS;
+      if (retryDue) requeueRetainedReservation(blocker);
+      return false;
+    }
+  }
+  delete job.peerHold;
   const permit = recoveringJobs.has(job.id)
     ? maintenance.recoverOwned('media', job.id)
     : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
@@ -1262,7 +1311,10 @@ async function drainLoop() {
       if (slots[lane] <= 0) continue;
       // One GPU job per peer initially. Different peers and this Mac remain
       // independent. Reconciliation occupies the same slot until settled.
-      if (lane === 'remote' && !job.params?.remoteMedia?.reconcile && candidates.some((pending) => pending.status === 'queued' && pending.params?.remoteMedia?.reconcile && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId)) continue;
+      if (lane === 'remote' && !job.params?.remoteMedia?.reconcile) {
+        const reconciling = candidates.find((pending) => pending.status === 'queued' && pending.params?.remoteMedia?.reconcile && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId);
+        if (reconciling) { holdForPeer(job, reconciling.id); continue; }
+      }
       if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
