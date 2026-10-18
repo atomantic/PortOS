@@ -20,12 +20,14 @@ import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
 import DuplicateGroup from '../components/sharing/DuplicateGroup';
+import ListLoadError from '../components/ui/ListLoadError';
 import MergeModal from '../components/sharing/MergeModal';
 import { timeAgo } from '../utils/formatters';
 import { listUniverseSummaries, deleteUniverse, listPipelineSeriesSummaries, listMediaCollections, listUniverseDuplicates } from '../services/api';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import { useRecordMerge } from '../hooks/useRecordMerge';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useListResource from '../hooks/useListResource';
 
 // Chip on a universe whose `factual` flag is set (#7616): its people and
 // places are real, so captured text is extracted as lived record rather than
@@ -101,10 +103,18 @@ function DeleteButton({ universe, confirming, onRequest, onConfirm, onCancel }) 
 
 export default function Universes() {
   const navigate = useNavigate();
-  const [universes, setUniverses] = useState([]);
-  const [series, setSeries] = useState([]);
-  const [latestImageByUniverse, setLatestImageByUniverse] = useState(() => new Map());
-  const [loading, setLoading] = useState(true);
+  const fetchUniverses = useCallback(() => listUniverseSummaries({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const { items: universes, setItems: setUniverses } = universesResource;
+  const fetchSeries = useCallback(() => listPipelineSeriesSummaries({ silent: true }), []);
+  const seriesResource = useListResource(fetchSeries);
+  const { items: series } = seriesResource;
+  const fetchCollections = useCallback(() => listMediaCollections({ silent: true }), []);
+  const collectionsResource = useListResource(fetchCollections);
+  const latestImageByUniverse = useMemo(
+    () => buildLatestImageByUniverse(collectionsResource.items),
+    [collectionsResource.items],
+  );
   // Same-named-but-different-id universes (e.g. cross-install sync produced two
   // "Clandestiny"s). Surfaced as a banner so the user can merge them here even
   // when it wasn't caught at sync time. Mirrors Sharing → Duplicates, scoped to
@@ -122,45 +132,9 @@ export default function Universes() {
   );
 
   useEffect(() => {
-    // Guard setState against a navigate-away before the fetch resolves —
-    // mirrors the editor's load effect (UniverseBuilder.jsx).
-    let cancelled = false;
-    // Universes drive the page; resolve `loading` as soon as they land so a
-    // slow/hung series fetch can't keep the list stuck on "Loading…".
-    // silent: the custom catch below owns the error toast (AGENTS.md).
-    listUniverseSummaries({ silent: true })
-      .catch((err) => {
-        toast.error(err.message || 'Failed to load universes');
-        return [];
-      })
-      .then((u) => {
-        if (cancelled) return;
-        setUniverses(Array.isArray(u) ? u : []);
-        setLoading(false);
-      });
-    // Series counts are a nice-to-have join, fetched independently — a failed
-    // or slow request should never block the universe list (counts just show
-    // 0). silent: swallowed to [] with no toast, so suppress request()'s.
-    listPipelineSeriesSummaries({ silent: true })
-      .catch(() => [])
-      .then((s) => {
-        if (cancelled) return;
-        setSeries(Array.isArray(s) ? s : []);
-      });
-    // Latest-image thumbnails come from each universe's auto-managed media
-    // collection (bucket links via `collection.universeId`). Independent fetch
-    // so a slow/failed media-collections endpoint never blocks the list —
-    // rows just render without a thumbnail.
-    listMediaCollections({ silent: true })
-      .catch(() => [])
-      .then((cols) => {
-        if (cancelled) return;
-        setLatestImageByUniverse(buildLatestImageByUniverse(cols));
-      });
     // Duplicate detection is on-demand (computed server-side from the live
     // universe set), independent of the list/joins above.
     loadDuplicates();
-    return () => { cancelled = true; };
   }, [loadDuplicates]);
 
   // Re-fetch after a merge or rename: the loser is tombstoned (so it drops from
@@ -168,17 +142,11 @@ export default function Universes() {
   // media folds into the survivor (thumbnails shift). Re-scan duplicates last so
   // a folded group disappears from the banner.
   const refresh = useCallback(() => {
-    listUniverseSummaries({ silent: true })
-      .then((u) => setUniverses(Array.isArray(u) ? u : []))
-      .catch((err) => toast.error(err.message || 'Failed to reload universes'));
-    listPipelineSeriesSummaries({ silent: true })
-      .then((s) => setSeries(Array.isArray(s) ? s : []))
-      .catch(() => {});
-    listMediaCollections({ silent: true })
-      .then((cols) => setLatestImageByUniverse(buildLatestImageByUniverse(cols)))
-      .catch(() => {});
+    universesResource.retry();
+    seriesResource.retry();
+    collectionsResource.retry();
     return loadDuplicates();
-  }, [loadDuplicates]);
+  }, [loadDuplicates, universesResource.retry, seriesResource.retry, collectionsResource.retry]);
 
   const { merge, setMerge, openMerge, runPreview, executeMerge, runAIMerge, updateOverride } = useRecordMerge({ onMerged: refresh });
 
@@ -255,8 +223,17 @@ export default function Universes() {
         </div>
       )}
 
-      {loading ? (
+      {seriesResource.state === 'error' ? (
+        <ListLoadError what="series counts" error={seriesResource.error} onRetry={seriesResource.retry} className="mb-3" />
+      ) : null}
+      {collectionsResource.state === 'error' ? (
+        <ListLoadError what="universe thumbnails" error={collectionsResource.error} onRetry={collectionsResource.retry} className="mb-3" />
+      ) : null}
+
+      {universesResource.state === 'loading' ? (
         <div className="text-gray-500 text-sm">Loading universes…</div>
+      ) : universesResource.state === 'error' ? (
+        <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} />
       ) : universes.length === 0 ? (
         <div className="text-gray-500 text-sm">
           No universes yet. Click <span className="text-port-accent">New Universe</span> to start.
@@ -300,7 +277,7 @@ export default function Universes() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{u.canonCount || 0}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{seriesCountByUniverse[u.id] || 0}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{seriesResource.state === 'ready' ? (seriesCountByUniverse[u.id] || 0) : '—'}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{timeAgo(u.updatedAt || u.createdAt)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -333,7 +310,7 @@ export default function Universes() {
                       ) : null}
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
                         <span className="inline-flex items-center gap-1"><Users size={12} /> {u.canonCount || 0} canon</span>
-                        <span className="inline-flex items-center gap-1"><WorkflowIcon size={12} /> {seriesCountByUniverse[u.id] || 0} series</span>
+                        <span className="inline-flex items-center gap-1"><WorkflowIcon size={12} /> {seriesResource.state === 'ready' ? (seriesCountByUniverse[u.id] || 0) : '—'} series</span>
                         <span>{timeAgo(u.updatedAt || u.createdAt)}</span>
                       </div>
                     </div>

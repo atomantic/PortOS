@@ -23,6 +23,7 @@ import ProgressBar from '../components/ui/ProgressBar';
 import TabPills from '../components/ui/TabPills';
 import Pill from '../components/ui/Pill';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import MediaPreview from '../components/media/MediaPreview';
@@ -36,6 +37,7 @@ import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
+import useListResource from '../hooks/useListResource';
 import { useSseProgress } from '../hooks/useSseProgress';
 import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
@@ -60,7 +62,9 @@ function DeckEditor({ id }) {
   const cardParam = params.get('card');
 
   const [deck, setDeck] = useState(null);
-  const [universes, setUniverses] = useState([]);
+  const fetchUniverses = useCallback(() => listUniverseSummaries({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const { items: universes } = universesResource;
   const [loading, setLoading] = useState(true);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -82,13 +86,9 @@ function DeckEditor({ id }) {
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     setLoading(true);
-    const [data, worlds] = await Promise.all([
-      getDeck(id, { silent: true }).catch(() => null),
-      listUniverseSummaries({ silent: true }).catch(() => []),
-    ]);
+    const data = await getDeck(id, { silent: true }).catch(() => null);
     if (!mountedRef.current || seq !== loadSeqRef.current) return;
     setDeck(data);
-    setUniverses(Array.isArray(worlds) ? worlds : []);
     if (!data) toast.error('Deck not found');
     setLoading(false);
   }, [id, mountedRef]);
@@ -370,6 +370,9 @@ function DeckEditor({ id }) {
           <Trash2 className="w-4 h-4" aria-hidden="true" />
         </button>
       </div>
+      {universesResource.state === 'error' ? (
+        <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} />
+      ) : null}
       {confirmingDelete ? (
         <InlineConfirmRow
           question={`Delete "${deck.name}"? Its cards and prompts are removed; rendered images stay in the gallery.`}

@@ -49,26 +49,90 @@ export async function readClaimOwnershipAgents() {
   return entries.map(([, agent]) => agent);
 }
 
+// Match merge admission's pre-start budget, across BOTH queues. A deadline is
+// cancellation only until the state callback starts; afterwards it diagnoses
+// pending work while both locks stay owned through real settlement.
+export const CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS = 15_000;
+const retryAfterMs = 5000;
+
+async function ownershipTransaction(operation, done, work) {
+  const { withStateLock, loadState, saveState } = await import('./cosState.js');
+  const queuedAt = performance.now();
+  let started = false;
+  let cancelled = false;
+  let phase = 'ownershipQueue';
+  let phaseStartedAt = queuedAt;
+  const timings = { ownershipQueue: 0, stateQueue: 0, ownerRead: 0, ownershipCheck: 0, persistence: 0 };
+  const elapsed = since => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(performance.now() - since)));
+  const finishPhase = () => { timings[phase] = elapsed(phaseStartedAt); };
+  const enter = name => { finishPhase(); phase = name; phaseStartedAt = performance.now(); };
+  const report = status => {
+    const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
+    log(`🔒 Claim ownership operation=${operation} status=${status} phase=${phase} phaseMs=${elapsed(phaseStartedAt)} totalMs=${elapsed(queuedAt)} ownershipQueueMs=${timings.ownershipQueue} stateQueueMs=${timings.stateQueue} ownerReadMs=${timings.ownerRead} ownershipCheckMs=${timings.ownershipCheck} persistenceMs=${timings.persistence}`);
+  };
+  const refuse = reason => ({ [done]: false, reason });
+  return new Promise((resolve, reject) => {
+    const expire = () => {
+      cancelled = true;
+      finishPhase();
+      report('queue-timeout');
+      resolve({ ...refuse(phase === 'ownershipQueue' ? 'ownership-queue-timeout' : 'state-queue-timeout'), retryAfterMs });
+    };
+    const fenced = () => {
+      if (cancelled) return true;
+      // A busy event loop can resume the queue before its overdue timer fires.
+      if (performance.now() - queuedAt >= CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS) { expire(); return true; }
+      return false;
+    };
+    const timer = setTimeout(() => {
+      if (!started) expire();
+      else report('pending');
+    }, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    const queued = withClaimOwnershipLock(() => {
+      if (fenced()) return;
+      enter('stateQueue');
+      return withStateLock(async () => {
+        if (fenced()) return;
+        started = true;
+        enter('ownerRead');
+        const agents = await readClaimOwnershipAgents();
+        if (!agents) return refuse('ownership-unreadable');
+        const state = await loadState();
+        if (JSON.stringify(Object.values(state.agents ?? {})) !== JSON.stringify(agents)) return refuse('ownership-stale');
+        // Do not alter loadState's shared pre-image before persistence starts.
+        const next = { ...state, agents: { ...state.agents } };
+        enter('ownershipCheck');
+        return work(next, async () => {
+          enter('persistence');
+          await saveState(next);
+        });
+      });
+    });
+    queued.then(result => {
+      if (!cancelled) { finishPhase(); report('settled'); resolve(result); }
+    }, error => {
+      if (!cancelled) { finishPhase(); report('failed'); reject(error); }
+    }).finally(() => clearTimeout(timer));
+  });
+}
+
 /**
  * @param {{ agentId: string, action: 'bind'|'release', branch: string }} input
  * @returns {Promise<{ bound: true, branch: string }|{ released: true, branch: string }|{ bound?: false, released?: false, reason: string }>}
  */
 export async function updateClaimOwnership({ agentId, action, branch }) {
   const done = action === 'bind' ? 'bound' : 'released';
-  const { withStateLock, loadState, saveState } = await import('./cosState.js');
   const { cosEvents } = await import('./cosEvents.js');
-  return withClaimOwnershipLock(() => withStateLock(async () => {
-    const state = await loadState();
+  return ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
     const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
     if (patch.refused) return { [done]: false, reason: patch.refused };
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
-    await saveState(state);
+    await save();
     cosEvents.emit('agent:updated', state.agents[agentId]);
-    console.log(`🔒 Claim ownership ${done}: ${branch} → ${agentId}`);
     return { [done]: true, branch };
-  }));
+  });
 }
 
 /**
@@ -119,25 +183,22 @@ export async function checkReconcileOwnership(input, deps = {}) {
   };
   if (!agentId) return admit();
 
-  const { withStateLock, loadState, saveState } = await import('./cosState.js');
   const { cosEvents } = await import('./cosEvents.js');
   // Decided inside the lock a bind takes, so no bind can land between
   // "admitted" and "reserved".
-  return withClaimOwnershipLock(() => withStateLock(async () => {
+  return ownershipTransaction('reserve', 'admitted', async (state, save) => {
     const admission = await admit();
     if (!admission.admitted) return admission;
-    const state = await loadState();
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { admitted: false, reason: 'owner-unknown' };
     const patch = reserveReconcileBranch(agent, branch);
     if (!patch) return admission;
     if (patch.refused) return { admitted: false, reason: patch.refused };
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
-    await saveState(state);
+    await save();
     cosEvents.emit('agent:updated', state.agents[agentId]);
-    console.log(`🔒 Reconcile reservation: ${branch} → ${agentId}`);
     return admission;
-  }));
+  });
 }
 
 /** Read-only snapshot publication gate. Registered review work remains owned

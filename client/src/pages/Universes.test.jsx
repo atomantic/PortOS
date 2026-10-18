@@ -56,6 +56,36 @@ beforeEach(() => {
 });
 
 describe('Universes page — duplicate detection', () => {
+  it('shows the universe list error and retries without rendering the empty copy', async () => {
+    api.listUniverseSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    const user = userEvent.setup();
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universes');
+    expect(screen.queryByText(/No universes yet/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/No universes yet/)).toBeInTheDocument();
+  });
+
+  it('shows and retries a failed series-count read independently', async () => {
+    api.listPipelineSeriesSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    const user = userEvent.setup();
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load series counts');
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('shows and retries a failed thumbnail collection read without blocking universes', async () => {
+    api.listMediaCollections.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    const user = userEvent.setup();
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universe thumbnails');
+    expect(screen.getAllByText('Clandestiny').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
   it('shows a banner when duplicate-named universes are detected', async () => {
     await renderPage();
     await waitFor(() => expect(screen.getByText(/1 duplicate-named universe detected/)).toBeInTheDocument());

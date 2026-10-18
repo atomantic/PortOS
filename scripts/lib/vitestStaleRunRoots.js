@@ -185,9 +185,9 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // Keep ownership evidence when the platform cannot inspect processes.
+  // Dead-owner evidence is sufficient to reclaim a root even if process
+  // inspection failed. Unknown owners still require inspection before aging out.
   const { inspected, preserved } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
-  if (!inspected && process.platform !== 'win32') return;
   let names;
   try {
     names = readdirSync(tmpRoot);
@@ -204,7 +204,7 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
       const owner = readOwner(path);
       const alive = owner ? probe(owner) : null;
       if (alive === true) continue;
-      if (alive === false || now - stat.mtimeMs > STALE_ROOT_AGE_MS) {
+      if (alive === false || (inspected && now - stat.mtimeMs > STALE_ROOT_AGE_MS)) {
         rmSync(path, { recursive: true, force: true });
       }
     } catch {

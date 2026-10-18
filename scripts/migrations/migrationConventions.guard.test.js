@@ -28,7 +28,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as lib from './_lib.js';
 import { sourceDeclaresPurge } from '../run-migrations.js';
 
@@ -108,7 +108,7 @@ describe('new-migration conventions', () => {
       .filter(([, source]) => /purge/i.test(source));
     expect(candidates.length).toBeGreaterThan(0);
     for (const [file, source] of candidates) {
-      const mod = await import(`./${file}`);
+      const mod = await import(pathToFileURL(resolve(HERE, file)).href);
       const migration = mod?.default && typeof mod.default.up === 'function' ? mod.default : mod;
       expect({ file, purge: sourceDeclaresPurge(source) }).toEqual({ file, purge: migration?.purge === true });
     }

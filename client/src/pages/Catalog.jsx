@@ -33,6 +33,8 @@ import {
 } from '../services/apiCatalog';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { listPipelineSeriesNames } from '../services/apiPipeline';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
@@ -122,6 +124,15 @@ export default function Catalog() {
   const [selectedItems, setSelectedItems] = useState(() => new Map());
   const [remixMenuOpen, setRemixMenuOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const fetchPlaceUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
+  const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: addMenuOpen });
+  const fetchPlaceSeries = useCallback(() => listPipelineSeriesNames({ silent: true }), []);
+  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: addMenuOpen });
+  const placeTargets = useMemo(() => ({
+    universes: placeUniversesResource.items.map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
+    series: placeSeriesResource.items.map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
+  }), [placeUniversesResource.items, placeSeriesResource.items]);
+  const placeTargetsLoading = addMenuOpen && (placeUniversesResource.state === 'loading' || placeSeriesResource.state === 'loading');
 
   // Inline create form.
   const [showForm, setShowForm] = useState(false);
@@ -493,34 +504,14 @@ export default function Catalog() {
 
   // Bulk-place targets are the FULL set of live universes/series — NOT the
   // facet arrays, which only list refs that already have catalog links. A
-  // freshly-created (still empty) universe/series must be a valid destination so
-  // the user can seed it. Lazy-loaded the first time the menu opens to keep
-  // mount cheap; `null` = not yet fetched.
-  const [placeTargets, setPlaceTargets] = useState(null);
-  const [placeTargetsLoading, setPlaceTargetsLoading] = useState(false);
-  const loadPlaceTargets = useCallback(() => {
-    setPlaceTargetsLoading(true);
-    Promise.all([
-      listUniverseNames({ silent: true }).catch(() => []),
-      listPipelineSeriesNames({ silent: true }).catch(() => []),
-    ]).then(([universes, series]) => {
-      setPlaceTargets({
-        universes: (Array.isArray(universes) ? universes : []).map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
-        series: (Array.isArray(series) ? series : []).map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
-      });
-      setPlaceTargetsLoading(false);
-    });
-  }, []);
-
+  // freshly-created (still empty) universe/series must be a valid destination.
+  // The resources enable while the menu is open and retain independent retries.
   const openAddMenu = () => {
     setRemixMenuOpen(false);
-    setAddMenuOpen((o) => {
-      const next = !o;
-      if (next && placeTargets === null && !placeTargetsLoading) loadPlaceTargets();
-      return next;
-    });
+    setAddMenuOpen((o) => !o);
   };
-  const hasPlaceTargets = !!placeTargets && (placeTargets.universes.length > 0 || placeTargets.series.length > 0);
+  const noPlaceTargets = placeUniversesResource.state === 'ready' && placeSeriesResource.state === 'ready'
+    && placeTargets.universes.length === 0 && placeTargets.series.length === 0;
 
   // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
   // allocate a fresh arrow per card every render.
@@ -964,12 +955,27 @@ export default function Catalog() {
                   aria-label="Add to universe or series"
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
                 >
-                  {placeTargetsLoading || placeTargets === null ? (
+                  {placeTargetsLoading && placeTargets.universes.length === 0 && placeTargets.series.length === 0 ? (
                     <p className="px-3 py-2 text-sm"><BrailleSpinner text="Loading…" /></p>
-                  ) : !hasPlaceTargets ? (
+                  ) : noPlaceTargets ? (
                     <p className="px-3 py-2 text-sm text-gray-500">No universes or series yet.</p>
                   ) : (
                     <>
+                      {placeUniversesResource.state === 'error' ? (
+                        <ListLoadError what="universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} className="m-2" />
+                      ) : null}
+                      {placeSeriesResource.state === 'error' ? (
+                        <ListLoadError what="series" error={placeSeriesResource.error} onRetry={placeSeriesResource.retry} className="m-2" />
+                      ) : null}
+                      {placeUniversesResource.state === 'loading' && placeTargets.universes.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">Loading universes…</p>
+                      ) : null}
+                      {placeSeriesResource.state === 'loading' && placeTargets.series.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">Loading series…</p>
+                      ) : null}
+                      {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">No universes yet.</p>
+                      ) : null}
                       {placeTargets.universes.length > 0 && (
                         <>
                           <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
@@ -1000,6 +1006,9 @@ export default function Catalog() {
                           ))}
                         </>
                       )}
+                      {placeSeriesResource.state === 'ready' && placeTargets.series.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">No series yet.</p>
+                      ) : null}
                     </>
                   )}
                 </div>

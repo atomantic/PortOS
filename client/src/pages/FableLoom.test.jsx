@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -77,6 +77,38 @@ describe('FableLoom index', () => {
     api.listLooms.mockResolvedValue([]);
     await renderPage();
     await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
+  });
+
+  it('shows a retriable error instead of the empty copy when looms fail to load', async () => {
+    api.listLooms.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load branching narratives');
+    expect(screen.queryByText(/No branching narratives yet/)).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/No branching narratives yet/)).toBeInTheDocument();
+  });
+
+  it('shows independent retry rows when universe or series picker options fail', async () => {
+    api.listUniverseNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
+    api.listPipelineSeriesNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'series-1', name: 'The Crown' }]);
+    const user = userEvent.setup();
+    await renderPage();
+    await user.click(screen.getByRole('button', { name: /New loom/ }));
+
+    await screen.findByText(/Could not load universes/);
+    expect(screen.getByText(/Could not load universes/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not load series/)).toBeInTheDocument();
+    const alerts = screen.getAllByRole('alert');
+    await user.click(within(alerts.find((alert) => alert.textContent.includes('universes'))).getByRole('button', { name: 'Retry' }));
+    await user.click(within(alerts.find((alert) => alert.textContent.includes('series'))).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => {
+      expect(api.listUniverseNames).toHaveBeenCalledTimes(2);
+      expect(api.listPipelineSeriesNames).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText(/Could not load universes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not load series/)).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Aria Verse' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'The Crown' })).toBeInTheDocument();
   });
 
   it('opens the creation form from the empty-state action', async () => {

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Sparkles } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
@@ -24,6 +24,8 @@ import {
   CLASSIFY_SOURCE_HEAD_CHARS,
 } from '../services/apiImporter';
 import { formatCount } from '../utils/formatters';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short Story',
@@ -120,22 +122,13 @@ export default function Importer() {
   // spelling. `listsLoaded` distinguishes "still fetching" from "fetched and
   // legitimately empty" so the deep-link resolver doesn't wait forever on an
   // install with no universes yet.
-  const [universes, setUniverses] = useState([]);
-  const [allSeries, setAllSeries] = useState([]);
-  const [listsLoaded, setListsLoaded] = useState(false);
-  useEffect(() => {
-    let canceled = false;
-    Promise.all([
-      listUniverseSummaries({ silent: true }).catch(() => []),
-      listPipelineSeriesSummaries({ silent: true }).catch(() => []),
-    ]).then(([u, s]) => {
-      if (canceled) return;
-      setUniverses(Array.isArray(u) ? u : []);
-      setAllSeries(Array.isArray(s) ? s : []);
-      setListsLoaded(true);
-    });
-    return () => { canceled = true; };
-  }, []);
+  const fetchUniverses = useCallback(() => listUniverseSummaries({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const fetchSeries = useCallback(() => listPipelineSeriesSummaries({ silent: true }), []);
+  const seriesResource = useListResource(fetchSeries);
+  const { items: universes } = universesResource;
+  const { items: allSeries } = seriesResource;
+  const listsLoaded = universesResource.state !== 'loading' && seriesResource.state !== 'loading';
 
   // Apply a `?universeId=…&seriesId=…` (or name-param) deep-link exactly once,
   // after the lists load so ids can resolve to names. Guarded by a ref so a
@@ -496,8 +489,14 @@ export default function Importer() {
           setIntake={setIntake}
           universeItems={universeItems}
           universeSelectedId={universeMatch?.id || null}
+          universeListState={universesResource.state}
+          universeListError={universesResource.error}
+          retryUniverses={universesResource.retry}
           seriesItems={seriesItems}
           seriesSelectedId={seriesMatch?.id || null}
+          seriesListState={seriesResource.state}
+          seriesListError={seriesResource.error}
+          retrySeries={seriesResource.retry}
           sourceCharLimit={config.sourceCharLimit}
           analyzing={analyzing}
           analyzeStages={analyzeStages}
@@ -554,6 +553,8 @@ export default function Importer() {
 export function IntakeForm({
   intake, setIntake,
   universeItems, universeSelectedId, seriesItems, seriesSelectedId,
+  universeListState = 'ready', universeListError = null, retryUniverses,
+  seriesListState = 'ready', seriesListError = null, retrySeries,
   sourceCharLimit, analyzing, analyzeStages, onAnalyze, classifying, onClassify, classifyHint,
   providers, llmProvider, llmModel, llmModels, onProviderChange, onModelChange,
 }) {
@@ -597,6 +598,9 @@ export function IntakeForm({
             createPrefix="New universe"
             className="w-full"
           />
+          {universeListState === 'error' ? (
+            <ListLoadError what="universes" error={universeListError} onRetry={retryUniverses} className="mt-2" />
+          ) : null}
           <p className="text-xs text-port-text-muted mt-1">
             {universeSelectedId
               ? 'Matched an existing universe — the import is added to it.'
@@ -618,11 +622,18 @@ export function IntakeForm({
             noun="series"
             placeholder="Search this universe's series or type a new name… e.g. The Choir Awakens"
             createPrefix="New series"
-            emptyNoItems={intake.universeName.trim()
-              ? 'No series in this universe yet — type a name.'
-              : 'Pick a universe above to list its series, or type a new name.'}
+            emptyNoItems={seriesListState === 'error'
+              ? 'Series could not be loaded — use Retry below or type a new name.'
+              : seriesListState === 'loading'
+                ? 'Loading series…'
+                : intake.universeName.trim()
+                  ? 'No series in this universe yet — type a name.'
+                  : 'Pick a universe above to list its series, or type a new name.'}
             className="w-full"
           />
+          {seriesListState === 'error' ? (
+            <ListLoadError what="series" error={seriesListError} onRetry={retrySeries} className="mt-2" />
+          ) : null}
           <p className="text-xs text-port-text-muted mt-1">
             {seriesSelectedId
               ? 'Matched an existing series — the import extends it.'
