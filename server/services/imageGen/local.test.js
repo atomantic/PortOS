@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import os, { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
 
 const admissionFault = vi.hoisted(() => ({ error: null }));
@@ -1328,9 +1328,17 @@ it('persists omitted reference evidence when the LoRA runner drops inputs', asyn
   writeFileSync(join(PATHS.loras, 'example.safetensors'), 'example');
   writeFileSync(join(PATHS.images, 'reference.png'), 'example');
   const { imageGenEvents } = await import('../imageGenEvents.js');
+  // Pin host memory, not the registry's hardware verdict: CI may have less
+  // than this model's 32 GiB floor, even though the render child is mocked.
+  const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(8 * 1024 ** 3);
   try {
-    const job = await generateImage({ modelId: 'flux2-klein-9b', prompt: '--reference-images',
-      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] });
+    const request = { modelId: 'flux2-klein-9b', prompt: '--reference-images',
+      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] };
+    const spawnCount = mockSpawn.mock.calls.length;
+    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MODEL_HARDWARE_UNAVAILABLE' });
+    expect(mockSpawn).toHaveBeenCalledTimes(spawnCount);
+    totalmem.mockReturnValue(64 * 1024 ** 3);
+    const job = await generateImage(request);
     expect(mockSpawn.mock.calls.at(-1)[1]).toContain('--reference-images');
     expect(mockSpawn.mock.calls.at(-1)[1]).not.toContain(join(PATHS.images, 'reference.png'));
     writeFileSync(join(PATHS.images, job.filename), 'synthetic output');
@@ -1343,7 +1351,10 @@ it('persists omitted reference evidence when the LoRA runner drops inputs', asyn
     expect(meta.referenceImageStrengths).toEqual([]);
     expect(meta.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png' }]);
     expect(meta.omittedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png', reason: 'unsupported-render-path' }]);
-  } finally { PATHS.loras = priorLoras; }
+  } finally {
+    totalmem.mockRestore();
+    PATHS.loras = priorLoras;
+  }
 });
 
 it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
