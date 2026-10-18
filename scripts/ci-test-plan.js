@@ -754,6 +754,8 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   }
   if (sharedCacheInputChanged || changedFiles.some((path) => WORKSPACE_CACHE_CLIENT_INPUTS.has(path))) {
     add('client/src/test/workspaceCaches.test.js');
+    // The runner's client enumeration is pinned against `vitest list` from the client workspace, where the client job runs it.
+    add('client/src/test/workspaceTests.test.js');
   }
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');

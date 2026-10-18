@@ -177,12 +177,13 @@ describe('test memo through the real runner', () => {
       writeFileSync(join(fixture, 'a.test.js'), "import { a } from './a.js';\ntest('a', () => { expect(a).toBe(1); });\n");
       writeFileSync(join(fixture, 'b.test.js'), "import { load } from './b.js';\ntest('b', async () => { expect((await load()).c).toBe(1); });\n");
       writeFileSync(join(fixture, 'plain.test.js'), "test('plain', () => { expect(1).toBe(1); });\n");
-      const vitest = join(import.meta.dirname, '..', 'server', 'node_modules', '.bin', 'vitest');
+      // Vitest's JS entry through node: the .bin shim cannot be started by spawnSync on Windows.
+      const vitest = join(import.meta.dirname, '..', 'server', 'node_modules', 'vitest', 'vitest.mjs');
       const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1', PORTOS_CI_TEST_SELECTION: '' };
       delete env.PORTOS_TEST_TEMP_ROOT;
       const viaVitest = (source) => {
         const report = join(fixture, `${source}.json`);
-        const result = spawnSync(vitest, ['related', `./${source}`, '--run', '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture,
+        const result = spawnSync(process.execPath, [vitest, 'related', `./${source}`, '--run', '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture,
           '--reporter=json', `--outputFile=${report}`, '--passWithNoTests'], { cwd: fixture, encoding: 'utf8', env, timeout: 60000 });
         expect(result.error).toBeUndefined();
         return JSON.parse(readFileSync(report, 'utf8')).testResults.map(suite => suite.name.replace(/\\/g, '/').split('/').pop()).sort();
