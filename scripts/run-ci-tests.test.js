@@ -131,8 +131,9 @@ describe('test memo through the real runner', () => {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
-          // An inherited PORTOS_TEST_MEMO=off (a developer's shell, a recording run) must not turn this contract off.
-          PORTOS_TEST_MEMO: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
+          // An inherited PORTOS_TEST_MEMO=off (a developer's shell, a recording run) must not turn this contract off,
+          // and an inherited CI_SHARD (a matrix job) must not slice the one selected file away.
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
       // A green-looking report with a run-level error records nothing.
       const tainted = run({ PORTOS_FAKE_LATE_ERROR: '1' });
