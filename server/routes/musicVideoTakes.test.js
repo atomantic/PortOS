@@ -1,3 +1,8 @@
+// Keep the filesystem half real without touching the host's Trash.
+vi.mock('../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  const { unlink } = await import('node:fs/promises');
+  for (const path of paths) await unlink(path);
+} }));
 /**
  * Music Video scene takes + external-asset handoff routes (#8965), exercised
  * through the real router and the real file-backed project store. Covers the

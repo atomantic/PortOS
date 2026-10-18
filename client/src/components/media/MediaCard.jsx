@@ -5,7 +5,7 @@ import AddToCollectionMenu from './AddToCollectionMenu';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
-import { formatDurationMs } from '../../utils/formatters';
+import { formatBytes, formatDurationMs } from '../../utils/formatters';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
 
 // Equal cells. `flex-1` on Remix used to eat the first row, which pushed
@@ -220,6 +220,9 @@ function MediaCard({
           {item.steps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.steps}st</span>}
           {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
           {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}
+          {item.fileSizeBytes != null && (
+            <span title="Original file size" className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{formatBytes(item.fileSizeBytes)}</span>
+          )}
           {item.seed != null && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">seed {item.seed}</span>}
           {/* How long this render took, once the queue picked it up (see the
               renderMs contract in normalize.js). Absent renders no chip at all,
@@ -250,7 +253,7 @@ function MediaCard({
           <InlineConfirmRow
             question={`Delete this ${isVideo ? 'video' : 'image'}?`}
             confirmText="Delete"
-            confirmTitle="Permanently delete"
+            confirmTitle="Move files to Trash or Recycle Bin on the PortOS host"
             onConfirm={() => { setConfirmingDelete(false); onDelete(item); }}
             onCancel={() => setConfirmingDelete(false)}
           />

@@ -917,3 +917,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 - `auditWorkflow.js`: versioned extended Deep execution and historical certification classification.
 
 | `musicDesignerValidation.js` | Non-transforming authored input schemas and character limits for Music Designer composition and routes. |
+
+- `mediaFileInfo.js`: `withMediaFileSize(kind, record)` / `withMediaFileSizes(items, kind?)` add current original-file byte sizes to bounded image/video pages; missing or unreadable files have no size.
+- `trashFiles.js`: `trashFiles(paths)` moves existing literal paths to the host OS Trash/Recycle Bin, guards test data, and propagates failures without permanent-delete fallback.
+- `nativeTrash.js`: `moveToNativeTrash(paths)` executes the pinned package native recycling helpers on macOS/Windows with hidden windows and a deadline; Linux uses the package XDG adapter. No local-directory or permanent-delete fallback.

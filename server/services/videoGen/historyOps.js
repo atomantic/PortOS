@@ -1,10 +1,11 @@
 /** User-facing video-history mutations. */
 
-import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { trashFiles } from '../../lib/trashFiles.js';
+import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
-import { loadHistory, mutateVideoHistory } from './history.js';
+import { mutateVideoHistory } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
@@ -45,30 +46,25 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true } = {})
   // One lease covers the history read, file removals, history rewrite, and
   // derived row removal; per-file admission would leave gaps between stores.
   return withBackupAssetPublication(async () => {
-    const history = await loadHistory();
-    const item = history.find((h) => h.id === id);
-    if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-    // Same path-traversal guard as extractLastFrame — unlink only if the
-    // filename resolves to inside the expected dir.
-    const videoFile = safeUnder(PATHS.videos, item.filename);
-    if (videoFile) await unlinkGuarded(videoFile).catch(() => {});
-    // The lossless audio master an Extend output keeps beside it (extendSplice.js).
-    const masterFile = videoFile && extendMasterPath(videoFile);
-    if (masterFile) await unlinkGuarded(masterFile).catch(() => {});
-    if (item.thumbnail) {
-      const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
-      if (thumbFile) await unlinkGuarded(thumbFile).catch(() => {});
-    }
-    // Delete evaluation frame thumbnails written by sampleEvaluationFrames:
-    // `${jobId}-f1.jpg` … `${jobId}-f9.jpg` (max count in sampleEvaluationFrames is 5,
-    // but 9 is a safe upper bound to catch any future increase).
-    for (let i = 1; i <= 9; i++) {
-      const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
-      if (frameFile) await unlinkGuarded(frameFile).catch(() => {});
-    }
-    // Serialized removal through the shared tail (re-filters the freshest list),
-    // so a concurrent download/render append isn't dropped by this save.
-    await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
+    let item;
+    // Hold the history writer across its recovery snapshot and the file move,
+    // so overlapping prompt edits/deletes cannot retire a different revision.
+    await mutateVideoHistory(async history => {
+      item = history.find((entry) => entry.id === id);
+      if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+      const videoFile = safeUnder(PATHS.videos, item.filename);
+      if (!videoFile) throw new ServerError('Invalid video filename', { status: 400, code: 'INVALID_VIDEO_PATH' });
+      // The shared history file stays in place; recycle a per-video copy of
+      // this record alongside its bytes so prompts/settings remain recoverable.
+      const metadataFile = `${videoFile}.metadata.json`;
+      await atomicWrite(metadataFile, item);
+      const files = [videoFile, metadataFile, extendMasterPath(videoFile)];
+      if (item.thumbnail) files.push(safeUnder(PATHS.videoThumbnails, item.thumbnail));
+      // Evaluation frames are derived; include all supported frame slots.
+      for (let i = 1; i <= 9; i++) files.push(safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`));
+      await trashFiles(files);
+      return history.filter(entry => entry.id !== id);
+    });
     // Drop the derived index row with the entry (#2738) — keyed by job id, the
     // ref the index wrote it under. Non-fatal + dynamically imported; see the
     // matching hook in imageGen/local.js#deleteImage for the rationale.
@@ -78,7 +74,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true } = {})
     // Music videos forget it too (their unused takes, marks and collection rows);
     // a batch delete from a video's asset manager forgets its whole batch at once.
     if (forgetInMusicVideos) await import('../musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]));
-    console.log(`🗑️ Deleted video: ${item.filename}`);
+    console.log(`🗑️ Trashed video: ${item.filename}`);
     return { ok: true };
   });
 }

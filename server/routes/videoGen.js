@@ -6,6 +6,7 @@
  * extraction, ffmpeg stitching).
  */
 
+import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
 import { basename } from 'path';
@@ -1192,7 +1193,7 @@ const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
 const visibilitySchema = z.object({ hidden: z.boolean() });
 
 router.get('/history', asyncHandler(async (_req, res) => {
-  res.json(await loadHistory());
+  res.json(await withMediaFileSizes(await loadHistory(), 'video'));
 }));
 
 // One history entry by id (#4165) — see videoHistoryRead.js.

@@ -1,3 +1,4 @@
+import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
 import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
@@ -96,6 +97,7 @@ export async function listGalleryPage({
       countAssets({ ...filters, compact }), summary ? countAssets({ ...filters, hidden: true, compact }) : undefined,
     ]);
   }
+  items = await withMediaFileSizes(items, mixed ? undefined : kind);
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }
 
@@ -187,7 +189,7 @@ export async function listImageVariants(filename, diskReader) {
     if (!self) return [];
     const root = rootOf(self);
     const original = images.find(image => image?.filename === root && isRoot(image));
-    return [...(original ? [original] : []), ...images.filter(image => image?.cleanedFrom === root)];
+    return withMediaFileSizes([...(original ? [original] : []), ...images.filter(image => image?.cleanedFrom === root)], 'image');
   }
 
   const [self] = await listAssets({ kind: 'image', filename, limit: 1 });
@@ -199,5 +201,5 @@ export async function listImageVariants(filename, diskReader) {
     root === filename ? [self] : listAssets({ kind: 'image', filename: root, limit: 1 }),
     listAssets({ kind: 'image', cleanedFrom: root }),
   ]);
-  return [...(isRoot(original) ? [original] : []), ...copies];
+  return withMediaFileSizes([...(isRoot(original) ? [original] : []), ...copies], 'image');
 }
