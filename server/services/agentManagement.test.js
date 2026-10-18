@@ -2025,6 +2025,26 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
 
   const requeuedMetadata = () => updateTask.mock.calls.at(-1)[1].metadata;
 
+  it('recovers a shutdown-marked dispatch during startup grace without charging either retry budget', async () => {
+    getAgents.mockResolvedValue([{
+      ...deadAgent,
+      startedAt: new Date().toISOString(),
+      metadata: { ...deadMetadata, phase: 'initializing', useRunner: true },
+    }]);
+    getTaskById.mockResolvedValue({
+      id: 'task-1', taskType: 'user', status: 'in_progress',
+      metadata: { orphanRetryCount: 1, totalSpawnCount: 2 },
+    });
+    readHostShutdownMarker.mockResolvedValue({ at: new Date().toISOString(), signal: 'SIGTERM', agentIds: ['agent-dead'] });
+
+    await cleanupOrphanedAgents();
+
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(requeuedMetadata()).toMatchObject({ orphanRetryCount: 1, totalSpawnCount: 1, interruptedByRestart: true });
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ category: 'interrupted', exitCode: 143 }));
+    expect(clearHostShutdownMarker).toHaveBeenCalled();
+  });
+
   it('requeues an interrupted run without incrementing orphanRetryCount or stamping lastOrphanedAt', async () => {
     getTaskById.mockResolvedValue({
       id: 'task-1', taskType: 'user', status: 'in_progress',

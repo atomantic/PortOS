@@ -1260,7 +1260,10 @@ async function runCleanupOrphanedAgents() {
       // completes a run that goes on to launch — its claim ownership bind then
       // fails with owner-not-running. Mirrors the zombie sweep's guards.
       if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
-      if (!agent.pid) {
+      // A shutdown-marked dispatch cannot still be initializing in this process.
+      // Retire it now; otherwise the grace skips it and we consume its marker,
+      // so the next sweep charges a genuine host interruption as an orphan.
+      if (!agent.pid && !interruptedByRestart.has(agent.id)) {
         const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
         if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
       }

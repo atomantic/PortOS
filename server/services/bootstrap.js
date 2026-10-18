@@ -79,7 +79,7 @@ import * as cos from './cos.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
-import { activeAgents } from './agentState.js';
+import { activeAgents, dispatchingAgentIds } from './agentState.js';
 import * as automationScheduler from './automationScheduler.js';
 import * as agentActionExecutor from './agentActionExecutor.js';
 import * as telegram from './telegram.js';
@@ -1152,10 +1152,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // Record which agents this process owned, so the NEXT boot's orphan sweep can
     // tell "PortOS was restarted out from under a healthy agent" apart from "the
     // agent's own process died" and skip the retry-budget/cooldown penalty for a
-    // fault the agent didn't cause (#3202). Only `activeAgents` — the ones whose
-    // child processes live in THIS process's tree — belong here; agents the CoS
-    // runner owns survive this restart untouched and are re-adopted by
-    // `syncRunnerAgents` on the next boot.
+    // fault the agent didn't cause (#3202). Include dispatches whose durable
+    // registration exists but whose process handoff has not finished: shutdown
+    // destroys that setup too. Exclude `runnerAgents`; those handed-off runs
+    // survive this restart and are re-adopted on the next boot.
     //
     // Note `activeAgents` is NOT "direct-spawn only": runner-launched TUI agents
     // register there too (`agentTuiSpawning.js`, both launch modes). The
@@ -1169,7 +1169,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // `.catch` is the belt-and-suspenders for an out-of-lifecycle rejection, and a
     // marker we fail to write only degrades recovery to the pre-existing orphan path.
     const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
-      writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
+      writeHostShutdownMarker({ agentIds: [...activeAgents.keys(), ...dispatchingAgentIds], signal })
         .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
 
     // Reach every child spawned into its own process group — agent runs, CLI
