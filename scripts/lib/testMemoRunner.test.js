@@ -137,7 +137,12 @@ describe('planTestMemo and recordTestMemo', () => {
     // The memo off: nothing is read, nothing is skipped.
     writeMemoEntry(memoDir, plan().verdicts.get('server/lib/c.test.js').floor.key, { test: 'server/lib/c.test.js', workspace: 'server', source: 'local' });
     expect(plan().skipped).toEqual([{ test: 'server/lib/c.test.js', via: 'floor' }]);
-    expect(plan({ memoDir: null }).skipped).toEqual([]);
+    const off = plan({ memoDir: null });
+    expect(off.skipped).toEqual([]);
+    expect(off.run).toEqual(off.selected);
+    // Nothing is analyzed for a files plan with the memo off: the list is the plan.
+    expect(off.verdicts.size).toBe(0);
+    expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
   it('hashes the forward-slashed root-relative path on every platform, like Vitest', () => {
