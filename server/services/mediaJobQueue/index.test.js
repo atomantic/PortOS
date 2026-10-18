@@ -1923,7 +1923,17 @@ describe('Audio kind (#1928)', () => {
 describe('Codex lane', () => {
   it('runs more than ten renders while enforcing the saved limit and cleaning up listeners', async () => {
     // Kickoff resolves; terminal events keep each render active until completed.
-    stubs.generateImageCodex.mockResolvedValue({});
+    let enteredTwelve;
+    let enteredThirteen;
+    const firstBatchEntered = new Promise(resolve => { enteredTwelve = resolve; });
+    const replacementEntered = new Promise(resolve => { enteredThirteen = resolve; });
+    let entered = 0;
+    stubs.generateImageCodex.mockImplementation(async () => {
+      entered += 1;
+      if (entered === 12) enteredTwelve();
+      if (entered === 13) enteredThirteen();
+      return {};
+    });
     await mediaJobQueue.initMediaJobQueue();
     mediaJobQueue.setCodexParallelLimit(12);
     const events = ['progress', 'status', 'completed', 'failed'];
@@ -1935,12 +1945,14 @@ describe('Codex lane', () => {
         kind: 'image', params: { prompt: `Example render ${i}`, mode: 'codex' },
       }));
     }
-    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 12);
+    await firstBatchEntered;
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(12);
     expect(mediaJobQueue.getQueueCapacity().lanes.cloud.limit).toBe(12);
     expect(mediaJobQueue.getJob(jobs[12].jobId).status).toBe('queued');
 
     imageGenEvents.emit('completed', { generationId: jobs[0].jobId, filename: 'example.png' });
-    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 13);
+    await replacementEntered;
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(13);
     for (const job of jobs.slice(1)) {
       imageGenEvents.emit('completed', { generationId: job.jobId, filename: 'example.png' });
     }
@@ -3685,10 +3697,19 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
       process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS = String(WINDOWS.AUDIO);
       process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS = String(WINDOWS.IMAGE);
       await importFresh();
+      // Await actual provider entry without advancing fake watchdog time or
+      // imposing a separate wall-clock deadline on asynchronous setup.
+      let signalEntered;
+      const entered = new Promise(resolve => { signalEntered = resolve; });
+      stubs[entry].mockImplementationOnce(async () => {
+        signalEntered();
+        return { jobId: 'whatever' };
+      });
       let jobId;
       try {
         ({ jobId } = await mediaJobQueue.enqueueJob({ kind, params: { prompt: 'hang', ...params } }));
-        await vi.waitFor(() => expect(stubs[entry]).toHaveBeenCalledTimes(1), { interval: 1 });
+        await entered;
+        expect(stubs[entry]).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(window - 100);
         await flush();
         expect(mediaJobQueue.getJob(jobId).status).toBe('running');
