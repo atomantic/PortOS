@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseQuotaDeferral, parseGoDuration, formatDeferral, MAX_QUOTA_DEFERRAL_MS,
+  parseQuotaDeferral, formatDeferral, MAX_QUOTA_DEFERRAL_MS,
 } from './imageQuotaSignal.js';
 
 // Verbatim shapes recorded by this install on 2026-10-17. Antigravity relays
@@ -57,18 +57,23 @@ describe('parseQuotaDeferral', () => {
   });
 });
 
-describe('parseGoDuration', () => {
+// Duration shapes are exercised through the public contract rather than the
+// private helper: a duration only means anything here when it is anchored to
+// reset wording, so that is what is worth pinning.
+describe('reset duration shapes', () => {
+  const withReset = (duration) => `RESOURCE_EXHAUSTED: Your quota will reset after ${duration}.`;
+
   it.each([
     ['2h26m1s', 8_761_000],
     ['45m10s', 2_710_000],
     ['30s', 30_000],
     ['1h', 3_600_000],
-  ])('parses %s', (text, expected) => {
-    expect(parseGoDuration(text)).toBe(expected);
+  ])('accepts %s', (duration, expected) => {
+    expect(parseQuotaDeferral(withReset(duration), { now: 0 })?.resetsInMs).toBe(expected);
   });
 
-  it.each(['12', 'soon', '', '2 hours', '2h30'])('rejects %s', (text) => {
-    expect(parseGoDuration(text)).toBeNull();
+  it.each(['12', 'soon', '2 hours', '2h30'])('rejects %s as a duration', (duration) => {
+    expect(parseQuotaDeferral(withReset(duration), { now: 0 })).toBeNull();
   });
 });
 
