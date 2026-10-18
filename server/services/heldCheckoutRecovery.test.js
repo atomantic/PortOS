@@ -55,7 +55,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
-  async function heldCheckout(name, { branch = null, lockReason = 'synthetic external owner' } = {}) {
+  async function heldCheckout(name, { branch = null, lockReason = 'synthetic external owner', beforeLock } = {}) {
     const path = join(external, name);
     await execGit(['worktree', 'add', ...(branch ? ['-b', branch, path] : ['--detach', path]), 'main'], repo);
     await writeFile(join(path, '.gitignore'), 'ignored.txt\nlinked\n');
@@ -64,6 +64,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(path, 'ignored.txt'), 'ignored work\n');
     // Windows runners may lack symlink privilege; the archive contract is the same.
     if (SYMLINKS) await symlink('../shared-target', join(path, 'linked'));
+    if (beforeLock) await beforeLock(path);
     await execGit(['worktree', 'lock', '--reason', lockReason, path], repo);
     const gitPath = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
     const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
@@ -101,8 +102,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'index.diff'), 'utf8')).toContain('+staged work');
   });
 
-  it('retires a merged branch checkout and its branch, and drops it from the persisted inventory', async () => {
-    const { path, release } = await heldCheckout('branch-held', { branch: 'feature/held' });
+  it('bundles a squash-merged branch, retires it with its branch, and drops it from the persisted inventory', async () => {
+    const { path, release } = await heldCheckout('branch-held', { branch: 'feature/held', beforeLock: async (tree) => {
+      await writeFile(join(tree, 'feature.txt'), 'feature\n');
+      await execGit(['add', 'feature.txt'], tree);
+      await execGit(['commit', '-m', 'feat: synthetic feature'], tree);
+      await execGit(['merge', '--squash', 'feature/held'], repo);
+      await execGit(['commit', '-m', 'feat: synthetic feature (squash)'], repo);
+    } });
     await recordBranchReconcileOutcome('app-1', {
       status: 'incomplete', reason: 'holds-remaining', nextAction: 'Recover held checkouts.',
       remaining: [{ ...release, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
@@ -113,6 +120,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
+    // The original commit stays recoverable after its branch is gone.
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored'], repo);
+    expect((await execGit(['rev-parse', 'restored'], repo)).stdout.trim()).toBe(release.head);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.status).toBe('incomplete');
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);

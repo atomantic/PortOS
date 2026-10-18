@@ -10,9 +10,9 @@
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
  * Before any mutation every unique byte is archived under
- * `data/cos/held-checkout-archives/`: commits not on the default branch, the
- * staged and unstaged diffs, and verbatim copies of untracked AND ignored files
- * (symlinks as recorded targets). The archive is verified by hash against the
+ * `data/cos/held-checkout-archives/`: a bundle of commits not on the default
+ * branch, the staged and unstaged diffs, and verbatim copies of untracked AND
+ * ignored files (symlinks as recorded targets). The archive is verified by hash against the
  * checkout, and the checkout's content hashes must not move between archive and
  * removal. A live owner, manual completion handoff, unreadable state or archive
  * failure leaves the checkout, its lock and its branch exactly as found.
@@ -53,11 +53,16 @@ const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).t
  */
 async function snapshotContent(path) {
   if ((await git(['ls-files', '-u', '-z'], path)).length) throw new Error('unmerged index entries cannot be archived');
+  // A submodule's files and commits live in its own repository; its gitlink is not its content.
+  if (zLines(await git(['ls-files', '--stage', '-z'], path)).some(line => line.startsWith('160000 '))) {
+    throw new Error('submodules cannot be archived');
+  }
   // Assume-unchanged (lowercase tag) and skip-worktree (S) entries hide edits from diff.
   const hidden = zLines(await git(['ls-files', '-v', '-z'], path)).find(line => /^[a-zS]/.test(line));
   if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
-  const indexDiff = await git(['diff', '--cached', '--binary'], path);
-  const worktreeDiff = await git(['diff', '--binary'], path);
+  // Raw bytes only: a textconv or external diff driver can drop content.
+  const indexDiff = await git(['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path);
+  const worktreeDiff = await git(['diff', '--binary', '--no-textconv', '--no-ext-diff'], path);
   const others = [];
   let total = 0;
   for (const rel of zLines(await git(['ls-files', '--others', '-z'], path))) {
@@ -97,8 +102,17 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   const snapshot = await snapshotContent(tree.path);
   await ensureDir(dir);
 
-  const commits = await git(['format-patch', `${defaultBranch}..${tree.head}`, '--stdout', '--binary'], repoPath);
-  if (commits) await writeFileGuarded(join(dir, 'commits.patch'), commits);
+  // A bundle keeps the original commit objects, merges included, which a
+  // squash-merged branch would otherwise lose to garbage collection.
+  const unique = Number((await git(['rev-list', '--count', `${defaultBranch}..${tree.head}`], repoPath)).trim());
+  if (!Number.isInteger(unique)) throw new Error('could not count commits outside the default branch');
+  const bundle = join(dir, 'commits.bundle');
+  if (unique > 0) {
+    await git(['bundle', 'create', bundle, 'HEAD', `^${defaultBranch}`], tree.path);
+    await git(['bundle', 'verify', bundle], repoPath);
+    const heads = await git(['bundle', 'list-heads', bundle], repoPath);
+    if (!heads.startsWith(`${tree.head} `)) throw new Error('commit bundle does not hold the checkout HEAD');
+  }
   if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
   if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
@@ -115,8 +129,9 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   await atomicWrite(join(dir, 'manifest.json'), {
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
     release, archivedAt: new Date().toISOString(),
-    captured: { commitsPatch: Boolean(commits), indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
+    captured: { commitBundle: unique > 0, indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
     restore: [
+      unique > 0 ? 'git -C <repo> fetch commits.bundle HEAD:refs/heads/<restored-branch>' : null,
       `git -C <repo> worktree add <checkout> ${tree.head}`,
       snapshot.indexDiff ? 'git -C <checkout> apply --index index.diff' : null,
       snapshot.worktreeDiff ? 'git -C <checkout> apply worktree.diff' : null,
