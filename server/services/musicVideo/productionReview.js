@@ -907,8 +907,8 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
     project = setShotLocks(project, { sceneIds: project.scenes.map(scene => scene.sceneId), locked: true, reviewer, approvedBy });
   }
   return { ...project, productionReview: { ...project.productionReview,
-    approvalHistory: [...(project.productionReview?.approvalHistory || []), decision],
-    reviewedRevisions: { ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } },
+    approvalHistory: [...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY),
+    reviewedRevisions: pruneReviewedRevisions({ ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
     approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
 }
 
@@ -950,6 +950,20 @@ export function carryStoryboardApproval(before, after, reason) {
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }
 
+const MAX_APPROVAL_HISTORY = 50;
+const MAX_RECENT_REVISIONS = 5;
+
+/**
+ * Bound the reviewed-revision snapshots, which ride every project write and sync:
+ * keep the newest few plus every snapshot an open comment still points at.
+ */
+function pruneReviewedRevisions(snapshots, feedback) {
+  const keep = new Set((feedback || []).filter(f => !f.resolvedAt).map(f => f.basis));
+  Object.entries(snapshots).sort(([, a], [, b]) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
+    .slice(0, MAX_RECENT_REVISIONS).forEach(([key]) => keep.add(key));
+  return Object.fromEntries(Object.entries(snapshots).filter(([key]) => keep.has(key)));
+}
+
 /** Comments retain the exact reviewed draft, even after a replacement import. */
 export function recordProductionFeedback(project, input) {
   const review = project.productionReview || {};
@@ -964,8 +978,8 @@ export function recordProductionFeedback(project, input) {
   if (input.decision === 'request-changes') {
     for (const stage of ['art', 'storyboard', 'proof'].slice(['art', 'storyboard', 'proof'].indexOf(input.stage))) delete approvals[stage];
   }
-  return { ...project, productionReview: { ...review, approvals, reviewedRevisions: snapshots,
-    feedback: [...(review.feedback || []), entry] } };
+  const feedback = [...(review.feedback || []), entry];
+  return { ...project, productionReview: { ...review, approvals, reviewedRevisions: pruneReviewedRevisions(snapshots, feedback), feedback } };
 }
 
 export function resolveProductionFeedback(project, { feedbackId, resolution, reviewer }) {
