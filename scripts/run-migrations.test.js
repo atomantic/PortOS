@@ -340,6 +340,116 @@ export default {
   });
 });
 
+describe('runMigrations lock (#12046)', () => {
+  let rootDir;
+  let dataDir;
+  let migrationsDir;
+  let appliedFile;
+  let lockDir;
+  let warnSpy;
+  let logSpy;
+
+  // Deliberately NOT idempotent: every execution appends one byte, so a
+  // double-apply shows up as a two-byte marker rather than hiding behind an
+  // existsSync guard.
+  const COUNTING_FIXTURE = `
+import { appendFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    appendFileSync(join(rootDir, 'data', 'applied-count.txt'), 'x');
+  }
+};
+`;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'run-migrations-lock-'));
+    dataDir = join(rootDir, 'data');
+    migrationsDir = join(rootDir, 'migrations');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(migrationsDir, { recursive: true });
+    appliedFile = join(dataDir, 'migrations.applied.json');
+    lockDir = join(dataDir, 'migrations.lock');
+    writeFileSync(appliedFile, JSON.stringify(['000-earlier.js']) + '\n');
+    writeFileSync(join(migrationsDir, '001-count.js'), COUNTING_FIXTURE);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  const appliedCount = () => (existsSync(join(dataDir, 'applied-count.txt'))
+    ? readFileSync(join(dataDir, 'applied-count.txt'), 'utf-8').length
+    : 0);
+
+  it('two concurrent runs apply each pending migration exactly once', async () => {
+    // The race: the manual `npm run migrations` and the booting server both
+    // read the ledger before either persists it. The second runner must wait
+    // for the first and then find nothing pending.
+    const results = await Promise.all([
+      runMigrations({ rootDir, migrationsDir }),
+      runMigrations({ rootDir, migrationsDir }),
+    ]);
+
+    expect(results.sort()).toEqual([0, 1]);
+    expect(appliedCount()).toBe(1);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js', '001-count.js']);
+    expect(existsSync(lockDir)).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Waiting for another migration run'));
+  });
+
+  it('releases the lock when a migration throws', async () => {
+    writeFileSync(join(migrationsDir, '002-throws.js'), 'export default { async up() { throw new Error("boom"); } };');
+
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('boom');
+
+    expect(existsSync(lockDir)).toBe(false);
+    // The retry reaches the migration again (rejecting with its error, not the
+    // lock's) and does not re-apply 001, which the first run recorded.
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 50, lockPollMs: 10 })).rejects.toThrow('boom');
+    expect(appliedCount()).toBe(1);
+  });
+
+  it('gives up after the bounded wait while a live holder keeps the lock', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 }))
+      .rejects.toThrow(/Another migration run \(pid \d+\) holds/);
+
+    expect(appliedCount()).toBe(0);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js']);
+    expect(existsSync(lockDir)).toBe(true); // never steals a live holder's lock
+  });
+
+  it('reclaims a lock whose holder process is gone', async () => {
+    mkdirSync(lockDir);
+    // Above every platform's pid ceiling, so the liveness probe reports ESRCH.
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
+
+    expect(ran).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer running'));
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  it('reclaims a lock held past the stale timeout even when its pid is unknown', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ startedAt: Date.now() - 31 * 60 * 1000 }));
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
+
+    expect(ran).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('held for over 30 minutes'));
+  });
+});
+
 describe('runMigrations worktree backstop (#1947)', () => {
   let baseDir;
   let migrationsDir;

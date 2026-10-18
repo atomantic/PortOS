@@ -476,6 +476,12 @@ npm run pm2:start
 
 The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
 
+### "Another migration run holds data/migrations.lock"
+
+**Symptom**: `npm run migrations` or server boot exits with `Another migration run (pid N) holds …/data/migrations.lock`.
+
+Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `pm2 stop portos`) and retry. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it on its own once the recorded pid is gone or the lock is over 30 minutes old, so only remove `data/migrations.lock` by hand when you are certain no migration runner is still alive.
+
 ### Lost App Registrations
 
 **Symptom**: Apps disappear after restart.
