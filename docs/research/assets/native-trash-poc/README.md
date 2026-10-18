@@ -11,7 +11,7 @@ removes everything it created, including from the Trash / Recycle Bin.
 | `mac-poc.mjs` | macOS — `/usr/bin/osascript -l JavaScript` + `NSFileManager.trashItemAtURL` | Executed 2026-10-18 on macOS 26.6 (home volume + RAM-disk volume) |
 | `xdgTrash.mjs` | Linux — proposed PortOS-owned freedesktop Trash 1.0 adapter (`node:fs` only) | Executed 2026-10-18 in Docker (Debian bookworm, GLib 2.74, trash-cli 0.17) |
 | `linux-poc.mjs`, `linux-docker-run.sh` | Linux harness: home trash, `$topdir/.Trash-$uid`, sticky `$topdir/.Trash/$uid`, refusal, `gio trash` / `trash-cli` interop | Executed with the adapter above |
-| `windows-poc.mjs` | Windows — Windows PowerShell 5.1 + shell32 `SHFileOperationW` (`FOF_ALLOWUNDO`) | **Not executed** — no Windows host; its header lists the acceptance checks |
+| `windows-poc.mjs` | Windows — Windows PowerShell 5.1 + shell32 `SHFileOperationW` (`FOF_ALLOWUNDO`) | **Not executed** — no Windows host; exits non-zero unless every acceptance check passes, including the two operator-supplied refusal scenarios |
 
 These are investigation tools, not product code: nothing under `server/` imports
 them, and the implementation plan in the ADR owns the production versions.
