@@ -8,12 +8,12 @@
  * local record updated and `overridden` populated.
  */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it as vitestIt, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { makePathsProxy, mockNoPeerSync, mockNoPeers, mockTestIdentity } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, mockNoPeers, mockTestIdentity, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
 const fileUtilsMock = vi.hoisted(() => ({ atomicWrite: vi.fn(), realAtomicWrite: null }));
 
@@ -26,6 +26,20 @@ function sha256Hex(buf) {
 // root up-front; per-test setup wipes + reseeds inside it.
 const tempData = mkdtempSync(join(tmpdir(), 'portos-sharing-roundtrip-data-'));
 let tempBucket;
+const tempBuckets = new Set();
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+
+// Vitest cancellation ends its wait for a body, not the body's I/O. Settle
+// fixture-owned import/export work before retiring any bucket (#12178).
+async function cleanupBuckets() {
+  try {
+    await owned.drain();
+  } finally {
+    for (const bucket of tempBuckets) rmSync(bucket, { recursive: true, force: true });
+    tempBuckets.clear();
+  }
+}
 
 // makePathsProxy, not a hand-rolled one: this suite listed `data`/`images`/
 // `videos` by hand, so `PATHS.imageRefs` — added later — still resolved to the
@@ -103,16 +117,19 @@ describe('sharing round-trip', () => {
     mkdirSync(join(tempData, 'videos'), { recursive: true });
     writeFileSync(join(tempData, 'images', 'fakeasset.png'), 'PNGSTUB');
     tempBucket = mkdtempSync(join(tmpdir(), 'portos-sharing-roundtrip-bucket-'));
+    tempBuckets.add(tempBucket);
   });
-  afterEach(() => {
-    if (tempBucket) rmSync(tempBucket, { recursive: true, force: true });
-  });
+  afterEach(cleanupBuckets);
 
   // tempData is minted once (module scope) and reused across every test in
   // this file — beforeEach only wipes-and-recreates it, so the LAST test's
   // root is never removed. Clean it once here (#9032).
-  afterAll(() => {
-    rmSync(tempData, { recursive: true, force: true });
+  afterAll(async () => {
+    try {
+      await cleanupBuckets();
+    } finally {
+      rmSync(tempData, { recursive: true, force: true });
+    }
   });
 
   it('preserves local video holds while importing bundled media-job records', async () => {
@@ -2747,73 +2764,76 @@ describe('sharing round-trip', () => {
     const overriddenFor = (result, fixture, id) =>
       result.outcome.overridden.filter((o) => o.kind === fixture.kind && o.id === id);
 
-    it.each(KINDS)('applies two delayed source revisions in order and stores the winning source clock ($kind)', async (fixture) => {
-      const bucket = await buckets.createBucket({ name: 'ClockBucket', path: tempBucket, mode: 'auto-merge' });
-      const seeded = await fixture.seed(bucket.id);
-      const [first, second] = await exportManifests(seeded, 2);
+    for (const fixture of KINDS) {
+      it(`applies two delayed source revisions in order and stores the winning source clock (${fixture.kind})`, async () => {
+        const bucket = await buckets.createBucket({ name: 'ClockBucket', path: tempBucket, mode: 'auto-merge' });
+        const seeded = await fixture.seed(bucket.id);
+        const [first, second] = await exportManifests(seeded, 2);
 
-      deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
-      const r1 = await importer.processManifest(bucket.id, first.filename);
-      expect(overriddenFor(r1, fixture, seeded.id)).toHaveLength(1);
-      expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 2', updatedAt: CLOCK.v2 });
+        deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
+        const r1 = await importer.processManifest(bucket.id, first.filename);
+        expect(overriddenFor(r1, fixture, seeded.id)).toHaveLength(1);
+        expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 2', updatedAt: CLOCK.v2 });
 
-      deliverRevision(fixture, seeded.id, 'Remote Version 3', CLOCK.v3);
-      const r2 = await importer.processManifest(bucket.id, second.filename);
-      expect(overriddenFor(r2, fixture, seeded.id)).toHaveLength(1);
-      expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 3', updatedAt: CLOCK.v3 });
-    });
-
-    it.each(KINDS)('converges on reverse-order and tied deliveries without bumping the clock ($kind)', async (fixture) => {
-      const bucket = await buckets.createBucket({ name: 'ReverseBucket', path: tempBucket, mode: 'auto-merge' });
-      const seeded = await fixture.seed(bucket.id);
-      const [first, second, third] = await exportManifests(seeded, 3);
-
-      deliverRevision(fixture, seeded.id, 'Remote Version 3', CLOCK.v3);
-      await importer.processManifest(bucket.id, second.filename);
-
-      // The older revision arrives late, then a different body at the SAME
-      // clock — both are no-ops that must neither apply nor manufacture a clock.
-      deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
-      const late = await importer.processManifest(bucket.id, first.filename);
-      expect(overriddenFor(late, fixture, seeded.id)).toEqual([]);
-      deliverRevision(fixture, seeded.id, 'Tied Rival', CLOCK.v3);
-      const tied = await importer.processManifest(bucket.id, third.filename);
-      expect(overriddenFor(tied, fixture, seeded.id)).toEqual([]);
-
-      expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 3', updatedAt: CLOCK.v3 });
-    });
-
-    it.each(KINDS)('keeps a local edit made after the importer read but before its queued write ($kind)', async (fixture) => {
-      const bucket = await buckets.createBucket({ name: 'RaceBucket', path: tempBucket, mode: 'auto-merge' });
-      const seeded = await fixture.seed(bucket.id);
-      const [exp] = await exportManifests(seeded, 1);
-      deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
-
-      // The importer's first read of this record returns the stale snapshot,
-      // but only after a local edit has fully committed — exactly the window
-      // the old out-of-queue compare could not see.
-      const st = fixture.store();
-      const realLoadOne = st.loadOne;
-      let armed = true;
-      const spy = vi.spyOn(st, 'loadOne').mockImplementation(async (id, ...rest) => {
-        const snapshot = await realLoadOne(id, ...rest);
-        if (armed && id === seeded.id) {
-          armed = false;
-          await fixture.edit(seeded.id, 'Local Newer');
-        }
-        return snapshot;
+        deliverRevision(fixture, seeded.id, 'Remote Version 3', CLOCK.v3);
+        const r2 = await importer.processManifest(bucket.id, second.filename);
+        expect(overriddenFor(r2, fixture, seeded.id)).toHaveLength(1);
+        expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 3', updatedAt: CLOCK.v3 });
       });
-      try {
-        const r = await importer.processManifest(bucket.id, exp.filename);
-        expect(armed).toBe(false);
-        expect(overriddenFor(r, fixture, seeded.id)).toEqual([]);
-      } finally {
-        spy.mockRestore();
-      }
-      const stored = await fixture.get(seeded.id);
-      expect(stored[fixture.field]).toBe('Local Newer');
-      expect(stored.updatedAt > CLOCK.v2).toBe(true);
-    });
+
+      it(`converges on reverse-order and tied deliveries without bumping the clock (${fixture.kind})`, async () => {
+        const bucket = await buckets.createBucket({ name: 'ReverseBucket', path: tempBucket, mode: 'auto-merge' });
+        const seeded = await fixture.seed(bucket.id);
+        const [first, second, third] = await exportManifests(seeded, 3);
+
+        deliverRevision(fixture, seeded.id, 'Remote Version 3', CLOCK.v3);
+        await importer.processManifest(bucket.id, second.filename);
+
+        // The older revision arrives late, then a different body at the SAME
+        // clock — both are no-ops that must neither apply nor manufacture a clock.
+        deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
+        const late = await importer.processManifest(bucket.id, first.filename);
+        expect(overriddenFor(late, fixture, seeded.id)).toEqual([]);
+        deliverRevision(fixture, seeded.id, 'Tied Rival', CLOCK.v3);
+        const tied = await importer.processManifest(bucket.id, third.filename);
+        expect(overriddenFor(tied, fixture, seeded.id)).toEqual([]);
+
+        expect(await fixture.get(seeded.id)).toMatchObject({ [fixture.field]: 'Remote Version 3', updatedAt: CLOCK.v3 });
+      });
+
+      it(`keeps a local edit made after the importer read but before its queued write (${fixture.kind})`, async () => {
+        const bucket = await buckets.createBucket({ name: 'RaceBucket', path: tempBucket, mode: 'auto-merge' });
+        const seeded = await fixture.seed(bucket.id);
+        const [exp] = await exportManifests(seeded, 1);
+        deliverRevision(fixture, seeded.id, 'Remote Version 2', CLOCK.v2);
+
+        // The importer's first read of this record returns the stale snapshot,
+        // but only after a local edit has fully committed — exactly the window
+        // the old out-of-queue compare could not see.
+        const st = fixture.store();
+        const realLoadOne = st.loadOne;
+        let armed = true;
+        const spy = vi.spyOn(st, 'loadOne').mockImplementation(async (id, ...rest) => {
+          const snapshot = await realLoadOne(id, ...rest);
+          if (armed && id === seeded.id) {
+            armed = false;
+            await fixture.edit(seeded.id, 'Local Newer');
+          }
+          return snapshot;
+        });
+        try {
+          const r = await importer.processManifest(bucket.id, exp.filename);
+          expect(armed).toBe(false);
+          expect(overriddenFor(r, fixture, seeded.id)).toEqual([]);
+        } finally {
+          spy.mockRestore();
+        }
+        const stored = await fixture.get(seeded.id);
+        expect(stored[fixture.field]).toBe('Local Newer');
+        expect(stored.updatedAt > CLOCK.v2).toBe(true);
+      });
+
+    }
 
     it('inbox promotion applies a remote revision with its source clock and origin', async () => {
       const bucket = await buckets.createBucket({ name: 'PromoteClockBucket', path: tempBucket, mode: 'inbox' });
