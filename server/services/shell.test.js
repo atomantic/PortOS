@@ -867,6 +867,8 @@ describe('registerExternalSession / unregisterExternalSession', () => {
     const id = shell.registerExternalSession('run-rw', pty, {});
     expect(shell.writeToSession(id, 'yes\n')).toBe(true);
     expect(pty.write).toHaveBeenCalledWith('yes\n');
+    shell.writeToSession(id, '\r', { promptSubmission: true });
+    expect(pty.write).toHaveBeenCalledWith('\r', { promptSubmission: true });
     expect(shell.resizeSession(id, 120, 40)).toBe(true);
     expect(pty.resize).toHaveBeenCalledWith(120, 40);
   });

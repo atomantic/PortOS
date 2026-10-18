@@ -251,6 +251,7 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     await vi.advanceTimersByTimeAsync(300);
     await controller.handleData('A sufficiently long prompt for this controller test');
     await vi.advanceTimersByTimeAsync(300);
+    expect(write).toHaveBeenCalledWith('session-abcdef12', '\r', { promptSubmission: true });
 
     const banner = "\n⏺ You've hit your session limit · resets 6:00 PM";
     await controller.handleData(banner);

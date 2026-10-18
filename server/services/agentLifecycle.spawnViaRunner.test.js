@@ -109,6 +109,9 @@ vi.mock('./agentErrorAnalysis.js', () => ({
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
+vi.mock('../lib/gitCommitProbe.js', async importOriginal => ({
+  ...(await importOriginal()), committedDuringRun: vi.fn(async () => true),
+}));
 vi.mock('./toolStateMachine.js', () => ({
   createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
   startExecution: vi.fn(),
@@ -121,7 +124,8 @@ vi.mock('./executionLanes.js', () => ({
   release: vi.fn(),
 }));
 
-import { spawnViaRunner } from './agentLifecycle.js';
+import { handleAgentCompletion, spawnViaRunner } from './agentLifecycle.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -132,6 +136,25 @@ import { handleOrphanedTask } from './agentManagement.js';
 import { runnerAgents } from './agentState.js';
 
 const REJECTION = 'Command not allowed: grok. Permitted commands: claude, codex';
+
+it('finalizes an interrupted TUI startup as retryable failure, without crediting a shared-checkout commit', async () => {
+  vi.clearAllMocks();
+  const startupErrorAnalysis = {
+    category: 'startup-failure', origin: 'runner', actionable: false,
+    message: 'Server restarted before the TUI task prompt was submitted',
+  };
+  runnerAgents.set('agent-interrupted', {
+    task: { id: 'task-interrupted', taskType: 'user', metadata: {} },
+    runId: 'run-interrupted', workspacePath: '/tmp/ws', startedAt: Date.now(),
+    startupErrorAnalysis, recoveredFromRunner: true,
+  });
+  await handleAgentCompletion('agent-interrupted', 143, false, 1000);
+  expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+    agentId: 'agent-interrupted', success: false, errorAnalysis: startupErrorAnalysis,
+  }));
+  expect(committedDuringRun).not.toHaveBeenCalled();
+  expect(runnerAgents.has('agent-interrupted')).toBe(false);
+});
 
 // The runner ANSWERED and declined. The shape mirrors what `spawnAgentViaRunner`
 // stamps on a non-2xx (pinned in cosRunnerClient.test.js); a bare Error would

@@ -41,6 +41,24 @@ A separate `portos-cos` PM2 process that:
 - A disconnect does **not** demote. In runner mode the runner owns every agent process, so while it is down new tasks are **held** as `pending` (logged once, not per task) and resume on reconnect. Demoting would spawn them as children of `portos-server` — the orphaning this app exists to prevent.
 - Agents already spawned directly keep completing through the direct path across a promotion; reconciliation only adopts agents this server does not already own.
 
+### TUI startup across a server restart
+
+The runner retains a submission receipt beside each opted-in TUI's live PTY.
+It records the receipt only when the task's submit Enter is written successfully;
+startup-dialog answers, a paste alone, and writes queued in the server do not count.
+If the server restarts before submission, its prompt-delivery timers disappear.
+Recovery registers the surviving terminal's completion owner, then asks the runner
+to stop it only if the receipt is still absent. Normal exit handling records a
+retryable startup failure and releases the task for a fresh attempt. Recovery never
+replays a potentially unsent paste into the old composer.
+
+The runner checks the receipt and claims cancellation synchronously, so a task
+submitted after the recovery listing survives, and a canceled startup cannot
+accept a late submission. Submitted tasks continue across restarts. Older servers
+and runners without this protocol report an unknown receipt and retain their
+existing recovery behavior; a legacy terminal already stuck at startup may still
+need relaunching.
+
 ## Unattended recovery gates
 
 Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Six gates in `server/services/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Five of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.

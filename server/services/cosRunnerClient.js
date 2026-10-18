@@ -80,7 +80,10 @@ const createTuiProxy = (sessionId, pid, state) => {
       pid,
       onData: (handler) => subscribe(state.dataHandlers, handler),
       onExit: (handler) => subscribe(state.exitHandlers, handler),
-      write: (data) => emitControl('tui:input', { data }),
+      write: (data, options) => emitControl('tui:input', {
+        data,
+        ...(options?.promptSubmission ? { promptSubmission: true } : {}),
+      }),
       resize: (cols, rows) => emitControl('tui:resize', { cols, rows }),
       kill: (signal = 'SIGTERM') => emitControl('tui:kill', { signal }),
     },
@@ -481,9 +484,13 @@ export async function getActiveAgentsFromRunner() {
 /**
  * Terminate an agent via the runner (graceful SIGTERM with SIGKILL fallback)
  */
-export async function terminateAgentViaRunner(agentId) {
+export async function terminateAgentViaRunner(agentId, { onlyIfPromptUnsubmitted = false } = {}) {
   const response = await fetchWithTimeout(`${COS_RUNNER_URL}/terminate/${agentId}`, {
-    method: 'POST'
+    method: 'POST',
+    ...(onlyIfPromptUnsubmitted ? {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ onlyIfPromptUnsubmitted: true }),
+    } : {}),
   }, 30000);
   if (!response.ok) {
     const error = await readRunnerJson(response);

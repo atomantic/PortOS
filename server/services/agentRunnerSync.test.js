@@ -10,6 +10,7 @@ const recoveredPty = {
 
 vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(),
+  terminateAgentViaRunner: vi.fn(async () => ({ success: true, terminated: true })),
   connectTuiSessionViaRunner: vi.fn(() => ({
     sessionId: 'tui-session-1',
     pid: 1234,
@@ -45,7 +46,7 @@ vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
-import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { activeAgents, runnerAgents } from './agentState.js';
@@ -255,5 +256,51 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
     await syncRunnerAgents();
 
     expect(appendRunEvent.mock.calls.map(([e]) => e.kind)).toEqual(['run.runner-recovered']);
+  });
+
+  // A server restart loses the controller's paste/Enter timers, while the
+  // runner keeps the empty composer alive. Recovery must await real exit and
+  // use ordinary completion/retry, rather than replaying a possibly pasted task.
+  it('stops an unsubmitted startup only after registering its completion owner and relay', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([{ ...survivingTui, promptSubmitted: false }]);
+    terminateAgentViaRunner.mockImplementationOnce(async () => {
+      expect(runnerAgents.get('agent-1')).toMatchObject({
+        startupErrorAnalysis: { category: 'startup-failure', actionable: false },
+      });
+      expect(shellService.registerExternalSession).toHaveBeenCalled();
+      expect(recoveredPty.onExit).toHaveBeenCalled();
+      return { success: true, terminated: true };
+    });
+
+    await expect(syncRunnerAgents()).resolves.toBe(1);
+    expect(terminateAgentViaRunner).toHaveBeenCalledWith('agent-1', { onlyIfPromptUnsubmitted: true });
+    expect(runnerAgents.has('agent-1')).toBe(true);
+    expect(recoveredPty.write).not.toHaveBeenCalled();
+  });
+
+  it.each([true, null, undefined])('preserves a submitted or legacy TUI (receipt=%s)', async promptSubmitted => {
+    getActiveAgentsFromRunner.mockResolvedValue([{ ...survivingTui, promptSubmitted }]);
+    await syncRunnerAgents();
+    expect(terminateAgentViaRunner).not.toHaveBeenCalled();
+    expect(runnerAgents.get('agent-1').startupErrorAnalysis).toBeUndefined();
+  });
+
+  it('preserves a task submitted after the recovery listing, using the runner refusal', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([{ ...survivingTui, promptSubmitted: false }]);
+    terminateAgentViaRunner.mockResolvedValueOnce({ success: true, terminated: false });
+    await syncRunnerAgents();
+    expect(runnerAgents.get('agent-1').startupErrorAnalysis).toBeUndefined();
+    await syncRunnerAgents();
+    expect(terminateAgentViaRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains ownership and retries a failed startup stop on the next sweep', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([{ ...survivingTui, promptSubmitted: false }]);
+    terminateAgentViaRunner.mockRejectedValueOnce(new Error('runner connection reset'));
+    await syncRunnerAgents();
+    expect(runnerAgents.has('agent-1')).toBe(true);
+    await syncRunnerAgents();
+    expect(terminateAgentViaRunner).toHaveBeenCalledTimes(2);
+    expect(shellService.registerExternalSession).toHaveBeenCalledTimes(1);
   });
 });

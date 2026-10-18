@@ -481,6 +481,7 @@ describe('cosRunnerClient', () => {
 
       capturedSocketListeners['tui:output']({ sessionId: session.sessionId, data: 'working' });
       session.ptyProcess.write('hello');
+      session.ptyProcess.write('\r', { promptSubmission: true });
       session.ptyProcess.resize(120, 40);
       capturedSocketListeners['tui:exit']({
         sessionId: session.sessionId,
@@ -498,6 +499,9 @@ describe('cosRunnerClient', () => {
       expect(capturedSocket.emit).toHaveBeenCalledWith('tui:input', {
         sessionId: 'agent-tui-1',
         data: 'hello',
+      });
+      expect(capturedSocket.emit).toHaveBeenCalledWith('tui:input', {
+        sessionId: 'agent-tui-1', data: '\r', promptSubmission: true,
       });
       expect(capturedSocket.emit).toHaveBeenCalledWith('tui:resize', {
         sessionId: 'agent-tui-1',
@@ -548,6 +552,16 @@ describe('cosRunnerClient', () => {
   // terminateAgentViaRunner
   // ===========================================================================
   describe('terminateAgentViaRunner', () => {
+    it('requests an atomic unsubmitted-prompt guard for startup recovery', async () => {
+      fetchWithTimeout.mockResolvedValue(mockResponse(true, { terminated: false }));
+      await expect(terminateAgentViaRunner('agent-123', { onlyIfPromptUnsubmitted: true }))
+        .resolves.toEqual({ terminated: false });
+      expect(fetchWithTimeout).toHaveBeenCalledWith(
+        expect.stringContaining('/terminate/agent-123'),
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"onlyIfPromptUnsubmitted":true}' },
+        30000,
+      );
+    });
     it('should POST terminate and return result', async () => {
       fetchWithTimeout.mockResolvedValue(mockResponse(true, { terminated: true }));
       const result = await terminateAgentViaRunner('agent-123');

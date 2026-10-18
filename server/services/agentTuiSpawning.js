@@ -191,6 +191,7 @@ export async function createAgentTuiSession({
       providerAuth: cliProviderAuthDescriptor(provider),
       doneSentinelPath,
       securityScanGrant,
+      trackPromptSubmission: true,
       onData,
       onExit: (event) => {
         exited = true;
@@ -389,7 +390,9 @@ export async function spawnTuiAgent({
     mergeGateIsOwed,
     spooler,
     session: {
-      write: (sessionId, keys) => shellService.writeToSession(sessionId, keys),
+      write: (sessionId, keys, options) => options
+        ? shellService.writeToSession(sessionId, keys, options)
+        : shellService.writeToSession(sessionId, keys),
       paste: (sessionId, text, options) => shellService.pasteToSession(sessionId, text, options),
       isAlive: (sessionId) => !!shellService.getSession(sessionId),
       kill: (sessionId) => shellService.killSession(sessionId),

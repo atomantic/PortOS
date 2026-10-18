@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -13,6 +13,7 @@ import { createTuiExitHandler } from './tuiExit.js';
 import { armForceKill } from './forceKill.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
 import * as requestSchemas from './requestSchemas.js';
+import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 
 // index.js binds a server at module load, so (like shutdown.test.js) it is
 // executed in a VM with its imports replaced by injected fakes. Nothing listens,
@@ -24,9 +25,9 @@ const SENTINEL_PATH = '/example/workspace/.agent-done-agent-1';
 
 // `sentinel` overrides the fake access object; `watch` captures the handler the
 // runner registers so a test can fire the "sentinel appeared" event itself.
-async function spawnTui(sentinel = {}) {
+async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
   const routes = new Map();
-  const app = { use: vi.fn(), get: vi.fn(), post: (path, handler) => routes.set(path, handler) };
+  const app = { use: vi.fn(), get: (path, handler) => routes.set(path, handler), post: (path, handler) => routes.set(path, handler) };
   const server = Object.assign(new EventEmitter(), {
     listen: vi.fn(), close: vi.fn(cb => cb?.()), closeAllConnections: vi.fn(),
   });
@@ -47,6 +48,7 @@ async function spawnTui(sentinel = {}) {
     ...sentinel,
   };
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
+  const killProcessTree = vi.fn();
   runInNewContext(source, {
     assertDatabaseAdmission: vi.fn(), maintenance,
     withBackupAssetPublication: vi.fn(), persistRunnerCompletion: vi.fn(),
@@ -61,7 +63,8 @@ async function spawnTui(sentinel = {}) {
     ...requestSchemas,
     createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
     createSecurityScanManager, securityScanRequestSchema,
-    armForceKillShared: armForceKill, killProcessTree: vi.fn(),
+    armForceKillShared: armForceKill, killProcessTree,
+    usableAgentPid, runnerAgentLivenessFields, getProcessStats: vi.fn(async () => ({})),
     spawn: vi.fn(), pty: { spawn: vi.fn(() => child) },
     createAgentSentinelAccess: vi.fn(() => access),
     parseSentinelPayload, SENTINEL_COMPLETION_MARKER,
@@ -71,17 +74,67 @@ async function spawnTui(sentinel = {}) {
   });
   const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json: vi.fn() };
   await routes.get('/spawn-tui')({ body: {
-    agentId: 'agent-1', taskId: 'task-1', command: 'example-cli', doneSentinelPath: SENTINEL_PATH,
+    agentId: 'agent-1', taskId: 'task-1', command: 'example-cli', doneSentinelPath: SENTINEL_PATH, trackPromptSubmission,
   } }, res);
   expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   // The runner hands its handler to watch(); firing it returns the tracked work.
   const fireSentinel = () => access.watch.mock.calls.at(-1)[0]();
-  return { access, child, stopWatching, fireSentinel };
+  const socket = new EventEmitter();
+  socket.use = vi.fn();
+  io.emit('connection', socket);
+  const listing = async () => {
+    const response = { json: vi.fn() };
+    await routes.get('/agents')({}, response);
+    return response.json.mock.calls[0][0][0];
+  };
+  const stopStartup = async () => {
+    const response = { json: vi.fn() };
+    await routes.get('/terminate/:agentId')({ params: { agentId: 'agent-1' }, body: { onlyIfPromptUnsubmitted: true } }, response);
+    return response.json.mock.calls[0][0];
+  };
+  return { access, child, stopWatching, fireSentinel, socket, listing, stopStartup, killProcessTree };
 }
 
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+describe('cos-runner TUI startup recovery receipt', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('counts only a successful task-submit Enter, preserving it across a server reconnect', async () => {
+    const run = await spawnTui();
+    const input = data => run.socket.emit('tui:input', { sessionId: 'agent-1', ...data });
+    input({ data: '\r' }); // startup dialog, not the task
+    input({ data: '\x1b[200~task body\x1b[201~' });
+    expect((await run.listing()).promptSubmitted).toBe(false);
+    run.child.write.mockImplementationOnce(() => { throw new Error('PTY write failed'); });
+    input({ data: '\r', promptSubmission: true });
+    expect((await run.listing()).promptSubmitted).toBe(false);
+    input({ data: '\r', promptSubmission: true });
+    expect((await run.listing()).promptSubmitted).toBe(true);
+    // A stale GET /agents from the old server must not authorize this kill.
+    expect(await run.stopStartup()).toMatchObject({ terminated: false });
+    expect(run.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it('stops an unsubmitted composer and refuses a late submission after the cancellation decision', async () => {
+    const run = await spawnTui();
+    expect(await run.stopStartup()).toMatchObject({ terminated: true });
+    expect(run.killProcessTree).toHaveBeenCalledWith(run.child, 'SIGTERM');
+    run.socket.emit('tui:input', { sessionId: 'agent-1', data: '\r', promptSubmission: true });
+    expect(run.child.write).not.toHaveBeenCalled();
+    expect((await run.listing()).promptSubmitted).toBe(false);
+  });
+
+  it('preserves terminals spawned by an older server without the tracking protocol', async () => {
+    const run = await spawnTui({}, { trackPromptSubmission: false });
+    expect((await run.listing()).promptSubmitted).toBeNull();
+    expect(await run.stopStartup()).toMatchObject({ terminated: false });
+    expect(run.killProcessTree).not.toHaveBeenCalled();
+  });
 });
 
 describe('cos-runner TUI completion sentinel (#3202)', () => {
