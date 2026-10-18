@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -287,6 +287,20 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
     throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
   }
   res.json({ success: true, request });
+}));
+
+// POST /api/cos/schedule/branch-reconcile/checkouts/retire - Archive and retire
+// one held checkout from the last branch-reconcile inventory (#12002)
+router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (req, res) => {
+  const { appId, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
+  const { retireInventoriedCheckout } = await import('../services/heldCheckoutRecovery.js');
+  const result = await retireInventoriedCheckout({ appId, release });
+  if (!result.ok) {
+    throw new ServerError(`Checkout kept: ${result.reason}${result.detail ? ` (${result.detail})` : ''}`, {
+      status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason },
+    });
+  }
+  res.json(result);
 }));
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see

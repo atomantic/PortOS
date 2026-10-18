@@ -313,6 +313,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
 | PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`; `autoStart`: set false for manual-only on-demand drains, omitted preserves legacy automatic starts/rechecks) |
 | POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
+| POST | `/cos/schedule/branch-reconcile/checkouts/retire` | Archive and retire one held checkout named exactly as the last branch-reconcile inventory reported it (operator only) |
 | GET | `/cos/schedule/maintenance-runs` | List manual maintenance runs (the Schedule tab's "Run maintenance now"; running first, then recent history) |
 | POST | `/cos/schedule/maintenance-runs` | Start a manual maintenance run for one app (`appId`, `providerId`, `model`, optional `effort`); returns the run and its first dispatch or hold reason. Independent of Quota Burn |
 | POST | `/cos/schedule/maintenance-runs/:id/stop` | Stop a run from dispatching further steps (a task already queued or running is not recalled) |

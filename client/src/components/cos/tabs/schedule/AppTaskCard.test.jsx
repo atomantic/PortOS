@@ -63,9 +63,9 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('Lock: <script>owner handoff</script>')).toBeVisible();
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('Outside managed worktree roots')).toBeVisible();
-    expect(screen.getByText(/Checkout recovery requires verified owner authority/)).toBeVisible();
+    expect(screen.getByText(/Retiring a checkout is a scoped release/)).toBeVisible();
     expect(screen.getByText('Resolve the listed holds and run again.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: /Remove|Unlock|Retire/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Archive and retire checkout…' })).toBeVisible();
   });
 
   it('distinguishes an unreadable inventory from a completed empty scan', () => {
