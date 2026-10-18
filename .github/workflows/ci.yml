@@ -154,6 +154,26 @@ jobs:
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  prompt-history:
+    name: Shipped prompt history
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+
+      - name: Check shipped stage-prompt history
+        run: node scripts/migrations/check-shipped-prompt-history.js
+
   server:
     # Sharded on a full plan — see docs/GITHUB_ACTIONS.md "Full-suite sharding".
     # The matrix comes from the planner; once-only steps pin to shard 1, and the
@@ -1050,7 +1070,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, browser, windows-server, node-minimum, linux-containment]
+    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1082,6 +1102,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_GATE_LABEL: CI Gate
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
+          CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}

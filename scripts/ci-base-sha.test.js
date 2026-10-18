@@ -47,12 +47,12 @@ describe('resolveBaseSha', () => {
 describe('ci.yml checkout depth', () => {
   const jobs = workflowJobs(WORKFLOW);
 
-  it('never asks for full history', () => {
-    // fetch-depth: 0 clones every commit in the repo on a job that only ever
-    // diffs the merge ref against its own first parent.
-    expect(WORKFLOW).not.toMatch(/fetch-depth:\s*0\b/);
-    // Negative control: the assertion above can fail.
-    expect('        with:\n          fetch-depth: 0\n').toMatch(/fetch-depth:\s*0\b/);
+  it('fetches full history only for the shipped prompt guard', () => {
+    const jobs = workflowJobs(WORKFLOW);
+    expect(jobs['prompt-history']).toMatch(/fetch-depth:\s*0\b/);
+    for (const [id, body] of Object.entries(jobs)) {
+      if (id !== 'prompt-history') expect(body, id).not.toMatch(/fetch-depth:\s*0\b/);
+    }
   });
 
   it('resolves the diff base in every job that consumes it', () => {
