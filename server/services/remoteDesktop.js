@@ -3,6 +3,7 @@ import { createConnection } from 'node:net';
 import { platform } from 'node:os';
 import { createWebSocketStream, WebSocketServer } from 'ws';
 import { isPortReachable } from '../lib/connectivity.js';
+import { markUpgradeClaimed } from '../lib/upgradeFallback.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const DEFAULT_VNC_PORT = 5900;
@@ -108,6 +109,7 @@ export const createRemoteDesktopBroker = ({
 
     httpServer.on('upgrade', (request, socket, head) => {
       if (request.url?.split('?', 1)[0] !== '/remote-desktop/ws') return;
+      markUpgradeClaimed(socket);
       let url;
       try {
         url = new URL(request.url, 'http://portos.invalid');

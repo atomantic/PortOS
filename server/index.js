@@ -17,6 +17,7 @@ import { getBuildIdentity } from './lib/buildIdentity.js';
 import { httpCompression } from './lib/httpCompression.js';
 import { PORTS } from './lib/ports.js';
 import { isSmokeBoot } from './lib/runtimeEnv.js';
+import { installUpgradeFallback } from './lib/upgradeFallback.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -216,6 +217,7 @@ setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
+  destroyUpgrade: false,
   maxHttpBufferSize: SOCKET_MAX_PAYLOAD_BYTES,
   // CORS headers are reflected only for handshakes allowRequest admits: the
   // same browser-relay guard as the HTTP gate refuses a foreign Origin or a
@@ -239,6 +241,11 @@ remoteDesktopBroker.mountWebSocket(localHttpServer);
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
+
+// Close unclaimed upgrade sockets after a bounded timeout (replaces engine.io's
+// destroyUpgrade timer so reverse proxies with slow upstreams aren't cut short).
+installUpgradeFallback(httpServer);
+installUpgradeFallback(localHttpServer);
 
 // Auth gate for Socket.IO — when settings.secrets.auth.enabled is true the
 // handshake must carry a valid token cookie or Authorization: Bearer header

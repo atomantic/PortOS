@@ -403,6 +403,7 @@ export * from './detachedSpawn.js';
 export * from './setupScriptRunner.js';
 export * from './hostShutdown.js';
 export * from './httpDrain.js';
+export * from './upgradeFallback.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
 export * from './ffmpegFilterGraph.js';
