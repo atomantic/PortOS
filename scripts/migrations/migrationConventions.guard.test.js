@@ -11,12 +11,26 @@
  *      `collidesWith` 5 each before `_lib.js` exported them. A declaration
  *      whose name matches a `_lib.js` export — or one of the local spellings
  *      in `LOCAL_ALIASES` — must import the export instead.
+ *
+ *   2. No import from `server/services` (#12049). A migration is a frozen
+ *      snapshot of a transform: an install upgrading across many versions runs
+ *      it months later, and a transform that calls into live service code
+ *      then does whatever today's service does, not what the migration did
+ *      when it shipped. Seventy-odd applied migrations import services and
+ *      stay as they are; a new one uses `_lib.js` primitives, `server/lib`
+ *      pure helpers, or a frozen copy of the transform.
+ *
+ *   3. The purge marker stays statically visible. `run-migrations.js` reads
+ *      `purge: true` from source text (`sourceDeclaresPurge`) so a fresh
+ *      install's first boot does not import every pending module up front;
+ *      every shipped migration's module must agree with that probe.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as lib from './_lib.js';
+import { sourceDeclaresPurge } from '../run-migrations.js';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..');
 
@@ -51,6 +65,11 @@ const redeclaredLibHelpers = (source) => [...stripComments(source).matchAll(DECL
   .filter((name) => LIB_EXPORTS.has(name) || name in LOCAL_ALIASES)
   .map((name) => ({ name, use: LOCAL_ALIASES[name] ?? name }));
 
+// Static `from '…/server/services/…'` and dynamic `import('…/server/services/…')`.
+const SERVICE_IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*)['"][^'"]*\/server\/services\//;
+
+const importsServerServices = (source) => SERVICE_IMPORT.test(stripComments(source));
+
 const migrationNumber = (file) => Number.parseInt(file.slice(0, 3), 10);
 
 const migrationFiles = () => readdirSync(HERE)
@@ -71,6 +90,44 @@ describe('new-migration conventions', () => {
     const offenders = guardedSources()
       .flatMap(([file, source]) => redeclaredLibHelpers(source).map(({ name, use }) => `${file}: ${name} — import ${use} from ./_lib.js`));
     expect(offenders).toEqual([]);
+  });
+
+  it('no guarded migration imports from server/services', () => {
+    const offenders = guardedSources()
+      .filter(([, source]) => importsServerServices(source))
+      .map(([file]) => `${file}: imports server/services — use _lib.js, server/lib, or a frozen copy of the transform`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('every shipped migration agrees with the static purge probe', async () => {
+    // Only modules that mention purge at all can disagree; importing those
+    // few keeps the drift check cheap while still covering every purge
+    // migration and every near-miss spelling.
+    const candidates = migrationFiles()
+      .map((file) => [file, readFileSync(resolve(HERE, file), 'utf8')])
+      .filter(([, source]) => /purge/i.test(source));
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const [file, source] of candidates) {
+      const mod = await import(`./${file}`);
+      const migration = mod?.default && typeof mod.default.up === 'function' ? mod.default : mod;
+      expect({ file, purge: sourceDeclaresPurge(source) }).toEqual({ file, purge: migration?.purge === true });
+    }
+  });
+
+  describe('service import matching', () => {
+    it('flags static and dynamic imports from server/services', () => {
+      expect(importsServerServices("import { listUniverses } from '../../server/services/universeBuilder.js';")).toBe(true);
+      expect(importsServerServices("const { x } = await import('../../server/services/universeCanon.js');")).toBe(true);
+    });
+
+    it('passes _lib.js, server/lib and a comment that only mentions the path', () => {
+      const source = [
+        "import { readJsonOrNull } from './_lib.js';",
+        "import { atomicWrite } from '../../server/lib/fileUtils.js';",
+        '// a frozen copy of server/services/universeCanon.js#backfill, not an import',
+      ].join('\n');
+      expect(importsServerServices(source)).toBe(false);
+    });
   });
 
   describe('helper redeclaration matching', () => {

@@ -17,6 +17,32 @@ const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'migrations');
 
 const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
 
+// ---- purge-class probe (#12049) ----
+//
+// The empty-ledger guard below has to know which PENDING migrations are purge
+// migrations before any of them runs. Importing each module to read its
+// `purge` export loaded every pending migration's import graph up front — on a
+// fresh install that is every migration, dozens of which pull in live server
+// services before the toolkit has booted. The marker is read from the source
+// text instead: a `purge: true` property at the two-space indentation of the
+// default export's own properties (how every purge migration writes it), or
+// an `export const purge = true`. Comments are stripped first so the rationale
+// block every purge migration carries cannot match. A `purge: true` nested
+// deeper inside a data literal is data, not the marker.
+// `migrationConventions.guard.test.js` checks every shipped migration's module
+// against this probe so the two cannot drift.
+const stripComments = (source) => source
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+const PURGE_PROPERTY = /^ {2}purge\s*:\s*true\s*,?\s*$/m;
+const PURGE_EXPORT = /^export\s+const\s+purge\s*=\s*true\b/m;
+
+/** Whether a migration's source text opts into the runner's purge class. */
+export const sourceDeclaresPurge = (source) => {
+  const code = stripComments(source);
+  return PURGE_PROPERTY.test(code) || PURGE_EXPORT.test(code);
+};
+
 // ---- runner lock (#12046) ----
 //
 // The ledger is read-then-written by every runner: the booting server
@@ -237,14 +263,13 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   // the run loop: if this rebuilt-from-empty run aborted on an earlier
   // throwing migration (the documented repair-and-reboot flow), the partial
   // ledger would no longer "start empty" on the next boot — and the purge
-  // would then execute destructively against the rebuilt install.
+  // would then execute destructively against the rebuilt install. The probe
+  // reads source text, never importing a module before its turn in the loop.
   if (ledgerStartedEmpty) {
     let disarmed = 0;
     for (const file of files) {
       if (applied.includes(file)) continue;
-      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
-      const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
-      if (!migration?.purge) continue;
+      if (!sourceDeclaresPurge(await readFile(join(migrationsDir, file), 'utf-8'))) continue;
       console.warn(`⏭️ Skipping purge migration ${file}: applied-list started empty/rebuilt — recorded as applied without running to avoid a destructive rerun (#2770)`);
       applied.push(file);
       disarmed++;
