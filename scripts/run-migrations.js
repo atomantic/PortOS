@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdir, readFile, mkdir, rename } from 'fs/promises';
+import { readdir, readFile, mkdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
@@ -16,6 +16,91 @@ const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..'));
 const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'migrations');
 
 const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
+
+// ---- runner lock (#12046) ----
+//
+// The ledger is read-then-written by every runner: the booting server
+// (bootstrap.js) and the documented manual `npm run migrations` both call
+// runMigrations, and a PM2 restart can start a second server mid-run. Two
+// runners that both read the ledger before either persists it each apply the
+// same non-idempotent migration. A `mkdir` is atomic on every filesystem, so
+// the lock is a directory; `owner.json` inside it carries the holder's pid and
+// start time so a runner that died (SIGKILL, power loss) can be recognised and
+// its lock reclaimed instead of blocking every later boot.
+const lockDirPath = (rootDir) => join(rootDir, 'data', 'migrations.lock');
+const LOCK_OWNER_FILE = 'owner.json';
+const LOCK_STALE_MS = 30 * 60 * 1000;
+const LOCK_WAIT_MS = 60 * 1000;
+const LOCK_POLL_MS = 250;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Signal 0 probes existence without delivering anything. EPERM means the pid
+// exists but belongs to another user, which still counts as alive.
+const pidAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
+};
+
+const readLockOwner = (lockDir) => readFile(join(lockDir, LOCK_OWNER_FILE), 'utf-8')
+  .then((raw) => JSON.parse(raw), () => null)
+  .then((owner) => (owner && typeof owner === 'object' ? owner : null));
+
+/**
+ * Why a held lock can be reclaimed, or null while its holder may still be
+ * running. The holder's own pid is never judged dead (an in-process second
+ * caller must wait, not steal), and a lock with no readable owner yet — the
+ * window between the holder's mkdir and its owner.json write — is judged by
+ * the directory's age alone.
+ */
+async function lockStaleReason(lockDir) {
+  const owner = await readLockOwner(lockDir);
+  const pid = Number.isInteger(owner?.pid) ? owner.pid : null;
+  if (pid !== null && pid !== process.pid && !pidAlive(pid)) return `holder pid ${pid} is no longer running`;
+  const startedAt = Number.isFinite(owner?.startedAt)
+    ? owner.startedAt
+    : (await stat(lockDir).then((s) => s.mtimeMs, () => null));
+  if (startedAt !== null && Date.now() - startedAt > LOCK_STALE_MS) return `held for over ${LOCK_STALE_MS / 60000} minutes`;
+  return null;
+}
+
+/**
+ * Take `data/migrations.lock`; resolves to the release function. A second
+ * runner waits up to `waitMs` for the holder to finish, reclaims a stale lock
+ * on sight, and otherwise rejects with the holder's identity so the operator
+ * knows what to wait for rather than racing it.
+ */
+async function acquireMigrationLock(lockDir, { waitMs = LOCK_WAIT_MS, pollMs = LOCK_POLL_MS } = {}) {
+  const deadline = Date.now() + waitMs;
+  let announced = false;
+  for (;;) {
+    const taken = await mkdir(lockDir).then(() => true, (err) => {
+      if (err.code === 'EEXIST') return false;
+      throw err;
+    });
+    if (taken) {
+      await writeFile(join(lockDir, LOCK_OWNER_FILE), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      return () => rm(lockDir, { recursive: true, force: true });
+    }
+    const stale = await lockStaleReason(lockDir);
+    if (stale) {
+      console.warn(`⚠️ Reclaiming stale migration lock ${lockDir}: ${stale}`);
+      await rm(lockDir, { recursive: true, force: true });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      const owner = await readLockOwner(lockDir);
+      throw new Error(
+        `Another migration run (pid ${owner?.pid ?? 'unknown'}) holds ${lockDir} — wait for it to finish (or stop the PortOS server) and retry; `
+        + `remove the directory by hand only if no migration runner is still alive`,
+      );
+    }
+    if (!announced) {
+      console.log(`⏳ Waiting for another migration run holding ${lockDir}`);
+      announced = true;
+    }
+    await sleep(pollMs);
+  }
+}
 
 /**
  * Scan for migration files (*.js, sorted by filename). Co-located vitest
@@ -88,6 +173,8 @@ export async function listPendingMigrations({
 export async function runMigrations({
   rootDir = DEFAULT_ROOT_DIR,
   migrationsDir = DEFAULT_MIGRATIONS_DIR,
+  lockWaitMs = LOCK_WAIT_MS,
+  lockPollMs = LOCK_POLL_MS,
 } = {}) {
   // Backstop for #1947: a process booted from inside a CoS agent git worktree
   // (data/cos/worktrees/agent-*) has no gitignored data/ runtime tree, so
@@ -105,6 +192,17 @@ export async function runMigrations({
   // ships in the repo and always exists).
   await mkdir(dirname(appliedFile), { recursive: true });
 
+  // Everything from the ledger read to its last persist runs under the lock:
+  // the read is only trustworthy while no other runner can append to it.
+  const releaseLock = await acquireMigrationLock(lockDirPath(rootDir), { waitMs: lockWaitMs, pollMs: lockPollMs });
+  try {
+    return await runPendingMigrations({ rootDir, migrationsDir, appliedFile });
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   // Load applied migrations list (repairing a corrupt file aside — see
   // readAppliedList).
   const applied = await readAppliedList(appliedFile, { repair: true });
