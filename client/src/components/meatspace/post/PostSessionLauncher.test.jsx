@@ -519,19 +519,17 @@ describe('PostSessionLauncher — Start card (issue #3249)', () => {
     getPostRecommendations.mockResolvedValue({ recommendations: [
       { id: 'default:full-post', kind: 'default', title: 'Keep your streak going', detail: 'No gaps', deepLink: '/post/launcher', priority: 0 },
     ] });
-    const { container } = renderLauncher();
+    renderLauncher();
     await waitFor(() => expect(screen.getByText('Up next')).toBeTruthy());
 
     // Compare document order: the Full POST button must precede every panel it
     // used to sit below. Node.compareDocumentPosition returns FOLLOWING (4) when
     // the argument comes after the reference node.
     const start = screen.getByText('Full POST');
-    for (const label of ["Today's Status", 'Goals', 'Up next', 'Session Mode'].filter(Boolean)) {
-      const el = screen.queryByText(label);
-      if (!el) continue;
+    for (const label of ["Today's Status", 'Goals', 'Up next']) {
+      const el = screen.getByText(label);
       expect(start.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
-    expect(container).toBeTruthy();
   });
 
   it('leads with a CTA that dispatches the top recommendation', async () => {
