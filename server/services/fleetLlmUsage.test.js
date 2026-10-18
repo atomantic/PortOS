@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ peers: [], tailnet: { peers: [] }, stored: null, written: [] }));
+const state = vi.hoisted(() => ({ peers: [], tailnet: { peers: [] }, stored: { ok: true, value: null }, written: [] }));
 
 vi.mock('./instances.js', () => ({ getPeers: async () => state.peers }));
 vi.mock('../lib/tailscale.js', () => ({ getTailscaleStatus: async () => state.tailnet }));
 vi.mock('../lib/paths.js', () => ({ dataPath: (...parts) => `/example/data/${parts.join('/')}` }));
 vi.mock('../lib/fileUtils.js', () => ({
-  readJSONFile: async () => state.stored,
+  readJSONFileStrict: async () => state.stored,
   atomicWrite: async (path, value) => state.written.push({ path, value }),
 }));
 
@@ -15,7 +15,7 @@ const { __resetFleetHostUsage, flushFleetHostUsage, getFleetHostUsageLedger, get
 beforeEach(() => {
   state.peers = [];
   state.tailnet = { peers: [] };
-  state.stored = null;
+  state.stored = { ok: true, value: null };
   state.written = [];
   __resetFleetHostUsage();
 });
@@ -49,22 +49,25 @@ describe('fleet host usage report', () => {
 
   it('serves a report from disk after a restart, without a phantom in-flight request', async () => {
     state.stored = {
-      version: 1,
-      since: Date.parse('2026-09-01T00:00:00Z'),
-      clients: [{
-        key: '192.0.2.10',
-        firstSeen: Date.parse('2026-09-19T00:00:00Z'),
-        lastSeen: Date.now(),
-        requests: 4,
-        errors: 0,
-        tokenReports: 4,
-        promptTokens: 400,
-        completionTokens: 900,
-        activeRequests: 3,
-        models: ['qwen3.8-27b'],
-        days: {},
-      }],
-      recent: [],
+      ok: true,
+      value: {
+        version: 1,
+        since: Date.parse('2026-09-01T00:00:00Z'),
+        clients: [{
+          key: '192.0.2.10',
+          firstSeen: Date.parse('2026-09-19T00:00:00Z'),
+          lastSeen: Date.now(),
+          requests: 4,
+          errors: 0,
+          tokenReports: 4,
+          promptTokens: 400,
+          completionTokens: 900,
+          activeRequests: 3,
+          models: ['qwen3.8-27b'],
+          days: {},
+        }],
+        recent: [],
+      },
     };
 
     const report = await getFleetHostUsageReport();
@@ -90,5 +93,80 @@ describe('fleet host usage report', () => {
     expect(Object.keys(payload.recent[0]).sort()).toEqual([
       'clientKey', 'completionTokens', 'durationMs', 'finishedAt', 'id', 'model', 'path', 'promptTokens', 'startedAt', 'status',
     ]);
+  });
+
+  it('skips persisting and logs error once when usage file is unreadable, then resumes on successful read', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // First attempt: unreadable file (e.g. EACCES, torn write)
+    state.stored = { ok: false, value: null };
+
+    const ledger = await getFleetHostUsageLedger();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('Could not read fleet host usage');
+
+    // Second touch while still unreadable: logs no additional error
+    await getFleetHostUsageLedger();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    // Record request and try to flush
+    ledger.endRequest(
+      ledger.beginRequest({ address: '192.0.2.10', path: '/v1/chat/completions' }),
+      { status: 200, usage: { promptTokens: 5, completionTokens: 6 } },
+    );
+    await flushFleetHostUsage();
+
+    // Persist must be skipped to avoid overwriting unreadable file
+    expect(state.written).toHaveLength(0);
+
+    // File becomes readable (e.g. lock released or permissions fixed)
+    state.stored = {
+      ok: true,
+      value: {
+        version: 1,
+        since: Date.parse('2026-09-01T00:00:00Z'),
+        clients: [{
+          key: '192.0.2.10',
+          firstSeen: Date.parse('2026-09-01T00:00:00Z'),
+          lastSeen: Date.now(),
+          requests: 10,
+          errors: 0,
+          tokenReports: 10,
+          promptTokens: 1000,
+          completionTokens: 2000,
+          activeRequests: 0,
+          models: [],
+          days: {},
+        }],
+        recent: [],
+      },
+    };
+
+    const recoveredLedger = await getFleetHostUsageLedger();
+    expect(recoveredLedger).toBe(ledger);
+
+    // Now flush should proceed and persist loaded history
+    await flushFleetHostUsage();
+    expect(state.written).toHaveLength(1);
+    const payload = JSON.parse(state.written[0].value);
+    expect(payload.clients[0].requests).toBe(10);
+    expect(payload.clients[0].completionTokens).toBe(2000);
+
+    errorSpy.mockRestore();
+  });
+
+  it('absent file hydrates empty and persists normally', async () => {
+    state.stored = { ok: true, value: null };
+
+    const ledger = await getFleetHostUsageLedger();
+    ledger.endRequest(
+      ledger.beginRequest({ address: '192.0.2.10', path: '/v1/chat/completions' }),
+      { status: 200, usage: { promptTokens: 1, completionTokens: 1 } },
+    );
+    await flushFleetHostUsage();
+
+    expect(state.written).toHaveLength(1);
+    const payload = JSON.parse(state.written[0].value);
+    expect(payload.clients[0].requests).toBe(1);
   });
 });
