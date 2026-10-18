@@ -78,13 +78,14 @@ async function onVideoCompleted({ generationId, videos } = {}) {
   });
 }
 
-// Drop one row, non-fatally. The delete paths call this AFTER the file is
-// already gone, so a failure here must never surface to the user — the row just
-// lingers until the next boot reconcile prunes it, i.e. exactly the old
-// behavior. Skipped under the escape hatch, where there's no index to maintain.
-async function unindexKey(mediaKey, kind) {
+// Post-delete hooks tolerate index failure until boot reconciliation. A caller
+// retaining its history row and bytes can use strict removal to fail closed.
+// Test/file backends have no derived Postgres index to maintain.
+async function unindexKey(mediaKey, kind, { strict = false } = {}) {
   if (!mediaKey || isEscapeHatch()) return;
-  await queueMediaIndexRefresh(() => removeAsset(mediaKey)).catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
+  const removal = queueMediaIndexRefresh(() => removeAsset(mediaKey));
+  if (strict) return removal;
+  await removal.catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
 }
 
 /**
@@ -97,11 +98,12 @@ export async function unindexImage(filename) {
 }
 
 /**
- * Drop a deleted video's row. `id` is the job id (NOT the filename) — the same
- * ref onVideoCompleted indexed it under. Never throws.
+ * Drop a video's row. `id` is the job id (NOT the filename).
+ * `strict` propagates failure when a caller still holds the history entry and
+ * bytes for a retry; ordinary post-delete hooks remain non-fatal.
  */
-export async function unindexVideo(id) {
-  await unindexKey(videoMediaKey(id), 'video');
+export async function unindexVideo(id, options = {}) {
+  await unindexKey(videoMediaKey(id), 'video', options);
 }
 
 /**

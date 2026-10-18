@@ -66,18 +66,17 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null 
       if (replacementId && project.renderHistoryId !== replacementId) return HISTORY_UNCHANGED;
       const eligible = new Set(finals.filter(entry => !entry.reason).map(entry => entry.id));
       const retainedFiles = new Set(history.filter(entry => !eligible.has(entry.id)).flatMap(renderFiles));
+      const index = eligible.size ? await import('../mediaAssetIndex/index.js') : null;
       for (const entry of history) {
         if (!eligible.has(entry.id)) continue;
         if (!safeUnder(PATHS.videos, entry.filename)) throw new ServerError('Invalid render filename', { status: 409, code: 'INVALID_VIDEO_PATH' });
+        // Leave the row and bytes available to retry if its derived index cannot settle.
+        await index.unindexVideo(entry.id, { strict: true });
         for (const path of renderFiles(entry)) if (!retainedFiles.has(path)) await remove(path);
         deleted.push(entry.id);
       }
       return deleted.length ? history.filter(entry => !eligible.has(entry.id)) : HISTORY_UNCHANGED;
     });
-    if (deleted.length) {
-      const { unindexVideo } = await import('../mediaAssetIndex/index.js');
-      for (const id of deleted) await unindexVideo(id);
-    }
     if (deleted.length) musicVideoEvents.emit('render-cleanup', { projectId });
     return deleted.length;
   }));

@@ -61,10 +61,22 @@ describe('derived render retention', () => {
     expect(inventory.finals.filter(item => !item.reason).map(item => item.id)).toEqual(['old']);
     expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
     expect((await loadHistory()).map(item => item.id)).not.toContain('old');
-    expect(unindexVideo).toHaveBeenCalledWith('old');
+    expect(unindexVideo).toHaveBeenCalledWith('old', { strict: true });
     for (const file of ['old.mp4']) expect(existsSync(join(PATHS.videos, file))).toBe(false);
     for (const file of ['old.jpg', 'old-proof.png']) expect(existsSync(join(PATHS.videoThumbnails, file))).toBe(false);
     for (const id of [...ids.filter(id => id !== 'old'), 'source', 'other']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
+  });
+
+  it('keeps history and bytes retryable when index removal fails, then settles them on retry', async () => {
+    await seed([entry('current'), entry('old')]);
+    unindexVideo.mockRejectedValueOnce(new Error('Index temporarily unavailable'));
+    await expect(cleanupSupersededFinals('example-project')).rejects.toThrow('Index temporarily unavailable');
+    expect((await loadHistory()).map(item => item.id)).toContain('old');
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+    expect((await loadHistory()).map(item => item.id)).not.toContain('old');
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(false);
+    expect(unindexVideo).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the previous final when its replacement failed to become the current render, or its file is missing', async () => {
