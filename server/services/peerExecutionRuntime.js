@@ -38,18 +38,43 @@ async function compose() {
     adapters: { prepare: adapters.preparePeerExecution, run: adapters.runPeerExecution, reconcile: adapters.reconcilePeerExecution },
     changed: () => io?.emit('peer-execution:changed'),
     resume: async input => (await import('./maintenanceControl.js')).resumeMaintenance(input) });
-  return { ...receiver, ledger, coordinator };
+  const result = { ...receiver, ledger, coordinator };
+  const rawKick = receiver.kick;
+  result.kick = () => {
+    if (!watcher) armPeerExecutionWatcher(result);
+    return rawKick();
+  };
+  return result;
 }
 export async function initializePeerExecution() {
   const receiver = await peerExecutionRuntime();
   // A new install remains silent and default-deny; no ledger/authority init at boot.
   if (receiver.ledger.authority.read()) await receiver.recover();
-  if (!watcher) {
-    assertNotRealDataWrite(receiver.coordinator.directory, 'peer execution drain notifications');
-    mkdirSync(receiver.coordinator.directory, { recursive: true, mode: 0o700 });
-    watcher = watch(receiver.coordinator.directory, () => receiver.kick());
+  armPeerExecutionWatcher(receiver);
+}
+
+function armPeerExecutionWatcher(receiver) {
+  if (watcher) return;
+  assertNotRealDataWrite(receiver.coordinator.directory, 'peer execution drain notifications');
+  mkdirSync(receiver.coordinator.directory, { recursive: true, mode: 0o700 });
+  try {
+    watcher = watch(receiver.coordinator.directory, () => {
+      receiver.kick();
+    });
+    watcher.on('error', (err) => {
+      console.error(`❌ Peer execution directory watcher error: ${err.message}`);
+      watcher?.close();
+      watcher = null;
+    });
     watcher.unref?.();
+  } catch (err) {
+    console.error(`❌ Failed to watch peer execution coordinator directory: ${err.message}`);
+    watcher = null;
   }
+}
+
+export function _getPeerExecutionWatcher() {
+  return watcher;
 }
 
 export async function withPeerExecutionIdentityRestore(fn) {
