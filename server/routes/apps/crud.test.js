@@ -4,6 +4,10 @@ vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(asy
 vi.mock('../../services/appQualitySnapshotFile.js', () => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234', path: '.quality.json' })) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorEvents } from '../../lib/errorHandler.js';
 import crudRoutes from './crud.js';
@@ -140,6 +144,29 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
       expect(response.body[0].overallStatus).toBe('online');
+    });
+
+    it('flags non-git directories with isGitRepo and leaves a missing directory unknown', async () => {
+      const plainDir = mkdtempSync(join(tmpdir(), 'portos-plain-'));
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([
+          { id: 'plain', name: 'Plain', repoPath: plainDir, pm2ProcessNames: [] },
+          { id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [] },
+          { id: 'gone', name: 'Gone', repoPath: join(plainDir, 'missing'), pm2ProcessNames: [] },
+        ]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+
+        const response = await request(app).get('/api/apps');
+
+        const flags = Object.fromEntries(response.body.map(a => [a.id, a.isGitRepo]));
+        expect(flags).toEqual({ plain: false, repo: true, gone: undefined });
+      } finally {
+        rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
     });
 
     it('returns the nav projection without invoking PM2 enrichment', async () => {
