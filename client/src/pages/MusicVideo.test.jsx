@@ -637,6 +637,29 @@ describe('MusicVideo per-project workspace (#12039)', () => {
   });
 });
 
+describe('MusicVideo music library load state (#12040)', () => {
+  it('shows a failed library read with Retry in the create form, then the tracks once the retry lands', async () => {
+    listTracks.mockRejectedValueOnce(new Error('library offline'));
+    renderMV();
+    fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load the music library — library offline');
+    expect(screen.queryByText(/No tracks in the music library yet/)).not.toBeInTheDocument();
+
+    listTracks.mockResolvedValueOnce([{ id: 't-example', title: 'Example Track' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: /Example Track/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty copy for a genuinely empty library, not an error', async () => {
+    renderMV();
+    fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+    expect(await screen.findByText(/No tracks in the music library yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo project header', () => {
   it('keeps only the picker beside the page title inside a project; fork and delete live in Project settings', async () => {
     await openProject(PROJECT_WITH_CLIP);

@@ -213,6 +213,7 @@ export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
 export { default as useDrawerTab } from './useDrawerTab.js';
 export { default as useSettingsForm } from './useSettingsForm.js';
+export { default as useListResource } from './useListResource.js';
 export { default as useDownloadPreflightConfirm } from './useDownloadPreflightConfirm.js';
 export { default as useChordPlayer } from './useChordPlayer.js';
 export { default as useDrumPlayer } from './useDrumPlayer.js';

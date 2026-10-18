@@ -1,6 +1,7 @@
 import MediaModePicker from './MediaModePicker.jsx';
 import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import Drawer from '../Drawer.jsx';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
 import AutomationBriefFields from './AutomationBriefFields.jsx';
@@ -21,7 +22,7 @@ const MODES = [
  * 2. Lyrics, concept, and style info are automatically read from the chosen track.
  * 3. Name, mode, character style, universe/moodboard, and brief settings.
  */
-export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, universes, trackName, youtube, onSubmit, submitting }) {
+export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, trackLibrary = null, universes, trackName, youtube, onSubmit, submitting }) {
   const autopilot = form.mode === 'autonomous';
   const optionLabels = trackOptionLabels(tracks || []);
   const selectedTrack = (tracks || []).find((t) => t.id === form.trackId) || null;
@@ -72,6 +73,12 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
               </option>
             ))}
           </select>
+          {trackLibrary?.state === 'error' && (
+            <ListLoadError what="the music library" error={trackLibrary.error} onRetry={trackLibrary.retry} />
+          )}
+          {trackLibrary?.state === 'ready' && !(tracks || []).length && (
+            <p className="text-xs text-port-text-muted">No tracks in the music library yet — import one below.</p>
+          )}
 
           <div>
             <span className="block text-xs text-port-text-muted mb-1">…or import a Suno song or YouTube audio</span>

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Music, Download } from 'lucide-react';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
@@ -36,7 +37,7 @@ function timedDataLabels(project) {
  * sound-design bed (#8988) mixes under the song only when explicitly chosen.
  */
 export default function TrackPanel({
-  project, tracks, trackName, audioFilename, youtube,
+  project, tracks, trackLibrary = null, trackName, audioFilename, youtube,
   renderBound, midiBound, onChangeTrack,
 }) {
   // A pending change that would destroy timed data waits for explicit confirm.
@@ -77,6 +78,12 @@ export default function TrackPanel({
           <option value="">Change track…</option>
           {tracks.map((t) => <option key={t.id} value={t.id}>{optionLabels.get(t.id)}</option>)}
         </select>
+        {trackLibrary?.state === 'error' && (
+          <ListLoadError className="basis-full" what="the music library" error={trackLibrary.error} onRetry={trackLibrary.retry} />
+        )}
+        {trackLibrary?.state === 'ready' && tracks.length === 0 && (
+          <span className="text-port-text-muted">No tracks in the music library yet.</span>
+        )}
         <YoutubeImportControls
           url={youtube.editUrl} onUrlChange={(e) => youtube.setEditUrl(e.target.value)}
           job={youtube.editJob} disabled={renderBound || midiBound}

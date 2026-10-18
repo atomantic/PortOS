@@ -7,6 +7,7 @@ import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
 import MusicVideoFilingSelect from '../media/MusicVideoFilingSelect';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
+import ListLoadError from '../ui/ListLoadError';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import ModelInputPreview from '../media/ModelInputPreview';
 import HfTokenBanner from './HfTokenBanner';
@@ -214,6 +215,9 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           <ImageGenControls
             mode={effectiveMode}
             models={catalogs.models}
+            modelsState={catalogs.modelsState}
+            modelsError={catalogs.modelsError}
+            onRetryModels={catalogs.retryModels}
             modelId={fields.modelId}
             onModelChange={actions.handleModelChange}
             width={fields.width}
@@ -250,6 +254,9 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             </p>
           )}
 
+          {isLocalMode && catalogs.lorasState === 'error' && (
+            <ListLoadError what="the LoRA library" error={catalogs.lorasError} onRetry={catalogs.retryLoras} />
+          )}
           {isLocalMode && (derived.remoteTargetActive || derived.currentModel?.supportsLoras !== false) && (
             <LoraPicker
               availableLoras={catalogs.availableLoras}
