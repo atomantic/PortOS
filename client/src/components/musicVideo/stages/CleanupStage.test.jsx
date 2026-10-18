@@ -73,7 +73,10 @@ describe('production cleanup', () => {
     const { rerender } = render(<CleanupStage board={{ project: { id: 'old-project' } }} />);
     rerender(<CleanupStage board={{ project: { id: 'new-project' } }} />);
     await screen.findByText('Superseded — safe to remove');
-    resolveOld({ finals: [{ id: 'wrong', bytes: 100, reason: 'Old project' }], segments: { stale: [], unusedLooks: [] } });
-    await waitFor(() => expect(screen.queryByText('Kept: Old project')).not.toBeInTheDocument());
+    await act(async () => {
+      resolveOld({ finals: [{ id: 'wrong', bytes: 100, reason: 'Old project' }], segments: { stale: [], unusedLooks: [] } });
+    });
+    expect(screen.getByText('Superseded — safe to remove')).toBeInTheDocument();
+    expect(screen.queryByText('Kept: Old project')).not.toBeInTheDocument();
   });
 });
