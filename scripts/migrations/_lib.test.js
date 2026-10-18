@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, mkdirSyn
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration, makeProviderSeedMigration, makeSeededProviderTierMigration, seededProviderTierModels } from './_lib.js';
+import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration, makeProviderSeedMigration, makeSeededProviderTierMigration, seededProviderTierModels, readJsonOrNull, pickGridEntry, makeWidgetSeedMigration } from './_lib.js';
 import { runSeededProviderTierMigrationTests } from './_testHelpers.js';
 import sonnet5Migration from './153-claude-default-sonnet-5.js';
 import opus5Migration from './206-claude-default-opus-5.js';
@@ -264,6 +264,74 @@ describe('readLayoutsDoc / writeLayoutsDoc', () => {
 // end-to-end in their own suites; these tests pin the DISTINGUISHING FLAGS in
 // isolation so a future edit to makeSplitMigration that breaks one flag fails
 // loudly here even if the per-migration suites still pass by coincidence.
+describe('readJsonOrNull', () => {
+  let dir;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'migration-readjson-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('returns null for an absent or unparseable document and the value otherwise', async () => {
+    writeFileSync(join(dir, 'bad.json'), '{ truncated');
+    writeFileSync(join(dir, 'ok.json'), '{"a":1}');
+    expect(await readJsonOrNull(join(dir, 'missing.json'))).toBeNull();
+    expect(await readJsonOrNull(join(dir, 'bad.json'))).toBeNull();
+    expect(await readJsonOrNull(join(dir, 'ok.json'))).toEqual({ a: 1 });
+  });
+
+  it('propagates a read error that is not ENOENT instead of reporting "absent"', async () => {
+    // A directory at the path exists but cannot be read as a file (EISDIR);
+    // collapsing that into null would let a migration overwrite it.
+    await expect(readJsonOrNull(dir)).rejects.toMatchObject({ code: expect.stringMatching(/EISDIR|EPERM|EACCES/) });
+  });
+});
+
+describe('dashboard-grid helpers', () => {
+  it('pickGridEntry keeps a free slot and otherwise drops below the occupied grid', () => {
+    const grid = [{ id: 'a', x: 0, y: 0, w: 4, h: 2 }, { id: 'b', x: 4, y: 0, w: 4, h: 3 }];
+    expect(pickGridEntry(grid, 'c', { x: 8, y: 0, w: 4, h: 2 })).toEqual({ id: 'c', x: 8, y: 0, w: 4, h: 2 });
+    expect(pickGridEntry(grid, 'c', { x: 2, y: 1, w: 4, h: 2 })).toEqual({ id: 'c', x: 0, y: 3, w: 4, h: 2 });
+  });
+
+  describe('makeWidgetSeedMigration', () => {
+    let rootDir;
+    let layoutsPath;
+    const migration = makeWidgetSeedMigration({ label: 'migration test', widgetId: 'new-widget', cell: { w: 4, h: 3 }, logLine: 'seeded in' });
+    const seedDoc = () => writeFileSync(layoutsPath, JSON.stringify({
+      layouts: [
+        { id: 'default', widgets: ['clock'], grid: [{ id: 'clock', x: 0, w: 4, h: 2, order: 0 }] },
+        { id: 'morning-review', widgets: ['new-widget'], grid: [] },
+        { id: 'custom-1', widgets: ['clock'], grid: [{ id: 'clock', x: 0, w: 4, h: 2, order: 0 }] },
+      ],
+    }));
+    const readDoc = () => JSON.parse(readFileSync(layoutsPath, 'utf-8'));
+
+    beforeEach(() => {
+      rootDir = mkdtempSync(join(tmpdir(), 'migration-widget-seed-'));
+      mkdirSync(join(rootDir, 'data'), { recursive: true });
+      layoutsPath = join(rootDir, 'data', 'dashboard-layouts.json');
+      seedDoc();
+    });
+    afterEach(() => { rmSync(rootDir, { recursive: true, force: true }); });
+
+    it('appends the widget to the built-in layouts only, after the last packed order, and heals a widgets-only entry', async () => {
+      expect(await migration.up({ rootDir })).toEqual({ updated: 2 });
+      const [dflt, morning, custom] = readDoc().layouts;
+      expect(dflt.widgets).toEqual(['clock', 'new-widget']);
+      expect(dflt.grid.at(-1)).toEqual({ id: 'new-widget', x: 0, w: 4, order: 1, h: 3 });
+      expect(morning.widgets).toEqual(['new-widget']);
+      expect(morning.grid).toEqual([{ id: 'new-widget', x: 0, w: 4, order: 0, h: 3 }]);
+      expect(custom.widgets).toEqual(['clock']);
+      expect(custom.grid).toHaveLength(1);
+    });
+
+    it('reports already-applied without rewriting on a rerun', async () => {
+      await migration.up({ rootDir });
+      const before = readFileSync(layoutsPath, 'utf-8');
+      expect(await migration.up({ rootDir })).toEqual({ updated: 0, reason: 'already-applied' });
+      expect(readFileSync(layoutsPath, 'utf-8')).toBe(before);
+    });
+  });
+});
+
 describe('makeSplitMigration flags', () => {
   let rootDir;
   let dataDir;
