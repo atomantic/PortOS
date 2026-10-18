@@ -2,7 +2,7 @@
  * Owner-aware sweep of run-scoped temp roots (#9113, #9804).
  *
  * Workspace configs and the CI launcher stamp `.owner.pid` in each root. A
- * killed run never reaches `teardown()` in `runTempRoot.js`, so its root is
+ * killed run never reaches its runner close hook, so its root is
  * left behind; the next config load calls `sweepStaleRunRoots()` to reclaim
  * it for the caller's exact prefix (default `pvt-`). A recorded owner that is provably gone frees the root immediately, an
  * owner that is alive keeps it however old it is (a >6h run must not be swept

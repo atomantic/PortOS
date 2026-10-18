@@ -859,17 +859,19 @@ describe('fixture-owned CDP artifacts root', () => {
     ['removes the owned root', true, [], undefined],
     ['reports an unremoved root with its creating test (negative control)', false,
       ['⚠️ test temp leak: portos-cdp-artifacts- ×1 (created by testBrowserCleanup.test.js)'], 1],
-  ])('global teardown %s', async (_name, passHandle, warnings, exitCode) => {
+  ])('runner close cleanup %s', async (_name, passHandle, warnings, exitCode) => {
     const artifacts = _createTestArtifactsRoot({ parent: runRoot });
     writeFileSync(join(artifacts.path, 'trace.json'), '{}');
     await _cleanupTestBrowser({ proc: exited(), artifacts: passHandle ? artifacts : undefined, cleanup: () => {} });
-    const { teardown } = await import('../../../scripts/vitestTempRootSetup.js');
+    const { setup } = await import('../../../scripts/vitestTempRootSetup.js');
+    const onClose = vi.fn();
+    setup({ vitest: { onClose } });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const originalExit = process.exitCode;
     let observed;
     try {
       process.exitCode = undefined;
-      teardown();
+      onClose.mock.calls[0][0]();
       observed = process.exitCode;
     } finally { process.exitCode = originalExit; }
     expect(warn.mock.calls.map(([line]) => line)).toEqual(warnings);
