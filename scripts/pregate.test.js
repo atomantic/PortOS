@@ -8,7 +8,7 @@
  * "CI will also run: db" from a plan field that has since been renamed.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
@@ -186,6 +186,45 @@ describe('pregate hidden-content invocation', () => {
       }
     },
   );
+
+  // Only the fixture-owned scan process is signaled; no real test runner starts.
+  it.skipIf(process.platform === 'win32')('attributes owner cancellation to its active stage and preserves SIGTERM', async () => {
+    write('scripts/scan-diff-hidden-content.js', `
+      console.log('fixture-stage-ready');
+      setInterval(() => {}, 1000);
+    `);
+    const runner = spawn(process.execPath, ['scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    runner.stderr.on('data', (data) => { stderr += data; });
+    runner.stdout.on('data', (data) => {
+      stdout += data;
+      if (stdout.includes('fixture-stage-ready')) runner.kill('SIGTERM');
+    });
+    try {
+      const result = await new Promise((resolve, reject) => {
+        runner.once('error', reject);
+        runner.once('close', (status, signal) => resolve({ status, signal }));
+      });
+      expect(result).toEqual({ status: null, signal: 'SIGTERM' });
+      expect(stderr).toContain(`Pregate incomplete: stage="hidden-content scan" owner_pid=${runner.pid}`);
+      expect(stderr).toMatch(/child_pid=\d+ received_signal=SIGTERM/);
+      expect(stdout).not.toContain('Pregate passed');
+    } finally {
+      runner.kill('SIGKILL');
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('reports a stage child signal as incomplete rather than an ordinary assertion failure', () => {
+    write('scripts/scan-diff-hidden-content.js', "process.kill(process.pid, 'SIGTERM');\n");
+    const result = run('--skip-lint');
+    expect(result.status).toBe(143);
+    expect(result.stderr).toMatch(/Pregate incomplete: stage="hidden-content scan" owner_pid=\d+ child_pid=\d+ child_signal=SIGTERM/);
+    expect(result.stderr).not.toContain('failed — fix it');
+    expect(result.stdout).not.toContain('Pregate passed');
+  });
 
   it('passes clean uncommitted changes even when the plan selects no lint or tests', () => {
     git('config', 'core.autocrlf', 'true');
