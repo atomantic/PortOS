@@ -3901,7 +3901,32 @@ describe('provider quota cooldowns', () => {
     // The point of the whole change: it is still queued, not burned.
     expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
     expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
-    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toMatch(/resumes in 2h2[56]m/);
+    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toMatch(/resumes at /);
+  });
+
+  it('keeps one hold message for the window, then promotes the job without it once the reset passes', async () => {
+    // Resolve so the first render releases its cloud slot once it fails.
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+    const waiting = mediaJobQueue.getJob(second.jobId).statusMsg;
+    // A later scan in the same window must not rewrite (and re-persist) it.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe(waiting);
+
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow + 3 * 60 * 60 * 1000);
+    try {
+      await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'running');
+      expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe('Starting');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('leaves a different backend free to run during another backend\'s cooldown', async () => {

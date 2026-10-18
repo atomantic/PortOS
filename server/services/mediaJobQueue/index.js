@@ -658,7 +658,8 @@ function trimArchiveForSnapshot() {
 const quotaCooldowns = new Map();
 
 /** Remaining cooldown for a job's backend, 0 when it is clear to dispatch. */
-function quotaCooldownRemaining(job, now = Date.now()) {
+/** The reset instant for a job's backend, or 0 when it is clear to dispatch. */
+function quotaCooldownResumeAt(job, now = Date.now()) {
   const mode = job?.params?.mode;
   if (!mode) return 0;
   const resumeAt = quotaCooldowns.get(mode);
@@ -669,7 +670,7 @@ function quotaCooldownRemaining(job, now = Date.now()) {
     quotaCooldowns.delete(mode);
     return 0;
   }
-  return resumeAt - now;
+  return resumeAt;
 }
 
 /**
@@ -688,6 +689,15 @@ function recordQuotaCooldown(job, errorText) {
   if (deferral.resumeAt <= existing) return;
   quotaCooldowns.set(mode, deferral.resumeAt);
   console.warn(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
+}
+
+// Derived from the ABSOLUTE reset so the message is constant for the whole
+// window: a countdown would change every tick and force a full-queue snapshot
+// per held job each time it did.
+const QUOTA_WAIT_PATTERN = /^Waiting for \S+ quota — resumes at /;
+function quotaWaitMessage(mode, resumeAt) {
+  const at = new Date(resumeAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `Waiting for ${mode} quota — resumes at ${at}`;
 }
 
 /** Snapshot shape: [[mode, resumeAt], ...], dropping anything already expired. */
@@ -1008,6 +1018,9 @@ function startLaneJob(job, { lane }) {
   job.startedAt = new Date().toISOString();
   job.position = 1;
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
+  // A quota wait describes the queued state only; a persisted one also
+  // survives a restart that outlasts the cooldown.
+  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
   job.statusMsg = job.statusMsg || 'Starting';
   if (lane === 'cloud') {
     cloudRunning.push(job);
@@ -1157,18 +1170,19 @@ async function drainLoop() {
       cloud: limits.cloud - cloudRunning.length,
       remote: limits.remote - remoteRunning.length,
     };
+    let quotaWaitChanged = false;
     for (const job of candidates) {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       // The provider told us when it recovers; dispatching before then just
       // converts a queued job into a failed one. Hold rather than fail, and say
       // when it resumes — `statusMsg` is in the persisted field whitelist, so
       // the Render Queue shows the wait across a restart too.
-      const cooling = quotaCooldownRemaining(job);
-      if (cooling > 0) {
-        const waiting = `Waiting for ${job.params.mode} quota — resumes in ${formatDeferral(cooling)}`;
+      const resumeAt = quotaCooldownResumeAt(job);
+      if (resumeAt) {
+        const waiting = quotaWaitMessage(job.params.mode, resumeAt);
         if (job.statusMsg !== waiting) {
           job.statusMsg = waiting;
-          persist().catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on quota hold failed: ${e.message}`));
+          quotaWaitChanged = true;
         }
         continue;
       }
@@ -1180,6 +1194,10 @@ async function drainLoop() {
       if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
+    }
+    // One snapshot for every hold this scan changed, not one per job.
+    if (quotaWaitChanged) {
+      persist().catch((e) => console.error(`❌ media-job mediaJobQueue persist on quota hold failed: ${e.message}`));
     }
     await sleep(150);
   }
