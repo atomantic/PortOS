@@ -113,8 +113,14 @@ export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS
   if (!chromePath) return { ok: false, cause: 'missing-executable' };
   const profile = mkdtempSync(join(tmpdir(), 'portos-h264-probe-'));
   try {
-    const run = await runOwnedProbe(chromePath, ['--headless=new', '--disable-gpu', '--no-sandbox',
-      `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE], { timeoutMs, graceMs });
+    const run = await runOwnedProbe(chromePath, [
+      '--headless=new', '--disable-gpu', '--no-sandbox',
+      '--no-first-run', '--no-default-browser-check',
+      '--disable-background-networking', '--disable-component-update',
+      '--disable-sync', '--disable-breakpad',
+      '--password-store=basic', '--use-mock-keychain',
+      `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
+    ], { timeoutMs, graceMs });
     if (run.spawnErrorCode) {
       return { ok: false, cause: ['ENOENT', 'ENOTDIR'].includes(run.spawnErrorCode) ? 'missing-executable' : 'no-answer' };
     }
