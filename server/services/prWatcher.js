@@ -22,6 +22,7 @@ import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { createGithubActorTrust } from './forgeActorTrust.js';
 import { createHash } from 'node:crypto';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
@@ -275,8 +276,10 @@ export async function queuePendingMerge(appId, pending) {
     if (index === -1) return [...existing, normalized];
     const next = [...existing];
     // Preserve the existing tick count so a duplicated completion callback
-    // cannot reset an already-wedged PR's bounded-watch budget.
-    next[index] = { ...normalized, ticks: existing[index].ticks };
+    // cannot reset an already-wedged PR's bounded-watch budget. A handoff of a
+    // different head is a new binding with its own budget.
+    const sameBinding = existing[index].handoff?.headSha === normalized.handoff?.headSha;
+    next[index] = { ...normalized, ticks: sameBinding ? existing[index].ticks : 0 };
     return next;
   });
   return Boolean(result);
@@ -307,12 +310,39 @@ async function readPendingPullRequest(repoSpec, prNumber, { cwd, env } = {}) {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 }
 
-async function notifyPendingMergeTimeout(app, pending, reason) {
+const HANDOFF_POLICIES = new Set([PR_COMPLETIONS.MERGE_ON_GREEN, PR_COMPLETIONS.REVIEW_THEN_MERGE]);
+const INVALID_HANDOFF = Symbol('invalid-handoff');
+
+// An agent handoff (#12247) pins the coordinator to one reviewed head. A legacy
+// PortOS-opened entry has no binding; a present-but-malformed one never merges.
+function readHandoffBinding(entry) {
+  if (!Object.hasOwn(entry, 'handoff')) return null;
+  const binding = entry.handoff;
+  return isPlainObject(binding) && /^[0-9a-f]{40}$/.test(binding.headSha)
+    && typeof binding.repository === 'string' && binding.repository
+    && typeof binding.agentId === 'string' && binding.agentId
+    && HANDOFF_POLICIES.has(binding.prCompletion) ? binding : INVALID_HANDOFF;
+}
+
+// A handoff's recovery inherits its recorded review policy and roster: a CI
+// fix or moved head is new, unreviewed code and must not ride the old verdict.
+function followUpPolicy(entry, binding) {
+  const roster = binding && isPlainObject(entry.followUp) ? entry.followUp : {};
+  return {
+    prCompletion: binding ? binding.prCompletion : PR_COMPLETIONS.MERGE_ON_GREEN,
+    reviewers: Array.isArray(roster.reviewers) ? roster.reviewers : [],
+    usernames: Array.isArray(roster.usernames) ? roster.usernames : [],
+    optionalReviewers: Array.isArray(roster.optionalReviewers) ? roster.optionalReviewers : [],
+    reviewerMaxRounds: isPlainObject(roster.reviewerMaxRounds) ? roster.reviewerMaxRounds : {},
+  };
+}
+
+async function notifyPendingMergeTimeout(app, pending, reason, description = null) {
   return addNotification({
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     priority: PRIORITY_LEVELS.HIGH,
     title: `Merge-only PR #${pending.prNumber} needs attention`,
-    description: `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`,
+    description: description || `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`,
     link: pending.prUrl,
     metadata: { appId: app.id, pendingMergePrNumber: pending.prNumber }
   }).catch((err) => {
@@ -324,7 +354,9 @@ async function notifyPendingMergeTimeout(app, pending, reason) {
 /**
  * Drive merge-only PortOS PRs on the normal pr-watcher cadence. Green PRs are
  * merged without consuming an agent lane; only a classified CI failure or
- * merge conflict recreates the pre-existing merge-only follow-up agent.
+ * merge conflict recreates the pre-existing merge-only follow-up agent. An
+ * agent handoff (cosMergeHandoff.js) merges only its recorded head; a moved
+ * head drops the binding and dispatches the recorded review/validation policy.
  */
 export async function processPendingMergePrs(app) {
   const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean);
@@ -346,10 +378,22 @@ export async function processPendingMergePrs(app) {
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
   const outcomes = new Map();
-  const result = { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0, errors: 0 };
+  const result = { ok: true, checked: 0, merged: 0, escalated: 0, invalidated: 0, timedOut: 0, errors: 0 };
 
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
+    let binding = readHandoffBinding(entry);
+    if (binding && binding !== INVALID_HANDOFF) {
+      const { repositoryKey } = await import('./cosMergeAdmission.js');
+      if (binding.repository !== repositoryKey(origin)) binding = INVALID_HANDOFF;
+    }
+    if (binding === INVALID_HANDOFF) {
+      await notifyPendingMergeTimeout(app, entry, null,
+        'PortOS will not merge this handed-off PR: its recorded head/policy binding is unreadable or names another repository. Verify the PR and merge or re-dispatch it.');
+      outcomes.set(key, null);
+      result.invalidated += 1;
+      continue;
+    }
     const prView = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
     if (!prView) {
       // An unreadable PR is still a cycle this entry spent pending, so it has to
@@ -377,7 +421,10 @@ export async function processPendingMergePrs(app) {
       continue;
     }
 
-    const failure = classifyPrFailure(prView);
+    // A head other than the one handed off was never validated by that run:
+    // drop the binding and dispatch fresh validation/review rather than merge.
+    const headMoved = binding && String(prView.headRefOid || '').toLowerCase() !== binding.headSha;
+    const failure = headMoved ? 'head-moved' : classifyPrFailure(prView);
     if (failure) {
       try {
         const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
@@ -387,14 +434,14 @@ export async function processPendingMergePrs(app) {
           prUrl: entry.prUrl,
           prBranch: entry.prBranch,
           sourceWorkspace: app.repoPath,
-          prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
-          reviewers: [],
-          usernames: [],
-          optionalReviewers: [],
-          reviewerMaxRounds: {}
+          ...followUpPolicy(entry, binding),
         });
         outcomes.set(key, null);
         result.escalated += 1;
+        if (headMoved) {
+          result.invalidated += 1;
+          console.warn(`⚠️ Pending merge handoff for PR #${entry.prNumber} invalidated: head moved from the handed-off commit`);
+        }
       } catch (err) {
         console.error(`❌ Failed to escalate PR #${entry.prNumber}: ${err.message}`);
         outcomes.set(key, entry);
@@ -409,6 +456,10 @@ export async function processPendingMergePrs(app) {
       const admitted = await withPendingMergeAdmission(origin, async () => {
         const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
         if (!currentPr || !isPendingMergeReady(currentPr)) return { success: false, error: 'Current head is not merge-ready' };
+        const expectedHeadSha = binding ? binding.headSha : currentPr.headRefOid;
+        if (String(currentPr.headRefOid || '').toLowerCase() !== String(expectedHeadSha).toLowerCase()) {
+          return { success: false, error: 'Current head is not the handed-off head' };
+        }
         const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
         const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
           undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
@@ -423,7 +474,7 @@ export async function processPendingMergePrs(app) {
         withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
         return assessment.ok
           ? await git.mergePR(app.repoPath, entry.prNumber, {
-            forgeAccount: app?.forgeAccount || null, expectedHeadSha: currentPr.headRefOid,
+            forgeAccount: app?.forgeAccount || null, expectedHeadSha,
           }).catch((err) => ({ success: false, error: err.message }))
           : { success: false, error: withheldReason };
       });

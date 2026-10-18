@@ -205,8 +205,9 @@ function registeredClaimBranch(agent) {
 }
 
 // Every branch the run registered — its pinned target plus each branch it bound
-// — minus the ones it explicitly released.
-function ownsClaimBranch(agent, branchName) {
+// — minus the ones it explicitly released. A picker's "may pick" fallback is
+// not ownership: callers that grant authority over a branch use this alone.
+export function ownsClaimBranch(agent, branchName) {
   if (ownershipList(agent, 'claimReleasedBranches').includes(branchName)) return false;
   return registeredClaimBranch(agent) === branchName || ownershipList(agent, 'claimBranches').includes(branchName);
 }

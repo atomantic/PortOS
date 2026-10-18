@@ -82,6 +82,30 @@ and reports progress every minute; after 10 minutes the reviewed PR (and any
 claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
 holds the lease only around its own read → assess → pinned merge.
 
+### Pending-merge handoff (#12247)
+
+A participant that has pushed a head and satisfied its configured reviews may
+hand the CI wait to the server instead of holding its session open:
+`POST /api/cos/merge-handoff` (host-control gated) takes the registered agent
+ID, the PR URL, the full head SHA and — for a claim run, which cuts its own
+checkout — the worktree path. The server binds everything else itself: the
+repository from the run's registration, the PR branch it must own (a bound
+claim branch, `reviewLoopMergeTarget` or `prDeliveryTarget`), a same-repository
+open non-draft PR whose live head equals the SHA, a checkout of this repository
+on that branch at that SHA, a merging completion policy (not leave-open, a JIRA
+handoff or read-only), and the worktree's `portos-review-status` (`clean`;
+absence is accepted only for merge-on-green). Fork targets are refused. The
+binding is persisted on the app's `pendingMergePrs` entry and the response
+carries a receipt.
+
+The pr-watcher pending-merge sweep then merges only the recorded head, under
+its own admission lease, once the PR is `CLEAN` with every reported check
+green; GitHub auto-merge is never enabled. A head that moved invalidates the
+binding and dispatches a follow-up with the recorded review roster; a failed
+check or conflict does the same; an unreadable binding never merges and is
+handed to the operator by notification; a PR that never settles times out to a
+notification as before.
+
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
 seed, migration, or federation payload. Admission waits at most 15 seconds to
