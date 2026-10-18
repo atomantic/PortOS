@@ -12,6 +12,7 @@ import {
   drinkUpdateSchema,
   customDrinkSchema,
   customDrinkUpdateSchema,
+  dailyRangeQuerySchema,
 } from '../lib/meatspaceValidation.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
 
@@ -35,7 +36,8 @@ router.get('/alcohol', asyncHandler(async (req, res) => {
  * Daily alcohol entries with optional date range
  */
 router.get('/alcohol/daily', asyncHandler(async (req, res) => {
-  const entries = await alcoholService.getDailyAlcohol(req.query.from, req.query.to);
+  const { from, to } = validateRequest(dailyRangeQuerySchema, req.query);
+  const entries = await alcoholService.getDailyAlcohol(from, to);
   res.json(entries);
 }));
 

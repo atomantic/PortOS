@@ -142,6 +142,7 @@ describe.each(WRITERS)('$name evaluation frames', ({ project: fixture, start }) 
     for (let i = 0; i < 5; i += 1) await settle();
     expect(await capture()).toEqual({ files: [], row: rowBefore });
     release();
-    await vi.waitFor(async () => expect(await capture()).toEqual({ files: [FRAME], row: [FRAME] }));
+    // Explicit budget: a contended runner (Windows CI, #12177) can land the deferred publish past waitFor's 1s default.
+    await vi.waitFor(async () => expect(await capture()).toEqual({ files: [FRAME], row: [FRAME] }), { timeout: 10000 });
   });
 });

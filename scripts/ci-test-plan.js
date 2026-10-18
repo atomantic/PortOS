@@ -369,6 +369,9 @@ export const ALWAYS_RUN_TESTS = [
   // Base-relative retired history guard: JSON edits have no import edge here.
   // Pregate and CI forward the planner's exact CI_BASE_SHA.
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
+  // Whole-tree scanner (#12048): server/index.js can mount a new router that no
+  // test imports, with no import edge from that router to this guard.
+  'server/routeTestCoverageConventions.test.js',
   'server/routeValidationConventions.test.js',
   'server/timerCallbackConventions.test.js',
 ];

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { _cleanupTestBrowser, _createTestArtifactsRoot } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
 import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
@@ -57,16 +57,11 @@ function assertInsideSafeArea(path, width, height) {
 
 describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Chrome and ffmpeg (#8984)', () => {
   beforeAll(async () => {
-    const profile = join(PATHS.data, 'chrome-test-profile');
+    // A per-run profile: a fixed path can be locked by an earlier run, and Chrome's exit must not hide behind a timeout.
+    await mkdir(PATHS.data, { recursive: true });
+    const profile = await mkdtemp(join(PATHS.data, 'chrome-test-profile-'));
     proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
-    const ws = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
-      proc.once('error', reject);
-      proc.stderr.on('data', bytes => {
-        const match = bytes.toString().match(/DevTools listening on (ws:\/\/\S+)/);
-        if (match) { clearTimeout(timer); resolve(match[1]); }
-      });
-    });
+    const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     artifacts = _createTestArtifactsRoot();
     browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
