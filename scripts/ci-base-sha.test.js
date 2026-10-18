@@ -48,7 +48,8 @@ describe('ci.yml checkout depth', () => {
   const jobs = workflowJobs(WORKFLOW);
 
   it('fetches full history only for the shipped prompt guard', () => {
-    const jobs = workflowJobs(WORKFLOW);
+    expect(Object.keys(jobs).length).toBeGreaterThan(0);
+    expect(jobs['prompt-history']).toBeDefined();
     expect(jobs['prompt-history']).toMatch(/fetch-depth:\s*0\b/);
     for (const [id, body] of Object.entries(jobs)) {
       if (id !== 'prompt-history') expect(body, id).not.toMatch(/fetch-depth:\s*0\b/);

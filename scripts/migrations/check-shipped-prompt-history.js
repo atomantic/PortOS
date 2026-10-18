@@ -12,13 +12,15 @@ const result = await inspectShippedPromptHistory({
 });
 
 if (result.skipped) {
-  console.log(
-    `⏭️ Skipping shipped stage-prompt history guard: ${result.skipped}`,
-  );
-  process.exit(0);
-}
-
-if (result.stranded.length) {
+  const inCi = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+  if (inCi) {
+    console.error(`❌ Shipped stage-prompt history guard requires full git history in CI: ${result.skipped}`);
+    process.exitCode = 1;
+  } else {
+    console.log(`⏭️ Skipping shipped stage-prompt history guard: ${result.skipped}`);
+    process.exit(0);
+  }
+} else if (result.stranded.length) {
   for (const { file, hash, commit } of result.stranded) {
     console.error(
       `❌ ${file}: historical hash ${hash} from ${commit.slice(0, 12)} is not accepted by a prompt migration`,
