@@ -2,7 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264 } from './browserSuiteGate.js';
+import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264, resolveTestChrome } from './browserSuiteGate.js';
+
+describe('resolveTestChrome', () => {
+  it('prefers CHROME_PATH, then the bundled Chromium, then the first installed package path, and reports none', () => {
+    const exists = (path) => ['/usr/bin/chromium', '/opt/chrome', '/pw/chrome'].includes(path);
+    expect(resolveTestChrome({ CHROME_PATH: '/opt/chrome' }, { exists, bundled: () => '/pw/chrome' })).toBe('/opt/chrome');
+    expect(resolveTestChrome({ CHROME_PATH: '/missing/chrome' }, { exists, bundled: () => '/pw/chrome' })).toBe('/pw/chrome');
+    expect(resolveTestChrome({}, { exists, bundled: () => null })).toBe('/usr/bin/chromium');
+    expect(resolveTestChrome({}, { exists: () => false, bundled: () => null })).toBeNull();
+  });
+});
 
 const original = process.env.PORTOS_REQUIRE_BROWSER_SUITES;
 

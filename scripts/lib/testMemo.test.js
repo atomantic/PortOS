@@ -171,6 +171,10 @@ describe('recorded key', () => {
         test: ["import { it } from 'vitest';", "import { createRequire } from 'node:module';", "const require = createRequire(import.meta.url);", "const legacy = require('../routes/legacy.cjs');", 'it(\'u\', () => {});'],
         mutate: 'server/routes/legacy.cjs',
       },
+      'createRequire under another name': {
+        test: ["import { it } from 'vitest';", "import { createRequire } from 'node:module';", "const load = createRequire(import.meta.url);", "const legacy = load('../routes/legacy.cjs');", 'it(\'u\', () => {});'],
+        mutate: 'server/routes/legacy.cjs',
+      },
       'shared source reader': {
         test: ["import { it } from 'vitest';", "import { readServerSource } from './testHelper.js';", "it('r', () => readServerSource('routes/x.js'));"],
         mutate: 'server/routes/x.js',
@@ -220,8 +224,16 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(key({ ...files, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(base.key);
     expect(key(files, { toolVersion: () => 'Python 3.13.0' }).key).not.toBe(base.key);
     expect(key({ ...files, 'scripts/tool.py': 'from .missing import x\n' }).memoizable).toBe(false);
+    // `import a, b` names two siblings.
+    expect(key({ ...files, 'scripts/tool.py': 'import _common, _pins\n', 'scripts/_pins.py': 'PINS = 3\n' }).key).not.toBe(key({ ...files, 'scripts/tool.py': 'import _common, _pins\n' }).key);
     // A test that never reaches python does not carry its version.
     expect(keyOf(TREE, 'server/lib/a.test.js', { toolVersion: () => 'Python 3.13.0' }).floor.key).toBe(keyOf(TREE).floor.key);
+    // The interpreter resolved through the shared helper is python too; an unknown program given a .py file is not memoizable.
+    const viaHelper = { ...files, 'server/lib/testHelper.js': "export const resolveTestPython = () => 'python3';\n",
+      'scripts/tool.test.js': ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "import { resolveTestPython } from '../server/lib/testHelper.js';", 'const pyBin = resolveTestPython();', "it('p', () => spawnSync(pyBin, [new URL('./tool.py', import.meta.url).pathname]));"].join('\n') };
+    expect(key(viaHelper).key).not.toBe(key(viaHelper, { toolVersion: () => 'Python 3.13.0' }).key);
+    const unknownProgram = { ...files, 'scripts/tool.test.js': ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "it('p', () => spawnSync(process.env.INTERPRETER, [new URL('./tool.py', import.meta.url).pathname]));"].join('\n') };
+    expect(key(unknownProgram)).toMatchObject({ memoizable: false, reason: expect.stringContaining('unknown program') });
   });
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {

@@ -28,10 +28,10 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
+import { resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
 import { WORKSPACE_BASE_INPUTS, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { listWorkspaceTests, toRepoPath, toWorkspacePath } from './workspaceTests.js';
@@ -237,10 +237,11 @@ export function clearVitestDependencies(repoRoot, scope) {
 /**
  * Version strings for `TEST_MEMO_TOOLS`, resolved once per process the way
  * the suites find the programs: `PORTOS_TEST_PYTHON` or `python3`, `ffmpeg`
- * on PATH, and Chrome through `CHROME_PATH` or playwright-core's bundled
- * Chromium. Null (keyed as `absent`) when the program cannot be run.
+ * on PATH, and Chrome through the suites' own candidate list
+ * (`resolveTestChrome`). Null (keyed as `absent`) when the program cannot
+ * be run.
  */
-export function createToolVersionResolver({ repoRoot, env = process.env } = {}) {
+export function createToolVersionResolver({ env = process.env } = {}) {
   const cache = new Map();
   const firstLine = (command, args) => {
     if (!command) return null;
@@ -248,15 +249,11 @@ export function createToolVersionResolver({ repoRoot, env = process.env } = {}) 
     if (result.error || result.status !== 0) return null;
     return `${result.stdout}${result.stderr}`.trim().split('\n')[0] || null;
   };
-  const chromeBinary = () => {
-    if (env.CHROME_PATH) return env.CHROME_PATH;
-    try { return createRequire(join(repoRoot, 'server', 'package.json'))('playwright-core').chromium.executablePath(); } catch { return null; }
-  };
   return (tool) => {
     if (cache.has(tool)) return cache.get(tool);
     const version = tool === 'python' ? firstLine(env.PORTOS_TEST_PYTHON || 'python3', ['--version'])
       : tool === 'ffmpeg' ? firstLine('ffmpeg', ['-version'])
-        : tool === 'chrome' ? firstLine(chromeBinary(), ['--version'])
+        : tool === 'chrome' ? firstLine(resolveTestChrome(env), ['--version'])
           : null;
     cache.set(tool, version);
     return version;

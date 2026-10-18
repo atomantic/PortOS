@@ -114,6 +114,8 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'client/src/hooks/index.test.js': 'enumerates the client/src/hooks directory against its README and barrel',
   'client/src/utils/index.test.js': 'enumerates the client/src/utils directory against its README and barrel',
   'client/src/services/index.test.js': 'enumerates the client/src/services directory against its catalog',
+  'scripts/lib/workspaceTests.test.js': 'enumerates the server workspace against vitest list',
+  'client/src/test/workspaceTests.test.js': 'enumerates the client workspace against vitest list',
 });
 
 /**
@@ -707,6 +709,12 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
   const match = matchBrackets(tokens);
   const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set() };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
+  // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
+  // `const pyBin = resolveTestPython()` makes `pyBin` the python interpreter.
+  const boundTo = (callee) => new Set([...ctx.bindings].filter(([, at]) => tokens[at]?.t === 'id' && tokens[at].v === callee && tokens[at + 1]?.v === '(').map(([name]) => name));
+  const requireNames = new Set(['require', ...boundTo('createRequire')]);
+  const pythonNames = boundTo('resolveTestPython');
+  const PYTHON_NAME = /^(?:py|python3?|py(?:thon)?(?:Bin|Path|Cmd|Exe))$/i;
 
   const code = tokens.map((t) => (t.t === 's' ? `'${t.v}'` : t.t === 'tpl' ? `\`${t.quasis.join('${}')}\`` : t.t === 'id' || t.t === 'p' ? t.v : '0')).join(' ');
   if (GIT_SPAWN.test(code)) facts.git = true;
@@ -769,7 +777,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     const receiver = isMember ? tokens[i - 2] : null;
 
     // Module edges that the static pass cannot see.
-    if ((token.v === 'import' || token.v === 'require') && open !== null && !isMember) {
+    if ((token.v === 'import' || requireNames.has(token.v)) && open !== null && !isMember) {
       const kind = token.v === 'import' ? 'dynamic' : 'require';
       const arg = literalArg(open);
       if (arg.kind === 'literal') { facts.edges.push({ spec: arg.value, kind }); continue; }
@@ -799,9 +807,20 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       } else if (arg.kind === 'expr') {
         const { value } = evaluate(tokens, match, arg.index, ctx);
         if (value.k === 'path') record(value, { walk: true, consumer: token.v });
-        // `spawn(process.env.PORTOS_TEST_PYTHON || 'python3', …)`: the program expression names python.
+        // `spawn(process.env.PORTOS_TEST_PYTHON || 'python3', …)`, `spawn(pyBin, …)` with
+        // `const pyBin = resolveTestPython()`: the program expression names python.
+        let python = false;
         for (let j = arg.index; j < match[open] && !(tokens[j].t === 'p' && tokens[j].v === ','); j += 1) {
-          if ((tokens[j].t === 'id' && tokens[j].v === 'PORTOS_TEST_PYTHON') || (tokens[j].t === 's' && /^python3?$/.test(tokens[j].v))) facts.tools.add('python');
+          const t = tokens[j];
+          if ((t.t === 'id' && (t.v === 'PORTOS_TEST_PYTHON' || pythonNames.has(t.v) || PYTHON_NAME.test(t.v))) || (t.t === 's' && /^python3?$/.test(t.v))) python = true;
+        }
+        if (python) facts.tools.add('python');
+        else if (value.k === 'unknown' || value.k === 'ext') {
+          // An unknown program handed a .py file is an interpreter the key cannot name.
+          for (let j = open + 1; j < match[open]; j += 1) {
+            const literal = tokens[j].t === 's' ? tokens[j].v : tokens[j].t === 'tpl' ? tokens[j].quasis.join('') : '';
+            if (/\.py$/.test(literal)) { facts.unresolvedInputs.push('spawns an unknown program with a python sidecar'); break; }
+          }
         }
       }
       const close = match[open];
@@ -986,14 +1005,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       const text = fs.read(target)?.toString('utf8') ?? '';
       const dir = posix.dirname(target);
       for (const line of text.split('\n')) {
-        const m = /^\s*(?:from\s+(\.*[\w.]*)\s+import\b|import\s+([\w.]+))/.exec(line);
+        const m = /^\s*(?:from\s+(\.*[\w.]*)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))/.exec(line);
         if (!m) continue;
-        const name = m[1] ?? m[2];
-        const relative = name.startsWith('.');
-        const head = name.replace(/^\.+/, '').split('.')[0];
-        const candidate = [`${dir}/${head}.py`, `${dir}/${head}/__init__.py`].find((rel) => fs.kind(rel) === 'file');
-        if (candidate) addPython(candidate, seen);
-        else if (relative) resolved.unresolvedInputs.push(`python import ${name} in ${target} does not resolve`);
+        for (const name of (m[1] !== undefined ? [m[1]] : m[2].split(',')).map((part) => part.trim()).filter(Boolean)) {
+          const relative = name.startsWith('.');
+          const head = name.replace(/^\.+/, '').split('.')[0];
+          const candidate = [`${dir}/${head}.py`, `${dir}/${head}/__init__.py`].find((rel) => fs.kind(rel) === 'file');
+          if (candidate) addPython(candidate, seen);
+          else if (relative) resolved.unresolvedInputs.push(`python import ${name} in ${target} does not resolve`);
+        }
       }
     };
     const addFile = (target, { edge = false } = {}) => {

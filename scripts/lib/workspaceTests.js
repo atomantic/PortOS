@@ -17,8 +17,14 @@ import { join, posix, sep } from 'node:path';
 import { BROWSER_SUITES } from './browserSuites.js';
 import { DB_TEST_INCLUDE } from './dbTestFiles.js';
 
-/** Directories never walked: installs, caches, build output, machine-local state, the bundled submodule. */
-const SKIP_DIRS = new Set(['node_modules', '.git', '.cache', 'coverage', 'dist', '.vite', 'data']);
+/**
+ * Directories never walked: exactly what both Vitest configs exclude at any
+ * depth (`**\/node_modules/**`, `**\/.git/**`). Anything else — a `data`,
+ * `dist` or `.cache` directory with a test file in it — Vitest would
+ * collect, so the walker must see it too; the `vitest list` parity tests
+ * pin that.
+ */
+const SKIP_DIRS = new Set(['node_modules', '.git']);
 
 /**
  * The server runner covers server, scripts/migrations, lib, autofixer and the
