@@ -661,3 +661,46 @@ describe('NotesTab URL state and unavailable reads', () => {
     expect(screen.queryByText('Search is unavailable')).toBeNull();
   });
 });
+
+describe('NotesTab preview rendering', () => {
+  const note = (name, content) => ({
+    path: `${name}.md`, name, folder: '', size: 12, tags: [],
+    modifiedAt: '2026-09-11T00:00:00Z', content, body: content, backlinks: []
+  });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    api.getNotesVaults.mockResolvedValue([{ id: 'a', name: 'Vault A' }]);
+    api.scanNotesVault.mockResolvedValue({ notes: [note('first', ''), note('second', 'second body')], total: 2 });
+    api.getNotesVaultFolders.mockResolvedValue({ folders: [] });
+    api.getNotesVaultTags.mockResolvedValue({ tags: [] });
+  });
+
+  it('renders notes through the shared markdown renderer with inert unsafe hrefs and live wikilinks', async () => {
+    const body = [
+      '# Title',
+      'See [docs](https://example.com/docs) and [evil](javascript:alert(1)) and [[second|the other note]] #tagged',
+      '- [ ] open task',
+      '- [x] done task',
+    ].join('\n');
+    api.getNote.mockImplementation((_vault, path) => Promise.resolve(path === 'first.md' ? note('first', body) : note('second', 'second body')));
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+
+    // The shared renderer clamps embedded headings below the page outline.
+    expect(screen.getByRole('heading', { level: 3, name: 'Title' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'docs' })).toHaveAttribute('href', 'https://example.com/docs');
+    // A javascript: destination never becomes an anchor — the label stays as text.
+    expect(screen.queryByRole('link', { name: 'evil' })).toBeNull();
+    expect(screen.getByText('evil')).toBeInTheDocument();
+    expect(screen.getByText('#tagged')).toBeInTheDocument();
+    expect(screen.getByText('open task')).toBeInTheDocument();
+    expect(screen.getByText('done task').closest('li').className).toContain('line-through');
+
+    // A wikilink opens the target note in place.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'the other note' })); });
+    expect(api.getNote).toHaveBeenLastCalledWith('a', 'second.md', { silent: true });
+    expect(screen.getByRole('heading', { name: 'second' })).toBeInTheDocument();
+    expect(screen.getByTestId('location').textContent).toContain('note=second.md');
+  });
+});
