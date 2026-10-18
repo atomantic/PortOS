@@ -370,7 +370,7 @@ describe('importGalleryImages', () => {
   });
 
   it.each(['../../etc/passwd.png', 'nested/dir/photo.png'])(
-    'rejects unsafe gallery filenames: %s',
+    'rejects traversal and unsafe gallery filenames: %s',
     async (filename) => {
       const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
       await expect(importGalleryImages(dataset.id, { filenames: [filename] }))
