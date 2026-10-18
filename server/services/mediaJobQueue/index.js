@@ -1777,8 +1777,10 @@ export async function enqueueJob({ kind, params, owner = null }) {
   }
   delete job.admitting;
   // A bulk cancel can reach the job while its snapshot is in flight; cancelJob
-  // already archived and announced it, so report that instead of 'queued'.
-  if (job.status !== 'queued') return { jobId: id, position: job.position, status: job.status };
+  // already withdrew it, so report its staged or durable terminal status.
+  if (job.durabilityPending || job.status !== 'queued') {
+    return { jobId: id, position: job.position, status: job.durabilityPending?.status ?? job.status };
+  }
   broadcastSse(ensureSseEntry(id), { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
   startWorker();
