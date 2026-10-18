@@ -30,6 +30,15 @@ describe('resolveTaskStatusTransition', () => {
     expect(t.isTerminal).toBe(false);
   });
 
+  it('revives a completed task without treating it as leaving blocked (#12058)', () => {
+    const t = resolveTaskStatusTransition('completed', 'pending');
+    expect(t.action).toBe('unblocked');
+    expect(t.isRevive).toBe(true);
+    expect(t.leavesBlocked).toBe(false);
+    expect(t.isRequeue).toBe(false);
+    expect(t.isTerminal).toBe(false);
+  });
+
   it('classifies a requeue (in_progress → pending)', () => {
     const t = resolveTaskStatusTransition('in_progress', 'pending');
     expect(t.action).toBe('requeued');

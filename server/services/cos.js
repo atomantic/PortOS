@@ -1596,7 +1596,7 @@ export async function init() {
   //   the evaluation interval that's meant for system task generation.
   // - 'approved': a newly approved task can now spawn — re-run dequeue. Either
   //   queue: a user row withheld by the #7300 hold is released the same way.
-  // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
+  // - 'unblocked': a blocked or completed task flipped back to pending (#2614, #12058)
   //   is newly spawnable exactly like an approval — re-run dequeue.
   // - 'requeued': an in_progress task flipped back to pending — a failed run's
   //   retry released from its cleanup hold (#3373) or an orphan sweep requeue.

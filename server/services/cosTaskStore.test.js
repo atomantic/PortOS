@@ -1278,11 +1278,11 @@ describe('cosTaskStore.addTask', () => {
     expect(second.duplicate).toBe(true);
   });
 
-  it('emits tasks:changed action "unblocked" on a blocked → pending flip (#2614)', async () => {
+  it.each(['blocked', 'completed'])('emits tasks:changed action "unblocked" on a %s → pending flip (#2614, #12058)', async (status) => {
     // cos.init re-runs the dequeue on 'unblocked' (like 'approved') so a
     // revived task spawns without waiting for an unrelated event or timer.
     const task = await addTask({ description: 'revive me', app: 'portos', id: 'sys-revive' }, 'internal');
-    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    await updateTask(task.id, { status, metadata: { blockedCategory: 'max-retries' } }, 'internal');
     mock.events.length = 0;
     await updateTask(task.id, { status: 'pending' }, 'internal');
     const evt = mock.events.find(e => e.name === 'tasks:changed');
