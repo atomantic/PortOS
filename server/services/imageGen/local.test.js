@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import os, { tmpdir } from 'os';
@@ -37,6 +37,7 @@ vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), en
 // touching the real frame-guard implementation the other suites exercise.
 const mockRejectDegenerateFrame = vi.fn(async () => null);
 vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: (...args) => mockRejectDegenerateFrame(...args) }));
+vi.mock('./localRuntime.js', () => ({ diagnoseLocalRuntime: vi.fn(async () => ({ readiness: 'ready' })) }));
 
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
@@ -502,6 +503,104 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).toContain('--model');
     expect(args[args.indexOf('--model') + 1]).toBe('dev');
     expect(args).toContain('--quantize');
+  });
+});
+
+describe('imageGen native MOSS invocation', () => {
+  const input = { model: { id: 'moss-image-sft-bf16', runner: 'moss-swift' },
+    prompt: '--seed', negativePrompt: 'blur', width: 1024, height: 768,
+    steps: 50, guidance: 3, seed: 42, outputPath: '/tmp/example.png' };
+
+  it('preserves flag-like prompt values and selects the pinned native snapshot without Python', () => {
+    const result = buildArgs(input);
+    expect(result.bin).toMatch(/moss-image$/);
+    expect(result.args).toEqual(['--snapshot', expect.stringContaining('fc5de0d56fc910cbca6f6625a70f5f582b26deb1'),
+      '--prompt', '--seed', '--negative', 'blur', '--width', '1024', '--height', '768',
+      '--steps', '50', '--guidance', '3', '--seed', '42', '--output', '/tmp/example.png']);
+    expect(result.providerInputs).toEqual({ initImagePath: null, referenceImagePaths: [] });
+  });
+
+  it.each([
+    { loraPaths: ['/tmp/example.safetensors'] }, { initImagePath: '/tmp/example.png' },
+    { referenceImagePaths: ['/tmp/example.png'] }, { width: 1536 }, { height: 513 },
+    { steps: 101 }, { guidance: Infinity }, { guidance: 1 }, { seed: Number.MAX_SAFE_INTEGER + 1 },
+  ])('refuses unsupported inputs before a native process can start: %j', patch => {
+    expect(() => buildArgs({ ...input, ...patch })).toThrow();
+  });
+});
+
+describe('imageGen native MOSS render workflow', () => {
+  let capabilitiesSpy;
+  let diagnoseLocalRuntime;
+  let imageGenEvents;
+  let manifest;
+  const request = { modelId: 'moss-image-sft-bf16', prompt: '--seed', negativePrompt: 'blur',
+    width: 512, height: 512, steps: 4, guidance: 3, seed: 42 };
+
+  beforeEach(async () => {
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    // Exercise the shipped registry requirements on every CI platform without
+    // requiring a real Apple GPU; only the subprocess boundary is simulated.
+    capabilitiesSpy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true,
+      cpuCount: 8, totalMemoryGb: 64,
+    });
+    ({ diagnoseLocalRuntime } = await import('./localRuntime.js'));
+    ({ imageGenEvents } = await import('../imageGenEvents.js'));
+    ({ MOSS_MANIFEST: manifest } = await import('./mossRuntime.js'));
+    diagnoseLocalRuntime.mockReset().mockResolvedValue({ readiness: 'ready' });
+    mockSpawn.mockReset();
+    mockIsFlux2VenvHealthy.mockClear();
+    releaseClaim.mockClear();
+  });
+
+  afterEach(() => {
+    capabilitiesSpy.mockRestore();
+    diagnoseLocalRuntime.mockReset().mockResolvedValue({ readiness: 'ready' });
+  });
+
+  it('renders without Python and publishes the pinned native model provenance', async () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+
+    const job = await generateImage(request);
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic native output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await expect(completed).resolves.toMatchObject({ generationId: job.jobId, filename: job.filename, mode: 'local' });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const [binary, args] = mockSpawn.mock.calls[0];
+    expect(binary).toMatch(/moss-image$/);
+    expect(args).toEqual(expect.arrayContaining(['--prompt', '--seed', '--negative', 'blur']));
+    expect(diagnoseLocalRuntime).toHaveBeenCalledWith({ modelId: request.modelId });
+    expect(mockIsFlux2VenvHealthy).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledTimes(1);
+    const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(sidecar).toMatchObject({
+      modelId: request.modelId, prompt: request.prompt, sentPrompt: request.prompt,
+      negativePrompt: request.negativePrompt, seed: 42, quantize: null, quantization: 'bf16',
+      modelRepo: manifest.repo, modelRevision: manifest.revision,
+      nativeRuntime: { runtime: 'moss-swift', sourceRevision: manifest.sourceRevision, adapterVersion: manifest.adapterVersion },
+      provenance: { sources: [{ kind: 'model', id: request.modelId, license: 'apache-2.0', sourceUrl: `https://huggingface.co/${manifest.repo}` }] },
+      inputProvenance: 'provider-inputs', initImageFilename: null, referenceImageFilenames: [], loraFilenames: [],
+    });
+  });
+
+  it('refuses an unavailable native runtime before spawning', async () => {
+    diagnoseLocalRuntime.mockResolvedValue({ readiness: 'unavailable', reason: 'Pinned MOSS weights are incomplete.' });
+    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MOSS_NOT_READY', message: 'Pinned MOSS weights are incomplete.' });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockIsFlux2VenvHealthy).not.toHaveBeenCalled();
+  });
+
+  it('refuses raw missing LoRA input before normalization can silently discard it', async () => {
+    await expect(generateImage({ ...request, loraFilenames: ['missing-native-lora.safetensors'] }))
+      .rejects.toMatchObject({ code: 'MOSS_INPUT_UNSUPPORTED' });
+    expect(diagnoseLocalRuntime).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 });
 

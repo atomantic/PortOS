@@ -6,6 +6,8 @@ const models = vi.hoisted(() => ({ value: [] }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => settings.value) }));
 vi.mock('../../lib/mediaModels.js', () => ({ getImageModels: vi.fn(() => models.value) }));
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
+vi.mock('./mossRuntime.js', () => ({ diagnoseMossRuntime: vi.fn(), MOSS_MANIFEST: { repo: 'example/moss', revision: 'pinned' } }));
+vi.mock('./mossWeights.js', () => ({ verifyMossWeights: vi.fn() }));
 vi.mock('../../lib/pythonSetup.js', () => ({
   isFlux2VenvHealthy: vi.fn(),
   FLUX2_VENV_DEFAULT: '/test/venv-flux2/bin/python3',
@@ -14,6 +16,8 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 import { diagnoseLocalRuntime } from './localRuntime.js';
 import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
+import { diagnoseMossRuntime } from './mossRuntime.js';
+import { verifyMossWeights } from './mossWeights.js';
 
 const mflux = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', hardwareCompatibility: { state: 'available', reasons: [] } };
 
@@ -28,6 +32,22 @@ beforeEach(() => {
 // exists to close, because the Settings panel probes a different interpreter and
 // reported "All required packages installed" for an unrenderable machine.
 describe('diagnoseLocalRuntime remedies', () => {
+  it('keeps native installation, pinned weights and readiness separate without a Python dependency', async () => {
+    models.value = [{ ...mflux, id: 'moss-image-sft-bf16', runner: 'moss-swift', repo: 'example/moss', revision: 'pinned' }];
+    settings.value = { imageGen: { local: { modelId: 'moss-image-sft-bf16' } } };
+    diagnoseMossRuntime.mockResolvedValue({ readiness: 'unavailable', reason: 'Metal resources missing', remedy: { kind: 'install-moss-swift' } });
+    await expect(diagnoseLocalRuntime()).resolves.toMatchObject({ runtime: 'moss-swift', readiness: 'unavailable', remedy: { kind: 'install-moss-swift' } });
+    expect(verifyMossWeights).not.toHaveBeenCalled();
+    diagnoseMossRuntime.mockResolvedValue({ readiness: 'ready' });
+    verifyMossWeights.mockResolvedValue({ cached: false });
+    await expect(diagnoseLocalRuntime()).resolves.toMatchObject({ readiness: 'unavailable', remedy: { kind: 'download-moss-weights' } });
+    verifyMossWeights.mockResolvedValue({ cached: true });
+    await expect(diagnoseLocalRuntime()).resolves.toMatchObject({ readiness: 'ready', remedy: null });
+    expect(getSetupCheck).not.toHaveBeenCalled();
+    expect(isFlux2VenvHealthy).not.toHaveBeenCalled();
+    models.value[0].revision = 'unvalidated';
+    await expect(diagnoseLocalRuntime()).resolves.toMatchObject({ readiness: 'unavailable', remedy: { kind: 'choose-model' } });
+  });
   it('offers the runtime install for a model whose shared torch venv is unhealthy', async () => {
     models.value = [{ ...mflux, id: 'qwen-image-2.1', runner: 'qwen', pipelineClass: 'QwenImage21Pipeline' }];
     settings.value = { imageGen: { local: { modelId: 'qwen-image-2.1' } } };

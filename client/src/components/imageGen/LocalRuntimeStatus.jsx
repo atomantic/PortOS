@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, HelpCircle, RefreshCw, Settings as SettingsIcon, Wand2 } from 'lucide-react';
 import Banner from '../ui/Banner';
 import Flux2InstallModal from './Flux2InstallModal';
+import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import { IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY } from '../../lib/imageGenBackends';
 
 /**
@@ -50,8 +51,8 @@ export default function LocalRuntimeStatus({
   hideWhenReady = false,
   className = '',
 }) {
-  const [installOpen, setInstallOpen] = useState(false);
-  const closeInstall = useCallback(() => setInstallOpen(false), []);
+  const [installKind, setInstallKind] = useState(null);
+  const closeInstall = useCallback(() => setInstallKind(null), []);
   const handleInstallComplete = useCallback(() => {
     onRefresh?.();
     onRuntimeChanged?.();
@@ -69,7 +70,8 @@ export default function LocalRuntimeStatus({
   const remedy = runtime.remedy;
   // A remedy this component can perform itself, vs. one whose form lives in
   // Settings. Anything else renders as a reason with no button.
-  const selfServe = remedy?.kind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV;
+  const selfServe = [IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV, IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT, IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS].includes(remedy?.kind);
+  const mossWeights = installKind === IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS;
   const RemedyIcon = REMEDY_ICON[remedy?.kind] || SettingsIcon;
 
   return (
@@ -103,7 +105,7 @@ export default function LocalRuntimeStatus({
             {selfServe ? (
               <button
                 type="button"
-                onClick={() => setInstallOpen(true)}
+                onClick={() => setInstallKind(remedy.kind)}
                 className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-accent px-3 py-2 text-sm text-white hover:bg-port-accent/80"
               >
                 <Download size={14} aria-hidden="true" /> {remedy.label}
@@ -125,7 +127,17 @@ export default function LocalRuntimeStatus({
           </span>
         )}
       </Banner>
-      <Flux2InstallModal open={installOpen} onClose={closeInstall} onComplete={handleInstallComplete} modelId={runtime.modelId} />
+      <Flux2InstallModal open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV} onClose={closeInstall} onComplete={handleInstallComplete} modelId={runtime.modelId} />
+      <RuntimeInstallModal
+        open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT || mossWeights}
+        runtime="moss-swift"
+        label={mossWeights ? 'MOSS SFT weights (27.2 GB)' : 'MOSS Swift runtime'}
+        installUrlBase={mossWeights ? '/api/image-gen/setup/moss-weights' : '/api/image-gen/setup/moss-install'}
+        description={mossWeights ? 'Downloading and verifying 27.2 GB of Apache-2.0 SFT weights.' : 'Building the pinned MIT Swift port and dependencies. Requires Swift 6.3+, Metal compiler and 10 GB free build space; weights download separately.'}
+        doneText={mossWeights ? 'MOSS SFT weights are verified.' : 'MOSS Swift is installed. Download the SFT weights separately.'}
+        onClose={closeInstall}
+        onComplete={handleInstallComplete}
+      />
     </>
   );
 }

@@ -29,16 +29,16 @@ const write = (root, path, source) => {
 };
 
 describe('API route graph scanner', () => {
-  it('resolves top-level mounts, imported child routers, local subrouters, and aliases', () => {
+  it.each(['', ', { helper }'])('resolves mounts and aliases with default imports followed by %s', (named) => {
     const root = makeRoot();
     write(root, 'server/index.js', `
-      import widgetsRoutes from './routes/widgets.js';
+      import widgetsRoutes${named} from './routes/widgets.js';
       app.use('/api/widgets', widgetsRoutes);
       app.use('/api/legacy-widgets', widgetsRoutes);
     `);
     write(root, 'server/routes/widgets.js', `
       import { Router } from 'express';
-      import childRoutes from './widgets-child.js';
+      import childRoutes${named} from './widgets-child.js';
       const router = Router();
       const setupRouter = Router();
       router.get('/', handler);
@@ -99,7 +99,7 @@ describe('API route graph scanner', () => {
   it('follows named factory returns and composed toolkit router properties', () => {
     const root = makeRoot();
     write(root, 'server/index.js', `
-      import { createRuns } from './routes/runs.js';
+      import unusedDefault, { createRuns } from './routes/runs.js';
       import { createProviders } from './routes/providers.js';
       app.use('/api/runs', createRuns(toolkit));
       app.use('/api/providers', createProviders(toolkit));

@@ -29,7 +29,7 @@ import {
   getCredentialInventory, saveCredential, getProviders,
 } from '../../services/api';
 import FalModelSelect from '../imageGen/FalModelSelect';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, isLocalImageConfigured, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
@@ -130,6 +130,7 @@ export function ImageGenTab() {
   // Server render callers and client forms use this pin unless a surface has
   // a saved model choice of its own.
   const [localModelId, setLocalModelId] = useState('');
+  const localConfigured = isLocalImageConfigured({ pythonPath, modelId: localModelId });
   // Catalog for the picker, probed once the Local tab is mounted — the same
   // "don't probe a tab nobody looked at" rule as the Agy list below.
   // Hardware-incompatible entries are filtered out by the hook's fetch: a
@@ -520,7 +521,7 @@ export function ImageGenTab() {
   // still one edit in one place.
   const savedBackends = deriveAvailableBackends({
     imageGen: {
-      local: { pythonPath: saved.pythonPath },
+      local: { pythonPath: saved.pythonPath, modelId: saved.localModelId },
       codex: { enabled: saved.codexEnabled },
       grok: { enabled: saved.grokEnabled },
       agy: { enabled: saved.agyEnabled },
@@ -687,9 +688,9 @@ export function ImageGenTab() {
 
     // Both tool entries are independent — sync them in parallel so a
     // tailnet save doesn't pay two sequential HTTP round-trips.
-    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url : (mode === IMAGE_GEN_MODE.LOCAL ? !!pythonPath : false);
+    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url : (mode === IMAGE_GEN_MODE.LOCAL ? localConfigured : false);
     const sdToolData = {
-      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
+      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Image Generation (Local)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
       enabled: sdEnabled,
@@ -870,7 +871,7 @@ export function ImageGenTab() {
           >
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4" />
-              <span className="font-medium text-sm">Local (mflux)</span>
+              <span className="font-medium text-sm">Local models</span>
             </div>
             <p className="text-xs text-gray-500 mt-1">Run image and video models on this machine. Apple Silicon enables MLX models such as FastMetal.</p>
           </button>
@@ -1188,6 +1189,12 @@ export function ImageGenTab() {
             settingsLink={false}
           />
           <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} onPackagesChanged={onLocalPackagesChanged} />
+          <p className="text-xs text-gray-500">
+            MOSS Image SFT uses a separate Swift/MLX runtime. Select it below to install on native Apple Silicon,
+            macOS 26+, with Swift 6.3 and the Metal compiler. Allow 10 GB for building and 27.2 GB for weights;
+            48 GB unified memory is the eligibility floor. Validated on M5 Max with 128 GB. Text-to-image,
+            bf16 only, 256–1024 pixels per side. Weight download is explicit.
+          </p>
           <FormField
             label="Default model"
             labelClassName="block text-xs font-medium text-gray-400 mb-1"
@@ -1214,7 +1221,7 @@ export function ImageGenTab() {
             Used by every local render that doesn&apos;t choose its own model — the Image Gen
             form, deck cards, sprite references, pipeline visuals, character sheets and
             FableLoom. A model picked on one of those surfaces still wins for that render.
-            Weights download on first use; check what&apos;s already cached in{' '}
+            Most models download weights on first use; MOSS requires its separate download action. Check what&apos;s already cached in{' '}
             <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
           </p>
           {localModels?.length === 0 && (
@@ -1298,7 +1305,7 @@ export function ImageGenTab() {
               // (so the user lands on a non-broken default rather than
               // sticking with codex or hopping to an unconfigured backend).
               if (!v && mode === IMAGE_GEN_MODE.CODEX) {
-                const hasLocal = !!pythonPath?.trim();
+                const hasLocal = localConfigured;
                 setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
@@ -1413,7 +1420,7 @@ export function ImageGenTab() {
               // saved mode pointing at a disabled provider — same fallback
               // order as the Codex toggle: local if configured, else external.
               if (!v && mode === IMAGE_GEN_MODE.GROK) {
-                const hasLocal = !!pythonPath?.trim();
+                const hasLocal = localConfigured;
                 setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
@@ -1480,7 +1487,7 @@ export function ImageGenTab() {
               const enabled = e.target.checked;
               setAgyEnabled(enabled);
               if (!enabled && mode === IMAGE_GEN_MODE.AGY) {
-                setMode(pythonPath?.trim() ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
+                setMode(localConfigured ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
             className="rounded"
@@ -1603,7 +1610,7 @@ export function ImageGenTab() {
               const enabled = e.target.checked;
               setFalEnabled(enabled);
               if (!enabled && mode === IMAGE_GEN_MODE.FAL) {
-                setMode(pythonPath?.trim() ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
+                setMode(localConfigured ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
             className="rounded"

@@ -16,6 +16,10 @@ const baseProps = (overrides = {}) => ({
 });
 
 describe('ImageGenControls — custom dimensions', () => {
+  it('does not offer unvalidated MOSS quantization choices', () => {
+    render(<ImageGenControls {...baseProps({ models: [{ id: 'moss', runner: 'moss-swift' }], modelId: 'moss', width: 1024, height: 1024, showQuantize: true })} />);
+    expect(screen.queryByLabelText(/Quantiz/i)).toBeNull();
+  });
   it('hides the width/height inputs when the size matches a preset', () => {
     render(<ImageGenControls {...baseProps({ width: 1024, height: 1024 })} />);
     expect(screen.queryByLabelText('Width')).toBeNull();

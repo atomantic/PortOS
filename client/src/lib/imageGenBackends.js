@@ -7,7 +7,7 @@
  */
 
 import { Cpu, Terminal, Cloud, Sparkles, Zap } from 'lucide-react';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, MODE_LABELS } from './imageGenModes.js';
+import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, MODE_LABELS, MOSS_IMAGE_MODEL_ID } from './imageGenModes.js';
 
 export * from './imageGenModes.js';
 
@@ -30,10 +30,16 @@ export const imageGenReadiness = (status) => {
   return status?.connected ? 'ready' : 'unavailable';
 };
 
+// Configuration makes Local selectable; the per-model status probe still decides
+// whether it can render. The native MOSS pin needs no Python interpreter.
+export const isLocalImageConfigured = (local) => Boolean(
+  (local?.pythonPath || '').trim() || local?.modelId === MOSS_IMAGE_MODEL_ID,
+);
+
 export function deriveAvailableBackends(settings, { excludeExternal = false } = {}) {
   const ig = settings?.imageGen || {};
   const out = [];
-  if ((ig.local?.pythonPath || '').trim())
+  if (isLocalImageConfigured(ig.local))
     out.push({ id: IMAGE_GEN_MODE.LOCAL, ...metaFor(IMAGE_GEN_MODE.LOCAL) });
   if (ig.codex?.enabled === true)
     out.push({ id: IMAGE_GEN_MODE.CODEX, ...metaFor(IMAGE_GEN_MODE.CODEX) });

@@ -59,6 +59,7 @@
  *   - selectedTextEncoder: id of the active text encoder
  */
 
+import { MOSS_IMAGE_MODEL_ID } from './imageRuntimeRemedies.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { randomUUID } from 'node:crypto';
@@ -967,6 +968,14 @@ const DEFAULT_REGISTRY = {
     defaultCuda: 'ltx_video',
   },
   image: [
+    {
+      id: MOSS_IMAGE_MODEL_ID, name: 'MOSS Image SFT Preview (Swift/MLX bf16, 27.2 GB download, 48+ GB RAM)',
+      runner: 'moss-swift', repo: 'OpenMOSS-Team/MOSS-Image-SFT',
+      revision: 'fc5de0d56fc910cbca6f6625a70f5f582b26deb1',
+      steps: 50, guidance: 3, quantization: 'bf16', supportsImg2Img: false, supportsLoras: false,
+      hardwareRequirements: { platforms: ['darwin'], architectures: ['arm64'], requiresAppleSilicon: true, minMemoryGb: 48 },
+      license: 'apache-2.0', licenseUrl: 'https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/fc5de0d56fc910cbca6f6625a70f5f582b26deb1/LICENSE',
+    },
     // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
     { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5, requiresHfToken: true, licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.1-dev' },
     { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0,   cfgDisabled: true },
