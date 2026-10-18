@@ -278,12 +278,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
   });
 
-  it('compares pathspec-magic filenames literally', async () => {
-    const c = await reviewedCheckout('literal', { featurePath: ':(exclude)*', superseded: true });
+  it('compares pathspec glob filenames literally', async () => {
+    const c = await reviewedCheckout('literal', { featurePath: '[literal].txt', superseded: true });
+    await writeFile(join(repo, 'l.txt'), 'unrelated glob match\n');
+    await execGit(['add', 'l.txt'], repo);
+    await execGit(['commit', '-m', 'unrelated default change'], repo);
+    c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe('review-supersession');
     expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
+    expect(prepared.review.comparison.difference).not.toContain('unrelated glob match');
   });
 
   it('retains all original changes in a multi-commit squash review', async () => {
