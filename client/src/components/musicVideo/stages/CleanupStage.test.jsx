@@ -24,6 +24,8 @@ describe('production cleanup', () => {
     fireEvent.click(cleanup);
     await waitFor(() => expect(cleanupMusicVideoRenders).toHaveBeenCalledWith('example-project', { unusedLooks: false }, { silent: true }));
     await waitFor(() => expect(cleanup).toBeDisabled());
+    await waitFor(() => expect(screen.queryByText('Superseded — safe to remove')).not.toBeInTheDocument());
+    expect(screen.getByRole('list', { name: 'Older final renders' })).toBeInTheDocument();
     const purge = screen.getByRole('button', { name: 'Remove superseded renders and unused looks' });
     expect(purge).toBeEnabled();
     fireEvent.click(purge);

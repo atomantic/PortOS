@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import CollapsibleListItem from '../../ui/CollapsibleListItem.jsx';
 import { RefreshCw, Trash2 } from 'lucide-react';
 import { cleanupMusicVideoRenders, getMusicVideoRenderCleanup } from '../../../services/apiMusicVideo.js';
 import socket from '../../../services/socket';
@@ -86,12 +87,7 @@ export default function CleanupStage({ board }) {
           <button type="button" className={ACTION} disabled={busy || !looks.length} onClick={() => clean(true)}><Trash2 size={16} />Remove superseded renders and unused looks</button>
         </div>
         {busy && <p role="status" className="text-sm">Cleaning render files…</p>}
-        {finals.length > 0 && <ul className="space-y-2" aria-label="Older final renders">
-          {finals.map(file => <li key={file.id} className="break-words rounded border border-port-border p-3 text-sm">
-            <p>{file.createdAt ? formatDateTime(file.createdAt) : 'Older final'} · {formatBytes(file.bytes)}</p>
-            <p className="text-port-text-muted">{file.reason ? `Kept: ${file.reason}` : file.pending ? 'Cleanup incomplete — retry to remove remaining files' : 'Superseded — safe to remove'}</p>
-          </li>)}
-        </ul>}
+        <CleanupFinalList key={project.id} files={finals} />
       </>}
     </section>
   );
@@ -101,5 +97,27 @@ function InventoryCard({ title, files, noun = 'files' }) {
   return <div className="min-w-0 rounded border border-port-border p-3">
     <h4 className="text-sm text-port-text-muted">{title}</h4>
     <p className="mt-1 font-semibold">{formatCount(files.length)} {noun} · {formatBytes(bytes(files))}</p>
+  </div>;
+}
+
+function CleanupFinalList({ files }) {
+  const [rows, setRows] = useState(() => files.map(file => ({ file, removing: false })));
+  useEffect(() => {
+    setRows(previous => {
+      const latest = new Map(files.map(file => [file.id, file]));
+      const known = new Set(previous.map(row => row.file.id));
+      return [...previous.map(row => latest.has(row.file.id)
+        ? { file: latest.get(row.file.id), removing: false } : { ...row, removing: true }),
+      ...files.filter(file => !known.has(file.id)).map(file => ({ file, removing: false }))];
+    });
+  }, [files]);
+  return <div role="list" aria-label="Older final renders" tabIndex={-1}>
+    {rows.map(({ file, removing }) => <CollapsibleListItem key={file.id} removing={removing}
+      onExited={() => setRows(previous => previous.filter(row => row.file.id !== file.id || !row.removing))}>
+      <article role="listitem" className="break-words rounded border border-port-border p-3 text-sm">
+        <p>{file.createdAt ? formatDateTime(file.createdAt) : 'Older final'} · {formatBytes(file.bytes)}</p>
+        <p className="text-port-text-muted">{file.reason ? `Kept: ${file.reason}` : file.pending ? 'Cleanup incomplete — retry to remove remaining files' : 'Superseded — safe to remove'}</p>
+      </article>
+    </CollapsibleListItem>)}
   </div>;
 }

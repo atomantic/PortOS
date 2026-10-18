@@ -1142,7 +1142,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
     throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
   }
-  const { assertRenderCleanupIdle } = await import('./renderCleanup.js');
+  const { assertRenderCleanupIdle } = await import('./renderCleanupActivity.js');
   assertRenderCleanupIdle(projectId);
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {

@@ -7,6 +7,8 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, listProjects, withProjectMediaMutation } from './projects.js';
+import { withRenderCleanupReservation } from './renderCleanupActivity.js';
+export { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from '../videoGen/history.js';
 
@@ -24,11 +26,6 @@ async function readPending() {
 const savePending = pending => pending.size
   ? atomicWrite(JOURNAL, { version: 1, entries: [...pending.values()] }) : remove(JOURNAL);
 const retirementEntries = (history, pending) => [...new Map([...pending, ...history].map(entry => [entry.id, entry])).values()];
-
-const cleaning = new Set();
-export function assertRenderCleanupIdle(projectId) {
-  if (cleaning.has(projectId)) throw new ServerError('Render cleanup is in progress. Try again when it finishes.', { status: 409, code: 'RENDER_CLEANUP_ACTIVE' });
-}
 
 // Include legacy and nested references (takes, proof, kits, clone provenance).
 const references = (value, ids) => {
@@ -56,15 +53,18 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
 async function finalInventory(projectId, history, pending = []) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const [{ listCollections }, timeline, director] = await Promise.all([
+  const [{ listCollections }, timeline, director, { isPublishKitBuildActive }, { listJobs }] = await Promise.all([
     import('../mediaCollections.js'), import('../videoTimeline/local.js'), import('../creativeDirector/local.js'),
+    import('./publishKit.js'), import('../mediaJobQueue/index.js'),
   ]);
   // Completed run receipts describe history, rather than a live media dependency.
   const projects = (await listProjects()).map(({ productionRuns, autonomousRun, ...record }) => ({
     ...record, productionRuns: productionRuns?.filter(run => run.status !== 'completed'),
     autonomousRun: autonomousRun?.status === 'completed' ? null : autonomousRun,
   }));
-  const owners = [projects, ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects()]))].flat();
+  const owners = [projects, listJobs().filter(job => ['queued', 'running'].includes(job.status)),
+    ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects()]))].flat();
+  const kitActive = isPublishKitBuildActive(projectId);
   const current = history.find(entry => entry.id === project.renderHistoryId);
   const hasCurrent = current && await size(safeUnder(PATHS.videos, current.filename)) > 0;
   const finals = [];
@@ -80,16 +80,16 @@ async function finalInventory(projectId, history, pending = []) {
     }
     const referenced = owners.some(owner => references(owner, ids))
       || history.some(other => other.id !== entry.id && references(other, ids));
-    const reason = !hasCurrent ? 'No completed replacement' : referenced ? 'Referenced by saved media or production records' : null;
+    const reason = !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit build' : referenced ? 'Referenced by saved media or production records' : null;
     finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
   }
   return { project, finals };
 }
 
 /** Called only after the replacement has been published. Failed writes keep old renders. */
-export async function cleanupSupersededFinals(projectId, { replacementId = null } = {}) {
+export async function cleanupSupersededFinals(projectId, { replacementId = null, reserved = false } = {}) {
   // One writer owns the shared journal across history commits and file retirement.
-  return cleanupWrites(() => withBackupAssetPublication(() => withProjectMediaMutation(async () => {
+  const retire = () => cleanupWrites(() => withBackupAssetPublication(() => withProjectMediaMutation(async () => {
     const pending = new Map((await readPending()).map(entry => [entry.id, entry]));
     let retiring = [];
     let retainedFiles;
@@ -125,6 +125,7 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null 
       return removed;
     })().finally(() => { if (retiring.length) musicVideoEvents.emit('render-cleanup', { projectId }); });
   })));
+  return reserved ? retire() : withRenderCleanupReservation(projectId, retire);
 }
 
 export async function getRenderCleanup(projectId) {
@@ -134,19 +135,13 @@ export async function getRenderCleanup(projectId) {
   return { finals, segments: await getSegmentCleanup(projectId) };
 }
 
-export async function withRenderCleanupReservation(projectId, work) {
-  assertRenderCleanupIdle(projectId);
-  cleaning.add(projectId);
-  try { return await work(); } finally { cleaning.delete(projectId); }
-}
-
 export async function cleanupRenders(projectId, { unusedLooks = false } = {}) {
   return withRenderCleanupReservation(projectId, async () => {
     const { isProjectRenderActive } = await import('./render.js');
     const { cleanupShotSegments, assertSegmentCleanupIdle } = await import('./shotSegments.js');
     if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before cleanup.', { status: 409, code: 'RENDER_IN_PROGRESS' });
     assertSegmentCleanupIdle(projectId);
-    await cleanupSupersededFinals(projectId);
+    await cleanupSupersededFinals(projectId, { reserved: true });
     await cleanupShotSegments(projectId, { unusedLooks, reserved: true });
     musicVideoEvents.emit('render-cleanup', { projectId });
     return getRenderCleanup(projectId);

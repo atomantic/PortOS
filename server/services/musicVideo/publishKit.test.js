@@ -97,6 +97,16 @@ describe('publishing kit build (#9281)', () => {
     await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ status: 409, code: 'NO_FINAL_RENDER' });
   });
 
+  it('refuses a new build during render retirement and remains usable after cleanup releases', async () => {
+    const { id } = await projects.createProject({ name: 'Example Cleanup' });
+    const { withRenderCleanupReservation } = await import('./renderCleanupActivity.js');
+    await withRenderCleanupReservation(id, async () => {
+      await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'RENDER_CLEANUP_ACTIVE' });
+      expect(kit.isPublishKitBuildActive(id)).toBe(false);
+    });
+    await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'NO_FINAL_RENDER' });
+  });
+
   it('reserves a build before async prerequisites and releases the reservation after setup fails', async () => {
     const { id } = await projects.createProject({ name: 'Example Concurrent Build' });
     await mkdir(PATHS.videos, { recursive: true });
@@ -114,8 +124,10 @@ describe('publishing kit build (#9281)', () => {
       releasePrerequisite(null);
       // No SSE job exists yet, so nothing is advertised as attachable.
       expect(kit.getActivePublishKitBuild(id)).toBeNull();
+      expect(kit.isPublishKitBuildActive(id)).toBe(true);
       await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
       expect(await firstFailure).toMatchObject({ code: 'FFMPEG_MISSING' });
+      expect(kit.isPublishKitBuildActive(id)).toBe(false);
       expect(probe).toHaveBeenCalledTimes(1);
       // A failed setup must leave the project available for the next attempt.
       await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'FFMPEG_MISSING' });

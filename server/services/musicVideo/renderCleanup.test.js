@@ -5,7 +5,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 
 const root = () => lazyTempDataRoot('mv-render-cleanup-');
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: root }));
-const state = { project: null, others: [], collections: [], timelines: [], director: [], active: false, failHistory: false };
+const state = { project: null, others: [], collections: [], timelines: [], director: [], active: false, failHistory: false, kitActive: false, jobs: [] };
 vi.mock('../../lib/fileUtils.js', async load => {
   const actual = await load();
   return { ...actual, atomicWrite: async (path, data) => {
@@ -13,6 +13,8 @@ vi.mock('../../lib/fileUtils.js', async load => {
     return actual.atomicWrite(path, data);
   } };
 });
+vi.mock('./publishKit.js', () => ({ isPublishKitBuildActive: () => state.kitActive }));
+vi.mock('../mediaJobQueue/index.js', () => ({ listJobs: () => state.jobs }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => state.project), listProjects: vi.fn(async () => [state.project, ...state.others]),
   withProjectMediaMutation: async work => work({}),
@@ -38,7 +40,7 @@ beforeEach(async () => {
   mkdirSync(PATHS.videos, { recursive: true });
   mkdirSync(PATHS.videoThumbnails, { recursive: true });
   state.project = { id: 'example-project', renderHistoryId: 'current' };
-  state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false; state.failHistory = false;
+  state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false; state.failHistory = false; state.kitActive = false; state.jobs = [];
   vi.clearAllMocks();
   assertSegmentCleanupIdle.mockReset();
   await saveHistory([]);
@@ -86,6 +88,19 @@ describe('derived render retention', () => {
     expect(existsSync(join(PATHS.videoThumbnails, 'poster sample.jpg'))).toBe(true);
     for (const id of ['current', 'path', 'url', 'proof', 'poster']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
     expect(existsSync(join(PATHS.videos, 'unused.mp4'))).toBe(false);
+  });
+
+  it('retains finals consumed by active publishing-kit builds and queued media jobs', async () => {
+    await seed([entry('current'), entry('old')]);
+    state.kitActive = true;
+    expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(0);
+    expect((await getRenderCleanup('example-project')).finals[0].reason).toMatch(/publishing-kit/);
+    state.kitActive = false;
+    state.jobs = [{ status: 'queued', params: { sourceId: 'old' } }];
+    expect(await cleanupSupersededFinals('example-project')).toBe(0);
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+    state.jobs = [];
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
   });
 
   it('keeps history and bytes retryable when index removal fails, then settles them on retry', async () => {

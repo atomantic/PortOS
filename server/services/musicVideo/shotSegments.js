@@ -40,7 +40,7 @@ import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
 import { getProject } from './projects.js';
-import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanup.js';
+import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { trackedRenderMap } from '../renderActivity.js';
