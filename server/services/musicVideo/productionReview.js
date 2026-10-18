@@ -959,7 +959,8 @@ const MAX_RECENT_REVISIONS = 5;
  */
 function pruneReviewedRevisions(snapshots, feedback) {
   const keep = new Set((feedback || []).filter(f => !f.resolvedAt).map(f => f.basis));
-  Object.entries(snapshots).sort(([, a], [, b]) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
+  // Reversed first so a same-millisecond tie keeps the later-inserted (newer) snapshot.
+  Object.entries(snapshots).reverse().sort(([, a], [, b]) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
     .slice(0, MAX_RECENT_REVISIONS).forEach(([key]) => keep.add(key));
   return Object.fromEntries(Object.entries(snapshots).filter(([key]) => keep.has(key)));
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { approveProductionStage, productionReadiness, productionAlignmentBasis, recordProductionFeedback } from './productionReview.js';
 
 function artProject(visualLanguage) {
@@ -17,6 +17,17 @@ const revise = (previous, n) => ({ ...artProject(`Grain ${n}`), productionReview
 const approve = (p) => approveProductionStage(p, { stage: 'art', basis: productionReadiness(p).basis.art });
 
 describe('production review record growth', () => {
+  it('keeps the newest snapshots when captures share one timestamp', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    try {
+      let project = artProject('Grain 0');
+      for (let n = 0; n < 8; n++) project = approve(revise(project, n));
+      const { basis } = productionReadiness(project);
+      expect(Object.keys(project.productionReview.reviewedRevisions)).toContain(basis.art);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('bounds approval history and revision snapshots across many approvals', () => {
     let project = artProject('Grain 0');
     for (let n = 0; n < 60; n++) project = approve(revise(project, n));
