@@ -161,6 +161,8 @@ function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC }
  * Read-only: lets a reloaded page re-attach to the render's progress stream
  * without POSTing /render, which would START one when none is live (#9940).
  */
+export const isProjectRenderActive = (projectId) => projectRenders.has(projectId);
+
 export function getActiveRenderJobId(projectId) {
   const existing = projectRenders.get(projectId);
   return existing && existing !== PENDING && jobs.has(existing) ? existing : null;
@@ -1013,6 +1015,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       await writeSettled(completed);
       return poster;
     });
+    await retireOldFinals(projectId, jobId);
     await finish(completed, { written: true });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
@@ -1094,9 +1097,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
       await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project)}), 'complete');
       return poster;
     });
-    finish('complete');
+    await retireOldFinals(projectId, jobId);
     // Older takes of each shot are dropped once the new cut is published.
-    const pruned = await pruneSegments(plan, { startedAtMs }).catch(() => 0);
+    const pruned = await pruneSegments(plan, { startedAtMs }).catch(err => { console.warn(`⚠️ Music-video segment cleanup failed: ${err.message}`); return 0; });
+    finish('complete');
     console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
   }).catch(async (err) => {
@@ -1138,6 +1142,8 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
     throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
   }
+  const { assertRenderCleanupIdle } = await import('./renderCleanup.js');
+  assertRenderCleanupIdle(projectId);
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
     throw new ServerError('Render already in progress for this project', {
@@ -1356,6 +1362,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               });
               return poster;
             });
+            await retireOldFinals(projectId, jobId);
             emitRenderSettled(projectId, job);
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
             broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
@@ -1480,4 +1487,9 @@ function scheduleRenderResumes(resumes) {
       }
     }
   }, RENDER_RESUME_DELAY_MS).unref?.();
+}
+
+async function retireOldFinals(projectId, replacementId) {
+  await import('./renderCleanup.js').then(({ cleanupSupersededFinals }) => cleanupSupersededFinals(projectId, { replacementId }))
+    .catch(err => console.warn(`⚠️ Music-video superseded render cleanup failed: ${err.message}`));
 }

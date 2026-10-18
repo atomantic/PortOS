@@ -85,6 +85,7 @@ import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
+import CleanupStage from '../components/musicVideo/stages/CleanupStage.jsx';
 import AssetsStage from '../components/musicVideo/stages/AssetsStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
@@ -142,7 +143,7 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
-  assets: AssetsStage,
+  assets: AssetsStage, cleanup: CleanupStage,
 };
 
 

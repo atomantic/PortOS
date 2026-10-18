@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import {
-  ArrowRight, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users,
+  ArrowRight, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users, Trash2,
 } from 'lucide-react';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
@@ -11,7 +11,7 @@ import { MUSIC_VIDEO_PAGES } from '../../lib/musicVideoStages.js';
 // One icon per step: the phone's bottom bar collapses to icons, and a repeated
 // glyph would be a repeated destination.
 const STAGE_ICONS = {
-  setup: Music, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images,
+  setup: Music, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
 };
 
 // The page's scroll body (the route is full-width, so the page owns its
