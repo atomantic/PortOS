@@ -27,7 +27,8 @@
  * What it deliberately does NOT cover, because each needs a resource this
  * checkout does not have: the DB suites (a provisioned `portos_test` —
  * `npm run setup:db:test && npm run test:db`), the Windows job (a Windows
- * runner), and the client build / boot smoke. The summary names the ones the
+ * runner), the Linux worker-containment job (bubblewrap namespaces), and the
+ * client build / boot smoke. The summary names the ones the
  * plan flagged so they are a decision rather than a surprise.
  */
 
@@ -56,6 +57,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const UNCOVERED_SUITES = Object.freeze({
   db: 'npm run setup:db:test && npm run test:db (never against the real `portos` database)',
   windows: 'a Windows runner — no local equivalent; CI is the only proof',
+  linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
   build: 'npm run build',
   smoke: 'npm run smoke',
 });
@@ -127,6 +129,11 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
       },
     });
   });
+
+  // CI's `prompt-history` job: one git-history read, seconds locally.
+  if (plan.promptHistory) {
+    stages.push({ name: 'shipped prompt history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
+  }
 
   return stages;
 }
@@ -364,6 +371,8 @@ async function main() {
     windows: raw.windows,
     build: raw.build,
     smoke: raw.smoke,
+    promptHistory: raw.prompt_history,
+    linuxContainment: raw.linux_containment,
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 

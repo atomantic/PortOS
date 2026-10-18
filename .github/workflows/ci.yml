@@ -50,6 +50,10 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       smoke: ${{ steps.plan.outputs.smoke }}
       slashdo: ${{ steps.plan.outputs.slashdo }}
+      # Path-gated single-purpose jobs: true on a forced-full run, else only
+      # when the diff reaches the job's import closure (scripts/ci-test-plan.js).
+      prompt_history: ${{ steps.plan.outputs.prompt_history }}
+      linux_containment: ${{ steps.plan.outputs.linux_containment }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -131,6 +135,9 @@ jobs:
           BUILD_MODE: ${{ steps.plan.outputs.build }}
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
           SLASHDO_MODE: ${{ steps.plan.outputs.slashdo }}
+          PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
+          LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
+          NODE_MINIMUM_MODE: ${{ steps.node-minimum.outputs.run }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
           SERVER_SHARDS: ${{ steps.plan.outputs.server_shards }}
@@ -150,12 +157,17 @@ jobs:
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
             echo "- Slashdo submodule: \`${SLASHDO_MODE}\`"
+            echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
+            echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
+            echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   prompt-history:
     name: Shipped prompt history
+    needs: impact
+    if: needs.impact.outputs.prompt_history == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1040,7 +1052,7 @@ jobs:
   linux-containment:
     name: Linux worker containment
     needs: impact
-    if: needs.impact.outputs.server_mode != 'skip'
+    if: needs.impact.outputs.linux_containment == 'true'
     # 22.04 allows unprivileged user namespaces without changing the runner's
     # AppArmor policy. Restricted hosts must remain fail-closed in the product.
     runs-on: ubuntu-22.04
@@ -1065,6 +1077,8 @@ jobs:
       - name: Exercise real namespaces, seccomp, limits and cancellation
         env:
           PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
+        # Keep this list equal to the impact planner's LINUX_CONTAINMENT_TESTS:
+        # the job is gated on those files' import closure.
         run: npm test --prefix server -- --run lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
 
   gate:

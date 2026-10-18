@@ -84,6 +84,14 @@ describe('resolvePlanStages', () => {
     }
   });
 
+  it('runs the shipped prompt-history guard only when the plan selects it', () => {
+    expect(resolvePlanStages(planWith({ promptHistory: false })).map((stage) => stage.name))
+      .not.toContain('shipped prompt history');
+    expect(resolvePlanStages(planWith({ promptHistory: true })).at(-1)).toEqual({
+      name: 'shipped prompt history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {},
+    });
+  });
+
   it('drops the lint stage under --skip-lint but keeps the test stages', () => {
     const stages = resolvePlanStages(
       planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } }),
@@ -127,7 +135,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/migrations/shippedPromptHistory.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
     ]) {
@@ -616,7 +624,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/migrations/shippedPromptHistory.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
       ]) {

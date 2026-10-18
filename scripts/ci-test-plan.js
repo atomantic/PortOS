@@ -2,13 +2,14 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, posix } from 'path';
-import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
+import { join, posix, relative } from 'path';
+import { staticImportClosure, staticImportSpecifiersFromSource, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -577,6 +578,75 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
 );
 
+// Two narrow CI jobs observe a small, enumerable input set, so a pull request
+// that touches none of it skips them (non-PR and release-base runs are forced
+// full and always run both). Each gate is the head tree's static import
+// closure of the job's entry points, computed per run so it cannot drift from
+// a hand-kept list, plus the non-module inputs named by the pattern. ci.yml is
+// in both patterns so a workflow edit proves the job still runs.
+export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
+// The guard reads git history of data.reference/prompts/stages and imports the
+// migrations that declare prompt hashes. The whole migrations directory is
+// listed (not just today's declaring modules) so a diff that removes a
+// declaration still runs the guard. taskPromptDefaults and the snapshot
+// regenerator are the other half of a prompt-default bump.
+export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
+// The files the `linux-containment` job passes to `npm test --prefix server`.
+export const LINUX_CONTAINMENT_TESTS = [
+  'server/lib/codeAnimationContainment.test.js',
+  'server/routes/codeAnimationExecution.test.js',
+  'server/services/codeAnimation/containedWorker.test.js',
+];
+// The server Vitest config and its setup files load around every one of those
+// tests; vitestTempRootSetup.js is named by URL, not by an import edge.
+const LINUX_CONTAINMENT_ENTRIES = [
+  ...LINUX_CONTAINMENT_TESTS,
+  'server/vitest.config.js',
+  'server/vitest.setup.js',
+  'scripts/vitestTempRootSetup.js',
+];
+// The job installs server dependencies from these before running anything.
+export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+
+/**
+ * Repository-relative static import closure of `entries` in `cwd`, or null
+ * when a module cannot be read — the caller then runs the gated job rather
+ * than trusting a partial walk. Every entry is an input even when absent, so
+ * deleting or renaming one still runs the job that names it.
+ */
+const staticClosureOf = (entries, cwd) => {
+  try {
+    const files = new Set(entries);
+    for (const entry of entries) {
+      if (!existsSync(join(cwd, entry))) continue;
+      for (const file of staticImportClosure(join(cwd, entry)).files) files.add(toModuleKey(relative(cwd, file)));
+    }
+    return uniqueSorted([...files]);
+  } catch {
+    return null;
+  }
+};
+
+/** Static closure of the prompt-history guard and every migration it imports. */
+export function collectPromptHistoryInputs(files, cwd) {
+  try {
+    const declaring = files.filter((path) => path.startsWith('scripts/migrations/')
+      && !path.slice('scripts/migrations/'.length).includes('/')
+      && isNumberedMigrationFile(basenameOf(path))
+      && declaresPromptHashes(readFileSync(join(cwd, path), 'utf8')));
+    return staticClosureOf([PROMPT_HISTORY_GUARD, ...declaring], cwd);
+  } catch {
+    return null;
+  }
+}
+
+/** Static closure of the linux-containment tests and their Vitest harness. */
+export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
+
+/** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
+const touchesJobInputs = (changed, inputs, pattern) => inputs === null
+  || changed.some((path) => pattern.test(path) || inputs.includes(path));
+
 const RUNNER_ROOTS = {
   server: [
     'server/',
@@ -866,7 +936,25 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  * Flat/shared files fall back to Vitest's import-graph-aware "related" mode,
  * while composition roots and test configuration force the complete suite.
  */
-export function buildCiTestPlan(changedFiles, {
+/**
+ * The CI plan for a diff: the test-suite selection plus whether each
+ * path-gated job (prompt history, Linux containment) runs.
+ *
+ * `promptHistoryInputs` / `linuxContainmentInputs` are the jobs' static
+ * import closures from collectPlanInputs(); null (the default) runs the job.
+ */
+export function buildCiTestPlan(changedFiles, options = {}) {
+  const plan = buildSuitePlan(changedFiles, options);
+  const { forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null } = options;
+  return {
+    ...plan,
+    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
+    linuxContainment: forceFull
+      || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
+  };
+}
+
+function buildSuitePlan(changedFiles, {
   trackedFiles = [],
   forceFull = false,
   forceFullReason = 'full CI requested',
@@ -1278,6 +1366,8 @@ export function emitGitHubPlan(plan) {
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
+    prompt_history: plan.promptHistory,
+    linux_containment: plan.linuxContainment,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1485,8 +1575,12 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
     .map((path) => [path, classifyDependencyChange(path, baseSha ? readAtBase(path) : null, readInTree(path))]));
 
+  // A forced-full run always runs both gated jobs, so it skips the walks.
+  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
+  const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
+
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies, dependencyChanges };
+    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs };
 }
 
 function main() {
@@ -1510,7 +1604,10 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies, dependencyChanges } = collectPlanInputs({
+  const {
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
+    dependencyChanges, promptHistoryInputs, linuxContainmentInputs,
+  } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
@@ -1525,6 +1622,8 @@ function main() {
     dbDependencies,
     browserDependencies,
     dependencyChanges,
+    promptHistoryInputs,
+    linuxContainmentInputs,
   }));
 }
 

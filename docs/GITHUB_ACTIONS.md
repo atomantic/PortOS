@@ -423,7 +423,8 @@ own.
 
 ### Shallow checkouts
 
-No job clones full history. `actions/checkout` runs at `fetch-depth: 2`
+Only the path-gated **Shipped prompt history** job clones full history (it
+reads every past stage-prompt body). `actions/checkout` runs at `fetch-depth: 2`
 in every job that diffs against the base. The two gate jobs set no depth at all
 (the action's own default is 1) and pass `sparse-checkout: scripts` instead:
 they check out only to run `scripts/ci-gate-report.js`, never look at history,
@@ -510,6 +511,24 @@ The selected work is split across parallel jobs:
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
   its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
   always run it.
+- **Shipped prompt history** — the one job with a full-history clone; it checks
+  that every stage-prompt body ever shipped is accepted by a prompt migration.
+  On a pull request it runs only when the impact planner's `prompt_history`
+  output is true: the diff touches `scripts/migrations/`,
+  `data.reference/prompts/`, `server/services/taskPromptDefaults`, the
+  integrity-snapshot regenerator, `ci.yml`, or any module the guard or a
+  hash-declaring migration statically imports (`PROMPT_HISTORY_PATH_RE` and
+  `collectPromptHistoryInputs()` in `scripts/ci-test-plan.js`). Non-PR runs
+  and pull requests into `release` always run it, and `npm run pregate` runs
+  it locally when selected.
+- **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
+  bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
+  the `linux_containment` output is true: the diff touches the static import
+  closure of those tests and the server Vitest harness, `server/package.json`,
+  `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
+  head tree on every run, so a new dependency is gated without a list edit.
+  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the

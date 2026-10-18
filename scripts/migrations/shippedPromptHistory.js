@@ -97,19 +97,27 @@ export const findUnacceptedPromptHistory = ({
   return stranded;
 };
 
+/** A numbered migration module (not a helper or test) this guard may load. */
+export const isNumberedMigrationFile = (file) =>
+  /^\d.*\.js$/.test(file) && !file.endsWith('.test.js');
+
+/**
+ * Whether a migration's source declares shipped prompt hashes, i.e. whether the
+ * guard imports it. The CI planner gates the job on the import closure of
+ * exactly these modules, so both sides share this predicate.
+ */
+export const declaresPromptHashes = (source) =>
+  source.includes('ACCEPTED_OLD_MD5') || source.includes('NEW_SHIPPED_MD5');
+
 const migrationHashes = async (migrationsDir) => {
   const accepted = {};
   const files = (await readdir(migrationsDir))
-    .filter((file) => /^\d.*\.js$/.test(file) && !file.endsWith('.test.js'))
+    .filter(isNumberedMigrationFile)
     .sort();
   for (const file of files) {
     const sourcePath = join(migrationsDir, file);
     const source = await readFile(sourcePath, 'utf8');
-    if (
-      !source.includes('ACCEPTED_OLD_MD5') &&
-      !source.includes('NEW_SHIPPED_MD5')
-    )
-      continue;
+    if (!declaresPromptHashes(source)) continue;
     const migration = await import(pathToFileURL(sourcePath).href);
     for (const [name, hashes] of Object.entries(
       migration.ACCEPTED_OLD_MD5 || {},
