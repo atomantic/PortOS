@@ -130,6 +130,11 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(HOST_CONTROL_ROUTES.filter((route) => !reached.has(route))).toEqual([]);
   });
 
+  it('lists each gated route once, so a duplicate cannot hide a block meant to add something else (#12024)', () => {
+    const duplicates = HOST_CONTROL_ROUTES.filter((route, index) => HOST_CONTROL_ROUTES.indexOf(route) !== index);
+    expect(duplicates).toEqual([]);
+  });
+
   it('covers Express spellings conservatively while preserving route boundaries', () => {
     expect(isHostControlRoute('post', '/API/Apps/example-app/START/')).toBe(true);
     expect(hostControlRouteFor('post', '/API/HTML-COMPOSITION/TOOLKIT/SKILLS/INSTALL/')).toBe('POST /api/html-composition/toolkit/skills/install');
