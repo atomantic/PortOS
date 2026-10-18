@@ -30,7 +30,7 @@ vi.mock('./render.js', async (importOriginal) => {
 vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)), withProjectMediaMutation: async work => work({}) }));
 
-const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview, segmentRendering, cleanupShotSegments, getSegmentCleanup, startShotRender, shotSegmentDir, assertSegmentCleanupIdle } = await import('./shotSegments.js');
+const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview, segmentRendering, cleanupShotSegments, getSegmentCleanup, startShotRender, shotSegmentDir, assertSegmentCleanupIdle, cancelShotRender } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { assertRenderCleanupIdle } = await import('./renderCleanupActivity.js');
 const { musicVideoEvents } = await import('./events.js');
@@ -263,8 +263,8 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     }
   });
 
-  it('drains superseded segments for every successfully overlapping shot once the batch is idle', async () => {
-    const id = 'mv-overlapping-replacements';
+  it.each(['rendered', 'failed', 'canceled'])('drains successful replacements after the last overlapping shot is %s', async (outcome) => {
+    const id = `mv-overlapping-${outcome}`;
     fixture.project = project({ id, filmLook: { preset: 'vhs', grain: 0.1 } });
     const originalClips = fixture.clips;
     const before = await planShotSegments(fixture.project);
@@ -275,20 +275,28 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     const started = {};
     const held = Object.fromEntries(['a', 'b'].map(scene => [scene, new Promise(resolve => { release[scene] = resolve; })]));
     const ready = ['a', 'b'].map(scene => new Promise(resolve => { started[scene] = resolve; }));
-    applyFilmLookFinish.mockImplementation(async ({ label }) => {
+    applyFilmLookFinish.mockImplementation(async ({ label, signal }) => {
       const scene = ['a', 'b'].find(key => label.endsWith(`shot ${key}`));
       started[scene]();
       await held[scene];
+      if (scene === 'b' && outcome === 'failed') throw new Error('Synthetic look failure');
+      if (signal.aborted) throw Object.assign(new Error('Synthetic cancellation'), { code: 'CANCELED' });
       return true;
     });
     let onShot;
+    let settleLast;
+    const lastDone = new Promise(resolve => { settleLast = resolve; });
     const firstDone = new Promise(resolve => {
-      onShot = event => { if (event.projectId === id && event.sceneId === 'a' && event.state === 'rendered') resolve(); };
+      onShot = event => {
+        if (event.projectId !== id) return;
+        if (event.sceneId === 'a' && event.state === 'rendered') resolve();
+        if (event.sceneId === 'b' && ['rendered', 'failed', 'canceled'].includes(event.state)) settleLast(event.state);
+      };
     });
     let onCleanup;
     const cleaned = new Promise(resolve => {
       let count = 0;
-      onCleanup = event => { if (event.projectId === id && ++count === 2) resolve(); };
+      onCleanup = event => { if (event.projectId === id && ++count === (outcome === 'rendered' ? 2 : 1)) resolve(); };
     });
     musicVideoEvents.on('shot-render', onShot);
     musicVideoEvents.on('render-cleanup', onCleanup);
@@ -299,13 +307,15 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
       release.a();
       await firstDone;
       expect(existsSync(before.segments[0].path)).toBe(true);
+      if (outcome === 'canceled') expect(cancelShotRender(id, 'b')).toBe(true);
       release.b();
+      expect(await lastDone).toBe(outcome);
       await cleaned;
       await vi.waitFor(() => { assertSegmentCleanupIdle(id); assertRenderCleanupIdle(id); });
-      for (const index of [0, 1]) {
-        expect(existsSync(before.segments[index].path)).toBe(false);
-        expect(existsSync(after.segments[index].path)).toBe(true);
-      }
+      expect(existsSync(before.segments[0].path)).toBe(false);
+      expect(existsSync(after.segments[0].path)).toBe(true);
+      expect(existsSync(before.segments[1].path)).toBe(outcome !== 'rendered');
+      expect(existsSync(after.segments[1].path)).toBe(outcome === 'rendered');
     } finally {
       release.a(); release.b();
       await vi.waitFor(() => { assertSegmentCleanupIdle(id); assertRenderCleanupIdle(id); });

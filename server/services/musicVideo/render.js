@@ -155,14 +155,19 @@ function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC }
   return out;
 }
 
+function releaseProjectRender(projectId) {
+  if (projectRenders.delete(projectId)) musicVideoEvents.emit('render-cleanup-idle', { projectId });
+}
+
+// Preparation also owns the slot before a public job ID exists.
+export const isProjectRenderActive = (projectId) => projectRenders.has(projectId);
+
 /**
  * The project's live final-render job on THIS instance, or null — a render
  * still preparing (no job id yet) or running on another machine reports null.
  * Read-only: lets a reloaded page re-attach to the render's progress stream
  * without POSTing /render, which would START one when none is live (#9940).
  */
-export const isProjectRenderActive = (projectId) => projectRenders.has(projectId);
-
 export function getActiveRenderJobId(projectId) {
   const existing = projectRenders.get(projectId);
   return existing && existing !== PENDING && jobs.has(existing) ? existing : null;
@@ -963,7 +968,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   });
   // `written`: the success path already committed the row inside its backup lease.
   const finish = async (patch, { written = false } = {}) => {
-    projectRenders.delete(projectId);
+    releaseProjectRender(projectId);
     if (!written) await writeSettled(patch);
     emitRenderSettled(projectId, job);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
@@ -1065,7 +1070,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
   console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
   const { signal } = job.overlayAbort;
   const finish = (status) => {
-    projectRenders.delete(projectId);
+    releaseProjectRender(projectId);
     emitRenderSettled(projectId, job);
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
@@ -1210,7 +1215,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      projectRenders.delete(projectId);
+      releaseProjectRender(projectId);
       // A cancel restores the pre-render status (so a cancelled re-render of a
       // 'complete' project stays 'complete'); a real failure marks it 'failed'.
       const targetStatus = canceled ? priorStatus : 'failed';
@@ -1280,7 +1285,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           job.lastError = reason;
           console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: reason });
-          projectRenders.delete(projectId);
+          releaseProjectRender(projectId);
           await updateProject(projectId, settledRender('failed', { renderError: reason.slice(0, 2000) })).catch((updateErr) => {
             maintenance.markCurrentUnsettled();
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
@@ -1378,7 +1383,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             });
             emitRenderSettled(projectId, job);
           } finally {
-            projectRenders.delete(projectId);
+            releaseProjectRender(projectId);
             closeJobAfterDelay(jobs, jobId);
             permit.finish();
           }
@@ -1391,7 +1396,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   } finally {
     // Prep threw (or we never handed off to the job lifecycle) — release the
     // reserved slot so a stale PENDING can't 409 every future render.
-    if (!handedOff) { projectRenders.delete(projectId); permit.finish(); }
+    if (!handedOff) { releaseProjectRender(projectId); permit.finish(); }
   }
 }
 

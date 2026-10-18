@@ -213,7 +213,11 @@ export function renderSegment(plan, segment, { signal, onProgress } = {}) {
     const controller = new AbortController();
     const fresh = { controller, waiters: 0, listeners: new Set() };
     fresh.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => fresh.listeners.forEach((fn) => fn(f)) })
-      .finally(() => { if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path); });
+      .finally(() => {
+        if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path);
+        // Cancellation releases its caller before the encoder/browser settles.
+        cleanupAfterShot(plan.project.id).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+      });
     inFlight.set(segment.path, fresh);
     entry = fresh;
   }
@@ -607,7 +611,10 @@ export async function startShotRender(projectId, sceneId) {
       if (!segments.length) {
         throw new ServerError(`${nameShots(project, [sceneId])}: not in the cut yet. Give it a clip, or a still with a start and end time`, { status: 422, code: 'SHOT_NOT_IN_CUT' });
       }
-      if (segments.every(segmentRendered)) return { sceneId, state: 'rendered' };
+      if (segments.every(segmentRendered)) {
+        await cleanupAfterShot(projectId, sceneId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+        return { sceneId, state: 'rendered' };
+      }
       if (shotJobs.has(key)) return { sceneId, state: 'rendering' };
       assertRenderCleanupIdle(projectId);
       const controller = new AbortController();
@@ -641,7 +648,7 @@ export async function startShotRender(projectId, sceneId) {
         emitShotRender({ projectId, sceneId, state: canceled ? 'canceled' : 'failed', error: canceled ? null : err.message });
       }).finally(async () => {
         shotJobs.delete(key);
-        if (rendered) await cleanupAfterShot(projectId, sceneId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+        await cleanupAfterShot(projectId, rendered ? sceneId : null).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
         permit.finish();
       });
       return { sceneId, state: 'rendering' };
