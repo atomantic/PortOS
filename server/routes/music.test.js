@@ -14,9 +14,9 @@ const gen = vi.hoisted(() => ({
 }));
 const mediaQueue = vi.hoisted(() => ({ jobs: [], enqueue: vi.fn() }));
 const remoteProvider = vi.hoisted(() => ({ peers: [], resolve: vi.fn() }));
-const cuda = vi.hoisted(() => ({ status: 'available', maxVramGb: 40 }));
+const cuda = vi.hoisted(() => ({ status: 'available', maxVramGb: 40, probe: null }));
 vi.mock('../lib/cudaCapability.js', () => ({
-  getCudaCapability: vi.fn(async () => ({ status: cuda.status, gpus: [], maxVramGb: cuda.maxVramGb, error: null })),
+  getCudaCapability: vi.fn(async () => cuda.probe ? cuda.probe() : ({ status: cuda.status, gpus: [], maxVramGb: cuda.maxVramGb, error: null })),
 }));
 vi.mock('../services/pipeline/musicGen.js', async () => {
   const actual = await vi.importActual('../services/pipeline/musicGen.js');
@@ -24,11 +24,12 @@ vi.mock('../services/pipeline/musicGen.js', async () => {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
     acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: [{ id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5' }], defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true },
-    'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3', downloadIgnore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'], downloadSizeGb: 29 }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true, executionProfile: 'cuda-bf16-auto-experimental', vramProfiles: { 'cuda-bf16-auto-experimental': { label: 'CUDA BF16 (experimental automatic placement)', minVramGb: null, recommendedVramGb: null } } },
+      'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3', downloadIgnore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'], downloadSizeGb: 29 }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true, executionProfile: 'cuda-bf16-auto-experimental', vramProfiles: { 'cuda-bf16-auto-experimental': { label: 'CUDA BF16 (experimental automatic placement)', minVramGb: null, recommendedVramGb: null } } },
     'minimax-music3-mlx': { id: 'minimax-music3-mlx', name: 'MiniMax Music 3 (MLX)', models: [
       { id: 'minimax-music3-mlx-8bit', repo: 'mlx-community/MiniMax-Music3-8bit', revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5', downloadSizeGb: 14, name: 'MiniMax Music 3 MLX 8-bit' },
       { id: 'minimax-music3-mlx-bf16', repo: 'mlx-community/MiniMax-Music3-bf16', revision: '83a5f2d365673689df5c8f36e21e108751fd92ea', downloadSizeGb: 29, name: 'MiniMax Music 3 MLX BF16' },
     ], defaultModelId: 'minimax-music3-mlx-8bit', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX', venvDefault: '/v/minimax-mlx', resolvePython: () => (gen.ready ? '/v/minimax-mlx/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, autoDuration: true },
+      'test-cuda': { id: 'test-cuda', name: 'Test CUDA', models: [{ id: 'test-cuda', name: 'Test CUDA' }], defaultModelId: 'test-cuda', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 1, installEnv: 'INSTALL_TEST_CUDA', venvDefault: '/v/test-cuda', resolvePython: () => (gen.ready ? '/v/test-cuda/bin/python3' : null), cudaRequired: true, executionProfile: 'test-cuda', vramProfiles: { 'test-cuda': { label: 'test CUDA', minVramGb: 0, recommendedVramGb: 0 } } },
   };
   return {
     composeMusicLyrics: actual.composeMusicLyrics,
@@ -220,6 +221,7 @@ describe('music routes', () => {
     cache.calls.length = 0;
     cuda.status = 'available';
     cuda.maxVramGb = 40;
+    cuda.probe = null;
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
     designer.describeMusic.mockReset().mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: { provider: 'fake-provider', model: 'fake-model' } });
     designer.writeLyrics.mockReset().mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
@@ -643,6 +645,41 @@ describe('music routes', () => {
     const r = await request(app).post('/api/music/setup/runtime-install?runtime=musicgen');
     expect(r.status).toBe(200);
     expect(r.text).toContain('cannot be installed on this host');
+    expect(setup.spawn).not.toHaveBeenCalled();
+  });
+
+  it('POST /setup/runtime-install claims a CUDA engine while its capability probe is pending', async () => {
+    let finishProbe;
+    cuda.probe = () => new Promise((resolve) => { finishProbe = resolve; });
+    gen.healthy = false;
+
+    const first = request(app).post('/api/music/setup/runtime-install?runtime=test-cuda').then((response) => response);
+    await vi.waitFor(() => expect(finishProbe).toEqual(expect.any(Function)));
+    const second = await request(app).post('/api/music/setup/runtime-install?runtime=test-cuda');
+    expect(second.status).toBe(200);
+    expect(second.text).toContain('Another Test CUDA install is already running');
+    expect(setup.spawn).not.toHaveBeenCalled();
+
+    finishProbe({ status: 'available', gpus: [], maxVramGb: 40, error: null });
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.text).toContain('Starting Test CUDA install.');
+    expect(setup.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /setup/runtime-install releases its CUDA claim when the probe rejects', async () => {
+    cuda.probe = vi.fn().mockRejectedValueOnce(new Error('CUDA probe failed'));
+    gen.healthy = false;
+
+    await expect(request(app).post('/api/music/setup/runtime-install?runtime=minimax-music3'))
+      .rejects.toThrow('fetch failed');
+    expect(setup.spawn).not.toHaveBeenCalled();
+
+    cuda.probe = null;
+    const retry = await request(app).post('/api/music/setup/runtime-install?runtime=minimax-music3');
+    expect(retry.status).toBe(200);
+    expect(retry.text).toContain('VRAM requirement has not been measured');
+    expect(retry.text).not.toContain('already running');
     expect(setup.spawn).not.toHaveBeenCalled();
   });
 
