@@ -13,6 +13,17 @@ const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error', 'p
 /** True when a frame is one of the stream-ending types this hook closes on. */
 export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);
 
+export const DEFAULT_MAX_SSE_FRAMES = 200;
+
+// One shared empty history so a `maxFrames: 0` consumer's `frames` keeps a
+// stable identity (every setFrames(EMPTY_FRAMES) bails out as a no-op).
+const EMPTY_FRAMES = Object.freeze([]);
+
+/** Append a frame, dropping the oldest ones so at most `max` are retained. */
+export const appendBoundedFrame = (frames, frame, max) => (
+  frames.length < max ? [...frames, frame] : [...frames.slice(frames.length - max + 1), frame]
+);
+
 /**
  * GET uses EventSource reconnects; POST reads one fetch stream without retry.
  * Subscribe to a server-side SSE stream of JSON-payload progress
@@ -23,9 +34,15 @@ export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);
  * The stream is torn down on unmount, when `url` changes, when `enabled`
  * flips false, or when a terminal frame (type === 'complete' / 'canceled'
  * / 'error') arrives.
+ *
+ * `frames` is a bounded history: at most `maxFrames` (default 200) are
+ * retained, the oldest dropped first, so a multi-hour run cannot grow memory
+ * or make each append O(run length). `latest` is its own cell — a consumer
+ * that only needs the newest frame passes `maxFrames: 0` and the history is
+ * never written, so it pays one state update (one render) per frame.
  */
-export function useSseProgress(url, { enabled = true, method = 'GET' } = {}) {
-  const [frames, setFrames] = useState([]);
+export function useSseProgress(url, { enabled = true, method = 'GET', maxFrames = DEFAULT_MAX_SSE_FRAMES } = {}) {
+  const [frames, setFrames] = useState(EMPTY_FRAMES);
   const [latest, setLatest] = useState(null);
   const [latestUrl, setLatestUrl] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -36,6 +53,16 @@ export function useSseProgress(url, { enabled = true, method = 'GET' } = {}) {
   // that will never arrive. Reset to false on every (re)subscribe.
   const [closed, setClosed] = useState(false);
   const esRef = useRef(null);
+  // Read through a ref inside the stream handlers so a changed cap neither
+  // resubscribes nor is ignored.
+  const maxFramesRef = useRef(maxFrames);
+  useEffect(() => { maxFramesRef.current = maxFrames; }, [maxFrames]);
+  const record = (data, streamUrl) => {
+    const max = maxFramesRef.current;
+    if (max > 0) setFrames(prev => appendBoundedFrame(prev, data, max));
+    setLatest(data);
+    setLatestUrl(streamUrl);
+  };
 
   useEffect(() => {
     if (!url || !enabled) {
@@ -48,7 +75,7 @@ export function useSseProgress(url, { enabled = true, method = 'GET' } = {}) {
       setLatestUrl(null);
       return undefined;
     }
-    setFrames([]);
+    setFrames(EMPTY_FRAMES);
     setLatest(null);
     setLatestUrl(null);
     setIsOpen(false);
@@ -63,9 +90,7 @@ export function useSseProgress(url, { enabled = true, method = 'GET' } = {}) {
       const isCurrent = () => esRef.current === connection && !controller.signal.aborted;
       const receive = (data) => {
         if (!isCurrent()) return;
-        setFrames(previous => [...previous, data]);
-        setLatest(data);
-        setLatestUrl(url);
+        record(data, url);
         if (isTerminalSseFrame(data)) {
           setIsOpen(false);
           setClosed(true);
@@ -133,9 +158,7 @@ export function useSseProgress(url, { enabled = true, method = 'GET' } = {}) {
       } catch {
         return;
       }
-      setFrames((prev) => [...prev, data]);
-      setLatest(data);
-      setLatestUrl(url);
+      record(data, url);
       if (TERMINAL_TYPES.has(data?.type)) {
         es.close();
         setIsOpen(false); // the connection is now closed — keep isOpen honest

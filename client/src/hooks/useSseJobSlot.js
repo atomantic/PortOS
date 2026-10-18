@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
 import useMounted from './useMounted.js';
 
 const defaultReadPercent = (frame) => frame.percent;
+const IDLE_PROGRESS = Object.freeze({ percent: 0, stage: null });
 
 /**
  * One single-slot SSE job: kickoff, captured target, progress and terminal
@@ -51,12 +52,12 @@ export default function useSseJobSlot({
 } = {}) {
   // jobId is null during preparation; context already owns the target then.
   const [job, setJob] = useState(null);
-  const [progress, setProgress] = useState({ percent: 0, stage: null });
   const slotRef = useRef(null);
   const mounted = useMounted();
   useEffect(() => () => { slotRef.current = null; }, []);
   const jobUrl = job?.jobId ? eventsUrl(job.jobId) : null;
-  const sse = useSseProgress(jobUrl);
+  // Latest-only consumer: no history, so each frame costs one render.
+  const sse = useSseProgress(jobUrl, { maxFrames: 0 });
   const latest = sse.latest;
   const percent = latest ? readPercent(latest) : undefined;
 
@@ -65,16 +66,23 @@ export default function useSseJobSlot({
     setJob(null);
   };
 
+  // Progress is folded from `latest` during render (carried in a ref) rather
+  // than through a state-setting effect, so a frame costs one render, not two.
   // Sparse metadata/warning frames preserve progress. A known mismatched URL
   // belongs to an older stream; absent URL identity remains tolerated for the
-  // existing SSE test seams.
-  useEffect(() => {
-    if (!job?.jobId || !latest) return;
-    if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
-    setProgress((prev) => ({
+  // existing SSE test seams. The fold is idempotent per frame, so StrictMode's
+  // double memo invocation lands on the same value.
+  const progressRef = useRef(IDLE_PROGRESS);
+  const progress = useMemo(() => {
+    if (!job?.jobId || !latest) return progressRef.current;
+    if (sse.latestUrl && sse.latestUrl !== jobUrl) return progressRef.current;
+    const prev = progressRef.current;
+    const next = {
       percent: Number.isFinite(percent) ? Math.round(percent) : prev.percent,
       stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
-    }));
+    };
+    progressRef.current = next;
+    return next;
   }, [latest, job, jobUrl, sse.latestUrl, percent]);
 
   useEffect(() => {
@@ -123,8 +131,8 @@ export default function useSseJobSlot({
     if (!mounted.current || slotRef.current) return;
     const slot = { jobId: null, context: context === undefined ? arg : context };
     slotRef.current = slot;
+    progressRef.current = IDLE_PROGRESS;
     setJob(slot);
-    setProgress({ percent: 0, stage: null });
     const isCurrent = () => mounted.current && slotRef.current === slot;
     startRequest(arg)
       .then(({ jobId }) => {
@@ -144,8 +152,8 @@ export default function useSseJobSlot({
     if (!jobId || !mounted.current || slotRef.current) return false;
     const slot = { jobId, context: context ?? null };
     slotRef.current = slot;
+    progressRef.current = IDLE_PROGRESS;
     setJob(slot);
-    setProgress({ percent: 0, stage: null });
     return true;
   };
 

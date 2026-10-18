@@ -80,6 +80,36 @@ describe('useSseProgress', () => {
     expect(result.current.latestUrl).toBeNull();
   });
 
+  it('retains at most maxFrames of history, dropping the oldest, while latest is the last frame', () => {
+    const { result } = renderHook(() => useSseProgress('/x', { maxFrames: 50 }));
+    act(() => {
+      for (let i = 1; i <= 1000; i += 1) last().emit({ type: 'progress', i });
+    });
+    expect(result.current.frames).toHaveLength(50);
+    expect(result.current.frames[0]).toEqual({ type: 'progress', i: 951 });
+    expect(result.current.frames.at(-1)).toEqual({ type: 'progress', i: 1000 });
+    expect(result.current.latest).toEqual({ type: 'progress', i: 1000 });
+  });
+
+  it('defaults the cap to 200 and never writes history for a maxFrames: 0 consumer', () => {
+    const capped = renderHook(() => useSseProgress('/x'));
+    act(() => {
+      for (let i = 0; i < 250; i += 1) last().emit({ type: 'progress', i });
+    });
+    expect(capped.result.current.frames).toHaveLength(200);
+
+    const latestOnly = renderHook(() => useSseProgress('/y', { maxFrames: 0 }));
+    const initialFrames = latestOnly.result.current.frames;
+    act(() => {
+      last().emit({ type: 'progress', i: 1 });
+      last().emit({ type: 'complete' });
+    });
+    expect(latestOnly.result.current.frames).toBe(initialFrames);
+    expect(latestOnly.result.current.frames).toHaveLength(0);
+    expect(latestOnly.result.current.latest).toEqual({ type: 'complete' });
+    expect(latestOnly.result.current.closed).toBe(true);
+  });
+
   it('isTerminalSseFrame matches the terminal set and rejects others', () => {
     expect(isTerminalSseFrame({ type: 'complete' })).toBe(true);
     expect(isTerminalSseFrame({ type: 'canceled' })).toBe(true);
