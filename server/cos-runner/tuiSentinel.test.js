@@ -87,9 +87,9 @@ async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
     await routes.get('/agents')({}, response);
     return response.json.mock.calls[0][0][0];
   };
-  const stopStartup = async () => {
-    const response = { json: vi.fn() };
-    await routes.get('/terminate/:agentId')({ params: { agentId: 'agent-1' }, body: { onlyIfPromptUnsubmitted: true } }, response);
+  const stopStartup = async (onlyIfPromptUnsubmitted = true) => {
+    const response = { json: vi.fn(), status: vi.fn().mockReturnThis() };
+    await routes.get('/terminate/:agentId')({ params: { agentId: 'agent-1' }, body: { onlyIfPromptUnsubmitted } }, response);
     return response.json.mock.calls[0][0];
   };
   return { access, child, stopWatching, fireSentinel, socket, listing, stopStartup, killProcessTree };
@@ -133,6 +133,12 @@ describe('cos-runner TUI startup recovery receipt', () => {
     const run = await spawnTui({}, { trackPromptSubmission: false });
     expect((await run.listing()).promptSubmitted).toBeNull();
     expect(await run.stopStartup()).toMatchObject({ terminated: false });
+    expect(run.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed guard instead of falling through to unconditional termination', async () => {
+    const run = await spawnTui();
+    expect(await run.stopStartup('true')).toMatchObject({ error: expect.stringContaining('onlyIfPromptUnsubmitted') });
     expect(run.killProcessTree).not.toHaveBeenCalled();
   });
 });
