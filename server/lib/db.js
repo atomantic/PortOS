@@ -58,6 +58,15 @@ pool.on('error', (err) => {
   console.error(`🗄️ Database pool error: ${err.message}`);
 });
 
+// pg-pool only installs its error handler while a client is idle. Every
+// checked-out client needs a temporary listener of its own because pg emits
+// unexpected socket errors while a transaction or other operation is active.
+// Keep one stable callback and remove it before release so client reuse cannot
+// accumulate listeners.
+function logCheckedOutClientError(err) {
+  console.error(`🗄️ Checked-out database client error: ${err.message}`);
+}
+
 /**
  * Is the configured database a DESIGNATED test database?
  *
@@ -328,6 +337,7 @@ export async function withTransaction(fn) {
 
 async function runTransaction(fn) {
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   // Guard the client's row writes with the same backstop as query(). The raw
   // pg client bypasses query() entirely, so without this wrapper a test-runner
   // process pointed at the real `portos` DB writes through every store's
@@ -354,6 +364,7 @@ async function runTransaction(fn) {
     if (began) await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
+    client.removeListener('error', logCheckedOutClientError);
     client.release(releaseErr);
   }
 }
@@ -423,6 +434,7 @@ export async function verifyDatabaseMaintenanceTarget(id) {
   const operation = readTarget();
   if (isTestRunner() && !/_test$/.test(POOL_CONFIG.database) && process.env.TEST_DB_OK !== '1') throw refuse();
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   let discard = false;
   try {
     await client.query({ text: 'BEGIN READ ONLY', query_timeout: 10_000 });
@@ -443,6 +455,7 @@ export async function verifyDatabaseMaintenanceTarget(id) {
     return { id, stage: operation.stage, target: operation.target.mode, targetHealthy: true, fenced: true };
   } finally {
     await client.query({ text: 'ROLLBACK', query_timeout: 10_000 }).catch(() => { discard = true; });
+    client.removeListener('error', logCheckedOutClientError);
     client.release(discard);
   }
 }
@@ -541,6 +554,7 @@ async function ensureSchemaImpl() {
   // deliberately not wrapped in one either — see the comment block above), so
   // nothing here may be wrapped in withTransaction()/BEGIN.
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   try {
     const { rows: [{ locked }] } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
     if (!locked) {
@@ -585,6 +599,7 @@ async function ensureSchemaImpl() {
     // itself fails, destroy the connection instead: closing it releases the
     // lock automatically, same as a hard kill mid-boot.
     const unlocked = await client.query('SELECT pg_advisory_unlock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]).then(() => true, () => false);
+    client.removeListener('error', logCheckedOutClientError);
     client.release(!unlocked);
   }
 }

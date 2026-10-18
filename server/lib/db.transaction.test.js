@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 const pool = vi.hoisted(() => ({
   client: null,
@@ -18,10 +19,10 @@ vi.mock('pg', async (importOriginal) => ({
 import { withTransaction, query, withDatabaseMaintenance } from './db.js';
 
 function makeClient(query) {
-  return {
-    query,
-    release: vi.fn(),
-  };
+  const client = new EventEmitter();
+  client.query = query;
+  client.release = vi.fn();
+  return client;
 }
 
 afterEach(() => {
@@ -112,6 +113,31 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => { throw dropError; })).rejects.toBe(dropError);
 
     expect(client.release).toHaveBeenCalledWith(dropError);
+  });
+
+  it('handles a checked-out client socket error and removes the listener before reuse', async () => {
+    const socketError = new Error('Connection terminated unexpectedly');
+    const client = makeClient(vi.fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(socketError)
+      .mockRejectedValueOnce(new Error('ROLLBACK on closed socket')));
+    pool.client = client;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withTransaction(async (transaction) => {
+      expect(client.listenerCount('error')).toBe(1);
+      expect(() => client.emit('error', socketError)).not.toThrow();
+      await transaction.query('SELECT 1');
+    })).rejects.toBe(socketError);
+
+    expect(log).toHaveBeenCalledWith(`🗄️ Checked-out database client error: ${socketError.message}`);
+    expect(client.listenerCount('error')).toBe(0);
+    expect(client.release).toHaveBeenCalledWith(socketError);
+
+    client.query.mockResolvedValue({});
+    await expect(withTransaction(async () => 'reused')).resolves.toBe('reused');
+    expect(client.listenerCount('error')).toBe(0);
+    expect(client.release).toHaveBeenLastCalledWith(undefined);
   });
 });
 
