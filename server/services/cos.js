@@ -1372,10 +1372,10 @@ export function isPerpetualRefillCandidate(agent, schedule) {
   const analysisType = agentScheduledType(agent);
   if (!analysisType) return false;
   const taskDef = schedule?.tasks?.[analysisType];
-  // `perpetual` is the single drain signal, orthogonal to the cadence type: an
-  // on-demand or cron task carrying the flag re-queues on completion, and one
-  // without it stays a single-run action.
-  return Boolean(taskDef?.enabled) && taskDef?.perpetual === true;
+  // A manual branch reconciliation owns a bounded sweep even when recurring
+  // dispatch is off. Other task types retain their saved perpetual policy.
+  const manualBranchSweep = analysisType === 'branch-reconcile' && agent?.metadata?.taskOnDemand;
+  return Boolean(taskDef?.enabled) && (taskDef?.perpetual === true || Boolean(manualBranchSweep));
 }
 
 /**
@@ -1437,7 +1437,15 @@ export function perpetualRefillPlan(agent, schedule) {
  * converges and can't fan out past the `dequeueNextTask` concurrency limits).
  */
 async function refillPerpetualForCompletedAgent(agent) {
-  if (!isDaemonRunning()) return;
+  const branchSweep = agentScheduledType(agent) === 'branch-reconcile';
+  const interrupted = async (reason) => {
+    if (!branchSweep) return;
+    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    await recordBranchReconcileOutcome(agent?.metadata?.taskApp || null, {
+      status: 'incomplete', reason, nextAction: 'Resolve the interruption, then run branch reconciliation again.',
+    });
+  };
+  if (!isDaemonRunning()) return interrupted('daemon-stopped');
   // Only a SUCCESSFUL perpetual run drains to the next item immediately. A failed
   // run (provider/setup/test failure) must NOT refill back-to-back: perpetual
   // completions skip the per-app cooldown, and the work-detector will usually
@@ -1445,13 +1453,13 @@ async function refillPerpetualForCompletedAgent(agent) {
   // the daemon through repeated failures. On failure, fall back to the task
   // retry/backoff and the improvement-check recheck cadence (the park IS the
   // throttle only once work genuinely runs out, not when a run errors).
-  if (!agent?.result?.success) return;
-  if (await isPaused()) return;
+  if (!agent?.result?.success) return interrupted('agent-failed');
+  if (await isPaused()) return interrupted('daemon-paused');
 
   const taskScheduleMod = await import('./taskSchedule.js');
   const schedule = await taskScheduleMod.loadSchedule();
   const plan = perpetualRefillPlan(agent, schedule);
-  if (plan.lane === 'skip') return;
+  if (plan.lane === 'skip') return interrupted('continuation-disabled');
 
   const state = await loadState();
 
@@ -1462,7 +1470,7 @@ async function refillPerpetualForCompletedAgent(agent) {
     // dequeueNextTask({ ignoreTaskId }) drains the re-issue dedup-safely against
     // the still-`in_progress` completing task; letting triggerOnDemandTask emit
     // its event would fire a redundant SECOND dequeue of the same request.
-    if (!isImprovementEnabled(state)) return;
+    if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');
     // A PARK STOPS A REFILL (#3848). Park elapse used to be read only by the
     // SCHEDULED lane, so a drain that parked itself (idle detector, no-progress,
     // drain cap) could still be re-issued here on the very next completion — the
@@ -1479,12 +1487,16 @@ async function refillPerpetualForCompletedAgent(agent) {
     // the drain engines must leave the park, convergence signature, and dispatch
     // counter intact. Without that pair the refill wipes its own convergence
     // state on every hop and the drain never parks while one actionable item remains.
-    await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId);
+    const refill = await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId).catch(async (err) => {
+      await interrupted('refill-failed');
+      throw err;
+    });
+    if (refill?.error) await interrupted('refill-rejected');
     return;
   }
 
   // Scheduled drain — autonomous queue path, gated on CoS auto-run.
-  if (!canQueueImprovementTasks(state)) return;
+  if (!canQueueImprovementTasks(state)) return interrupted('automatic-dispatch-disabled');
 
   // `agent:completed` fires from `completeAgent` BEFORE the completion flow's
   // `updateTask` marks this agent's task done (agentLifecycle.js: completeAgent

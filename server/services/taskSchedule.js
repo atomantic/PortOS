@@ -563,6 +563,17 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
     const record = ensureExecutionRecord(schedule, taskType, appId);
     record.parkedUntil = parkedUntil;
     record.parkReason = reason;
+    if (taskType === 'branch-reconcile') {
+      const remaining = record.branchReconcileOutcome?.remaining ?? null;
+      const drained = reason === 'no-in-flight-branches' && remaining?.length === 0;
+      record.branchReconcileOutcome = {
+        ...record.branchReconcileOutcome,
+        status: drained ? 'drained' : 'incomplete', reason, remaining,
+        observedAt: record.branchReconcileOutcome?.observedAt ?? null,
+        updatedAt: new Date().toISOString(),
+        nextAction: drained ? null : 'Resolve the listed holds or dispatch limit, then run branch reconciliation again.',
+      };
+    }
     if (branchAttempts === null) delete record.branchReconcileAttempts;
     else if (branchAttempts !== undefined) record.branchReconcileAttempts = branchAttempts;
     record.parkActionableCount = actionableCount;
@@ -706,6 +717,20 @@ export async function isPerpetualParkActive(taskType, appId = null) {
   const schedule = await loadSchedule();
   const record = resolveExecutionRecord(schedule, taskType, appId);
   return parkedUntilMs(record) > Date.now();
+}
+
+/** Persist the latest deterministic sweep evidence independently of agent success. */
+export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction }) {
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const now = new Date().toISOString();
+    record.branchReconcileOutcome = {
+      ...record.branchReconcileOutcome, status, reason, nextAction, updatedAt: now,
+      remaining: remaining === undefined ? record.branchReconcileOutcome?.remaining ?? null : remaining,
+      observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
 }
 
 /**
@@ -1548,6 +1573,13 @@ export async function getScheduleStatus() {
       };
     }
 
+    if (taskType === 'branch-reconcile') {
+      taskStatus.reconcileOutcomes = Object.fromEntries([
+        ...(execution.branchReconcileOutcome ? [[null, execution.branchReconcileOutcome]] : []),
+        ...Object.entries(execution.perApp || {}).filter(([, record]) => record.branchReconcileOutcome)
+          .map(([appId, record]) => [appId, record.branchReconcileOutcome]),
+      ]);
+    }
     status.tasks[taskType] = taskStatus;
 
     if (learningInfo.adjusted) {

@@ -141,6 +141,7 @@ import {
   isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
+  recordBranchReconcileOutcome,
   applyOnDemandRunResets,
   queuePerpetualRefill,
   isRefillRequest,
@@ -3137,6 +3138,20 @@ describe('taskSchedule', () => {
         isTaskTypeEnabledForApp.mockResolvedValue(true);
         mockSchedule({ tasks: { 'branch-reconcile': { ...task, enabled: false } }, executions: { 'task:branch-reconcile': execution } });
         expect(await shouldRunTask('branch-reconcile', 'app-1')).toEqual({ shouldRun: false, reason: 'disabled' });
+      });
+
+      it('persists incomplete sweep evidence and exposes it when recurring dispatch is off', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: false } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const remaining = [{ branch: 'fix/example', path: '/example/checkout', reason: 'worktree-locked' }];
+        await recordBranchReconcileOutcome('app-1', { status: 'running', reason: 'batch-pending', remaining, nextAction: 'Continue.' });
+        const observedAt = saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.observedAt;
+        await recordBranchReconcileOutcome('app-1', { status: 'incomplete', reason: 'agent-failed', nextAction: 'Resolve the provider failure and run again.' });
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome)
+          .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
+        expect((await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'])
+          .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
       });
 
       it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {
