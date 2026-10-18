@@ -76,6 +76,19 @@ describe('ci.yml checkout depth', () => {
       expect(body, id).not.toMatch(/CI_BASE_SHA:\s*\$\{\{/);
     }
   });
+
+  it('gives the planner the head commit the attestation tree is read from', () => {
+    // The pregate attestation compares the attested tree with `<head>^{tree}`.
+    // At depth 2 the merge-ref checkout carries the head as HEAD^2, which is
+    // the only reason the planner can resolve it without a wider fetch — so
+    // the planner pins the event head to that parent, and the impact job must
+    // keep passing the head and keep the depth that makes it present.
+    const planner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-test-plan.js'), 'utf8');
+    expect(planner).toContain("['rev-parse', '--verify', '--quiet', 'HEAD^2']");
+    expect(jobs.impact).toContain('CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}');
+    expect(jobs.impact).toMatch(/fetch-depth:\s*2\b/);
+    expect(jobs.impact).not.toMatch(/fetch-depth:\s*0\b/);
+  });
 });
 
 describe('ci.yml required checks', () => {

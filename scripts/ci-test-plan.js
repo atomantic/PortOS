@@ -9,6 +9,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { ATTESTABLE_STAGES, selectAttestation } from './lib/pregateAttestation.js';
 import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
@@ -1381,6 +1382,10 @@ export function emitGitHubPlan(plan) {
     client_shards: JSON.stringify(plan.shards.client),
     windows_shards: JSON.stringify(plan.shards.windows),
     suite_reasons: JSON.stringify(plan.suiteReasons),
+    // The pregate attestation this plan honored (see applyAttestation), or
+    // why none was: `{"attested": false, "reason": …}` is still a decision.
+    attestation: JSON.stringify(plan.attestation ?? { attested: false, reason: 'no attestation resolved' }),
+    attested_stages: JSON.stringify(plan.attestedStages ?? []),
   };
 
   Object.entries(outputs).forEach(([name, value]) => {
@@ -1588,6 +1593,148 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs };
 }
 
+// ---------------------------------------------------------------------------
+// Pregate attestation (docs/GITHUB_ACTIONS.md "Pregate attestation")
+//
+// A local `npm run pregate` that ran a stage to green, followed by
+// `node scripts/pregate-attest.js` after the push, leaves a `pregate` commit
+// status on the head whose description names the validated TREE and the
+// stages that passed (scripts/lib/pregateAttestation.js). This section reads
+// that status back and lets the plan skip those stages — never Windows, the
+// Linux containment job, or the Node-minimum check, which have no local run.
+//
+// Fail closed at every step: anything other than a same-repository pull
+// request into a non-release base, with a head commit the owner attested
+// whose tree is exactly the head tree, leaves the plan untouched and the
+// reason in the outputs. The planner never has to be right about a fork or a
+// bot for this to be safe — a fork's token cannot create a status here and a
+// bot's login is not the owner's — but it refuses them explicitly so the
+// summary says why.
+// ---------------------------------------------------------------------------
+
+/** Stages a receipt may attest to, mapped to the plan fields they clear. */
+const ATTESTATION_SKIPS = Object.freeze({
+  lint: (plan) => ({ lint: { ...plan.lint, mode: 'skip' } }),
+  client: (plan) => ({ client: { ...plan.client, mode: 'skip' } }),
+  build: () => ({ build: false }),
+  smoke: () => ({ smoke: false }),
+  browser: () => ({ browserFiles: [] }),
+  db: () => ({ db: false }),
+  'prompt-history': () => ({ promptHistory: false }),
+});
+
+/**
+ * Whether this run may honor an attestation at all, and the head it would
+ * read it from. Reads only the `CI_*` inputs ci.yml passes to the plan step.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{eligible: boolean, reason: string, headSha?: string, repository?: string, owner?: string}}
+ */
+export function attestationEligibility(env) {
+  const trim = (value) => (typeof value === 'string' ? value.trim() : '');
+  const eventName = trim(env.CI_EVENT_NAME);
+  const repository = trim(env.CI_REPOSITORY);
+  const owner = trim(env.CI_REPOSITORY_OWNER);
+  const headRepo = trim(env.CI_PR_HEAD_REPO);
+  const headSha = trim(env.CI_PR_HEAD_SHA);
+  const author = trim(env.CI_PR_AUTHOR);
+  if (eventName !== 'pull_request') return { eligible: false, reason: `event ${eventName || '(none)'} is not a pull request` };
+  if (env.CI_FORCE_FULL === 'true') return { eligible: false, reason: 'full CI requested' };
+  if (trim(env.CI_BASE_REF) === 'release') return { eligible: false, reason: 'release gate: pull request into release' };
+  if (!repository || !owner) return { eligible: false, reason: 'repository or owner unknown' };
+  if (headRepo.toLowerCase() !== repository.toLowerCase()) return { eligible: false, reason: `head repository ${headRepo || '(unknown)'} is not ${repository}` };
+  if (!author || /\[bot\]$/i.test(author)) return { eligible: false, reason: `pull request author ${author || '(unknown)'} is a bot or unknown` };
+  if (!/^[0-9a-f]{40}$/.test(headSha)) return { eligible: false, reason: 'head sha unknown' };
+  return { eligible: true, reason: 'same-repository pull request', headSha, repository, owner };
+}
+
+/**
+ * The attestation on the pull request's head, or null and why.
+ *
+ * The checkout is the merge ref at depth 2, which carries the head commit as
+ * `HEAD^2`: that is what makes `<head>^{tree}` resolvable without a wider
+ * fetch, and the first check — the event's head must BE that second parent,
+ * or the tree compared would not be the tree being tested.
+ *
+ * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
+ * and the tests parse, so every human-readable line here stays off it.
+ *
+ * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void}} [options]
+ * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, stages?: string[], creator?: string, createdAt?: string}}
+ */
+export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn } = {}) {
+  const none = (reason) => {
+    log(`⏭️ Pregate attestation not honored: ${reason}.`);
+    return { attested: false, reason };
+  };
+  const eligibility = attestationEligibility(env);
+  if (!eligibility.eligible) return none(eligibility.reason);
+  const { headSha, repository, owner } = eligibility;
+  const capture = (command, args) => {
+    try {
+      return exec(command, args, { cwd, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch (error) {
+      return { error: error?.stderr?.toString().trim() || error?.message || 'command failed' };
+    }
+  };
+  const mergeHead = capture('git', ['rev-parse', '--verify', '--quiet', 'HEAD^2']);
+  if (typeof mergeHead !== 'string' || mergeHead !== headSha) {
+    return none(`checkout is not the merge ref of head ${headSha.slice(0, 9)}`);
+  }
+  const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
+  if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
+  const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
+  if (typeof body !== 'string') return none(`statuses API failed: ${body.error}`);
+  let statuses;
+  try {
+    statuses = JSON.parse(body);
+  } catch {
+    return none('statuses API returned unreadable JSON');
+  }
+  const { attestation, reason } = selectAttestation(statuses, { owner, headTree });
+  if (!attestation) return none(reason);
+  log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}.`);
+  return { attested: true, reason, sha: headSha, ...attestation };
+}
+
+/**
+ * The plan with every attested stage skipped and the decision recorded.
+ *
+ * The server job owns the boot smoke (`smoke == 'true' && matrix.shard == 1`
+ * on a job gated by `server_mode != 'skip'`), so `server` is skipped only when
+ * the smoke is attested too or was never selected; otherwise skipping the job
+ * would drop an unattested smoke on the floor. `full` is forced false so the
+ * `Full CI Gate` is never published for a run that skipped anything on the
+ * strength of a local receipt. Windows, Linux containment, the Node-minimum
+ * check and the shard matrices are left as the plan computed them.
+ *
+ * @param {object} plan - a finished plan (buildCiTestPlan)
+ * @param {{attested: boolean, reason: string, stages?: string[], sha?: string, tree?: string, creator?: string, createdAt?: string}} attestation
+ */
+export function applyAttestation(plan, attestation) {
+  const base = { ...plan, attestation, attestedStages: [] };
+  if (!attestation?.attested) {
+    return { ...base, suiteReasons: { ...plan.suiteReasons, attestation: `not honored: ${attestation?.reason ?? 'unknown'}` } };
+  }
+  const attested = new Set(attestation.stages ?? []);
+  const smokeCovered = attested.has('smoke') || !plan.smoke;
+  const skips = { ...ATTESTATION_SKIPS, server: smokeCovered ? (current) => ({ server: { ...current.server, mode: 'skip' } }) : null };
+  let next = base;
+  const skipped = [];
+  for (const stage of ATTESTABLE_STAGES) {
+    if (!attested.has(stage) || !skips[stage]) continue;
+    next = { ...next, ...skips[stage](next) };
+    skipped.push(stage);
+  }
+  const label = `attested by pregate on ${String(attestation.sha ?? '').slice(0, 9)} (tree ${String(attestation.tree ?? '').slice(0, 12)})`;
+  const suiteReasons = { ...plan.suiteReasons, attestation: `${label}: skipping ${skipped.join(', ') || 'nothing'}` };
+  for (const stage of skipped) suiteReasons[stage === 'prompt-history' ? 'promptHistory' : stage] = `skipped: ${label}`;
+  if (attested.has('server') && !smokeCovered) {
+    suiteReasons.server = `${plan.suiteReasons.server}; server job kept: the boot smoke was not attested`;
+  }
+  return { ...next, full: false, attestedStages: skipped, suiteReasons };
+}
+
 function main() {
   const forceFullReason = forceFullReasonFor({
     forceFull: process.env.CI_FORCE_FULL === 'true',
@@ -1617,7 +1764,7 @@ function main() {
     forceFull,
     changedFiles: changedFilesOverride,
   });
-  emitGitHubPlan(buildCiTestPlan(changedFiles, {
+  const plan = buildCiTestPlan(changedFiles, {
     trackedFiles,
     forceFull,
     forceFullReason,
@@ -1629,7 +1776,9 @@ function main() {
     dependencyChanges,
     promptHistoryInputs,
     linuxContainmentInputs,
-  }));
+  });
+  // Last, over the finished plan: the attestation only ever removes work.
+  emitGitHubPlan(applyAttestation(plan, resolveCiAttestation()));
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

@@ -9,8 +9,12 @@ import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
+import { encodeAttestation } from './lib/pregateAttestation.js';
+
 import {
   ALWAYS_RUN_TESTS,
+  applyAttestation,
+  attestationEligibility,
   BROWSER_SUITES,
   buildCiTestPlan,
   classifyDependencyChange,
@@ -23,6 +27,7 @@ import {
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
   PLATFORM_PACKAGE_RES,
+  resolveCiAttestation,
   shardIndexes,
   SLASHDO_GITLINK_PATH,
   sourceReferencePattern,
@@ -1948,5 +1953,192 @@ describe('path-gated single-purpose jobs', () => {
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
     expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
+  });
+});
+
+describe('pregate attestation', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const TREE = 'a'.repeat(40);
+  const HEAD = 'c'.repeat(40);
+  const REPOSITORY = 'acme/widget';
+  const prEnv = {
+    CI_EVENT_NAME: 'pull_request', CI_REPOSITORY: REPOSITORY, CI_REPOSITORY_OWNER: 'acme', CI_PR_HEAD_REPO: REPOSITORY,
+    CI_PR_HEAD_SHA: HEAD, CI_PR_AUTHOR: 'acme', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+  };
+  const status = (overrides = {}) => ({
+    context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z',
+    description: encodeAttestation({ tree: TREE, stages: ['scan', 'lint', 'server', 'smoke', 'client', 'build', 'db', 'browser', 'prompt-history'] }),
+    ...overrides,
+  });
+  /** An execFileSync double: git answers from `git`, gh from `statuses`; a thrown entry throws. */
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null } = {}) => (command, args) => {
+    const key = `${command} ${args.join(' ')}`;
+    if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
+    if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
+    if (key.startsWith('gh api ')) {
+      if (apiError) throw Object.assign(new Error('gh failed'), { stderr: apiError });
+      expect(key).toBe(`gh api repos/${REPOSITORY}/commits/${HEAD}/statuses?per_page=100`);
+      return typeof statuses === 'string' ? statuses : JSON.stringify(statuses);
+    }
+    throw new Error(`unexpected ${key}`);
+  };
+  const quiet = () => {};
+  const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
+
+  it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
+    expect(attestationEligibility(prEnv)).toMatchObject({ eligible: true, headSha: HEAD, owner: 'acme' });
+    expect(attestationEligibility({ ...prEnv, CI_PR_HEAD_REPO: 'someone/widget' }).reason).toMatch(/head repository someone\/widget is not/);
+    expect(attestationEligibility({ ...prEnv, CI_PR_AUTHOR: 'dependabot[bot]' }).reason).toMatch(/is a bot/);
+    expect(attestationEligibility({ ...prEnv, CI_BASE_REF: 'release' }).reason).toMatch(/release gate/);
+    expect(attestationEligibility({ ...prEnv, CI_FORCE_FULL: 'true' }).reason).toMatch(/full CI requested/);
+    expect(attestationEligibility({ ...prEnv, CI_EVENT_NAME: 'schedule' }).reason).toMatch(/not a pull request/);
+    expect(attestationEligibility({ ...prEnv, CI_PR_HEAD_SHA: 'abc' }).reason).toMatch(/head sha unknown/);
+    expect(attestationEligibility({}).eligible).toBe(false);
+  });
+
+  it('honors the owner\'s newest successful status whose tree is the head tree, and nothing else', () => {
+    const honored = resolveCiAttestation({ env: prEnv, exec: fakeExec(), log: quiet });
+    expect(honored).toMatchObject({ attested: true, sha: HEAD, tree: TREE, creator: 'acme' });
+    expect(honored.stages).toContain('server');
+
+    const older = status({ created_at: '2026-10-18T09:00:00Z', description: encodeAttestation({ tree: TREE, stages: ['lint'] }) });
+    const newest = status({ created_at: '2026-10-18T11:00:00Z', description: encodeAttestation({ tree: TREE, stages: ['db'] }) });
+    expect(resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: [older, newest] }), log: quiet }).stages).toEqual(['db']);
+
+    const reasons = [];
+    const log = (line) => reasons.push(line);
+    const refused = (options, env = prEnv) => {
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log });
+      expect(result.attested).toBe(false);
+      return result.reason;
+    };
+    expect(refused({ statuses: [status({ creator: { login: 'someone' } })] })).toMatch(/created by "someone"/);
+    expect(refused({ headTree: 'b'.repeat(40) })).toMatch(/is not the head tree/);
+    expect(refused({ mergeHead: 'd'.repeat(40) })).toMatch(/not the merge ref of head/);
+    expect(refused({ apiError: 'HTTP 403: Resource not accessible by integration' })).toMatch(/statuses API failed: HTTP 403/);
+    expect(refused({ statuses: '<html>captive portal</html>' })).toMatch(/unreadable JSON/);
+    expect(refused({ statuses: [] })).toMatch(/no successful "pregate" status/);
+    expect(refused({}, { ...prEnv, CI_PR_HEAD_REPO: 'someone/widget' })).toMatch(/head repository/);
+    // Every refusal is logged with its reason — the summary's only evidence.
+    expect(reasons.every((line) => line.startsWith('⏭️ Pregate attestation not honored: '))).toBe(true);
+    expect(reasons).toHaveLength(7);
+  });
+
+  it('skips the attested stages, reports full=false, and leaves the CI-only jobs alone', () => {
+    const plan = fullPlan();
+    expect(plan).toMatchObject({ full: true, windows: true, linuxContainment: true, promptHistory: true, db: true, build: true, smoke: true });
+    const attested = applyAttestation(plan, resolveCiAttestation({ env: prEnv, exec: fakeExec(), log: quiet }));
+    expect(attested).toMatchObject({
+      full: false,
+      server: { mode: 'skip' }, client: { mode: 'skip' }, lint: { mode: 'skip' },
+      db: false, build: false, smoke: false, browserFiles: [], promptHistory: false,
+      // Untouched: no local run exists for these.
+      windows: plan.windows, windowsMode: plan.windowsMode, windowsFiles: plan.windowsFiles, linuxContainment: true,
+      shards: plan.shards,
+    });
+    expect(attested.attestedStages).toEqual(['prompt-history', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db']);
+    expect(attested.suiteReasons.server).toBe(`skipped: attested by pregate on ${HEAD.slice(0, 9)} (tree ${TREE.slice(0, 12)})`);
+    expect(attested.suiteReasons.promptHistory).toMatch(/^skipped: attested by pregate/);
+    expect(attested.suiteReasons.windows).toBe(plan.suiteReasons.windows);
+    expect(attested.suiteReasons.attestation).toMatch(/^attested by pregate .*: skipping prompt-history, lint, server/);
+    expect(attested.changedFiles).toEqual(plan.changedFiles);
+  });
+
+  it('keeps the server job when the boot smoke it owns was not attested', () => {
+    const plan = fullPlan();
+    const partial = { attested: true, reason: 'r', sha: HEAD, tree: TREE, stages: ['scan', 'server', 'lint'] };
+    const attested = applyAttestation(plan, partial);
+    expect(attested.server.mode).toBe(plan.server.mode);
+    expect(attested.smoke).toBe(true);
+    expect(attested.lint.mode).toBe('skip');
+    expect(attested.attestedStages).toEqual(['lint']);
+    expect(attested.suiteReasons.server).toMatch(/server job kept: the boot smoke was not attested$/);
+    // With no smoke selected, the server stage alone is enough.
+    const noSmoke = applyAttestation({ ...plan, smoke: false }, partial);
+    expect(noSmoke.server.mode).toBe('skip');
+    expect(noSmoke.attestedStages).toEqual(['lint', 'server']);
+  });
+
+  it('records why no attestation applied without touching the plan', () => {
+    const plan = fullPlan();
+    const untouched = applyAttestation(plan, { attested: false, reason: 'head repository someone/widget is not acme/widget' });
+    expect(untouched).toMatchObject({ ...plan, attestedStages: [] });
+    expect(untouched.full).toBe(true);
+    expect(untouched.suiteReasons.attestation).toBe('not honored: head repository someone/widget is not acme/widget');
+  });
+
+  it('emits the attestation through the planner CLI and ci.yml gates the impact job on it', () => {
+    // A merge-ref checkout (HEAD^2 is the pull request head) with a fake `gh`
+    // on PATH, so the whole wiring — env in, statuses API, plan outputs — runs
+    // exactly as the impact job does.
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-attest-'));
+    const bin = join(root, 'bin');
+    const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=Example', '-c', 'user.email=ci@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    const write = (path, body) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    };
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      write('server/lib/example.js', 'export const value = 1;\n');
+      write('server/lib/example.test.js', 'import { value } from "./example.js";\n');
+      git('add', '--all');
+      git('commit', '-qm', 'base');
+      git('checkout', '-qb', 'feature');
+      write('server/lib/example.js', 'export const value = 2;\n');
+      git('add', '--all');
+      git('commit', '-qm', 'change');
+      const head = git('rev-parse', 'HEAD');
+      const headTree = git('rev-parse', 'HEAD^{tree}');
+      git('checkout', '-q', 'main');
+      git('merge', '-q', '--no-ff', '--no-edit', 'feature');
+      const base = git('rev-parse', 'HEAD^1');
+
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'gh.js'), 'process.stdout.write(process.env.FAKE_GH_STATUSES);\n');
+      writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
+      writeFileSync(join(bin, 'gh.cmd'), `@"${process.execPath}" "%~dp0gh.js" %*\r\n`);
+      const statuses = JSON.stringify([status({ description: encodeAttestation({ tree: headTree, stages: ['scan', 'lint', 'server', 'smoke', 'client', 'build'] }) })]);
+      const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
+      }));
+
+      const honored = plan({});
+      expect(JSON.parse(honored.attestation)).toMatchObject({ attested: true, sha: head, tree: headTree, creator: 'acme' });
+      expect(JSON.parse(honored.attested_stages)).toEqual(['lint', 'server', 'client', 'build', 'smoke']);
+      expect(honored).toMatchObject({ full: false, server_mode: 'skip', client_mode: 'skip', lint_mode: 'skip', build: false, smoke: false });
+      expect(JSON.parse(honored.suite_reasons).attestation).toMatch(/^attested by pregate/);
+
+      const fork = plan({ CI_PR_HEAD_REPO: 'someone/widget' });
+      expect(JSON.parse(fork.attestation)).toEqual({ attested: false, reason: `head repository someone/widget is not ${REPOSITORY}` });
+      expect(fork.server_mode).not.toBe('skip');
+      expect(JSON.parse(fork.attested_stages)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    // Reading statuses needs the scope; nothing in the impact job may write one.
+    expect(jobs.impact).toMatch(/\n    permissions:\n      contents: read\n      statuses: read\n/);
+    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-test-plan.js'));
+    for (const line of [
+      "CI_EVENT_NAME: ${{ github.event_name }}",
+      'CI_REPOSITORY: ${{ github.repository }}',
+      'CI_REPOSITORY_OWNER: ${{ github.repository_owner }}',
+      'CI_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}',
+      'CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}',
+      'CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}',
+      'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+    ]) expect(planStep).toContain(line);
+    expect(jobs.impact).toContain('attestation: ${{ steps.plan.outputs.attestation }}');
+    expect(jobs.impact).toContain('attested_stages: ${{ steps.plan.outputs.attested_stages }}');
+    // The summary is where a reader learns a stage was skipped on a receipt.
+    expect(jobs.impact).toContain('ATTESTATION: ${{ steps.plan.outputs.attestation }}');
+    expect(jobs.impact).toMatch(/echo "- Pregate attestation: \\`\$\{ATTESTATION\}\\`"/);
+    // The full gate must stay withheld: `full` is reported false on an attested run.
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
   });
 });
