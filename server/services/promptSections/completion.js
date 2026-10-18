@@ -589,6 +589,27 @@ function buildClaimOwnershipSection(agentId) {
   ].join('\n');
 }
 
+// The record a review phase leaves for the handoff: one REVIEW_HEAD line naming
+// the commit its final clean round covered, beside REVIEW_STATUS (#12247).
+// A missing status file stays missing: a REVIEW_HEAD alone would read as unreadable evidence.
+const RECORD_REVIEW_HEAD = 'F="$(git rev-parse --git-path portos-review-status)"; if [ -f "$F" ]; then { grep -v "^REVIEW_HEAD=" "$F"; printf "REVIEW_HEAD=%s\\n" "$(git rev-parse HEAD)"; } > "$F.tmp" && mv "$F.tmp" "$F"; fi';
+
+/**
+ * A GitHub participant may hand its pending CI to the server coordinator, which
+ * merges only the recorded head under its own admission (cosMergeHandoff.js).
+ */
+function buildPendingMergeHandoffLines(agentId) {
+  const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-handoff',
+    payload: JSON.stringify({ agentId, prUrl: 'PR_URL', headSha: 'HEAD_SHA', worktreePath: 'WORKTREE_PATH' }) });
+  return [
+    '**PortOS pending-merge handoff (GitHub, same-repository PR, before waiting for CI):** The server coordinator waits for required CI and merges exactly your recorded head under its own admission, so this run need not hold its session open. When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (any later commit, fix, rebase or conflict resolution means that head was not reviewed, so rerun the affected review first):',
+    '```bash', RECORD_REVIEW_HEAD, '```',
+    'Once the published head (`git rev-parse HEAD` equals the PR head) has passed local validation and every configured review, and the PR is ready (not draft), hand it off — unless review is `review-blocked` or the PR is being left open, whose stop rules still apply. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):',
+    '```bash', command, '```',
+    'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, acquire admission, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue with the CI wait and admission-gated merge below. A refusal never permits merging without admission.',
+  ];
+}
+
 /**
  * Only the registered parent acquires, and only around the final verify-and-merge:
  * sync, pregate, push and CI run concurrently across runs (#10803).
@@ -600,7 +621,8 @@ export function buildMergeAdmissionSection(agentId) {
   return [
     '## Repository merge admission',
     'Admission serializes only the merge instant. The parent orchestrator (never a fan-out child) completes publication, validation, configured reviews and required CI on its own head WITHOUT admission — other runs and every PR in a swarm do this concurrently. Never hold admission while syncing, running pregate, pushing or waiting for CI/reviews. Do not chase the default branch: rebase only for an actual conflict, an enforced up-to-date branch policy, or evidenced integration risk (inspect semantic overlap as well as textual conflicts). This overrides mandatory base-sync instructions in delegated slashdo workflows.',
-    'Local admission forbids GitHub deferred auto-merge: GitHub cannot acquire this application lease at its later merge instant. Do not enable auto-merge for this workflow. Wait for the workflow CI gate, acquire/check admission, merge immediately on the verified head, confirm MERGED, then release. Any generic handoff prose applies only outside local admission and does not override this rule.',
+    'Local admission forbids GitHub deferred auto-merge: GitHub cannot acquire this application lease at its later merge instant. Do not enable auto-merge for this workflow. Unless the PortOS pending-merge handoff below accepts your head, wait for the workflow CI gate, acquire/check admission, merge immediately on the verified head, confirm MERGED, then release. Any generic auto-merge handoff prose applies only outside local admission and does not override this rule.',
+    ...buildPendingMergeHandoffLines(agentId),
     'Once required CI is green on the exact head you pushed (record that SHA as the CI-verified head) and configured reviews are satisfied, acquire admission. Require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
     '```bash', command('acquire'), '```',
     'If an acquire/check refusal names lease-head-changed, release your token with outcome resync before acquiring again. If admitted:false with retryable:false, release any owned token with outcome leave-open, stop retrying, report the reason and message, and leave the PR/worktree intact. Otherwise, if admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR (and any claim) intact. A refusal is never a reason to merge without admission. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',

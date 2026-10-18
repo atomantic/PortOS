@@ -9,6 +9,8 @@ vi.mock('./github.js', () => ({
   findPullRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
   getPullRequestState: vi.fn().mockResolvedValue({ status: 'unavailable', state: null, detail: null }),
 }));
+const hasQueuedMergeHandoff = vi.hoisted(() => vi.fn());
+vi.mock('./cosMergeHandoff.js', () => ({ hasQueuedMergeHandoff }));
 vi.mock('./gitlab.js', () => ({
   findMergeRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
 }));
@@ -26,6 +28,7 @@ beforeEach(() => {
   findPullRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   findMergeRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   getPullRequestState.mockResolvedValue({ status: 'unavailable', state: null, detail: null });
+  hasQueuedMergeHandoff.mockResolvedValue(false);
 });
 
 describe('probePrForBranch', () => {
@@ -53,6 +56,20 @@ describe('probePrForBranch', () => {
     if (local) execGit.mockResolvedValue(local);
     else execGit.mockRejectedValue(new Error('unreadable'));
     expect(await probePrForBranch('/repo', 'my-branch')).not.toHaveProperty('autoMergeEnabled', true);
+  });
+
+  it('reports a pending-merge receipt for the published head without claiming MERGED', async () => {
+    const pr = { status: 'found', url: 'https://github.com/example/repo/pull/7', number: 7, detail: 'OPEN', headRefOid: 'published-head' };
+    findPullRequestForBranch.mockResolvedValue(pr);
+    hasQueuedMergeHandoff.mockResolvedValue(true);
+    expect(await probePrForBranch('/repo', 'my-branch')).toMatchObject({ prState: 'OPEN', readable: true, mergeHandoffQueued: true });
+    expect(hasQueuedMergeHandoff).toHaveBeenCalledWith({ prUrl: pr.url, prBranch: 'my-branch', headSha: 'published-head' });
+
+    // Local commits the receipt never covered keep the run on recovery.
+    hasQueuedMergeHandoff.mockClear();
+    execGit.mockResolvedValue({ exitCode: 0, stdout: 'local-only-head\n' });
+    expect(await probePrForBranch('/repo', 'my-branch')).not.toHaveProperty('mergeHandoffQueued');
+    expect(hasQueuedMergeHandoff).not.toHaveBeenCalled();
   });
 
   it('uppercases whatever case the forge returned for prState', async () => {

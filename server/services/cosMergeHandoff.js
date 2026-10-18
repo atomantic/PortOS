@@ -144,7 +144,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
     queuedAt: new Date().toISOString(),
   };
-  const { queuePendingMerge } = await import('./prWatcher.js');
+  const { queuePendingMerge, sweepPendingMergeApp } = await import('./prWatcher.js');
   const queued = await queuePendingMerge(app.id, {
     prUrl, prNumber: pr.number, prBranch: view.headRefName, sourceAgentId: agentId,
     sourceTask: {
@@ -167,5 +167,33 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   });
   if (!queued) return refuse('queue-write-failed');
   console.log(`🤝 PR #${pr.number} handed to the pending-merge coordinator at ${head.slice(0, 12)} by ${agentId}`);
+  // Detached: the receipt must not wait on forge reads, and the 30-minute timer
+  // still owns the entry if this pass finds CI pending or fails.
+  sweepPendingMergeApp(app.id);
   return { queued: true, receipt };
+}
+
+/**
+ * Does the pending-merge queue hold a verified handoff of exactly this PR head?
+ * Completion and cleanup read it as a pending end state (#12247): the branch is
+ * the coordinator's until it merges or recovers. False on anything unreadable,
+ * so a missed receipt degrades to the ordinary open-PR handling.
+ *
+ * @param {{ prUrl: string, prBranch: string, headSha: string }} target
+ * @returns {Promise<boolean>}
+ */
+export async function hasQueuedMergeHandoff({ prUrl, prBranch, headSha }) {
+  const head = String(headSha || '').toLowerCase();
+  const target = prIdentity(prUrl);
+  if (!target || !prBranch || !SHA_PATTERN.test(head)) return false;
+  const [{ getActiveApps }, { readPendingMergePrs }] = await Promise.all([import('./apps.js'), import('./prWatcher.js')]);
+  const apps = await getActiveApps().catch(() => []);
+  return apps.some((app) => readPendingMergePrs(app).some((entry) => entry?.prBranch === prBranch
+    && prIdentity(entry.prUrl) === target && isPlainObject(entry.handoff) && entry.handoff.headSha === head));
+}
+
+// Forge URLs differ in case and trailing segments; the PR they name does not.
+function prIdentity(url) {
+  const pr = parsePullRequestUrl(url);
+  return pr ? `${pr.host}/${pr.owner}/${pr.repo}#${pr.number}`.toLowerCase() : null;
 }

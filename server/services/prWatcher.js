@@ -50,6 +50,7 @@ const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 // rather than a per-app map: simultaneous writes for different app ids would
 // otherwise still load stale whole-file snapshots and clobber one another.
 let pendingMergeWriteTail = Promise.resolve();
+const pendingMergeSweeps = new Map();
 
 // Cache the gh-authenticated login PER HOST, for the process lifetime. Host-keyed
 // for two reasons: (1) `gh api` does NOT infer the host from the working
@@ -361,7 +362,25 @@ async function notifyPendingMergeTimeout(app, pending, reason, description = nul
  * agent handoff (cosMergeHandoff.js) merges only its recorded head; a moved
  * head drops the binding and dispatches the recorded review/validation policy.
  */
-export async function processPendingMergePrs(app) {
+export function processPendingMergePrs(app, { spendTicks = true } = {}) {
+  return joinPendingMergeSweep(app?.id, () => runPendingMergePrs(app, { spendTicks }));
+}
+
+// The timer sweep, the task-generator sweep and a receipt sweep can overlap:
+// a caller joins the app's in-flight pass rather than double-escalating or
+// double-merging the same entry. Registration is synchronous, so a pass started
+// by one caller is visible to the next before either awaits.
+function joinPendingMergeSweep(appId, start) {
+  if (!appId) return start();
+  const inFlight = pendingMergeSweeps.get(appId);
+  if (inFlight) return inFlight;
+  const settled = start().finally(() => pendingMergeSweeps.delete(appId));
+  pendingMergeSweeps.set(appId, settled);
+  return settled;
+}
+
+async function runPendingMergePrs(app, { spendTicks }) {
+  const charge = spendTicks ? 1 : 0;
   const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean);
   if (pending.length === 0) return { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0 };
 
@@ -407,7 +426,7 @@ export async function processPendingMergePrs(app) {
       // `result.errors` accounting is unchanged — the cycle is both an error and
       // a tick.
       result.errors += 1;
-      const unreadable = { ...entry, ticks: entry.ticks + 1 };
+      const unreadable = { ...entry, ticks: entry.ticks + charge };
       if (unreadable.ticks >= MAX_PENDING_MERGE_TICKS) {
         await notifyPendingMergeTimeout(app, entry, 'it could not be read from the forge');
         outcomes.set(key, null);
@@ -496,7 +515,7 @@ export async function processPendingMergePrs(app) {
       console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
     }
 
-    const next = { ...entry, ticks: entry.ticks + 1 };
+    const next = { ...entry, ticks: entry.ticks + charge };
     if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
       const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
         ? `it is ${String(prView.state).toLowerCase()} rather than open`
@@ -557,6 +576,23 @@ export async function sweepPendingMergePrs() {
     totals.timedOut += result.timedOut || 0;
   }
   return totals;
+}
+
+/**
+ * One immediate pass over an app right after a handoff receipt (#12247), so a
+ * head whose CI already settled merges now instead of at the next 30-minute
+ * timer. It spends no tick budget — the receipt is not a cadence cycle — and
+ * never throws: the timer sweep remains the owner of every queued entry.
+ */
+export function sweepPendingMergeApp(appId) {
+  return joinPendingMergeSweep(appId, async () => {
+    // A timer sweep may join this pass, so it answers in the same result shape.
+    const app = await getAppById(appId);
+    return app ? runPendingMergePrs(app, { spendTicks: false }) : { ok: false, reason: 'app-not-found' };
+  }).catch((err) => {
+    console.error(`❌ Receipt pending-merge sweep failed for app ${appId}: ${err.message}`);
+    return null;
+  });
 }
 
 /**

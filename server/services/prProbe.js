@@ -61,11 +61,17 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
   // `none` is a real answer, not a gap — callers that need "the agent never
   // opened one" distinguished from "we couldn't ask" read `readable` for that.
   if (found.status !== 'found') return { prState: null, prUrl: null, prNumber: null, cli, readable: true };
-  // A remote handoff cannot cover local commits the agent never published.
-  const localHead = cli === 'gh' && found.autoMergeEnabled === true
+  // A remote handoff — GitHub auto-merge or a server pending-merge receipt
+  // (#12247) — cannot cover local commits the agent never published.
+  const open = cli === 'gh' && String(found.detail || '').toUpperCase() === 'OPEN';
+  const localHead = open
     ? await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)
-      .then(result => result.exitCode === 0 ? result.stdout.trim() : null).catch(() => null)
+      .then(result => result.exitCode === 0 ? result.stdout.trim().toLowerCase() : null).catch(() => null)
     : null;
+  const published = !!localHead && localHead === String(found.headRefOid || '').toLowerCase();
+  const mergeHandoffQueued = published && !!found.url
+    && await (await import('./cosMergeHandoff.js')).hasQueuedMergeHandoff({ prUrl: found.url, prBranch: branchName, headSha: localHead })
+      .catch(() => false);
   return {
     prState: found.detail ? String(found.detail).toUpperCase() : null,
     prUrl: found.url || null,
@@ -75,7 +81,8 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
     prNumber: found.number ?? null,
     cli,
     readable: !!found.detail,
-    ...(cli === 'gh' && found.autoMergeEnabled === true && localHead && localHead === found.headRefOid ? { autoMergeEnabled: true } : {}),
+    ...(published && found.autoMergeEnabled === true ? { autoMergeEnabled: true } : {}),
+    ...(mergeHandoffQueued ? { mergeHandoffQueued: true } : {}),
   };
 }
 
