@@ -548,6 +548,40 @@ describe('taskSchedule', () => {
       expect(schedule.executions).toBeDefined()
     })
 
+    it('returns independent schedule instances on consecutive no-file reads without polluting defaults', async () => {
+      readJSONFile.mockResolvedValue(null)
+      const first = await loadSchedule()
+      first.executions['task:security'] = { lastRun: '2026-10-18T00:00:00.000Z', count: 1 }
+      first.templates.push({ name: 'polluted' })
+      first.tasks['security'].enabled = false
+
+      const second = await loadSchedule()
+      expect(second.executions['task:security']).toBeUndefined()
+      expect(second.templates).toEqual([])
+      expect(second.tasks['security'].enabled).toBe(true)
+      expect(DEFAULT_TASK_INTERVALS['security'].enabled).toBe(true)
+    })
+
+    it('does not mutate DEFAULT_TASK_INTERVALS during v1 to v2 migration', async () => {
+      const originalSecurityPrompt = DEFAULT_TASK_INTERVALS['security'].prompt
+      const originalSecurityMeta = DEFAULT_TASK_INTERVALS['security'].taskMetadata
+
+      readJSONFile.mockResolvedValue({
+        version: 1,
+        selfImprovement: {
+          security: {
+            prompt: 'custom v1 prompt',
+            taskMetadata: { fileIssues: true }
+          }
+        }
+      })
+
+      const migrated = await loadSchedule()
+      expect(migrated.tasks['security'].prompt).toBe('custom v1 prompt')
+      expect(DEFAULT_TASK_INTERVALS['security'].prompt).toBe(originalSecurityPrompt)
+      expect(DEFAULT_TASK_INTERVALS['security'].taskMetadata).toEqual(originalSecurityMeta)
+    })
+
     it('installs tasks on demand and keeps model research disabled until configured', async () => {
       const schedule = await loadSchedule()
 
