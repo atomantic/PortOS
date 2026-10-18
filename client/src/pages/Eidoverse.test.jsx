@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { awaitEnabled, findEnabledByRole } from '../test/enabledBarrier.js';
+import { mockFrameWindows } from '../test/mockFrameWindows.js';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
@@ -128,6 +129,7 @@ const renderPage = (entry = '/eidoverse') => render(
 describe('Eidoverse hosted page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFrameWindows();
     api.getInstanceFeatures.mockResolvedValue(featureResponse());
     api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
     api.getAppRepositorySources.mockResolvedValue({ updateAvailable: false, sources: [] });
