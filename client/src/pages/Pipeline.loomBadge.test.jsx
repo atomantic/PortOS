@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Pipeline from './Pipeline';
 
@@ -68,10 +68,22 @@ describe('Pipeline series list — branching-narrative badge', () => {
   });
 
   it('renders the list without badges when the loom fetch fails', async () => {
-    listLooms.mockRejectedValue(new Error('offline'));
+    listLooms.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
     await renderPage();
     await screen.findByText('Example Series');
     await waitFor(() => expect(screen.getByText('Second Series')).toBeInTheDocument());
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load branching narrative badges');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(screen.queryByText(/branching/)).toBeNull();
+  });
+
+  it('keeps a failed series read distinct from the empty list and retries it', async () => {
+    listPipelineSeriesSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load series');
+    expect(screen.queryByText(/No series yet/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/No series yet/)).toBeInTheDocument();
   });
 });

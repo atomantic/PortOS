@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
 import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../../server/lib/universeBibleLimits.js';
@@ -85,6 +85,15 @@ describe('Pipeline series detail — mobile layout', () => {
     expect(premise.value).toHaveLength(12_000);
     expect(screen.getByPlaceholderText(/moebius linework/)).toHaveAttribute('maxlength', String(STYLE_NOTES_MAX));
     expect(document.querySelector(`[maxlength="${LOGLINE_MAX}"]`)).not.toBeNull();
+  });
+
+  it('shows a retriable universe read error in the linked-universe picker', async () => {
+    listUniverses.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Example Series' })).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universes');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });
 
