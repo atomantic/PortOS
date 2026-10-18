@@ -17,8 +17,13 @@ const runGit = (args, cwd, encoding = 'utf8') =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-export const isShallowRepository = (repoRoot) =>
-  runGit(['rev-parse', '--is-shallow-repository'], repoRoot).trim() === 'true';
+export const isShallowRepository = (repoRoot) => {
+  try {
+    return runGit(['rev-parse', '--is-shallow-repository'], repoRoot).trim() !== 'false';
+  } catch {
+    return true;
+  }
+};
 
 const historicalHashes = (repoRoot, files) => {
   const wanted = new Set(

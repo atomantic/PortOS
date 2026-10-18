@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { tmpdir } from 'os';
 import {
   findUnacceptedPromptHistory,
   isShallowRepository,
@@ -17,6 +19,15 @@ if (!historyAvailable) {
 }
 
 describe('shipped stage-prompt history guard', () => {
+  it('treats a source archive without Git metadata as unavailable history', () => {
+    const archive = mkdtempSync(join(tmpdir(), 'shipped-prompt-source-archive-'));
+    try {
+      expect(isShallowRepository(archive)).toBe(true);
+    } finally {
+      rmSync(archive, { recursive: true, force: true });
+    }
+  });
+
   it('identifies historical hashes missing from every migration table', () => {
     expect(
       findUnacceptedPromptHistory({
