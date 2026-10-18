@@ -26,6 +26,7 @@ import {
   DO_BETTER_LENS_COVERAGE,
   AUDIT_RUN_GUIDANCE,
   AUDIT_SUGGESTED_AFTER,
+  AUDIT_REDACTION_RULE,
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
@@ -432,5 +433,82 @@ describe('applyDepfreeMode — the dependency-freedom {depfreeMode} block', () =
 
   it('leaves every other task type untouched', () => {
     expect(applyDepfreeMode('{depfreeMode}', 'better-complexity', { depfreeMode: 'extreme' })).toBe('{depfreeMode}');
+  });
+});
+
+// One owner per rule (#12080): redaction and "read AGENTS.md first" live in the
+// two mode banners, resolve-every-finding only in the do-work banner, and the
+// scan-then-bound contract only in the discovery block — so an assembled prompt
+// says each once. A mission body that restates any of them is the regression.
+describe('banner-owned rules are not restated by mission bodies (#12080)', () => {
+  const BANNER_OWNED = [
+    AUDIT_REDACTION_RULE,
+    'Redact before you publish',
+    /[Nn]ever paste/,
+    /Read (?:the|this) (?:project|repository)'s (?:own )?(?:instruction files|`AGENTS\.md`)/,
+    'Every accepted finding requires resolution',
+    /cheap repository-wide inventory/,
+  ];
+
+  it('no audit mission body carries a banner-owned sentence', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    for (const taskType of AUDIT_TASK_TYPE_LIST) {
+      const body = DEFAULT_TASK_PROMPTS[taskType];
+      expect(body, taskType).toBeTruthy();
+      for (const rule of BANNER_OWNED) {
+        expect(body, `${taskType} restates ${rule}`).not.toMatch(rule);
+      }
+    }
+  });
+
+  it.each([true, false])('an assembled code-quality prompt states each rule once (fileIssues=%s)', async (fileIssues) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const { auditQualityInstructions } = await import('./auditQuality.js');
+    const banner = `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions('code-quality')}`;
+    const prompt = applyAuditModeWrapper(DEFAULT_TASK_PROMPTS['code-quality'], banner)
+      .replace('{modeInstructions}', banner);
+    const count = (needle) => prompt.split(needle).length - 1;
+    expect(count(AUDIT_REDACTION_RULE)).toBe(1);
+    expect(count('`AGENTS.md`')).toBe(1);
+    expect(count('Every accepted finding requires resolution')).toBe(fileIssues ? 0 : 1);
+    expect(count('cheap repository-wide signal scan')).toBe(1);
+  });
+});
+
+// Lane boundaries decided in the 2026-10-17 prompt audit. Each cession names
+// the owning lane so two lanes cannot both file one class of finding.
+describe('lane ownership cessions', () => {
+  const hunted = (body) => body.split('\n').filter((line) => /^\s*(?:-|\d+\.) \*\*/.test(line)).join('\n');
+
+  it('only data-integrity hunts read-modify-write races; data-safety and runtime-safety cede them (#12082)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(hunted(DEFAULT_TASK_PROMPTS['data-integrity'])).toContain('read-modify-write');
+    for (const lane of ['data-safety', 'better-runtime-safety']) {
+      expect(hunted(DEFAULT_TASK_PROMPTS[lane]), lane).not.toContain('read-modify-write');
+      expect(DEFAULT_TASK_PROMPTS[lane], lane).toMatch(/read-modify-write races[^.]*data-integrity\s+work/);
+    }
+    expect(DEFAULT_TASK_PROMPTS['better-runtime-safety']).toContain('check-then-act sequences on module-level');
+  });
+
+  it('simplify cedes file splits to module-hygiene (#12083)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(DEFAULT_TASK_PROMPTS.simplify).not.toContain('outgrew their file');
+    expect(DEFAULT_TASK_PROMPTS.simplify).toContain('File splits and responsibility boundaries belong to the\nmodule-hygiene work');
+  });
+
+  it('error-handling cedes sensitive error detail to privacy and partial writes to data-integrity (#12086)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const body = DEFAULT_TASK_PROMPTS['error-handling'];
+    expect(body).not.toContain('Sensitive detail in an error path');
+    expect(body).not.toContain('Partial writes with no recovery');
+    expect(body).toContain('Sensitive detail\nleaking through an error path belongs to the privacy work; partial writes to\nthe data-integrity work');
+  });
+
+  it('structural-drift hunts behaviour twins (#12092) and ui-lifecycle hunts failed loads rendered as empty (#12094)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(hunted(DEFAULT_TASK_PROMPTS['better-structural-drift'])).toContain('**Behaviour twins**');
+    expect(DEFAULT_TASK_PROMPTS['better-structural-drift']).toContain('one shared primitive or\n   a parity test, never a copied patch');
+    expect(hunted(DEFAULT_TASK_PROMPTS['ui-lifecycle'])).toContain('**Failed loads rendered as empty**');
+    expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('loading/ready/error state with a retry, not a toast');
   });
 });
