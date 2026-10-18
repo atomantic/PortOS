@@ -129,12 +129,18 @@ const splitReadJsonTolerant = async (path) => {
 // truncated record would forever load as null. rename() is atomic within one
 // filesystem, and tmp sits in the same dir as its target, so the swap is safe.
 // Also used by the provider-seed family, where a truncated `data/providers.json`
-// would cost the user every stored apiKey and provider customization.
-export const writeJsonAtomic = async (path, value) => {
+// would cost the user every stored apiKey and provider customization, and by
+// the prompt-replace family: a half-written stage prompt hashes as neither the
+// accepted-old nor the shipped body, so the next pass would classify it as
+// user-customized and leave the truncated prompt in place forever.
+export const writeTextAtomic = async (path, content) => {
   const tmp = `${path}.tmp-${process.pid}`;
-  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
+  await writeFile(tmp, content);
   await rename(tmp, path);
 };
+
+export const writeJsonAtomic = (path, value) =>
+  writeTextAtomic(path, JSON.stringify(value, null, 2) + '\n');
 
 // Reserved keys a legacy `map`-shape doc can carry as own properties (JSON.parse
 // surfaces a literal `"__proto__"` key as an own property). They pass a typical
@@ -470,7 +476,7 @@ export async function applyPromptReplaceMigration({
   const counts = { updated: 0, alreadyCurrent: 0, skipped: 0, created: 0, retired: 0 };
   for (const plan of plans) {
     if (plan.unlink) await unlink(plan.unlink);
-    if (plan.write) await writeFile(plan.write.path, plan.write.content);
+    if (plan.write) await writeTextAtomic(plan.write.path, plan.write.content);
     if (plan.warn) console.warn(plan.warn);
     if (plan.log) console.log(plan.log);
     if (plan.counter) counts[plan.counter]++;
@@ -563,9 +569,9 @@ export async function readLayoutsDoc({ rootDir, label }) {
   return { ok: true, doc, path };
 }
 
-/** Persist a layouts doc with the canonical 2-space indentation. */
+/** Persist a layouts doc with the canonical 2-space indentation (no trailing newline, matching the store). */
 export async function writeLayoutsDoc(path, doc) {
-  await writeFile(path, JSON.stringify(doc, null, 2));
+  await writeTextAtomic(path, JSON.stringify(doc, null, 2));
 }
 
 /**
@@ -812,7 +818,7 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
         continue;
       }
       await mkdir(join(perRecordDir, id), { recursive: true });
-      await writeFile(recordPath, JSON.stringify(seedRecords[id], null, 2) + '\n');
+      await writeJsonAtomic(recordPath, seedRecords[id]);
       added += 1;
     }
 
@@ -833,7 +839,7 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
         live.records[id] = seedRecords[id];
         legacyAdded += 1;
       }
-      if (legacyAdded > 0) await writeFile(legacyPath, JSON.stringify(live, null, 2) + '\n');
+      if (legacyAdded > 0) await writeJsonAtomic(legacyPath, live);
     }
 
     if (added === 0 && legacyAdded === 0) {
