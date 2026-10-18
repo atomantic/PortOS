@@ -14,6 +14,7 @@ import { spawn } from './childProcess.js';
  * @param {number} [options.maxBuffer] - Max output buffer size in bytes (default 10 MB)
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
+ * @param {object} [options.env] - Explicit child environment; omitted inherits normally
  * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
@@ -33,7 +34,8 @@ export function execGit(args, cwd, options = {}) {
     // platforms (including Windows) without a shell wrapper.
     const child = spawn('git', args, {
       cwd,
-      shell: false
+      shell: false,
+      ...(options.env ? { env: options.env } : {})
     });
 
     let stdout = '';

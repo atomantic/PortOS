@@ -71,10 +71,10 @@ async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranc
   // sweep's mode — no forge read needed to name the repo it is already in).
   if (repoSpec) args.push('--repo', repoSpec);
   args.push(`--${method}`);
-  // `--repo` mode: `--delete-branch` deletes the REMOTE branch only — it never
-  // runs a local checkout in the user's working tree. Local mode: it deletes
-  // the branch in `cwd`'s checkout, same as `gh pr merge` does unassisted.
-  if (deleteBranch) args.push('--delete-branch');
+  // Checkout-mode deletion can remove linked worktrees, including ignored
+  // contents. Only remote mode may delegate deletion to gh; mergePR owns its
+  // separate exact-ref cleanup and never asks gh to touch local branches.
+  if (deleteBranch && repoSpec) args.push('--delete-branch');
   if (expectedHeadSha) args.push('--match-head-commit', expectedHeadSha);
 
   const error = await execGh(args, timeoutMs, { cwd, env }).then(() => null, err => err);
@@ -101,7 +101,7 @@ async function mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeout
  * The one caller of `gh pr merge` / `glab mr merge`. Dir/target-shaped rather
  * than app-shaped, so both the direct-merge button (`--repo` remote mode,
  * whichever method the user picked) and the automated merge sweep (local
- * checkout mode, gh only, hardcoded `--merge --delete-branch`) share the same
+ * checkout mode, gh only, hardcoded `--merge`) share the same
  * argv construction and forge-failure classification (issue #7580).
  *
  * `timeoutMs` is intentionally NOT defaulted here: `mergeAppPullRequest` passes
