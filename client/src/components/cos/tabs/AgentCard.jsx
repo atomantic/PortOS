@@ -37,6 +37,7 @@ import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
 import { useSocketResource } from '../../../hooks/useSocketResource';
+import { useTimeTick } from '../../../hooks/useTimeTick';
 
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -406,7 +407,6 @@ function GoalFidelityFollowUp({ followUp }) {
 export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
   const [expanded, setExpanded] = useState(initiallyExpanded);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [now, setNow] = useState(Date.now());
   // Every surface of this card that renders the agent's own prose resolves a
   // bare `#7640` against the run's tracker through the one resolver.
   const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
@@ -512,12 +512,10 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     }
   }, [agent.id, btwInput, sendingBtw]);
 
-  // Update duration display for running agents
-  useEffect(() => {
-    if (inactive) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [inactive]);
+  // The elapsed-time display shares the app-wide one-second ticker (one timer
+  // for N running cards, paused in a hidden tab) and unsubscribes once the run
+  // is finished or paused, where the duration no longer moves.
+  const now = useTimeTick(1000, { enabled: !inactive });
 
   // Read only for an expanded, active local agent. The resource key discards
   // in-flight responses after collapsing, switching agents, or going inactive.

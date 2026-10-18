@@ -104,6 +104,34 @@ describe('AgentCard runtime presentation', () => {
     expect(screen.queryByText(/left$/)).not.toBeInTheDocument();
   });
 
+  // Running cards share the app-wide one-second ticker (#12031): N cards cost
+  // one timer, and a finished card costs none.
+  it('advances the elapsed time of running cards from one shared ticker and none for finished ones', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAt(30_000)} />
+        <AgentCard agent={{ ...runningAt(45_000), id: 'agent-two' }} />
+        <AgentCard agent={agent} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByText('30s')).toBeInTheDocument();
+    expect(screen.getByText('45s')).toBeInTheDocument();
+    expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 1000)).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText('31s')).toBeInTheDocument();
+    expect(screen.getByText('46s')).toBeInTheDocument();
+    expect(screen.getByText('1h 0m')).toBeInTheDocument();
+
+    intervalSpy.mockRestore();
+  });
+
   // The run this card is for, and the execution-scoped history that describes it
   // (#8001). Same task type as `durationHistory` above, but four times slower —
   // so a card that fell back to the task-type average would show the wrong ETA.
