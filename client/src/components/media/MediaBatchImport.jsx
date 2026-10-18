@@ -3,6 +3,7 @@ import { Upload } from 'lucide-react';
 import FilePickerButton from '../ui/FilePickerButton';
 import { importGalleryFile, assignImportedMedia } from '../../services/apiMedia';
 import { formatCount } from '../../utils/formatters';
+import useMounted from '../../hooks/useMounted';
 
 const ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,.png,.jpg,.jpeg,.gif,.webp,.mp4,.m4v,.mov,.webm,.mkv';
 
@@ -12,13 +13,10 @@ export default function MediaBatchImport({ collectionId, onImported }) {
   const [stopping, setStopping] = useState(false);
   const running = useRef(false);
   const cancelled = useRef(false);
-  const mounted = useRef(true);
+  const mounted = useMounted();
   const importedCallback = useRef(onImported);
   useEffect(() => { importedCallback.current = onImported; }, [onImported]);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; cancelled.current = true; };
-  }, []);
+  useEffect(() => () => { cancelled.current = true; }, []);
 
   const run = async (batch) => {
     if (running.current) return;
