@@ -132,6 +132,31 @@ describe('AgentCard runtime presentation', () => {
     intervalSpy.mockRestore();
   });
 
+  // A running agent's panel is fed a sliding buffer, so it must show the newest
+  // lines and page backwards; a finished transcript keeps head-first paging
+  // (#12028).
+  it('windows live output from the tail and finished transcripts from the head', async () => {
+    const toolLines = (count) => Array.from({ length: count }, (_, i) => ({ line: `🔧 step ${i}` }));
+    const { unmount } = render(
+      <MemoryRouter>
+        <AgentCard agent={runningAt(30_000)} liveOutput={toolLines(200)} initiallyExpanded />
+      </MemoryRouter>
+    );
+    // The newest line also appears in the card's one-line "last output"
+    // preview, hence getAll.
+    expect(screen.getAllByText('🔧 step 199').length).toBeGreaterThan(0);
+    expect(screen.queryByText('🔧 step 0')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show earlier (120)' })).toBeInTheDocument();
+    unmount();
+
+    api.getCosAgent.mockResolvedValue({ ...agent, output: toolLines(200) });
+    render(<MemoryRouter><AgentCard agent={agent} completed initiallyExpanded /></MemoryRouter>);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Show full transcript' }));
+    expect(await screen.findByText('🔧 step 0')).toBeInTheDocument();
+    expect(screen.queryByText('🔧 step 199')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show more (120 remaining)' })).toBeInTheDocument();
+  });
+
   // The run this card is for, and the execution-scoped history that describes it
   // (#8001). Same task type as `durationHistory` above, but four times slower —
   // so a card that fell back to the task-type average would show the wrong ETA.
