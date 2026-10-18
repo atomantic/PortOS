@@ -42,6 +42,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
+| `trash` | 2 | KEEP | Recoverable image/video history deletion (`server/lib/trashFiles.js`) | Native macOS Trash and Windows Recycle Bin helpers plus Linux XDG trash; avoids maintaining platform deletion/restore semantics. Lazy-loaded, literal paths only, no permanent-delete fallback |
 | `undici` | 1 | KEEP | HTTP client | Node core team project |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |

@@ -18,7 +18,7 @@ import { i2vReferenceModeLabel } from '../../lib/videoReferenceModes';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
-import { formatDateTime, formatDateNumeric, formatDurationMs } from '../../utils/formatters';
+import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
 import AttributionList from './AttributionList';
 import SentPromptPanel from './SentPromptPanel';
 
@@ -302,6 +302,7 @@ export default function MediaLightbox({
     ['Execution', executionLabel],
     ['Frames', item.numFrames],
     ['FPS', item.fps],
+    ['File size', item.fileSizeBytes != null ? formatBytes(item.fileSizeBytes) : null],
     // What the conditioning image promised (#4874). Recorded on the render only
     // when it wasn't the default, so this row appears exactly on the clips whose
     // opening frame was generated rather than reproduced — the one fact the

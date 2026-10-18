@@ -39,6 +39,7 @@
     "socket.io": "4.8.4",
     "socket.io-client": "4.8.4",
     "three": "0.186.1",
+    "trash": "10.1.1",
     "undici": "8.12.1",
     "ws": "8.22.0",
     "zod": "4.6.7"

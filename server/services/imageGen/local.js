@@ -20,6 +20,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { trashFiles } from '../../lib/trashFiles.js';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -1460,6 +1461,7 @@ export async function listGallery() {
         path: `/data/images/${f}`,
         createdAt: metadata.createdAt || s.birthtime.toISOString(),
         ...metadata,
+        fileSizeBytes: s.size,
       };
     },
   });
@@ -1468,39 +1470,20 @@ export async function listGallery() {
 
 export async function deleteImage(filename) {
   assertGalleryFilename(filename);
-  return withBackupAssetPublication(async () => {
-    await unlinkGuarded(join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
-    // Drop the derived index row with the file (#2738). Without this the row
-    // survives until the next boot reconcile, so anything counting the index
-    // (the Character sheet's Auteur skill / Media Assets tile) reads high in
-    // between. Non-fatal + dynamically imported: a broken index must never fail
-    // the user's delete, and this keeps the pg stack out of this module's static
-    // graph (the mirror of how the index dynamically imports the media stack).
-    //
-    // Gated on the PNG being CONFIRMED gone. The unlink above swallows its error,
-    // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
-    // listGallery() — unindexing it there would swap this bug for its mirror and
-    // UNDERcount a live image. Failed-to-delete is not deleted.
-    //
-    // The probe is tri-state, NOT existsSync: that collapses "absent" and "I
-    // couldn't tell" (EACCES on the dir, EIO) into the same `false`, which is the
-    // absent-vs-failed sentinel trap — an unreadable gallery would read as "every
-    // image is gone" and retire live rows. Only a definitive ENOENT retires the
-    // row; present-or-unknown leaves it for the reconcile, which reads disk.
-    const probeErr = await stat(join(PATHS.images, filename)).then(() => null, (err) => err);
-    if (probeErr?.code === 'ENOENT') {
-      await import('../mediaAssetIndex/index.js')
-        .then((m) => m.unindexImage(filename))
-        .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
-    } else {
-      console.error(`❌ Image file not confirmed gone (${probeErr?.code || 'still present'}), keeping its index row: ${filename}`);
-    }
-    console.log(`🗑️ Deleted image: ${filename}`);
+  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
+    await trashFiles([
+      join(PATHS.images, filename),
+      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+      join(PATHS.images, `${filename}.metadata.json`),
+      join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
+    ]);
+    // trashFiles verifies removal before derived records can be retired.
+    await import('../mediaAssetIndex/index.js')
+      .then((m) => m.unindexImage(filename))
+      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+    console.log(`🗑️ Trashed image: ${filename}`);
     return { ok: true };
-  });
+  }));
 }
 
 // Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
@@ -1517,6 +1500,17 @@ function editImageSidecar(filename, mutate) {
     const { path: sidecarPath, metadata } = await readImageSidecar(filename);
     const result = mutate(metadata);
     if (result === null) return null;
+    // A stale edit queued after deletion must not recreate its sidecar/index.
+    // Sidecar-only records remain editable while peer media bytes are pending.
+    const present = await Promise.all([
+      join(PATHS.images, filename),
+      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+      join(PATHS.images, `${filename}.metadata.json`),
+    ].map(path => stat(path).then(() => true, error => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    })));
+    if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
     await atomicWrite(sidecarPath, metadata);
     await refreshImageIndex(filename);
     return result;

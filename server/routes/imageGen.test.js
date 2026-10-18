@@ -186,7 +186,7 @@ vi.mock('../lib/pythonSetup.js', () => ({
 
 // Stat the python binary to key the cache. Override per-test for mtime
 // changes; default to a stable mtime so the cache HIT path works.
-const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000 }));
+const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000, isFile: () => false }));
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, stat: (path) => mockStat(path) };

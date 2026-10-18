@@ -1,7 +1,7 @@
 /**
  * Gallery image delete → media-asset-index delete hook (#2738).
  *
- * deleteImage unlinks real files, so PATHS.images is redirected at a temp
+ * deleteImage moves real files, so PATHS.images is redirected at a temp
  * gallery (same pattern as saveUploadedGalleryImage.test.js) — this suite must
  * never touch the repo's real data/images. The index module is mocked: the
  * contract under test is the WIRING (the delete path calls the hook, with the
@@ -34,19 +34,15 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 const unindexImage = vi.fn(async () => {});
 vi.mock('../mediaAssetIndex/index.js', () => ({ unindexImage }));
 
-// Real fs/promises, except tests can make unlink fail (simulating an
-// EACCES/EBUSY gallery, which deleteImage swallows, leaving the file on disk)
-// and make the post-delete stat probe fail (simulating an unreadable dir).
-let unlinkImpl = null;
-let statImpl = null;
-vi.mock('fs/promises', async () => {
-  const actual = await vi.importActual('fs/promises');
-  return {
-    ...actual,
-    unlink: async (...args) => (unlinkImpl ? unlinkImpl(...args) : actual.unlink(...args)),
-    stat: async (...args) => (statImpl ? statImpl(...args) : actual.stat(...args)),
-  };
-});
+// The native adapter moves into a fixture-owned bin, never the host Trash.
+let trashError = null;
+vi.mock('../../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  if (trashError) throw trashError;
+  const { rename, mkdir } = await vi.importActual('fs/promises');
+  const bin = join(tmpRoot, 'trash');
+  await mkdir(bin, { recursive: true });
+  for (const path of paths) await rename(path, join(bin, path.split(/[\\/]/).pop()));
+} }));
 
 let tmpRoot;
 let priorRegistryEnv;
@@ -69,8 +65,8 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  unlinkImpl = null;
-  statImpl = null;
+  trashError = null;
+  rmSync(join(tmpRoot, 'trash'), { recursive: true, force: true });
   rmSync(imagesDir, { recursive: true, force: true });
 });
 
@@ -92,6 +88,8 @@ describe('deleteImage → media asset index delete hook', () => {
     expect(res).toEqual({ ok: true });
     expect(existsSync(join(imagesDir, 'img-1.png'))).toBe(false);
     expect(existsSync(thumbnail)).toBe(false);
+    expect(existsSync(join(tmpRoot, 'trash', 'img-1.png'))).toBe(true);
+    expect(existsSync(join(tmpRoot, 'trash', 'img-1.metadata.json'))).toBe(true);
     // The ref must be the gallery filename — the key the index wrote the row under.
     expect(unindexImage).toHaveBeenCalledWith('img-1.png');
   });
@@ -109,33 +107,14 @@ describe('deleteImage → media asset index delete hook', () => {
     errSpy.mockRestore();
   });
 
-  it('keeps the index row when the file survives the delete (no undercount)', async () => {
-    // deleteImage swallows unlink errors, so an EACCES/EBUSY gallery leaves the
-    // image on disk and still listed by listGallery(). Unindexing it here would
-    // swap the overcount this issue fixed for an undercount of a LIVE image.
+  it('preserves the image, metadata and index when recycling fails', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    unlinkImpl = async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+    trashError = Object.assign(new Error('EACCES'), { code: 'EACCES' });
     seedImage('img-3.png');
-
-    await expect(deleteImage('img-3.png')).resolves.toEqual({ ok: true });
+    await expect(deleteImage('img-3.png')).rejects.toMatchObject({ code: 'MEDIA_TRASH_FAILED' });
     expect(existsSync(join(imagesDir, 'img-3.png'))).toBe(true);
+    expect(existsSync(join(imagesDir, 'img-3.metadata.json'))).toBe(true);
     expect(unindexImage).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('not confirmed gone'));
-    errSpy.mockRestore();
-  });
-
-  it('keeps the index row when the probe itself fails (unknown != absent)', async () => {
-    // An unreadable gallery dir must not read as "the file is gone". existsSync
-    // would return false here and retire a live row; only a definitive ENOENT
-    // may unindex.
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    unlinkImpl = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
-    statImpl = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
-    seedImage('img-4.png');
-
-    await expect(deleteImage('img-4.png')).resolves.toEqual({ ok: true });
-    expect(unindexImage).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
     errSpy.mockRestore();
   });
 });

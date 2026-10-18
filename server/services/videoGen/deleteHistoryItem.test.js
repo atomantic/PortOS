@@ -61,6 +61,8 @@ vi.mock('../hfToken.js', () => ({
   getHfToken: vi.fn(async () => null),
 }));
 
+const trashFiles = vi.fn(async () => {});
+vi.mock('../../lib/trashFiles.js', () => ({ trashFiles }));
 const unlink = vi.fn(async () => {});
 vi.mock('fs/promises', () => ({ unlink, writeFile: vi.fn(async () => {}), copyFile: vi.fn(async () => {}) }));
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true), statSync: vi.fn(() => ({ size: 1000 })) }));
@@ -69,7 +71,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn(() => true), statSync: vi.fn(() => ({ s
 // mutator to the live list so the test can assert the entry really left.
 let history = [];
 const loadHistory = vi.fn(async () => history.slice());
-const mutateVideoHistory = vi.fn(async (fn) => { history = fn(history.slice()); return history; });
+const mutateVideoHistory = vi.fn(async (fn) => { history = await fn(history.slice()); return history; });
 vi.mock('./history.js', () => ({ loadHistory, mutateVideoHistory, saveHistory: vi.fn(async () => {}) }));
 
 const unindexVideo = vi.fn(async () => {});
@@ -94,12 +96,15 @@ describe('deleteHistoryItem → media asset index delete hook', () => {
     expect(unindexVideo).not.toHaveBeenCalledWith('job-1.mp4');
   });
 
-  it('removes the Extend audio master kept beside the clip', async () => {
+  it('recycles the clip and Extend audio master with a recovery metadata snapshot', async () => {
     await deleteHistoryItem('job-1');
 
-    const unlinked = unlink.mock.calls.map(([path]) => path);
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    expect(atomicWrite).toHaveBeenCalledWith(join(MOCK_PATHS.videos, 'job-1.mp4.metadata.json'), expect.objectContaining({ id: 'job-1', filename: 'job-1.mp4' }));
+    const unlinked = trashFiles.mock.calls.flatMap(([paths]) => paths);
     expect(unlinked).toContain(join(MOCK_PATHS.videos, 'job-1.mp4'));
     expect(unlinked).toContain(join(MOCK_PATHS.videos, 'job-1.master.flac'));
+    expect(unlinked).toContain(join(MOCK_PATHS.videos, 'job-1.mp4.metadata.json'));
   });
 
   it('is non-fatal: a failing index removal still removes the entry and returns ok', async () => {
@@ -116,4 +121,11 @@ describe('deleteHistoryItem → media asset index delete hook', () => {
     await expect(deleteHistoryItem('nope')).rejects.toThrow('Not found');
     expect(unindexVideo).not.toHaveBeenCalled();
   });
+});
+
+it('preserves video history and its index when recycling fails', async () => {
+  trashFiles.mockRejectedValueOnce(new Error('recycle unavailable'));
+  await expect(deleteHistoryItem('job-1')).rejects.toThrow('recycle unavailable');
+  expect(history).toHaveLength(1);
+  expect(unindexVideo).not.toHaveBeenCalled();
 });

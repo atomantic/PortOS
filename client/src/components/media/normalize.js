@@ -32,6 +32,7 @@ export function normalizeImage(i) {
   const modelId = i.modelId || i.model || (i.mode && i.mode !== IMAGE_GEN_MODE.LOCAL ? i.mode : null);
   return {
     kind: 'image',
+    fileSizeBytes: Number.isFinite(i.fileSizeBytes) && i.fileSizeBytes >= 0 ? i.fileSizeBytes : null,
     key: `image:${i.filename}`,
     filename: i.filename,
     previewUrl: originalUrl,
@@ -130,6 +131,7 @@ export function normalizeVideo(v) {
   const loraNames = (pickLoraFilenames(v) || []).filter(Boolean);
   return {
     kind: 'video',
+    fileSizeBytes: Number.isFinite(v.fileSizeBytes) && v.fileSizeBytes >= 0 ? v.fileSizeBytes : null,
     key: `video:${v.id}`,
     posterSec: v.posterSec ?? null,
     id: v.id,
