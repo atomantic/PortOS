@@ -29,7 +29,7 @@ vi.mock('../services/googleAuth.js', () => ({
   GOOGLE_API_TIMEOUT_MS: 30_000,
   getAuthenticatedClient: async () => doubles.auth
 }));
-vi.mock('@googleapis/gmail', () => ({ gmail: () => ({ users: { messages: { get: doubles.metadata, send: doubles.submit } } }) }));
+vi.mock('../services/gmailApi.js', () => ({ createGmailApi: () => ({ getMessage: doubles.metadata, sendMessage: doubles.submit }) }));
 vi.mock('../services/messagePlaywrightSync.js', () => ({ getSelectors: vi.fn(), updateSelectors: vi.fn(), testSelectors: vi.fn(), launchProvider: vi.fn() }));
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
 vi.mock('../services/messageActions.js', () => ({ executeAction: vi.fn() }));
@@ -47,13 +47,13 @@ const observeError = () => {};
 beforeAll(() => errorEvents.on('error', observeError));
 afterAll(() => errorEvents.off('error', observeError));
 let app;
-const metadata = () => ({ data: {
+const metadata = () => ({
   id: 'gmail-message-1', threadId: 'gmail-thread-1', payload: { headers: [
     { name: 'Message-ID', value: '<original@example.com>' },
     { name: 'References', value: '<root@example.com>\r\n <parent@example.com>' },
     { name: 'Subject', value: 'Example conversation' }
   ] }
-} });
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -65,7 +65,7 @@ beforeEach(() => {
   };
   doubles.metadata.mockResolvedValue(metadata());
   doubles.auth.getAccessToken.mockResolvedValue({ token: 'example-token' });
-  doubles.submit.mockResolvedValue({ data: { id: 'gmail-reply-1' } });
+  doubles.submit.mockResolvedValue({ id: 'gmail-reply-1' });
   app = express();
   app.use(express.json());
   app.use('/api/messages', messagesRoutes);
@@ -88,12 +88,12 @@ describe('HTTP Gmail reply identity', () => {
     expect((await request(app).post(`/api/messages/drafts/${id}/send`)).body).toEqual({ success: true });
     expect((await getDraft(id)).status).toBe('sent');
     expect(doubles.metadata).toHaveBeenCalledTimes(1);
-    expect(doubles.metadata).toHaveBeenCalledWith({
-      userId: 'me', id: 'gmail-message-1', format: 'metadata',
+    expect(doubles.metadata).toHaveBeenCalledWith('gmail-message-1', {
+      format: 'metadata',
       metadataHeaders: ['Message-ID', 'References', 'In-Reply-To', 'Subject']
     }, { timeout: 10_000, retry: false });
     expect(doubles.submit).toHaveBeenCalledTimes(1);
-    const [{ requestBody }, options] = doubles.submit.mock.calls[0];
+    const [requestBody, options] = doubles.submit.mock.calls[0];
     expect(requestBody.threadId).toBe('gmail-thread-1');
     expect(options).toEqual({ retry: false });
     const mime = Buffer.from(requestBody.raw, 'base64url').toString('utf8');
@@ -108,12 +108,12 @@ describe('HTTP Gmail reply identity', () => {
 
   it('fills an empty reply subject and uses the parent In-Reply-To when References are absent', async () => {
     const data = metadata();
-    data.data.payload.headers = data.data.payload.headers.filter(h => h.name !== 'References');
-    data.data.payload.headers.push({ name: 'In-Reply-To', value: '<parent@example.com>' });
+    data.payload.headers = data.payload.headers.filter(h => h.name !== 'References');
+    data.payload.headers.push({ name: 'In-Reply-To', value: '<parent@example.com>' });
     doubles.metadata.mockResolvedValue(data);
     const id = await approvedReply({ subject: '', threadId: null });
     expect((await request(app).post(`/api/messages/drafts/${id}/send`)).status).toBe(200);
-    const mime = Buffer.from(doubles.submit.mock.calls[0][0].requestBody.raw, 'base64url').toString('utf8');
+    const mime = Buffer.from(doubles.submit.mock.calls[0][0].raw, 'base64url').toString('utf8');
     expect(mime).toContain('References: <parent@example.com> <original@example.com>\r\n');
     expect(mime).toContain('Subject: Example conversation\r\n');
   });
@@ -123,9 +123,9 @@ describe('HTTP Gmail reply identity', () => {
     ['wrong account', () => {}, { accountId: OTHER_ACCOUNT_ID }, 'REPLY_TARGET_NOT_FOUND'],
     ['local thread mismatch', () => {}, { threadId: 'other-local-thread' }, 'THREAD_MISMATCH'],
     ['metadata lookup failure', () => { doubles.metadata.mockRejectedValue(new Error('Example lookup failure')); }, {}, 'GMAIL_REPLY_METADATA_UNAVAILABLE'],
-    ['provider identity mismatch', () => { const data = metadata(); data.data.id = 'other-gmail-message'; doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_UNAVAILABLE'],
-    ['provider thread mismatch', () => { const data = metadata(); data.data.threadId = 'other-gmail-thread'; doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_UNAVAILABLE'],
-    ['missing RFC identity', () => { const data = metadata(); data.data.payload.headers = data.data.payload.headers.filter(h => h.name !== 'Message-ID'); doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_INVALID'],
+    ['provider identity mismatch', () => { const data = metadata(); data.id = 'other-gmail-message'; doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_UNAVAILABLE'],
+    ['provider thread mismatch', () => { const data = metadata(); data.threadId = 'other-gmail-thread'; doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_UNAVAILABLE'],
+    ['missing RFC identity', () => { const data = metadata(); data.payload.headers = data.payload.headers.filter(h => h.name !== 'Message-ID'); doubles.metadata.mockResolvedValue(data); }, {}, 'GMAIL_REPLY_METADATA_INVALID'],
     ['incompatible subject', () => {}, { subject: 'Different conversation' }, 'GMAIL_REPLY_SUBJECT_MISMATCH']
   ])('refuses %s without submission, approval consumption or send attempts', async (_label, arrange, overrides, code) => {
     arrange();
@@ -153,7 +153,7 @@ describe('HTTP Gmail reply identity', () => {
     const id = await approvedReply({ replyToMessageId: null, threadId: null, subject: 'New message' });
     expect((await request(app).post(`/api/messages/drafts/${id}/send`)).status).toBe(200);
     expect(doubles.metadata).not.toHaveBeenCalled();
-    const body = doubles.submit.mock.calls[0][0].requestBody;
+    const body = doubles.submit.mock.calls[0][0];
     expect(Object.keys(body)).toEqual(['raw']);
     const mime = Buffer.from(body.raw, 'base64url').toString('utf8');
     expect(mime).toContain('Subject: New message\r\n');

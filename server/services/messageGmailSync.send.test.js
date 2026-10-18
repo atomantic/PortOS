@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
-import { auth as googleAuth } from '@googleapis/gmail';
+import { auth as googleAuth } from '@googleapis/calendar';
 
 // Gmail send workflow through the REAL sender, draft store, Gmail adapter and
 // Google API client. Only the network is stubbed (the auth client's fetch), so
