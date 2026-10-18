@@ -13,6 +13,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     writeFile: vi.fn((...args) => actual.writeFile(...args)),
     stat: vi.fn((...args) => actual.stat(...args)),
     chmod: vi.fn((...args) => actual.chmod(...args)),
+    open: vi.fn((...args) => actual.open(...args)),
   };
 });
 
@@ -34,7 +35,7 @@ beforeEach(() => {
 afterEach(() => {
   restorePlatform();
   restorePlatform = () => {};
-  for (const name of ['rename', 'writeFile', 'stat', 'chmod']) {
+  for (const name of ['rename', 'writeFile', 'stat', 'chmod', 'open']) {
     fsPromises[name].mockReset();
     fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
   }
@@ -64,6 +65,43 @@ describe('AI Toolkit atomicWrite Windows lock retries', () => {
     expect(readFileSync(target, 'utf8')).toBe('{"v":1}');
     expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS);
     expect(readdirSync(tmpRoot)).toEqual(['persistent.json']);
+  });
+});
+
+describe('AI Toolkit atomicWrite crash durability (#12025, mirrors fileCore)', () => {
+  it('fsyncs the temp file before the rename and the parent directory after it', async () => {
+    const target = join(tmpRoot, 'durable.json');
+    const calls = [];
+    fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+      calls.push(['writeFile', options?.flush]);
+      return realFsPromises.writeFile(path, data, options);
+    });
+    fsPromises.rename.mockImplementationOnce(async (...args) => {
+      calls.push(['rename']);
+      return realFsPromises.rename(...args);
+    });
+    fsPromises.open.mockImplementationOnce(async (path, flags) => {
+      const handle = await realFsPromises.open(path, flags);
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => { calls.push(['dirSync', path]); return sync(); };
+      return handle;
+    });
+
+    await atomicWrite(target, { durable: true });
+
+    expect(calls).toEqual([['writeFile', true], ['rename'], ['dirSync', tmpRoot]]);
+    expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ durable: true });
+  });
+
+  it('skips the directory sync on Windows', async () => {
+    restorePlatform = pinPlatform('win32');
+    const target = join(tmpRoot, 'state.json');
+    fsPromises.open.mockClear();
+
+    await atomicWrite(target, { v: 1 });
+
+    expect(fsPromises.open).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
   });
 });
 
