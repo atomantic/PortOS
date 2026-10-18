@@ -31,7 +31,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
-import { join, posix, relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { WORKSPACE_BASE_INPUTS, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { listWorkspaceTests, toRepoPath, toWorkspacePath } from './workspaceTests.js';
@@ -110,18 +110,29 @@ export function vitestShardRange(count, index, total) {
 }
 
 /**
- * The files shard `index` of `count` runs, mirroring Vitest's
- * `BaseSequencer.shard`: sort by the sha1 of each file's path relative to
- * the Vitest root (the absolute path with the root prefix sliced off, so a
- * file outside the workspace hashes its remaining absolute tail), then take
- * the range. Pinned against a real `vitest run --shard` in the tests.
+ * The string Vitest hashes for a test file when sharding:
+ * `resolve(slash(root), slash(moduleId)).slice(root.length)` — the absolute
+ * path as the platform's `path.resolve` builds it (backslashes on Windows)
+ * with the root prefix sliced off, so an in-workspace file hashes as
+ * `/lib/x.test.js` or `\\lib\\x.test.js` and a file outside the workspace
+ * hashes its remaining absolute tail. `path` is injectable so both
+ * separators are pinned in the tests.
  */
-export function vitestShardSlice(files, { repoRoot, scope, index, count }) {
-  const repoPosix = repoRoot.split(sep).join('/');
-  const rootPosix = posix.join(repoPosix, scope);
+export function vitestShardHashInput(rel, { repoRoot, scope, path = nodePath }) {
+  const root = path.resolve(repoRoot, scope);
+  return path.resolve(repoRoot, ...rel.split('/')).slice(root.length);
+}
+
+/**
+ * The files shard `index` of `count` runs, mirroring Vitest's
+ * `BaseSequencer.shard`: sort by the sha1 of `vitestShardHashInput`, then
+ * take `vitestShardRange`. Pinned against a real `vitest run --shard` in
+ * the tests.
+ */
+export function vitestShardSlice(files, { repoRoot, scope, index, count, path = nodePath }) {
   const hashed = files.map((rel) => ({
     rel,
-    hash: createHash('sha1').update(posix.join(repoPosix, rel).slice(rootPosix.length)).digest('hex'),
+    hash: createHash('sha1').update(vitestShardHashInput(rel, { repoRoot, scope, path })).digest('hex'),
   })).sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
   const [start, end] = vitestShardRange(hashed.length, index, count);
   return hashed.slice(start, end).map(({ rel }) => rel);

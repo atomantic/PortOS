@@ -11,6 +11,19 @@ import { globToRegExp, listWorkspaceTests, toRepoPath, toWorkspacePath } from '.
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
 
+/** What `vitest list --filesOnly` collects for a workspace, sorted and project-prefix free. */
+function vitestListedFiles(repoRoot, workspace) {
+  // Through node, not the .bin shim: the shim is a shell script (.cmd on Windows) execFileSync cannot start there.
+  const listed = execFileSync(process.execPath, [join(repoRoot, workspace, 'node_modules', 'vitest', 'vitest.mjs'),
+    'list', '--filesOnly', '--configLoader', 'runner'], {
+      cwd: join(repoRoot, workspace), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_CI_BROWSER_OWNER: '' },
+    })
+    .split('\n').map((line) => line.trim().replace(/^\[[^\]]+\] /, '')).filter(Boolean);
+  if (listed.length < 100) throw new Error(`vitest list returned only ${listed.length} ${workspace} files`);
+  return [...new Set(listed)].sort();
+}
+
 describe('workspace test enumeration', () => {
   it('matches the subset of glob syntax the configs use', () => {
     expect(globToRegExp('**/*.test.js').test('lib/x.test.js')).toBe(true);
@@ -30,18 +43,11 @@ describe('workspace test enumeration', () => {
     expect(toWorkspacePath('client', 'client/src/x.test.jsx')).toBe('src/x.test.jsx');
   });
 
-  for (const workspace of ['server', 'client']) {
-    it(`collects the same files as \`vitest list\` for ${workspace}`, () => {
-      const listed = execFileSync(join(REPO_ROOT, workspace, 'node_modules', '.bin', 'vitest'),
-        ['list', '--filesOnly', '--configLoader', 'runner'], {
-          cwd: join(REPO_ROOT, workspace), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-          env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_CI_BROWSER_OWNER: '' },
-        })
-        .split('\n').map((line) => line.trim().replace(/^\[[^\]]+\] /, '')).filter(Boolean).sort();
-      expect(listed.length).toBeGreaterThan(100);
-      expect(listWorkspaceTests(workspace, { repoRoot: REPO_ROOT, env: {} })).toEqual([...new Set(listed)].sort());
-    }, 120_000);
-  }
+  // The client half lives in client/src/test/workspaceTests.test.js: the server
+  // CI job installs no client workspace, so a client `vitest list` cannot run here.
+  it('collects the same files as `vitest list` for server', () => {
+    expect(listWorkspaceTests('server', { repoRoot: REPO_ROOT, env: {} })).toEqual(vitestListedFiles(REPO_ROOT, 'server'));
+  }, 120_000);
 
   it('drops the registered browser suites only for the Linux unit owner', () => {
     const all = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'linux', env: {} });

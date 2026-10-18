@@ -7,11 +7,11 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, passedTestFiles, planTestMemo, readVitestDependencies,
-  recordTestMemo, vitestShardRange, vitestShardSlice, writeSelectionFile,
+  recordTestMemo, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 
@@ -140,6 +140,18 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null }).skipped).toEqual([]);
   });
 
+  it('hashes the root-relative path with the platform\'s own separator, like Vitest', () => {
+    // POSIX: `/lib/x.test.js`; Windows: `\\lib\\x.test.js` (path.resolve builds a backslash path).
+    expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('/lib/x.test.js');
+    expect(vitestShardHashInput('scripts/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('s/x.test.js');
+    expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('\\lib\\x.test.js');
+    expect(vitestShardHashInput('scripts/x.test.js', { repoRoot: 'D:\\a\\repo', scope: 'server', path: win32 })).toBe('s\\x.test.js');
+    // The two separators hash differently, so a slice computed for the other platform is not this platform's slice.
+    const files = ['server/lib/a.test.js', 'server/lib/b.test.js', 'server/lib/c.test.js', 'scripts/d.test.js', 'scripts/e.test.js'];
+    const slices = (path, repoRoot) => [1, 2].map((index) => vitestShardSlice(files, { repoRoot, scope: 'server', index, count: 2, path }));
+    for (const [a, b] of [slices(posix, '/repo'), slices(win32, 'D:\\a\\repo')]) expect([...a, ...b].sort()).toEqual([...files].sort());
+  });
+
   it('slices shards exactly like Vitest\'s sequencer', () => {
     expect([1, 2, 3].map((index) => vitestShardRange(7, index, 3))).toEqual([[0, 3], [3, 5], [5, 7]]);
     expect([1, 2].map((index) => vitestShardRange(1, index, 2))).toEqual([[0, 1], [1, 1]]);
@@ -150,12 +162,13 @@ describe('planTestMemo and recordTestMemo', () => {
       const files = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta'].map((name) => `${name}.test.js`);
       for (const file of files) writeFileSync(join(fixture, file), "import { it } from 'vitest';\nit('x', () => {});\n");
       writeFileSync(join(fixture, 'vitest.config.mjs'), 'export default { test: { include: ["*.test.js"], maxWorkers: 1 } };');
-      const vitest = join(import.meta.dirname, '..', '..', 'server', 'node_modules', '.bin', 'vitest');
+      // Vitest's JS entry through node: the .bin shim cannot be started by execFileSync on Windows.
+      const vitest = join(import.meta.dirname, '..', '..', 'server', 'node_modules', 'vitest', 'vitest.mjs');
       const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1', PORTOS_CI_TEST_SELECTION: '' };
       delete env.PORTOS_TEST_TEMP_ROOT;
       for (const index of [1, 2, 3]) {
         const report = join(fixture, `shard${index}.json`);
-        execFileSync(vitest, ['run', `--shard=${index}/3`, '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, '--reporter=json', `--outputFile=${report}`], { cwd: fixture, env, encoding: 'utf8', timeout: 60_000 });
+        execFileSync(process.execPath, [vitest, 'run', `--shard=${index}/3`, '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, '--reporter=json', `--outputFile=${report}`], { cwd: fixture, env, encoding: 'utf8', timeout: 60_000 });
         const ran = JSON.parse(readFileSync(report, 'utf8')).testResults.map((suite) => suite.name.replace(/\\/g, '/').split('/').pop()).sort();
         expect(ran, `shard ${index}`).toEqual(vitestShardSlice(files, { repoRoot: fixture, scope: '.', index, count: 3 }).sort());
       }
