@@ -14,6 +14,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const mocks = vi.hoisted(() => ({
   createIngredient: vi.fn(),
   getIngredient: vi.fn(),
+  getIngredientIdentityIds: vi.fn(),
   getIngredientRevision: vi.fn(),
   listRefsForIngredient: vi.fn(),
   updateIngredient: vi.fn(),
@@ -30,6 +31,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../services/catalogDB.js', () => ({
   createIngredient: mocks.createIngredient,
   getIngredient: mocks.getIngredient,
+  getIngredientIdentityIds: mocks.getIngredientIdentityIds,
   getIngredientRevision: mocks.getIngredientRevision,
   listRefsForIngredient: mocks.listRefsForIngredient,
   updateIngredient: mocks.updateIngredient,
@@ -60,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.createIngredient.mockImplementation(async (body) => ({ id: 'ing-1', ...body }));
   mocks.getIngredient.mockResolvedValue({ id: 'ing-1', name: 'Before', payload: {} });
+  mocks.getIngredientIdentityIds.mockImplementation(async id => [id]);
   mocks.getIngredientRevision.mockResolvedValue(null);
   mocks.listRefsForIngredient.mockResolvedValue([]);
   mocks.updateIngredient.mockImplementation(async (id, patch) => ({ id, ...patch }));
@@ -194,6 +197,7 @@ describe('Catalog parsed write bodies', () => {
       snapshot('user');
       return ingredient;
     });
+    mocks.getIngredient.mockImplementation(async () => ingredient);
     mocks.linkIngredientToRef.mockImplementation(async () => {
       canon.characters = [{
         id: 'canon-1', ingredientId: ingredient.id, name: ingredient.name,

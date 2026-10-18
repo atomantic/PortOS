@@ -291,6 +291,29 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect((await query('SELECT 1 FROM writers_room_folders WHERE id = $1', [folderId])).rowCount).toBe(1);
   });
 
+  it('refuses unknown functions and wrong overloads even when a shipped function is absent', async () => {
+    // Missing signatures resolve to NULL: they must not admit an unrelated
+    // function through nullable NOT IN comparisons during an older restore.
+    await query('DROP FUNCTION public.catalog_resolve_ingredient_id(text) RESTRICT');
+    try {
+      for (const signature of ['unexpected_restore_function()', 'catalog_resolve_ingredient_id(integer)']) {
+        await query(`CREATE FUNCTION public.${signature} RETURNS text LANGUAGE SQL AS $$ SELECT 'unapproved'::text $$`);
+        try {
+          const before = (await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows;
+          for (const dryRun of [true, false]) {
+            expect(await restore(dryRun)).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+          }
+          expect((await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual(before);
+          expect((await query('SELECT to_regprocedure($1) IS NOT NULL AS present', [`public.${signature}`])).rows[0].present).toBe(true);
+        } finally {
+          await query(`DROP FUNCTION IF EXISTS public.${signature} RESTRICT`);
+        }
+      }
+    } finally {
+      await ensureSchema({ force: true });
+    }
+  });
+
   it('preflights unknown objects and external dependencies without mutations, including preview', async () => {
     await query('CREATE TABLE public.unexpected_restore_record (id integer PRIMARY KEY)');
     await query('INSERT INTO public.unexpected_restore_record VALUES (42)');
