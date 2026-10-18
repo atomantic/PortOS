@@ -448,6 +448,34 @@ describe('commandSecurity', () => {
       expect(validateUnattendedCommand(cmd).valid).toBe(false)
     })
 
+    // `--output[=<file>]` is a file-write primitive on a lane documented as
+    // read-only — the same class `find -fprint` is denied for (#12020).
+    it.each([
+      'git log --output=notes.txt',
+      'git diff --output=notes.txt',
+      'git show --output=notes.txt',
+      'git log --oneline --output notes.txt',
+    ])('rejects git --output file write: %s', (cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/--output/)
+    })
+
+    it('still accepts --output-indicator-* on git diff (a marker option, not a file write)', () => {
+      expect(validateUnattendedCommand('git diff --output-indicator-new=+').valid).toBe(true)
+    })
+
+    it.each([
+      ['-c injects config such as core.pager or a credential helper', 'git -c core.pager=less log'],
+      ['--git-dir retargets the repository', 'git --git-dir=../other/.git log'],
+      ['--work-tree retargets the checkout', 'git --work-tree=../other status'],
+      ['--exec-path swaps the git binaries', 'git --exec-path=/opt/evil log'],
+    ])('rejects a global option before the verb: %s', (_label, cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/global options before the subcommand/)
+    })
+
     it.each([
       ['-delete removes files', 'find . -delete'],
       // The `{}` / `;` form is already caught by the metacharacter filter, so this
