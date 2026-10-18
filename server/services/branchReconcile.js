@@ -22,6 +22,7 @@
  * is reported, never touched.
  */
 
+import { buildAutoMergeHandoffInstructions } from '../lib/mergeGateContract.js';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
@@ -1827,27 +1828,21 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
 // recovery followed by fresh validation on the resulting head.
 const verifyGate = 'Fetch the default branch for comparison before opening or updating a PR; inspect semantic overlap and supersession. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk. Base movement alone does not require a rebase or another CI run; this overrides mandatory base-sync instructions in delegated slashdo workflows. Run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result. After changing the head, rerun affected validation and required reviews/checks. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
 
-// The terminal state of an auto-mergeable branch is MERGED — not "PR opened",
-// not "PR green and waiting". Every drive-to-merge instruction ends with this
-// tail so the agent waits CI out IN-SESSION instead of handing back an open PR
-// (the miss that left a green, MERGEABLE PR sitting open after a NEEDS_PR run:
-// the agent opened it and signaled done 51s later). GitHub-native `--auto` is
-// deliberately not the answer on its own — the agent exits the moment it
-// finishes, so a queued auto-merge that later goes red has nobody left to fix
-// it, and the branch silently stays in-flight until the next recheck.
-//
+// A verified GitHub auto-merge handoff can finish the run before CI drains.
+// Immediate merges still require the current-head CI and ownership gates.
 // `pr` is the PR's number when the branch already has one, else the `<num>`
 // placeholder the agent fills in after opening it.
 // Exported so the per-agent repo-state audit (services/agentRepoStateVerification.js)
 // hands a recovery agent the SAME merge procedure, rather than re-authoring a
 // `gh pr merge` line that loses these caveats.
 export const driveToMerge = (pr) => [
+  buildAutoMergeHandoffInstructions(pr),
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
   'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
   'Record the exact local branch head whose checks and configured reviews passed as <verified-head>; immediately before merging, repeat the ownership/policy Recheck and require the forge PR head to equal that same head. If either changed, stop and revalidate. Every merge attempt, including a method retry, must retain --match-head-commit <verified-head>.',
-  `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch --match-head-commit <verified-head>\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
+  `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch --match-head-commit <verified-head>\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`.`,
   'After the merge, remove the branch\'s worktree first, then delete the local branch — the delete fails while a worktree still has it checked out.'
 ].join(' ');
 

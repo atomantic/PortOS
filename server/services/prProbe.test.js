@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
+
 vi.mock('./git.js', () => ({
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
 }));
@@ -11,6 +13,7 @@ vi.mock('./gitlab.js', () => ({
   findMergeRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
 }));
 
+import { execGit } from '../lib/execGit.js';
 import { resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
@@ -18,6 +21,7 @@ import { probeChangeRequestState, probePrForBranch } from './prProbe.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  execGit.mockResolvedValue({ exitCode: 0, stdout: 'published-head\n' });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: null });
   findPullRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   findMergeRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
@@ -33,6 +37,22 @@ describe('probePrForBranch', () => {
     expect(findPullRequestForBranch).toHaveBeenCalledWith('my-branch', { cwd: '/repo', env: null });
     expect(findMergeRequestForBranch).not.toHaveBeenCalled();
     expect(result).toEqual({ prState: 'MERGED', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true });
+  });
+
+  it('propagates GitHub-confirmed pending auto-merge without claiming MERGED', async () => {
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', autoMergeEnabled: true, headRefOid: 'published-head' });
+    expect(await probePrForBranch('/repo', 'my-branch')).toMatchObject({ prState: 'OPEN', readable: true, autoMergeEnabled: true });
+  });
+
+  it.each([
+    ['unpublished commits', { exitCode: 0, stdout: 'local-only-head\n' }],
+    ['missing local branch', { exitCode: 1, stdout: '' }],
+    ['unreadable local head', null],
+  ])('refuses a remote auto-merge handoff with %s', async (_name, local) => {
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', autoMergeEnabled: true, headRefOid: 'published-head' });
+    if (local) execGit.mockResolvedValue(local);
+    else execGit.mockRejectedValue(new Error('unreadable'));
+    expect(await probePrForBranch('/repo', 'my-branch')).not.toHaveProperty('autoMergeEnabled', true);
   });
 
   it('uppercases whatever case the forge returned for prState', async () => {

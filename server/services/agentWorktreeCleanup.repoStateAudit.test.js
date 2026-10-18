@@ -35,10 +35,12 @@ vi.mock('./worktreeManager.js', () => ({
   removeWorktree: vi.fn().mockResolvedValue({ removed: true, warnings: [] }),
   classifyWorktreeDirt: vi.fn().mockReturnValue({ clean: true }),
 }));
+vi.mock('./prProbe.js', () => ({ probePrForBranch: vi.fn().mockResolvedValue({ readable: true, prState: 'MERGED' }) }));
 vi.mock('./agentRepoStateVerification.js', () => ({
   verifyAgentRepoState: vi.fn().mockResolvedValue({ verified: true, issues: [] }),
 }));
 
+import { probePrForBranch } from './prProbe.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { verifyAgentRepoState } from './agentRepoStateVerification.js';
 import { getAgent, getAgentRecord, addTask } from './cos.js';
@@ -58,6 +60,7 @@ const auditRan = () => vi.waitFor(() => expect(verifyAgentRepoState).toHaveBeenC
 
 beforeEach(() => {
   vi.clearAllMocks();
+  probePrForBranch.mockResolvedValue({ readable: true, prState: 'MERGED' });
   // A non-worktree agent makes the cleanup itself a no-op, so these exercise the
   // wrapper's hook rather than the teardown.
   getAgent.mockResolvedValue({ metadata: { isWorktree: false } });
@@ -149,6 +152,34 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
     await auditRan();
 
     expect(order).toEqual(['removeWorktree', 'audit']);
+  });
+
+  it('preserves a GitHub-confirmed pending auto-merge without cleanup warnings', async () => {
+    getAgent.mockResolvedValue(worktreeAgent);
+    probePrForBranch.mockResolvedValue({ readable: true, prState: 'OPEN', autoMergeEnabled: true });
+    const warnings = await cleanupAgentWorktree('agent-1', true, { skipMerge: true, originalTask: { id: 'task-1', metadata: { openPR: true } } });
+    expect(warnings).toEqual([]);
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('preserves an unhealthy handoff for the repo-state recovery audit', async () => {
+    getAgent.mockResolvedValue(worktreeAgent);
+    probePrForBranch.mockResolvedValue({ readable: true, prState: 'OPEN' });
+    const warnings = await cleanupAgentWorktree('agent-1', true, { skipMerge: true, originalTask: { id: 'task-1', metadata: { openPR: true } } });
+    expect(warnings).toEqual([]);
+    expect(removeWorktree).not.toHaveBeenCalled();
+    await auditRan();
+  });
+
+  it.each(['unreadable', 'closed unmerged'])('preserves the worktree for %s PR state', async (state) => {
+    getAgent.mockResolvedValue(worktreeAgent);
+    if (state === 'unreadable') probePrForBranch.mockRejectedValue(new Error('forge unavailable'));
+    else probePrForBranch.mockResolvedValue({ readable: true, prState: 'CLOSED' });
+    const warnings = await cleanupAgentWorktree('agent-1', true, { skipMerge: true, originalTask: { id: 'task-1', metadata: { openPR: true } } });
+    expect(warnings).toEqual([]);
+    expect(removeWorktree).not.toHaveBeenCalled();
+    await auditRan();
   });
 
   it('returns the cleanup warnings unchanged, and survives an audit that throws', async () => {

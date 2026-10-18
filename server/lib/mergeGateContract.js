@@ -77,6 +77,8 @@ export function summaryStatesLeaveOpen(summary) {
  *   one that's CLOSED rather than merged). Either way there is nothing here
  *   to act on: finalize normally and let the post-teardown audit
  *   (`agentRepoStateVerification.js`) be the backstop, as today.
+ * - `auto-merge-enabled` — GitHub confirms a pending handoff; finalize without
+ *   claiming it has merged.
  * - `leave-open-stated` — the agent said, in its own words, that it is
  *   deliberately leaving the PR open; that is a correct terminal state.
  * - `needs-reprompt` — the PR is open and the summary names no blocker: send
@@ -85,12 +87,13 @@ export function summaryStatesLeaveOpen(summary) {
  * @param {object} params
  * @param {{prState: string|null, readable: boolean}|null} params.prProbe
  * @param {string|null|undefined} params.summary
- * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'needs-reprompt'}
+ * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'auto-merge-enabled'|'needs-reprompt'}
  */
 export function resolveMergeGateVerdict({ prProbe, summary }) {
   if (!prProbe || prProbe.readable === false) return 'no-pr-action';
   if (prProbe.prState === 'MERGED') return 'merged';
   if (prProbe.prState !== 'OPEN') return 'no-pr-action';
+  if (prProbe.autoMergeEnabled === true) return 'auto-merge-enabled';
   if (summaryStatesLeaveOpen(summary)) return 'leave-open-stated';
   return 'needs-reprompt';
 }
@@ -106,7 +109,28 @@ export function resolveMergeGateVerdict({ prProbe, summary }) {
 export function buildMergeGateReprompt(prUrl) {
   return [
     `Your Merge Gate is not finished: ${prUrl} is still OPEN and your last summary did not say you were leaving it open.`,
-    'Work through the Merge Gate steps from your original instructions now: watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
+    'Work through the Merge Gate steps from your original instructions now: use the verified GitHub auto-merge handoff when eligible, otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
     'If it truly cannot merge (a required check is red after a genuine fix attempt, or there is a conflict only a human can resolve), say so explicitly and leave it open.',
   ].join('\n');
+}
+
+// A queued handoff is temporary ownership, not an indefinite exemption from
+// recovery. Unknown check shapes and hour-old requests fail closed.
+export function hasHealthyAutoMergeRequest(pr, now = Date.now()) {
+  const enabledAt = Date.parse(pr?.autoMergeRequest?.enabledAt);
+  if (pr?.state !== 'OPEN' || pr.isDraft !== false || !Number.isFinite(enabledAt)
+    || enabledAt > now || now - enabledAt >= 60 * 60 * 1000
+    || !Array.isArray(pr.statusCheckRollup) || pr.statusCheckRollup.length === 0) return false;
+  return pr.statusCheckRollup.every(check => {
+    if (check?.__typename === 'StatusContext') return ['SUCCESS', 'PENDING', 'EXPECTED'].includes(check.state);
+    if (check?.__typename !== 'CheckRun') return false;
+    return check.status === 'COMPLETED'
+      ? ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion)
+      : ['QUEUED', 'IN_PROGRESS', 'REQUESTED', 'WAITING', 'PENDING'].includes(check.status);
+  });
+}
+
+/** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
+export function buildAutoMergeHandoffInstructions(prRef) {
+  return `**GitHub auto-merge handoff (before waiting for CI):** If this run requires repository merge admission, do not enable GitHub auto-merge: a deferred GitHub merge cannot honor the local lease. Use the normal in-session CI wait and immediate admission-gated merge below. The remaining handoff applies only to workflows explicitly outside local admission. After local validation and all configured reviews pass on the published head, inspect \`gh pr view ${prRef} --json state,isDraft,headRefOid,mergeable,statusCheckRollup,reviewDecision\` and \`gh api repos/{owner}/{repo}\` (the PR's BASE repository). Require \`allow_auto_merge: true\`, a ready/non-draft conflict-free PR, satisfied reviews, no failed checks, and CI queued or running on that head. Read \`gh pr checks ${prRef} --required --json name,state\` and compare with every outstanding check in the workflow's CI gate: every such check must be enforced by GitHub. Missing/unknown required-check policy or any outstanding unenforced check means wait for all workflow checks and use the normal immediate merge gate. Only then enable \`gh pr merge ${prRef} --auto --merge --match-head-commit <published-head>\`. Use \`--squash\` or \`--rebase\` only if merge commits are disallowed. Never use \`--admin\`, change branch protection, or enable repository auto-merge settings. Read back \`gh pr view ${prRef} --json state,headRefOid,autoMergeRequest\`: require the same published head and OPEN with a non-null \`autoMergeRequest.enabledAt\`, or confirm MERGED. Exit status alone is not proof. A verified pending handoff is successful only outside local admission: report the PR URL and head, explicitly say auto-merge enabled with CI pending, write the completion sentinel if required, and stop without waiting for MERGED. Preserve the unmerged branch; do not close its issue or claim it landed. This eligible handoff overrides later in-session CI waits and MERGED-only completion instructions, including delegated slashdo workflows. If unavailable, rejected, or unverified, follow the normal CI/merge gate below; failed checks require a real fix.`;
 }

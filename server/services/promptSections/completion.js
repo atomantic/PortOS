@@ -2,6 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
+import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.js';
 import { DEFAULT_REVIEWER, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
@@ -599,6 +600,7 @@ export function buildMergeAdmissionSection(agentId) {
   return [
     '## Repository merge admission',
     'Admission serializes only the merge instant. The parent orchestrator (never a fan-out child) completes publication, validation, configured reviews and required CI on its own head WITHOUT admission — other runs and every PR in a swarm do this concurrently. Never hold admission while syncing, running pregate, pushing or waiting for CI/reviews. Do not chase the default branch: rebase only for an actual conflict, an enforced up-to-date branch policy, or evidenced integration risk (inspect semantic overlap as well as textual conflicts). This overrides mandatory base-sync instructions in delegated slashdo workflows.',
+    'Local admission forbids GitHub deferred auto-merge: GitHub cannot acquire this application lease at its later merge instant. Do not enable auto-merge for this workflow. Wait for the workflow CI gate, acquire/check admission, merge immediately on the verified head, confirm MERGED, then release. Any generic handoff prose applies only outside local admission and does not override this rule.',
     'Once required CI is green on the exact head you pushed (record that SHA as the CI-verified head) and configured reviews are satisfied, acquire admission. Require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
     '```bash', command('acquire'), '```',
     'If an acquire/check refusal names lease-head-changed, release your token with outcome resync before acquiring again. If admitted:false with retryable:false, release any owned token with outcome leave-open, stop retrying, report the reason and message, and leave the PR/worktree intact. Otherwise, if admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR (and any claim) intact. A refusal is never a reason to merge without admission. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
@@ -621,7 +623,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
     buildClaimOwnershipSection(agentId), '',
-    ...(!leavePrOpen ? [buildMergeAdmissionSection(agentId), ''] : []),
+    ...(!leavePrOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId), ''] : []),
     '## Claim Workflow Handoff',
     ...(leavePrOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
