@@ -4,6 +4,7 @@ import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import * as commands from '../services/commands.js';
 import { requireHostControl } from '../services/authGate.js';
+import { broadcastToCommandSubscribers } from '../services/socket.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, commandExecuteBodySchema } from '../lib/validation.js';
@@ -42,21 +43,20 @@ router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
     }
   }
 
-  const io = req.app.get('io');
-
   // executeCommand reports validation failures through onComplete before it
   // returns null. Declare the id first so that synchronous callback cannot
   // access it in its temporal dead zone; there is no command-scoped socket
-  // event to emit when no command was started.
+  // event to emit when no command was started. Output goes only to sockets
+  // subscribed to command output, never to every connected socket (#12019).
   let commandId;
   commandId = commands.executeCommand(
     command,
     workspacePath,
     (data, stream) => {
-      if (commandId) io?.emit(`command:${commandId}:data`, { data, stream });
+      if (commandId) broadcastToCommandSubscribers(`command:${commandId}:data`, { data, stream });
     },
     (result) => {
-      if (commandId) io?.emit(`command:${commandId}:complete`, result);
+      if (commandId) broadcastToCommandSubscribers(`command:${commandId}:complete`, result);
     }
   );
 

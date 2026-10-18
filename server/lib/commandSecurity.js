@@ -354,17 +354,27 @@ export function validateUnattendedCommand(command) {
   return check;
 }
 
-// Patterns matching sensitive env var values in command output
-const SENSITIVE_ENV_PATTERN = /("(?:[a-z0-9]+_)*(?:KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH)(?:_[a-z0-9]+)*":\s*)"[^"]+"/gi;
+// Sensitive key names: a segment of the key, separated by `_`, `.` or `-`, so
+// `API_TOKEN` and `github.token` match while `author` does not.
+const SENSITIVE_KEY_WORDS = 'KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH';
+// JSON key/value pairs, e.g. `"SECRET_KEY": "value"` in `pm2 jlist` env blocks.
+const SENSITIVE_ENV_PATTERN = new RegExp(`("(?:[a-z0-9]+_)*(?:${SENSITIVE_KEY_WORDS})(?:_[a-z0-9]+)*":\\s*)"[^"]+"`, 'gi');
+// Assignment lines, e.g. `API_TOKEN=value` from a dotenv read or
+// `github.token=value` from `git config --list` (#12019). Anchored to the
+// line (horizontal whitespace only) so a value is only ever the remainder of
+// its own line.
+const SENSITIVE_ASSIGNMENT_PATTERN = new RegExp(`^([ \\t]*(?:export[ \\t]+)?(?:[a-z0-9]+[_.-])*(?:${SENSITIVE_KEY_WORDS})(?:[_.-][a-z0-9]+)*[ \\t]*=)(.+)$`, 'gim');
 
 /**
- * Redact sensitive env var values from command output before persisting.
- * Only redacts JSON key/value patterns (e.g. "SECRET_KEY": "value"). Shell-level
- * leaks (env expansion, command substitution) are not covered — acceptable for
- * PortOS's single-user, private-network deployment where the operator is the
- * only user and shell output is not exposed to external consumers.
+ * Redact sensitive values from command output before it is persisted,
+ * broadcast, or returned. Covers JSON key/value pairs and `KEY=value`
+ * assignment lines whose key names a secret. Shell-level leaks (env
+ * expansion, command substitution) are not covered — the allowlist and the
+ * metacharacter filter keep those out of the spawn in the first place.
  */
 export function redactOutput(output) {
   if (!output) return output;
-  return output.replace(SENSITIVE_ENV_PATTERN, '$1"[REDACTED]"');
+  return output
+    .replace(SENSITIVE_ENV_PATTERN, '$1"[REDACTED]"')
+    .replace(SENSITIVE_ASSIGNMENT_PATTERN, '$1[REDACTED]');
 }

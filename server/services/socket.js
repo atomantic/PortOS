@@ -87,6 +87,10 @@ const codeAnimationSubscribers = new Set();
 // global emit.
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
+// Operator command-runner output (#12019). Never a global emit: the stream
+// carries host command output, and a peer relay socket (restricted to
+// `cos:subscribe`) must not receive it.
+const commandSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -99,10 +103,15 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers];
 
 export function emitCodeAnimationChanged(id) {
   broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', { id });
+}
+
+/** Emit a `command:<id>:*` frame to sockets that sent `command:subscribe`. */
+export function broadcastToCommandSubscribers(event, data) {
+  broadcastToSet(commandSubscribers, event, data);
 }
 
 function broadcastToSet(set, event, data) {
@@ -214,6 +223,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'code-animation', codeAnimationSubscribers);
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
+  registerSubscriber(socket, 'command', commandSubscribers);
 }
 
 function registerErrorHandlers(socket, io) {

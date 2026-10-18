@@ -101,7 +101,7 @@ vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
 vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn() }));
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
-import { initSocket } from './socket.js';
+import { broadcastToCommandSubscribers, initSocket } from './socket.js';
 import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged } from './apps.js';
 import { resolvePm2HomeForProcess } from './appProcessStatus.js';
@@ -265,6 +265,34 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     meatspaceEvents.emit('death-clock:changed', {});
     expect(io.emitted).toEqual([['meatspace:death-clock:changed', {}]]);
+  });
+
+  it('delivers operator command output only to command subscribers, never to every socket (#12019)', () => {
+    const subscriber = makeSocket('command-subscriber');
+    const cosOnly = makeSocket('cos-only-relay');
+    const bystander = makeSocket('bystander');
+    io.connect(subscriber);
+    io.connect(cosOnly);
+    io.connect(bystander);
+    createdSockets.push(subscriber, cosOnly, bystander);
+    subscriber.handlers['command:subscribe']();
+    // A peer relay is limited to cos:subscribe by PEER_RELAY_ALLOWED_EVENTS.
+    cosOnly.handlers['cos:subscribe']();
+    io.emitted.length = 0;
+
+    broadcastToCommandSubscribers('command:example-id:data', { data: 'TOKEN=[REDACTED]', stream: 'stdout' });
+    broadcastToCommandSubscribers('command:example-id:complete', { success: true, exitCode: 0 });
+
+    expect(subscriber.emitted).toContainEqual(['command:example-id:data', { data: 'TOKEN=[REDACTED]', stream: 'stdout' }]);
+    expect(subscriber.emitted).toContainEqual(['command:example-id:complete', { success: true, exitCode: 0 }]);
+    expect(cosOnly.emitted.some(([event]) => event.startsWith('command:'))).toBe(false);
+    expect(bystander.emitted.some(([event]) => event.startsWith('command:'))).toBe(false);
+    expect(io.emitted).toEqual([]);
+
+    subscriber.handlers['command:unsubscribe']();
+    subscriber.emitted.length = 0;
+    broadcastToCommandSubscribers('command:example-id:data', { data: 'after', stream: 'stdout' });
+    expect(subscriber.emitted.some(([event]) => event.startsWith('command:'))).toBe(false);
   });
 
   it('forwards dashboard invalidations without source records and gates CoS events on subscription', () => {
