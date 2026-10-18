@@ -1,20 +1,17 @@
 /**
- * Server-side pose evaluator for the declarative clip contract in
- * `threejsModel.js`, used by the gates that measure a clip mid-motion
- * (`threejsModelPhysicalAudit.js`).
+ * Pure pose evaluator for the declarative clip contract in `threejsModel.js`,
+ * shared by the Three.js Models preview (`client/src/lib/threejsAnimation.js`
+ * re-uses it) and the gates that measure a clip mid-motion
+ * (`threejsModelPhysicalAudit.js`), so the audit measures the pose the user sees.
  *
- * The semantics MIRROR the preview evaluator (`client/src/lib/threejsAnimation.js`)
- * and the player emitted into an exported factory (`threejsModelPlayerSource.js`):
+ * The semantics MIRROR the player emitted into an exported factory
+ * (`threejsModelPlayerSource.js`):
  * per part+channel the owning sequence is the window containing the instant, else
  * the most recent window behind it (its `to` holds), else the next window ahead
  * (its `from` has not moved yet); `visible` is a step that takes `to` only once
- * the window completes; easing names resolve to the same four curves. A gate
- * that sampled any other pose would report defects the user can never see, or
- * pass ones they can. `threejsModelClipPose.test.js` executes all three against
- * the same clip so they cannot drift apart silently.
- *
- * Server code cannot import the client module, and the player is a fixed source
- * string, so this is the third copy rather than a shared one.
+ * the window completes; `easeInOut` is smoothstep. The player is a fixed source
+ * string that cannot import this module, so `threejsModelClipPose.test.js`
+ * executes both against the same clip to keep them from drifting apart.
  */
 
 const CLIP_CHANNELS = ['position', 'rotationDegrees', 'scale', 'opacity', 'visible'];

@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateThreejsClipPose as evaluatePreviewPose } from '../../client/src/lib/threejsAnimation.js';
 import { evaluateThreejsModelClipPose } from './threejsModelClipPose.js';
 import { THREEJS_PLAYER_SOURCE } from './threejsModelPlayerSource.js';
 
-// The audit only means something if it measures the pose the user sees, so the
-// server evaluator is pinned against BOTH other copies — the preview's and the
-// one shipped inside an exported factory — over every semantic they share:
+// The preview re-uses this evaluator, so the remaining copy to pin is the one
+// shipped inside an exported factory, over every semantic they share:
 // each easing curve, the step `visible`, a gap between two windows on one
 // channel (the earlier `to` holds), the time before a part's first window (its
 // `from` holds), and sequences declared out of time order.
@@ -27,15 +25,14 @@ const clip = {
 };
 
 describe('evaluateThreejsModelClipPose', () => {
-  it('poses a clip exactly as the preview and the exported player do', async () => {
+  it('poses a clip exactly as the exported player does', async () => {
     const { evaluateSculptClipPose } = await importEmittedPlayer();
     for (let step = 0; step <= 32; step += 1) {
       const time = step * 0.125;
       const server = { ...evaluateThreejsModelClipPose(clip, time) };
-      expect(server).toEqual({ ...evaluatePreviewPose(clip, time).pose });
       expect(server).toEqual({ ...evaluateSculptClipPose(clip, time) });
     }
-    // Spot-check the semantics the parity rests on, so three copies that drifted
+    // Spot-check the semantics the parity rests on, so two copies that drifted
     // together cannot pass by agreeing with each other.
     expect(evaluateThreejsModelClipPose(clip, 0).arm.rotationDegrees).toEqual([0, 0, 0]);
     expect(evaluateThreejsModelClipPose(clip, 2).arm.rotationDegrees).toEqual([0, 90, 0]);
