@@ -173,4 +173,49 @@ describe('main-server eidoverse reverse-proxy', () => {
     await once(client, 'close');
     webSocketClients.pop();
   });
+
+  it('forwards a JSON POST body when mounted in the production order', async () => {
+    let receivedBody = null;
+    let receivedHeaders = null;
+    const upstreamPort = await listen(createServer((req, res) => {
+      receivedHeaders = req.headers;
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        receivedBody = body;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, echo: body ? JSON.parse(body) : null }));
+      });
+    }));
+
+    // Mirror production order from server/index.js:
+    // Eidoverse proxy mounted BEFORE express.json()
+    const app = express();
+    app.use(createEidoverseExpressMiddleware({
+      isActive: () => true,
+      targetHost: '127.0.0.1',
+      targetPort: upstreamPort,
+      getProtocol: () => 'http',
+    }));
+    app.use(express.json());
+    app.use(express.urlencoded({ extended: true }));
+    const server = createServer(app);
+    const port = await listen(server);
+
+    const payload = { action: 'ping', count: 42 };
+    const response = await fetch(`http://127.0.0.1:${port}/eidoverse-host/api/action`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data).toEqual({ ok: true, echo: payload });
+    expect(receivedBody).toBe(JSON.stringify(payload));
+    expect(Number(receivedHeaders['content-length'])).toBe(Buffer.byteLength(JSON.stringify(payload)));
+  });
 });

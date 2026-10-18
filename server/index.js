@@ -292,6 +292,14 @@ app.use(authGate);
 // authority: a session, or a local connection on a password-free install.
 app.use(hostControlRouteGate);
 
+// Eidoverse same-origin reverse-proxy (`/eidoverse-host` + root allowlist while
+// the host is active). Must sit above express.json() / express.urlencoded() so
+// mutating POST/PUT request body streams are not consumed before proxyHttpToEidoverse
+// pipes them upstream (#12068), above mountAssetRoutes so the `/eidoverse-host`
+// SERVER_OWNED terminator cannot 404 proxied paths, and above the SPA fallback
+// so `/version` / `/ws` are not answered with PortOS index.html.
+mountEidoverseOnServer(app);
+
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
 // Every per-file upload cap is derived from this value — see lib/uploadLimits.js.
@@ -490,11 +498,6 @@ app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 
-// Eidoverse same-origin reverse-proxy (`/eidoverse-host` + root allowlist while
-// the host is active). Must sit above mountAssetRoutes so the `/eidoverse-host`
-// SERVER_OWNED terminator cannot 404 proxied paths, and above the SPA fallback
-// so `/version` / `/ws` are not answered with PortOS index.html.
-mountEidoverseOnServer(app);
 
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through
