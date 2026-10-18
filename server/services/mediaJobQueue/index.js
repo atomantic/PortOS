@@ -370,6 +370,11 @@ export async function refreshCodexParallelLimit() {
 const sseJobs = new Map();
 
 let workerStarted = false;
+let workerOperation = null;
+let wakeWorker = null;
+let resettingForTests = false;
+const testLifecycleDisposals = new Set();
+const laneOperations = new Set();
 let initPromise = null;
 // Shutdown latch (#8691): once set, nothing promotes a waiting job to running —
 // neither the worker nor Run Now — and nothing re-arms the worker. Waiting jobs
@@ -1040,10 +1045,9 @@ function startWorker() {
   if (workerStarted || dispatchQuiesced) return;
   workerStarted = true;
   // Detach from awaiting so init can return; the loop runs until shutdown quiesces it.
-  drainLoop().catch((err) => {
+  workerOperation = drainLoop().catch((err) => {
     console.error(`❌ mediaJobQueue worker crashed: ${err.message}`, err.stack || '');
-    workerStarted = false;
-  });
+  }).finally(() => { workerStarted = false; });
 }
 
 // Every lane uses fire-and-forget so the poll loop is never blocked by a
@@ -1122,7 +1126,7 @@ function startLaneJob(job, { lane }) {
   // Null when the lifecycle threw before returning its evidence.
   let lifecycleEvidence = null;
   trackOperation(dispatchOperations, new Promise((resolve) => { markRunning = resolve; }));
-  permit.run(async () => {
+  trackOperation(laneOperations, permit.run(async () => {
     try {
       await persist();
       // Cancellation can win while the running snapshot is blocked.
@@ -1133,6 +1137,7 @@ function startLaneJob(job, { lane }) {
       const lifecycle = runJob(job, permit, finalizeLane);
       markRunning();
       lifecycleEvidence = await lifecycle;
+      if (resettingForTests) return;
     } catch (err) {
       markRunning();
       // runJob threw before its own terminal handlers ran (e.g. PYTHON
@@ -1164,7 +1169,7 @@ function startLaneJob(job, { lane }) {
     if (release === OWNERSHIP_RELEASE.UNSETTLED) permit.markUnsettled();
     else if (release === OWNERSHIP_RELEASE.COMPLETE_RECOVERY) await permit.completeRecovery();
     else await permit.finish();
-  }).catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
+  }).catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`)));
   return true;
 }
 
@@ -1212,11 +1217,20 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
 // IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
 const recoveringJobs = new Set();
 
+// Quiescing wakes the idle wait even under fake timers, so joining the worker
+// never depends on another clock tick. Preparation already in flight still joins.
+function waitForWorker() {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { wakeWorker = null; resolve(); }, 150);
+    wakeWorker = () => { clearTimeout(timer); wakeWorker = null; resolve(); };
+  });
+}
+
 async function drainLoop() {
   while (!dispatchQuiesced) {
     const held = maintenance.held();
     const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
-    if (held && !candidates.length) { await sleep(150); continue; }
+    if (held && !candidates.length) { await waitForWorker(); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (dispatchQuiesced) break;
@@ -1257,7 +1271,7 @@ async function drainLoop() {
     if (quotaWaitChanged) {
       persist().catch((e) => console.error(`❌ media-job mediaJobQueue persist on quota hold failed: ${e.message}`));
     }
-    await sleep(150);
+    if (!dispatchQuiesced) await waitForWorker();
   }
 }
 
@@ -1269,6 +1283,7 @@ async function drainLoop() {
 export function quiesceMediaJobQueue() {
   if (dispatchQuiesced) return false;
   dispatchQuiesced = true;
+  wakeWorker?.();
   console.log(`⏸️  mediaJobQueue dispatch stopped for shutdown (${queue.length} waiting job(s) kept queued)`);
   return true;
 }
@@ -1780,93 +1795,111 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   }, Math.min(30_000, Math.max(25, Math.floor(idleTimeoutMs / 4))));
   watchdogTimer.unref?.();
 
+  let abandonForTests;
+  const abandoned = new Promise(resolve => { abandonForTests = () => {
+    job.terminating = true;
+    resolve();
+  }; });
+  testLifecycleDisposals.add(abandonForTests);
   try {
-    // A restored remote submission must reach its adapter to deliver an
-    // already-recorded cancellation, even after its project narrows or is deleted.
-    const recoveringRemoteCancellation = isRemoteMediaJob(job) && job.cancelRequested
-      && job.params?.remoteMedia?.reconcile === true && job.params.remoteMedia.cancelRequested === true;
-    if (!recoveringRemoteCancellation) await assertMusicVideoJobPolicy(job.kind, job.params);
-    const mod = await getGenModuleForJob(job);
-    if (job.params?.videoProduction) {
-      const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
-      await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
-    }
-    if (job.params?.shotInstruction?.repair && job.params?.musicVideo) {
-      const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
-      await assertPerformanceRepairDispatch(job.params.musicVideo);
-    }
-    if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
-    // A cancel that arrived while this job was still queued lives on the
-    // persisted marker, not on any in-memory adapter state. Re-stamp it for
-    // every remote kind so the adapter starts already knowing it must recover
-    // the provider job and cancel it rather than import its result.
-    if (isRemoteMediaJob(job)) {
-      safeParams.remoteMedia = {
-        ...(safeParams.remoteMedia && typeof safeParams.remoteMedia === 'object'
-          ? safeParams.remoteMedia : {}),
-        cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
-      };
-    }
-    if (job.params?.musicVideo?.sceneId && !(job.cancelRequested && isRemoteMediaJob(job))) {
-      const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
-      await assertMusicVideoSceneReview(job.params.musicVideo, job.kind);
-    }
-    // Remote recovery must still reach its adapter to cancel an existing render.
-    // Local cancellation before dispatch owns no provider process to stop.
-    if (job.cancelRequested && !isRemoteMediaJob(job)) {
-      throw new Error('Canceled before provider dispatch');
-    }
-    // A watchdog can win during the awaited policy/module preparation above.
-    // Its terminal outcome must prevent that delayed provider from starting.
-    if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
-    // Transient, like terminating: no await between this flag and invocation.
-    job.providerInvoked = true;
-    const request = { ...safeParams, jobId: job.id };
-    const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
-    markDispatched();
-    await kickoff;
-  } catch (err) {
-    // Policy/auth refusal still stands, but it cannot prove a previously
-    // admitted peer render finished before this recovery attempt.
-    if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
-    // generateVideo / generateChainedVideo / generateImage threw before
-    // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
-    // validation fail). Clean up multipart upload temp files the route
-    // handed us so they don't leak under data/uploads.
-    // safeUnlinkUpload constrains the delete to PATHS.uploads as
-    // defense-in-depth against corrupted persisted params. audioFilePath
-    // is the same kind of staged upload (a2v jobs) — clean it up too.
-    // Tracked from the first microtask of the rejection, so a drain that saw
-    // the dispatch window close cannot miss this failure (#9029).
-    await trackTerminalOperation((async () => {
-      if (!(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
-        await safeUnlinkUpload(job.params?.uploadedTempPath);
-        await safeUnlinkUpload(job.params?.audioFilePath);
-        for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-          await safeUnlinkUpload(p);
-        }
+    try {
+      // A restored remote submission must reach its adapter to deliver an
+      // already-recorded cancellation, even after its project narrows or is deleted.
+      const recoveringRemoteCancellation = isRemoteMediaJob(job) && job.cancelRequested
+        && job.params?.remoteMedia?.reconcile === true && job.params.remoteMedia.cancelRequested === true;
+      if (!recoveringRemoteCancellation) await assertMusicVideoJobPolicy(job.kind, job.params);
+      const mod = await getGenModuleForJob(job);
+      if (job.params?.videoProduction) {
+        const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+        await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
       }
-      handlers.failed({ error: err.message, code: err.code,
-        remoteInputsDisposable: isRemoteMediaJob(job) && job.providerInvoked !== true && job.params?.remoteMedia?.reconcile !== true });
-    })());
-  }
+      if (job.params?.shotInstruction?.repair && job.params?.musicVideo) {
+        const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+        await assertPerformanceRepairDispatch(job.params.musicVideo);
+      }
+      if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
+      // A cancel that arrived while this job was still queued lives on the
+      // persisted marker, not on any in-memory adapter state. Re-stamp it for
+      // every remote kind so the adapter starts already knowing it must recover
+      // the provider job and cancel it rather than import its result.
+      if (isRemoteMediaJob(job)) {
+        safeParams.remoteMedia = {
+          ...(safeParams.remoteMedia && typeof safeParams.remoteMedia === 'object'
+            ? safeParams.remoteMedia : {}),
+          cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
+        };
+      }
+      if (job.params?.musicVideo?.sceneId && !(job.cancelRequested && isRemoteMediaJob(job))) {
+        const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+        await assertMusicVideoSceneReview(job.params.musicVideo, job.kind);
+      }
+      // Remote recovery must still reach its adapter to cancel an existing render.
+      // Local cancellation before dispatch owns no provider process to stop.
+      if (job.cancelRequested && !isRemoteMediaJob(job)) {
+        throw new Error('Canceled before provider dispatch');
+      }
+      // A watchdog can win during the awaited policy/module preparation above.
+      // Its terminal outcome must prevent that delayed provider from starting.
+      if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
+      // Transient, like terminating: no await between this flag and invocation.
+      job.providerInvoked = true;
+      const request = { ...safeParams, jobId: job.id };
+      const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
+      markDispatched();
+      await Promise.race([kickoff, abandoned]);
+      if (resettingForTests) return null;
+    } catch (err) {
+      // Policy/auth refusal still stands, but it cannot prove a previously
+      // admitted peer render finished before this recovery attempt.
+      if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
+      // generateVideo / generateChainedVideo / generateImage threw before
+      // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
+      // validation fail). Clean up multipart upload temp files the route
+      // handed us so they don't leak under data/uploads.
+      // safeUnlinkUpload constrains the delete to PATHS.uploads as
+      // defense-in-depth against corrupted persisted params. audioFilePath
+      // is the same kind of staged upload (a2v jobs) — clean it up too.
+      // Tracked from the first microtask of the rejection, so a drain that saw
+      // the dispatch window close cannot miss this failure (#9029).
+      await trackTerminalOperation((async () => {
+        if (!(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+          await safeUnlinkUpload(job.params?.uploadedTempPath);
+          await safeUnlinkUpload(job.params?.audioFilePath);
+          for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+            await safeUnlinkUpload(p);
+          }
+        }
+        handlers.failed({ error: err.message, code: err.code,
+          remoteInputsDisposable: isRemoteMediaJob(job) && job.providerInvoked !== true && job.params?.remoteMedia?.reconcile !== true });
+      })());
+    }
 
-  // The gen modules emit completed/failed asynchronously after kickoff. Await
-  // the explicit terminal signal rather than polling every 100ms; this makes
-  // lane release immediate and gives tests a deterministic lifecycle to drain.
-  // Only release the execution lane after the provider invocation has settled.
-  // Keep maintenance ownership until the admitted completion is durable.
-  await Promise.race([terminalState, deferredCompletion]);
-  if (job.durabilityPending) finalizeLane();
-  await terminalState;
-  if (watchdogNeedsProviderSettlement) await providerSettlement;
-  // A watchdog can win the terminal row before the real provider responds.
-  // Keep its later trusted verdict through physical settlement, then release
-  // inputs under the still-owned lane after that row is durable.
-  await releaseRemoteAudioInputs(recovery.inputsDisposable);
-  dispatcher.detach();
-  // The lane finalizer combines this with its final flush before releasing.
-  return recovery;
+    // The gen modules emit completed/failed asynchronously after kickoff. Await
+    // the explicit terminal signal rather than polling every 100ms; this makes
+    // lane release immediate and gives tests a deterministic lifecycle to drain.
+    // Only release the execution lane after the provider invocation has settled.
+    // Keep maintenance ownership until the admitted completion is durable.
+    await Promise.race([terminalState, deferredCompletion, abandoned]);
+    if (resettingForTests) return null;
+    if (job.durabilityPending) finalizeLane();
+    await Promise.race([terminalState, abandoned]);
+    if (resettingForTests) return null;
+    if (watchdogNeedsProviderSettlement) await Promise.race([providerSettlement, abandoned]);
+    if (resettingForTests) return null;
+    // A watchdog can win the terminal row before the real provider responds.
+    // Keep its later trusted verdict through physical settlement, then release
+    // inputs under the still-owned lane after that row is durable.
+    await releaseRemoteAudioInputs(recovery.inputsDisposable);
+    // The lane finalizer combines this with its final flush before releasing.
+    return recovery;
+  } finally {
+    testLifecycleDisposals.delete(abandonForTests);
+    clearInterval(watchdogTimer);
+    emitter.off('activity', onActivity);
+    emitter.off('progress', onActivity);
+    dispatcher.detach();
+    await drainProgressPersist();
+  }
 }
 
 /**
@@ -2169,7 +2202,15 @@ export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT
 }
 
 // Test-only reset hook. Real callers go through enqueueJob/cancelJob.
-export function __resetForTests() {
+export async function __resetForTests() {
+  quiesceMediaJobQueue();
+  await workerOperation;
+  await __drainForTests();
+  // Tests simulate crashes with provider stubs that never resolve. Detach those
+  // waits without publishing a fabricated terminal outcome or releasing ownership.
+  resettingForTests = true;
+  for (const abandon of testLifecycleDisposals) abandon();
+  await __drainForTests({ settleLanes: true });
   queue.length = 0;
   running = null;
   // `cloudRunning` is a const array — clear it in place rather than reassigning,
@@ -2181,7 +2222,9 @@ export function __resetForTests() {
   videoHolds.clear();
   sseJobs.clear();
   workerStarted = false;
+  workerOperation = null;
   dispatchQuiesced = false;
+  resettingForTests = false;
   initPromise = null;
   // Reset the lane limit too — a test that called setCodexParallelLimit(N)
   // otherwise leaks N into subsequent tests and makes ordering matter.
@@ -2199,13 +2242,14 @@ export function __resetForTests() {
 // Test-only deterministic settle hook. EventEmitter terminal handlers and
 // persistence are intentionally fire-and-forget in production; tests use this
 // instead of sleeping for an arbitrary wall-clock window before inspecting or
-// removing their temporary data directory.
-export async function __drainForTests() {
+// removing their temporary data directory. settleLanes also joins archive and
+// maintenance-release tails; use it only after terminal events or test disposal.
+export async function __drainForTests({ settleLanes = false } = {}) {
   // Include open dispatches: a started job reaches its provider (or a pre-dispatch
   // failure, which becomes a terminal operation) only after real I/O that
   // neither fake timers nor a microtask yield cover (#9029).
-  while (dispatchOperations.size > 0 || terminalOperations.size > 0) {
-    await Promise.allSettled([...dispatchOperations, ...terminalOperations]);
+  while (dispatchOperations.size > 0 || terminalOperations.size > 0 || (settleLanes && laneOperations.size > 0)) {
+    await Promise.allSettled([...dispatchOperations, ...terminalOperations, ...(settleLanes ? laneOperations : [])]);
   }
   await persistChain.catch(() => {});
   // A settled terminal operation can schedule the archive snapshot in the

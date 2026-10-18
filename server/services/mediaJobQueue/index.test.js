@@ -5,7 +5,6 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
-import { sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
 // test gets a clean slate without scribbling over the real data dir.
@@ -187,6 +186,7 @@ let imageGenEvents;
 let audioGenEvents;
 
 async function importFresh() {
+  await mediaJobQueue?.__resetForTests();
   vi.resetModules();
   mediaJobQueue = await import('./index.js');
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
@@ -251,17 +251,16 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await flush();
-  mediaJobQueue?.__resetForTests();
+  await mediaJobQueue?.__resetForTests();
   if (tempDataDir && existsSync(tempDataDir)) {
     rmSync(tempDataDir, { recursive: true, force: true });
   }
 });
 
-// Late work (a debounced persist, a still-terminating child on Windows) can
-// recreate or pin a per-test temp dir after afterEach removed it (#9046) —
-// see sweepStrayTempRoots's doc.
-afterAll(async () => {
-  await sweepStrayTempRoots('mediaJobQueue-test-');
+// No sweep: reset must join owned work before fixture removal, rather than
+// deleting evidence of a late writer after the fact.
+afterAll(() => {
+  expect(readdirSync(tmpdir()).filter(name => name.startsWith('mediaJobQueue-test-'))).toEqual([]);
 });
 
 describe('mediaJobQueue', () => {
@@ -2035,11 +2034,15 @@ describe('Codex lane', () => {
     imageGenEvents.emit('completed', { generationId: jobs[0].jobId, filename: 'example.png' });
     await replacementEntered;
     expect(stubs.generateImageCodex).toHaveBeenCalledTimes(13);
+    expect(persistedJobs().find(job => job.id === jobs[0].jobId).status).toBe('completed');
     for (const job of jobs.slice(1)) {
       imageGenEvents.emit('completed', { generationId: job.jobId, filename: 'example.png' });
     }
-    await waitFor(() => jobs.every((job) => mediaJobQueue.getJob(job.jobId).status === 'completed'));
+    await mediaJobQueue.__drainForTests({ settleLanes: true });
+    expect(jobs.every((job) => mediaJobQueue.getJob(job.jobId).status === 'completed')).toBe(true);
     expect(listenerCounts()).toEqual(before);
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    expect(maintenance.status().blockers).toEqual([]);
   });
 
   it('dispatches a Codex job to imageGen/codex.js#generateImage, not local', async () => {
@@ -2509,7 +2512,7 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.isVideoModelHeld(modelId, persisted.videoHolds[0].runtime)).toBe(true);
 
     vi.clearAllTimers();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     await tick();
@@ -2666,13 +2669,19 @@ describe('local video failure holds', () => {
   it('counts pre-dispatch rejection once and resumes with a cleared streak', async () => {
     stubs.generateVideo.mockRejectedValue(Object.assign(new Error("Example runtime is not installed. Install or repair it from Video Gen's model setup panel."), { code: 'EXAMPLE_VENV_MISSING' }));
     const ids = await submitMany(4);
-    for (let i = 0; i < 4; i += 1) await tick();
+    for (let i = 0; i < 4; i += 1) {
+      await tick();
+      await mediaJobQueue.__drainForTests({ settleLanes: true });
+    }
     expect(stubs.generateVideo).toHaveBeenCalledTimes(3);
     const held = mediaJobQueue.getJob(ids[3]);
     expect(held.status).toBe('queued');
     await mediaJobQueue.resumeVideoHold(held.hold.id);
     const next = await submit();
-    await tick(); await tick();
+    await tick();
+    await mediaJobQueue.__drainForTests({ settleLanes: true });
+    await tick();
+    await mediaJobQueue.__drainForTests({ settleLanes: true });
     expect(stubs.generateVideo).toHaveBeenCalledTimes(5);
     expect(mediaJobQueue.getJob(next).status).toBe('failed');
   });
@@ -2976,7 +2985,7 @@ describe('durable remote source-audio settlement', () => {
     await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
     await flush();
     mediaJobQueue.quiesceMediaJobQueue();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     stubs.generateVideoRemote.mockClear();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
@@ -3022,7 +3031,7 @@ describe('durable remote source-audio settlement', () => {
     videoGenEvents.emit('completed', { generationId: other.jobId, remoteInputsDisposable: true });
     await flush();
     mediaJobQueue.quiesceMediaJobQueue();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     stubs.generateVideoRemote.mockClear();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
@@ -3267,7 +3276,7 @@ describe('durable admission and shutdown flush', () => {
     const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
     // Crash straight after the acknowledgement — nothing else gets to write.
     vi.clearAllTimers();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     const restored = mediaJobQueue.listJobs().filter((j) => j.id === jobId);
@@ -3307,7 +3316,7 @@ describe('shutdown quiesce', () => {
   };
   const restart = async () => {
     vi.clearAllTimers();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
   };
@@ -3378,6 +3387,56 @@ describe('shutdown quiesce', () => {
     await tick();
     expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
     expect(mediaJobQueue.getJob(jobId).status).toBe('queued');
+  });
+
+  it('reset joins worker preparation before clearing a fixture or reopening dispatch', async () => {
+    let enterPreparation;
+    let releasePreparation;
+    const entered = new Promise(resolve => { enterPreparation = resolve; });
+    const preparation = new Promise(resolve => { releasePreparation = resolve; });
+    vi.doMock('../videoGen/modelSelection.js', () => ({
+      resolveVideoModelSelection: async () => {
+        enterPreparation();
+        await preparation;
+        return { model: { id: 'example-mlx', runtime: 'mlx_video' } };
+      },
+    }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting on preparation' } });
+    await vi.advanceTimersByTimeAsync(150);
+    await entered;
+    let resetSettled = false;
+    const reset = Promise.resolve(mediaJobQueue.__resetForTests()).then(() => { resetSettled = true; });
+    try {
+      await Promise.resolve();
+      expect(resetSettled).toBe(false);
+    } finally {
+      releasePreparation();
+      await reset;
+    }
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    rmSync(tempDataDir, { recursive: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(existsSync(tempDataDir)).toBe(false);
+  });
+
+  it('reset detaches abandoned providers and drains progress before removing the fixture', async () => {
+    const events = ['progress', 'status', 'completed', 'failed', 'activity'];
+    const before = events.map(event => imageGenEvents.listenerCount(event));
+    let finishKickoff;
+    stubs.generateImageCodex.mockImplementation(() => new Promise(resolve => { finishKickoff = resolve; }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'abandoned render' } });
+    await tick();
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    imageGenEvents.emit('progress', { generationId: jobId, type: 'progress', progress: 0.5 });
+    await mediaJobQueue.__resetForTests();
+    expect(events.map(event => imageGenEvents.listenerCount(event))).toEqual(before);
+    rmSync(tempDataDir, { recursive: true });
+    finishKickoff({});
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example.png' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(existsSync(tempDataDir)).toBe(false);
   });
 
   it('refuses Run Now without touching the waiting job', async () => {
@@ -3566,7 +3625,7 @@ describe('durable execution and terminal settlement', () => {
     expect(canceled).toHaveBeenCalledTimes(1);
     expect(existsSync(upload)).toBe(false);
     vi.clearAllTimers();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     await vi.advanceTimersByTimeAsync(200);
@@ -3603,7 +3662,7 @@ describe('durable execution and terminal settlement', () => {
       maintenance.resume({ id: hold.id, revision: hold.revision });
     }
     vi.clearAllTimers();
-    mediaJobQueue.__resetForTests();
+    await mediaJobQueue.__resetForTests();
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     await vi.advanceTimersByTimeAsync(200);
