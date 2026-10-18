@@ -46,6 +46,14 @@ describe('music-video-autopilot scheduled handler', () => {
     expect(startAutonomousVideo).not.toHaveBeenCalled();
   });
 
+  it('ignores a soft-deleted live project when choosing whether to dispatch', async () => {
+    ideas.push(idea('a', '2026-01-01T00:00:00.000Z'));
+    projects.push({ ...project('Gone', 'needs-human', 'zzz'), deleted: true });
+
+    expect(await run({ params: {} })).toMatchObject({ dispatched: true });
+    expect(await countPending({ params: {} })).toMatchObject({ count: 1 });
+  });
+
   it('names the parked project, why it is waiting and where to clear it, so the Schedule card can show it', async () => {
     ideas.push(idea('a', '2026-01-01T00:00:00.000Z'));
     projects.push({ id: 'mv-9', name: 'Parked video', autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics', stage: 'style', brief: { origin: { kind: 'schedule', ideaId: 'zzz' } } } });
