@@ -128,6 +128,21 @@ sweeps of one app (timer, task generator, receipt) join a single pass; a receipt
 that lands during a pass which already read the queue gets one follow-up pass
 after it settles.
 
+When that immediate pass leaves the receipt's entry queued (CI still running,
+admission deferred, the forge briefly unreadable), the receipt arms a bounded
+follow-up poll for the app so a head whose CI turns green a minute later does
+not wait out the rest of the 30-minute timer. It re-runs the receipt sweep
+every 60 seconds for the first five polls, then every 120 seconds
+(`HANDOFF_FOLLOW_UP_*` in `server/services/prWatcher.js`), and stops once
+every receipt it tracks has merged, escalated, timed out to a notification or
+left the queue. An app has at most one poller: a receipt that lands while one
+is active joins it with its own 45-minute cap, after which the 30-minute timer
+sweep owns the entry exactly as before. Polls spend no tick budget, so
+`MAX_PENDING_MERGE_TICKS` still measures wall-clock hours on the timer. Each
+poll passes the timer's own gate — daemon running, not paused, CoS auto-run set
+to `execute` — and is skipped otherwise; stopping the daemon cancels every
+poller, and a receipt accepted while the daemon is stopped arms none.
+
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
 seed, migration, or federation payload. Admission waits at most 15 seconds to

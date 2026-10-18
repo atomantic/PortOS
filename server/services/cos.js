@@ -560,15 +560,16 @@ async function bootDaemon(state) {
   // queued merges. Same autonomy gate as the evaluateTasks call site: merging
   // writes to a default branch, so it only runs when the user has CoS auto-run
   // set to `execute` and the daemon is not paused.
-  const { PENDING_MERGE_SWEEP_INTERVAL_MS } = await import('./prWatcher.js');
+  // The handoff follow-up poll (prWatcher.followUpHandoffReceipt) shares the
+  // gate and is cancelled with the daemon.
+  const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
+  setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({
     id: 'cos-pending-merge-sweep',
     type: 'interval',
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
-      if (!isDaemonRunning()) return;
-      const s = await loadState();
-      if (s.paused || getDomainMode(s.config, 'cos') !== 'execute') return;
+      if (await pendingMergeSweepBlocked()) return;
       const prWatcher = await import('./prWatcher.js');
       const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
         console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);
@@ -614,6 +615,15 @@ async function bootDaemon(state) {
   }, POST_STARTUP_QUEUE_DELAY_MS);
 }
 
+// Null when a pending-merge sweep may merge, else the skip reason.
+async function pendingMergeSweepBlocked() {
+  if (!isDaemonRunning()) return 'daemon-stopped';
+  const s = await loadState();
+  if (s.paused) return 'daemon paused';
+  if (getDomainMode(s.config, 'cos') !== 'execute') return 'CoS auto-run is not set to execute';
+  return null;
+}
+
 /**
  * Stop the CoS daemon
  */
@@ -642,6 +652,7 @@ async function teardownDaemon() {
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-pending-merge-sweep');
+  (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 
   await withStateLock(async () => {

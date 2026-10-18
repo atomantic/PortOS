@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -241,5 +241,133 @@ describe('pending-merge handoff', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ link: PR_URL, priority: 'high' }));
     expect(pending()).toEqual([]);
+  });
+});
+
+// A receipt whose CI is still running gets a bounded follow-up poll instead of
+// waiting up to a whole 30-minute timer interval after CI turns green.
+describe('handoff follow-up poll', () => {
+  let gate;
+  let prWatcher;
+  // setImmediate stays real: it drains the poll's promise chain between ticks.
+  const settle = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
+  const forgeViews = () => execGhMock.mock.calls.filter(([args]) => args[0] === 'pr' && args[1] === 'view').length;
+  const minutes = (n) => vi.advanceTimersByTimeAsync(n * 60 * 1000).then(settle);
+
+  // The coordinator's lazy imports load from disk, which a setImmediate drain
+  // does not wait for; warm them so a fresh worker settles like a warm one.
+  beforeAll(() => Promise.all(['./prReviewerSecurity.js', '../lib/validation.js'].map((m) => import(m))));
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    prWatcher = await import('./prWatcher.js');
+    gate = vi.fn(async () => null);
+    prWatcher.setHandoffFollowUpGate(gate);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    prWatcher.cancelHandoffFollowUps();
+    // Spies first: one captured under fake timers must not outlive them.
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const handOffPending = async () => {
+    const result = await handoff();
+    await settle();
+    return result;
+  };
+
+  it('polls a pending head, merges it once CI turns green, then stops', async () => {
+    await handOffPending();
+    expect(vi.getTimerCount()).toBe(1);
+    expect(mergePrMock).not.toHaveBeenCalled();
+
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+
+    greenChecks();
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
+    expect(pending()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('every handed-off entry settled'));
+  });
+
+  it('never arms when the immediate pass already merged', async () => {
+    greenChecks();
+    await handOffPending();
+    expect(mergePrMock).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('extends the active poller for a second receipt instead of arming another timer', async () => {
+    const first = await handOffPending();
+    const second = await handOffPending();
+    expect(second.receipt.id).not.toBe(first.receipt.id);
+    expect(vi.getTimerCount()).toBe(1);
+
+    greenChecks();
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(mergePrMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('backs off, spends no tick budget, and hands back to the timer sweep at the cap', async () => {
+    await handOffPending();
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_FAST_POLLS);
+    const fastReads = forgeViews();
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_BACKOFF_MS / 60000 / 2);
+    expect(forgeViews()).toBe(fastReads);
+
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_CAP_MS / 60000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(pending()).toEqual([expect.objectContaining({ ticks: 0 })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('the timer sweep owns 1 entry'));
+    const finalReads = forgeViews();
+    await minutes(60);
+    expect(forgeViews()).toBe(finalReads);
+  });
+
+  it('skips a poll the daemon gate blocks without reading the forge', async () => {
+    await handOffPending();
+    const reads = forgeViews();
+    gate.mockResolvedValue('daemon paused');
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(forgeViews()).toBe(reads);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('skipped: daemon paused'));
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('stops when the daemon stops', async () => {
+    await handOffPending();
+    const reads = forgeViews();
+    prWatcher.cancelHandoffFollowUps();
+    expect(vi.getTimerCount()).toBe(0);
+    await minutes(10);
+    expect(forgeViews()).toBe(reads);
+
+    // A receipt while the daemon is stopped leaves the entry to the timer sweep.
+    await handOffPending();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('owns a throwing poll and keeps polling', async () => {
+    await handOffPending();
+    const read = f.apps.get.bind(f.apps);
+    f.apps.get = () => { throw new Error('apps store unreadable'); };
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('apps store unreadable'));
+    expect(vi.getTimerCount()).toBe(1);
+
+    f.apps.get = read;
+    greenChecks();
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(mergePrMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

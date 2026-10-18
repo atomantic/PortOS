@@ -144,7 +144,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
     queuedAt: new Date().toISOString(),
   };
-  const { queuePendingMerge, sweepPendingMergeApp } = await import('./prWatcher.js');
+  const { queuePendingMerge, followUpHandoffReceipt } = await import('./prWatcher.js');
   const queued = await queuePendingMerge(app.id, {
     prUrl, prNumber: pr.number, prBranch: view.headRefName, sourceAgentId: agentId,
     sourceTask: {
@@ -167,9 +167,10 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   });
   if (!queued) return refuse('queue-write-failed');
   console.log(`🤝 PR #${pr.number} handed to the pending-merge coordinator at ${head.slice(0, 12)} by ${agentId}`);
-  // Detached: the receipt must not wait on forge reads, and the 30-minute timer
-  // still owns the entry if this pass finds CI pending or fails.
-  sweepPendingMergeApp(app.id);
+  // Detached: the receipt must not wait on forge reads. One immediate pass
+  // merges a head whose CI already settled; a still-pending entry gets the
+  // bounded follow-up poll, and the 30-minute timer owns it after that.
+  followUpHandoffReceipt(app.id, receipt.id);
   return { queued: true, receipt };
 }
 

@@ -42,8 +42,20 @@ const PR_LIST_LIMIT = 200;
 // before a merge-only PR silently leaks forever. cos.js drives its interval off
 // PENDING_MERGE_SWEEP_INTERVAL_MS so `MAX_PENDING_MERGE_TICKS` keeps mapping to
 // wall-clock hours rather than to restarts (#3630).
+//
+// A handoff receipt whose CI is still running would otherwise wait up to one
+// full interval after CI turns green, so the receipt arms a bounded per-app
+// follow-up poll (`followUpHandoffReceipt`): every HANDOFF_FOLLOW_UP_INTERVAL_MS
+// for the first HANDOFF_FOLLOW_UP_FAST_POLLS polls (a scoped CI run), then every
+// HANDOFF_FOLLOW_UP_BACKOFF_MS, until its receipts settle or HANDOFF_FOLLOW_UP_CAP_MS
+// passes after the latest one. Those polls spend no ticks, so the timer above
+// stays the sole owner of the budget and of every entry after the cap.
 export const PENDING_MERGE_SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 export const MAX_PENDING_MERGE_TICKS = 12;
+export const HANDOFF_FOLLOW_UP_INTERVAL_MS = 60 * 1000;
+export const HANDOFF_FOLLOW_UP_FAST_POLLS = 5;
+export const HANDOFF_FOLLOW_UP_BACKOFF_MS = 2 * 60 * 1000;
+export const HANDOFF_FOLLOW_UP_CAP_MS = 45 * 60 * 1000;
 
 const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 // Every app lives in the same apps.json store, so this must be one global tail
@@ -52,6 +64,10 @@ const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 let pendingMergeWriteTail = Promise.resolve();
 const pendingMergeSweeps = new Map();
 const pendingMergeResweeps = new Map();
+// appId -> { receipts: Map<receiptId, deadlineMs>, polls, timer }
+const handoffFollowUps = new Map();
+// Registered by the CoS daemon while it runs; null = daemon stopped.
+let handoffFollowUpGate = null;
 
 // Cache the gh-authenticated login PER HOST, for the process lifetime. Host-keyed
 // for two reasons: (1) `gh api` does NOT infer the host from the working
@@ -608,6 +624,118 @@ function receiptSweep(appId) {
     console.error(`❌ Receipt pending-merge sweep failed for app ${appId}: ${err.message}`);
     return null;
   });
+}
+
+/**
+ * The receipt sweep for one handoff, then — if that receipt's entry is still
+ * queued (CI pending, admission deferred, forge briefly unreadable) — the app's
+ * bounded follow-up poll. Never rejects.
+ */
+export function followUpHandoffReceipt(appId, receiptId) {
+  return sweepPendingMergeApp(appId)
+    .then(() => armHandoffFollowUp(appId, receiptId))
+    .catch((err) => {
+      console.error(`❌ Handoff follow-up for app ${appId} could not be armed: ${err.message}`);
+    });
+}
+
+/**
+ * The CoS daemon registers the same gate its pending-merge timer uses: it
+ * resolves null when a poll may merge, else a skip reason. A poll that finds no
+ * gate (daemon stopped) ends its poller.
+ */
+export function setHandoffFollowUpGate(gate) {
+  handoffFollowUpGate = typeof gate === 'function' ? gate : null;
+}
+
+/** Daemon stop: drop every follow-up poll and the gate. */
+export function cancelHandoffFollowUps() {
+  handoffFollowUpGate = null;
+  for (const poller of handoffFollowUps.values()) clearTimeout(poller.timer);
+  handoffFollowUps.clear();
+}
+
+async function queuedReceiptIds(appId) {
+  const app = await getAppById(appId);
+  return new Set(readPendingMergePrs(app).map((entry) => entry?.handoff?.receiptId).filter(Boolean));
+}
+
+async function armHandoffFollowUp(appId, receiptId) {
+  if (!receiptId || !(await queuedReceiptIds(appId)).has(receiptId)) return;
+  if (!handoffFollowUpGate) {
+    console.warn(`⏸️ Handoff follow-up for app ${appId} not armed: CoS daemon is stopped; the timer sweep owns the entry`);
+    return;
+  }
+  const deadline = Date.now() + HANDOFF_FOLLOW_UP_CAP_MS;
+  const active = handoffFollowUps.get(appId);
+  if (active) {
+    active.receipts.set(receiptId, deadline);
+    return;
+  }
+  const poller = { receipts: new Map([[receiptId, deadline]]), polls: 0, timer: null };
+  handoffFollowUps.set(appId, poller);
+  scheduleHandoffFollowUp(appId, poller);
+  console.log(`⏱️ Handoff follow-up armed for app ${appId}: entry still pending, polling every ${HANDOFF_FOLLOW_UP_INTERVAL_MS / 1000}s`);
+}
+
+// A bounded wait on an external system: the forge cannot push CI completion to
+// a private install, which exposes no public webhook endpoint.
+function scheduleHandoffFollowUp(appId, poller) {
+  const delay = poller.polls < HANDOFF_FOLLOW_UP_FAST_POLLS ? HANDOFF_FOLLOW_UP_INTERVAL_MS : HANDOFF_FOLLOW_UP_BACKOFF_MS;
+  poller.timer = setTimeout(() => {
+    pollHandoffFollowUp(appId, poller).catch((err) => {
+      console.error(`❌ Handoff follow-up poll for app ${appId} failed: ${err.message}`);
+      if (handoffFollowUps.get(appId) !== poller) return;
+      // Still bounded when every poll throws: the latest receipt's cap ends it.
+      if (Date.now() >= Math.max(...poller.receipts.values())) {
+        handoffFollowUps.delete(appId);
+        console.warn(`⏸️ Handoff follow-up for app ${appId} reached its cap; the timer sweep owns its entries`);
+      } else {
+        scheduleHandoffFollowUp(appId, poller);
+      }
+    });
+  }, delay);
+  poller.timer.unref?.();
+}
+
+async function pollHandoffFollowUp(appId, poller) {
+  poller.polls += 1;
+  const blocked = handoffFollowUpGate ? await handoffFollowUpGate() : 'daemon-stopped';
+  if (handoffFollowUps.get(appId) !== poller) return;
+  if (blocked === 'daemon-stopped') {
+    handoffFollowUps.delete(appId);
+    console.warn(`⏸️ Handoff follow-up for app ${appId} stopped: CoS daemon is stopped`);
+    return;
+  }
+  if (blocked) {
+    console.warn(`⏸️ Handoff follow-up poll for app ${appId} skipped: ${blocked}`);
+  } else {
+    const result = await sweepPendingMergeApp(appId);
+    // null: receiptSweep already logged the thrown failure.
+    if (result && !result.ok) {
+      console.error(`❌ Handoff follow-up poll for app ${appId} failed: ${result.reason || 'sweep error'}`);
+    }
+  }
+  const queued = await queuedReceiptIds(appId);
+  // Each await is a window for a daemon stop to cancel this poller.
+  if (handoffFollowUps.get(appId) !== poller) return;
+  const now = Date.now();
+  let expired = 0;
+  for (const [receiptId, deadline] of poller.receipts) {
+    if (!queued.has(receiptId)) poller.receipts.delete(receiptId);
+    else if (now >= deadline) { poller.receipts.delete(receiptId); expired += 1; }
+  }
+  if (poller.receipts.size === 0) {
+    handoffFollowUps.delete(appId);
+    if (expired) {
+      console.warn(`⏸️ Handoff follow-up for app ${appId} reached its ${HANDOFF_FOLLOW_UP_CAP_MS / 60000}-minute cap; the timer sweep owns ${expired} entr${expired === 1 ? 'y' : 'ies'}`);
+    } else {
+      console.log(`✅ Handoff follow-up for app ${appId} done: every handed-off entry settled`);
+    }
+    return;
+  }
+  scheduleHandoffFollowUp(appId, poller);
+  console.log(`⏳ Handoff follow-up for app ${appId}: ${poller.receipts.size} handed-off entr${poller.receipts.size === 1 ? 'y' : 'ies'} still pending after poll ${poller.polls}`);
 }
 
 /**
