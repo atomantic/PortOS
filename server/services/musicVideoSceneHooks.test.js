@@ -220,7 +220,9 @@ describe('music-video scene completion hooks → takes', () => {
       expect(emitted.find((e) => e.event === 'scene-failure')).toMatchObject({ projectId: project.id, sceneId: scene.sceneId, lastFailure: stored.lastFailure });
 
       mediaJobEvents.emit('failed', { ...videoJob(project.id, scene.sceneId, 'clip-x'), status: 'failed', error: 'provider timed out' });
-      await waitFor(async () => (await sceneOf(project.id, scene.sceneId)).lastFailure?.lane === 'video');
+      // The event follows the durable write. Polling the file while Windows
+      // is replacing it creates read handles that can contend with that write.
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure' && e.lastFailure?.lane === 'video'));
       stored = await sceneOf(project.id, scene.sceneId);
       expect(stored.lastFailure).toMatchObject({ lane: 'video', error: 'provider timed out' });
     });
@@ -237,7 +239,9 @@ describe('music-video scene completion hooks → takes', () => {
 
     it('a landed take for the failed lane clears it; the other lane keeps it', async () => {
       mediaJobEvents.emit('failed', { ...videoJob(project.id, scene.sceneId, 'clip-x'), status: 'failed', error: 'clip broke' });
-      await waitFor(async () => (await sceneOf(project.id, scene.sceneId)).lastFailure?.lane === 'video');
+      // The event follows the durable write. Polling the file while Windows
+      // is replacing it creates read handles that can contend with that write.
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure' && e.lastFailure?.lane === 'video'));
 
       mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'frame.png'));
       await waitFor(() => emitted.some((e) => e.event === 'scene-image'));
