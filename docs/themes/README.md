@@ -2,7 +2,7 @@
 
 PortOS themes are design systems, not palette presets. A theme defines color, surface material, typography, radius, shadows, density, chart colors, motion, and route-level feel through a manifest in `client/src/themes/portosThemes.js`.
 
-The current production UI remains available as `classic-midnight`. The re-imagined concepts are:
+The default theme for new installs is `kestrel-neon`; the previous default UI remains available as `classic-midnight`. The re-imagined concepts are:
 
 - `lumen-glass` - translucent glass control room.
 - `black-ice-terminal` - dense cyberpunk terminal.

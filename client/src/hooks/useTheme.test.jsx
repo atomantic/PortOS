@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe('useTheme applies the manifest to <html>', () => {
   const withEffects = THEMES['kestrel-neon'];
-  const withoutEffects = THEMES[DEFAULT_THEME_ID];
+  const withoutEffects = THEMES['classic-midnight'];
   // Declared only by the effects theme — it must not survive the switch.
   const privateToken = '--port-fx-overlay-blend';
 
