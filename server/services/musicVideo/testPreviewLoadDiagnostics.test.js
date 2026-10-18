@@ -111,4 +111,30 @@ describe('preview load failure evidence', () => {
     expect(session.send).not.toHaveBeenCalled();
     expect(page.eventNames()).toEqual([]);
   });
+
+  it('returns screenshot bytes unchanged without failure probes or retained observers', async () => {
+    const { session, browser } = browserSession(async () => ({}));
+    const page = fixture(undefined, browser);
+    const bytes = Buffer.from([137, 80, 78, 71]);
+    await expect(_withTestPreviewLoadDiagnostics(page, async () => bytes,
+      { phase: 'film-look-reference-screenshot' })).resolves.toBe(bytes);
+    expect(page.evaluate).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+    expect(page.eventNames()).toEqual([]);
+  });
+
+  it.each(['film-look-reference-screenshot', '/private/phase-sentinel'])('retains only an allowlisted screenshot phase (%s) before cleanup', async phase => {
+    vi.useFakeTimers();
+    const { browser } = browserSession(() => new Promise(() => {}));
+    const page = fixture(vi.fn(() => new Promise(() => {})), browser);
+    const failure = new Error('screenshot deadline');
+    const checked = expect(_withTestPreviewLoadDiagnostics(page, async () => { throw failure; }, { phase })).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(1000);
+    await checked;
+    expect(snapshot(failure)).toMatchObject({ phase: phase.startsWith('/') ? 'unavailable' : phase,
+      pageClosed: false, browserConnected: true, documentProbe: 'deadline', processProbe: 'deadline' });
+    expect(failure.message).not.toContain('phase-sentinel');
+    expect(page.eventNames()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

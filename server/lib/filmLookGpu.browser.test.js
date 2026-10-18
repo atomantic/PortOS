@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
+import { _withTestPreviewLoadDiagnostics } from '../services/musicVideo/testPreviewLoadDiagnostics.js';
 import { browserSuiteCanRun } from './browserSuiteGate.js';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, filmLookFilterMarkup, filmLookPreset, normalizeFilmLook } from './filmLook.js';
 import { filmLookGpuRuntimeSource } from './filmLookGpu.js';
@@ -162,7 +163,8 @@ describe.skipIf(!canRun).each([
         document.documentElement.style.filter = css;
       }, { filter, css });
       await gpu.evaluate(({ look, w, h }) => globalThis.primaryRenderer.render(document.getElementById('v'), look, { frame: 0, width: w, height: h }), { look, w, h });
-      const reference = await sharp(await svg.screenshot()).removeAlpha().raw().toBuffer();
+      const reference = await sharp(await _withTestPreviewLoadDiagnostics(svg, () => svg.screenshot(),
+        { phase: 'film-look-reference-screenshot' })).removeAlpha().raw().toBuffer();
       const finished = await sharp(await gpu.screenshot()).removeAlpha().raw().toBuffer();
       expect(psnr(reference, finished)).toBeGreaterThanOrEqual(40);
     } finally {

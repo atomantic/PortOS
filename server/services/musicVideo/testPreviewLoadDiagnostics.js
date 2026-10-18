@@ -11,6 +11,7 @@ const PROCESS_SAMPLE_MS = 250;
 const PROCESS_PROBE_MS = 1000;
 const DEADLINE = Symbol('deadline');
 const SAMPLED_PROCESS_TYPES = new Set(['browser', 'renderer', 'GPU']);
+const PHASES = new Set(['load', 'composition-readiness', 'film-look-reference-screenshot']);
 const count = value => Number.isInteger(value) && value >= 0 ? Math.min(value, LIMIT) : 'unavailable';
 const flag = value => typeof value === 'boolean' ? value : 'unavailable';
 const percent = value => Number.isFinite(value) ? Math.min(Math.max(Math.round(value), 0), 10 * LIMIT) : 'unavailable';
@@ -103,7 +104,7 @@ function hostLoadPerCpu() {
   return Number.isFinite(perCpu) ? Math.min(Math.round(perCpu * 100) / 100, LIMIT) : 'unavailable';
 }
 
-export async function _withTestPreviewLoadDiagnostics(page, load) {
+export async function _withTestPreviewLoadDiagnostics(page, operation, { phase: initialPhase = 'load' } = {}) {
   const started = Date.now();
   const facts = { domContentLoaded: false, load: false, crashed: false, closed: false,
     scriptRequested: 0, scriptFinished: 0, scriptFailed: 0,
@@ -124,11 +125,12 @@ export async function _withTestPreviewLoadDiagnostics(page, load) {
     pageerror: error => increment(error.name === 'TypeError' ? 'typeError' : error.name === 'SyntaxError' ? 'syntaxError' : 'otherError'),
   };
   for (const [event, listener] of Object.entries(events)) page.on(event, listener);
-  let phase = 'load';
+  // Caller phases are fixed vocabulary, never paths or document-derived text.
+  let phase = PHASES.has(initialPhase) ? initialPhase : 'unavailable';
   try {
     // The caller keeps its existing Playwright load and semantic deadlines.
     // Observations never replace load with a weaker lifecycle event.
-    await load(() => { phase = 'composition-readiness'; });
+    return await operation(() => { phase = 'composition-readiness'; });
   } catch (error) {
     const failure = { phase, elapsedMs: Math.min(Date.now() - started, 3600000), ...facts,
       pageClosed: page.isClosed(), browserConnected: page.context().browser()?.isConnected() ?? false,
