@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { Server } from 'socket.io';
+import { io as connect } from 'socket.io-client';
 
 const createShellSession = vi.fn(() => 'sess-1');
 const resizeSession = vi.fn(() => true);
@@ -35,6 +39,29 @@ describe('shell:start payload validation', () => {
     await handlers['shell:start'](undefined);
     expect(createShellSession).toHaveBeenCalledTimes(1);
     expect(socket.emit).toHaveBeenCalledWith('shell:started', { sessionId: 'sess-1' });
+  });
+
+  it('starts the default shell across Socket.IO when the client emits undefined options', async () => {
+    const http = createServer();
+    const server = new Server(http);
+    server.on('connection', registerShellHandlers);
+    let client;
+    try {
+      http.listen(0, '127.0.0.1');
+      await once(http, 'listening');
+      client = connect(`http://127.0.0.1:${http.address().port}`, {
+        transports: ['websocket'], reconnection: false
+      });
+      await once(client, 'connect');
+      const started = once(client, 'shell:started', { signal: AbortSignal.timeout(2000) });
+      // This is the Shell page's empty-options emit: the wire turns undefined into null.
+      client.emit('shell:start', undefined);
+      expect(await started).toEqual([{ sessionId: 'sess-1' }]);
+      expect(createShellSession).toHaveBeenCalledTimes(1);
+    } finally {
+      client?.disconnect();
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 });
 
