@@ -742,12 +742,13 @@ function captureQueueSnapshot() {
   // other write (progress, enqueue, the shutdown flush, or one landing after a
   // completion's own retries gave up) keeps it `running` on disk and leaves it
   // to an admitted recovery commit, never publishing it in the middle of a cut.
-  const completionAdmitted = holdsBackupAssetPublication();
+  const completionAdmitted = !completionRecoveryDeferred && holdsBackupAssetPublication();
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending }) =>
+    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
+      ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
   );
   const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
   return { data: { jobs: serializable, videoHolds: videoHolds.snapshot(), quotaCooldowns: snapshotQuotaCooldowns() }, transitions, hasDeferredCompletion };
@@ -770,8 +771,20 @@ async function acknowledgeWrittenTransitions(transitions) {
 // hooks join the lease from the fan-out. Never awaited inside the persist
 // chain, so a cut draining an admitted write cannot deadlock on it.
 let completionRecovery = null;
+let completionRecoveryDeferred = false;
+
+// Boot restores the queue before wiring domain hooks. Open recovery only after
+// those listeners exist; keeping the receipt private also protects completions
+// from a newly dispatched job during that startup window.
+export function resumeMediaJobCompletions() {
+  completionRecoveryDeferred = false;
+  if ([...pendingTransitions.keys()].some(job => job.durabilityPending?.status === 'completed')) {
+    recoverCompletionsUnderAdmission();
+  }
+}
+
 function recoverCompletionsUnderAdmission() {
-  if (completionRecovery) return;
+  if (completionRecovery || completionRecoveryDeferred) return;
   // Tracked as a terminal operation so the shutdown flush drains it (and times
   // out, reporting failure, if an open cut still holds the commit).
   completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
@@ -779,8 +792,35 @@ function recoverCompletionsUnderAdmission() {
     .finally(() => { completionRecovery = null; }));
 }
 
-export async function initMediaJobQueue() {
+async function announceTerminalTransition(job, onDurable = () => {}) {
+  if (job.params?.videoProduction) {
+    const tag = job.params.videoProduction;
+    const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+    await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (job.status === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : job.status })
+      .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
+  }
+  // Wake the lane finalizer without polling. Some providers emit their
+  // terminal event just before their kickoff promise resolves; the promise
+  // retains that signal until runJob reaches the await below.
+  onDurable();
+  const logPrefix = job.status === 'completed' ? '✅' : job.status === 'canceled' ? '🛑' : '❌';
+  const logSuffix = job.status === 'failed' ? `: ${job.error}` : job.status === 'canceled' ? ' (was running)' : '';
+  const log = job.status === 'failed' ? console.error : console.log;
+  log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${job.status}${logSuffix}`);
+  const ssePayload =
+    job.status === 'completed' ? { type: 'complete', result: job.result }
+    : job.status === 'canceled' ? { type: 'canceled', reason: job.error }
+    : { type: 'error', error: job.error };
+  broadcastSse(ensureSseEntry(job.id), ssePayload);
+  closeJobAfterDelay(sseJobs, job.id);
+  // Hooks that publish files or rows acquire their own admission; see
+  // runOutsideBackupAssetPublication.
+  runOutsideBackupAssetPublication(() => mediaJobEvents.emit(job.status, job));
+}
+
+export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
   if (initPromise) return initPromise;
+  completionRecoveryDeferred = deferCompletionRecovery;
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);
@@ -839,6 +879,22 @@ export async function initMediaJobQueue() {
       // Reconcile the original idempotency key while preserving its peer slot.
       const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
         && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
+      if (j.status === 'running' && j.durabilityPending?.status === 'completed') {
+        // This optional receipt is private queue state, not a published result.
+        // Legacy snapshots have no receipt and retain their existing recovery.
+        const receipt = j.durabilityPending;
+        const permit = maintenance.recoverOwned('media', j.id);
+        archive.push(j);
+        stageTerminalTransition(j, target => Object.assign(target, receipt), () => permit.run(async () => {
+          videoHolds.recordTerminal(j);
+          videoHolds.updateQueued(queue);
+          await announceTerminalTransition(j);
+          // A receipt proves completion, not remote executor teardown or input
+          // cleanup. finish deliberately retains any uncertain ownership.
+          await permit.finish();
+        }));
+        continue;
+      }
       if (j.status === 'running' && maintenance.held()) {
         maintenance.recoverOwned('media', j.id);
         if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
@@ -1034,14 +1090,16 @@ function startLaneJob(job, { lane }) {
     ? (job.params?.mode || 'cloud')
     : lane === 'remote' ? `remote ${job.kind}` : job.kind;
   let finalized = false;
+  let terminalCounted = false;
   let archiveWrite;
   function finalizeLane() {
+    if (!terminalCounted && ['completed', 'failed', 'canceled'].includes(job.status)) {
+      terminalCounted = true;
+      videoHolds.recordTerminal(job);
+      videoHolds.updateQueued(queue);
+    }
     if (finalized) return archiveWrite;
     finalized = true;
-    // Count once, after every terminal path (including pre-dispatch throws),
-    // and before releasing the lane. Boot reconciliation never comes here.
-    videoHolds.recordTerminal(job);
-    videoHolds.updateQueued(queue);
     if (lane === 'cloud') {
       const idx = cloudRunning.indexOf(job);
       if (idx >= 0) cloudRunning.splice(idx, 1);
@@ -1072,7 +1130,7 @@ function startLaneJob(job, { lane }) {
       broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
       mediaJobEvents.emit('started', job);
       console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${label} started`);
-      const lifecycle = runJob(job, permit);
+      const lifecycle = runJob(job, permit, finalizeLane);
       markRunning();
       lifecycleEvidence = await lifecycle;
     } catch (err) {
@@ -1391,22 +1449,24 @@ function makeGenDispatcher(emitter, job, handlers) {
 // The dispatch window closes once the provider has been invoked (not settled —
 // a provider kickoff may legitimately stay pending) or the job failed before
 // reaching it. The finally covers a throw anywhere before that point.
-async function runJob(job, permit) {
+async function runJob(job, permit, finalizeLane) {
   let markDispatched;
   trackOperation(dispatchOperations, new Promise((resolve) => { markDispatched = resolve; }));
   try {
-    return await runJobLifecycle(job, markDispatched, permit);
+    return await runJobLifecycle(job, markDispatched, permit, finalizeLane);
   } finally {
     markDispatched();
   }
 }
 
-async function runJobLifecycle(job, markDispatched, permit) {
+async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
   const terminalState = new Promise((resolve) => { resolveTerminalState = resolve; });
   let resolveProviderSettlement;
   const providerSettlement = new Promise(resolve => { resolveProviderSettlement = resolve; });
+  let resolveDeferredCompletion;
+  const deferredCompletion = new Promise(resolve => { resolveDeferredCompletion = resolve; });
   let watchdogNeedsProviderSettlement = false;
   // Transient: returned to the lane finalizer, never persisted or projected.
   const recovery = createRecoveryEvidence();
@@ -1502,7 +1562,24 @@ async function runJobLifecycle(job, markDispatched, permit) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
-    await admitCompletion(state, () => publishTerminalTransition(state, apply, remoteInputsDisposable));
+    let publicationStarted = false;
+    try {
+      await admitCompletion(state, () => {
+        publicationStarted = true;
+        return publishTerminalTransition(state, apply, remoteInputsDisposable);
+      });
+    } catch (error) {
+      if (publicationStarted || state !== 'completed') throw error;
+      console.warn(`⏸️ media-job [${job.id.slice(0, 8)}] completion retained for publication recovery: ${error.message}`);
+      // The provider finished, but admission never opened. Persist a pending
+      // receipt without publishing completion, so recovery can finish it even
+      // after a restart. Do not replay a callback that already started.
+      try {
+        await publishTerminalTransition(state, apply, remoteInputsDisposable);
+      } finally {
+        resolveDeferredCompletion();
+      }
+    }
   }
 
   async function publishTerminalTransition(state, apply, remoteInputsDisposable) {
@@ -1527,29 +1604,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
       // A shared persist can acknowledge another job: restore THAT job's
       // maintenance context, and never let cleanup failure lose this callback.
       await releaseRemoteAudioInputs(remoteInputsDisposable);
-      if (job.params?.videoProduction) {
-        const tag = job.params.videoProduction;
-        const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
-        await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (state === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : state })
-          .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
-      }
-      // Wake the lane finalizer without polling. Some providers emit their
-      // terminal event just before their kickoff promise resolves; the promise
-      // retains that signal until runJob reaches the await below.
-      resolveTerminalState();
-      const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
-      const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
-      const log = state === 'failed' ? console.error : console.log;
-      log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
-      const ssePayload =
-        state === 'completed' ? { type: 'complete', result: job.result }
-        : state === 'canceled' ? { type: 'canceled', reason: job.error }
-        : { type: 'error', error: job.error };
-      broadcastSse(sseEntry, ssePayload);
-      closeJobAfterDelay(sseJobs, job.id);
-      // Hooks that publish files or rows acquire their own admission; see
-      // runOutsideBackupAssetPublication.
-      runOutsideBackupAssetPublication(() => mediaJobEvents.emit(state, job));
+      await announceTerminalTransition(job, resolveTerminalState);
     });
     await persistTerminalTransition(job);
   }
@@ -1799,6 +1854,10 @@ async function runJobLifecycle(job, markDispatched, permit) {
   // The gen modules emit completed/failed asynchronously after kickoff. Await
   // the explicit terminal signal rather than polling every 100ms; this makes
   // lane release immediate and gives tests a deterministic lifecycle to drain.
+  // Only release the execution lane after the provider invocation has settled.
+  // Keep maintenance ownership until the admitted completion is durable.
+  await Promise.race([terminalState, deferredCompletion]);
+  if (job.durabilityPending) finalizeLane();
   await terminalState;
   if (watchdogNeedsProviderSettlement) await providerSettlement;
   // A watchdog can win the terminal row before the real provider responds.
@@ -2134,6 +2193,7 @@ export function __resetForTests() {
   // jobs file would otherwise leave every later test's queue unable to persist.
   persistBlocked = false;
   completionRecovery = null;
+  completionRecoveryDeferred = false;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and
