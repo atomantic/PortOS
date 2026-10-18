@@ -302,13 +302,13 @@ describe('taskPromptDefaults integrity snapshot', () => {
       const prompt = DEFAULT_TASK_PROMPTS[key];
       expect(prompt.toLowerCase()).not.toContain('copilot');
       expect(prompt).not.toMatch(/^\s*gh pr merge[^\n]*--auto/m);
-      expect(prompt).toContain('--json state -q .state');
+      expect(prompt).toContain('--json state,headRefOid,mergeStateStatus,isDraft,reviewDecision');
       expect(prompt).toContain('[ "$STATE" = "MERGED" ]');
-      expect(prompt).toContain('--squash --match-head-commit "$CI_VERIFIED_HEAD"');
+      expect(prompt).toContain('for MERGE_METHOD in merge squash rebase');
       expect(prompt).not.toContain('--delete-branch');
       expect(prompt).toContain('Archive failure');
       expect(prompt).toContain('untracked AND ignored');
-      expect(prompt).toContain('--rebase --match-head-commit "$CI_VERIFIED_HEAD"');
+      expect(prompt).toContain('"--$MERGE_METHOD" --match-head-commit "$CI_VERIFIED_HEAD"');
       expect(prompt).toContain('Never force-delete with `-D`');
     }
 
@@ -333,7 +333,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-task'];
     const claimFlow = DEFAULT_TASK_PROMPTS['plan-task-claim'];
 
-    expect(PROMPT_VERSIONS['plan-task']).toBe(22);
+    expect(PROMPT_VERSIONS['plan-task']).toBe(23);
     expect(current).not.toContain('## Phase 6 — Review locally');
     expect(current).not.toContain('{reviewers}');
     expect(current).not.toContain('LOCAL reviewers');
@@ -951,7 +951,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(42);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(43);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -978,7 +978,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   );
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 42], ['claim-issue-gitlab', 37], ['claim-issue-jira', 24]];
+    const cases = [['claim-issue', 43], ['claim-issue-gitlab', 37], ['claim-issue-jira', 24]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];
