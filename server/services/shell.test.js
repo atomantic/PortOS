@@ -458,6 +458,14 @@ describe('writeToSession / resizeSession', () => {
   it('resizeSession returns false for missing session', () => {
     expect(shell.resizeSession('missing', 80, 24)).toBe(false);
   });
+
+  it('resizeSession returns false without throwing when pty.resize throws', () => {
+    const id = shell.createShellSession(makeSocket());
+    ptyInstances[0].resize.mockImplementationOnce(() => {
+      throw new Error('ioctl(2) failed, EBADF');
+    });
+    expect(shell.resizeSession(id, 80, 24)).toBe(false);
+  });
 });
 
 describe('changeSessionDirectory', () => {
