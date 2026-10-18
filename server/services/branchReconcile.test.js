@@ -2121,8 +2121,18 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
     expect(instruction).not.toContain('--delete-branch');
     expect(instruction).toContain('Archive failure');
-    // Worktree first, then the branch — the delete fails while it's checked out.
-    expect(instruction).toContain('Then remove only the authorized worktree and ancestry-gate');
+    // Prove preservation and default-branch ancestry before removing the
+    // checkout; delete the named branch only after it is no longer checked out.
+    const cleanupSteps = [
+      'Archive failure',
+      'Fetch the verified remote’s intended default branch explicitly',
+      'git merge-base --is-ancestor <exact-local-tip> <fetched-intended-default>',
+      'Then remove only the authorized worktree',
+      'git branch -d <branch>',
+    ].map(step => instruction.indexOf(step));
+    expect(cleanupSteps.every(position => position >= 0)).toBe(true);
+    expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
+    expect(instruction).toContain('If ancestry is unproven, preserve both checkout and branch');
   });
 
   it('names the real PR number when the branch already has one', () => {
