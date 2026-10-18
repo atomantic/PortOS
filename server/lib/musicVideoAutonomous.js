@@ -86,6 +86,30 @@ export function normalizeLocalMusicOptions(raw) {
 // A run in one of these states can still be resumed / approved.
 export const AUTONOMOUS_LIVE_STATUSES = Object.freeze(['running', 'awaiting-approval', 'needs-human', 'stopped']);
 
+/**
+ * Presentation only: a current finished video supersedes its old stills-only
+ * checkpoint. Keep the run and its child unchanged as historical evidence;
+ * failures, interruptions and unverified/stale renders still need attention.
+ */
+export function supersededStillsCheckpoint(project, readiness = project?.productionReadiness) {
+  const auto = project?.autonomousRun;
+  if (project?.status !== 'complete' || !isStr(project.renderHistoryId) || !project.renderHistoryId.trim()
+    || project.renderDependencyState?.status !== 'current'
+    || !readiness?.art?.approved || readiness.art.stale
+    || !readiness?.storyboard?.approved || readiness.storyboard.stale
+    || auto?.status !== 'awaiting-approval' || auto.awaiting !== 'stills' || auto.interrupted
+    || !auto.output?.productionRunId) return false;
+  const child = (project.productionRuns || []).find((run) => run.id === auto.output.productionRunId);
+  if (child?.status !== 'awaiting-video' || child.interrupted) return false;
+  // Summary cards carry only coarse run flags. Keep their warning when other
+  // work still needs attention, even if this particular checkpoint is obsolete.
+  return !project.castAndSets?.interrupted
+    && !(project.revisions || []).some((revision) => ['open', 'rendering'].includes(revision.status))
+    && !(project.autoReviews || []).some((run) => ['running', 'needs-human', 'limit-reached', 'stopped', 'failed'].includes(run.status))
+    && !(project.productionRuns || []).some((run) => run.id !== child.id
+      && (run.interrupted || ['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video', 'needs-human', 'failed'].includes(run.status)));
+}
+
 export const AUTONOMOUS_PROMPT_MAX = 4000;
 export const AUTONOMOUS_NAME_MAX = 200;
 export const AUTONOMOUS_ORIGINS = Object.freeze(['manual', 'schedule']);

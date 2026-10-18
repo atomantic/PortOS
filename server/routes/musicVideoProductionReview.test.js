@@ -40,6 +40,7 @@ vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await
   }),
 }));
 
+const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
@@ -78,6 +79,31 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('human-reviewed Music Video workflow', () => {
+  it('projects a finished video past its stills checkpoint while retaining the stored run and new attention', async () => {
+    expect((await approve('art')).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      status: 'complete', renderHistoryId: 'synthetic-final', renderDependencies: captureMusicVideoEvidence(current),
+      autonomousRun: { id: 'synthetic-auto', status: 'awaiting-approval', awaiting: 'stills', stage: 'produce', output: { productionRunId: 'synthetic-production' } },
+      productionRuns: [{ id: 'synthetic-production', status: 'awaiting-video' }],
+    } }));
+    const before = await store.getProject(project.id);
+    const full = await request(app).get(base);
+    expect(full.body.renderDependencyState.status).toBe('current');
+    expect(full.body.productionReadiness).toMatchObject({ art: { approved: true }, storyboard: { approved: true } });
+    const summary = async () => {
+      const response = await request(app).get('/api/music-video?summary=1&limit=500');
+      expect(response.status).toBe(200);
+      return response.body.items.find(item => item.id === project.id);
+    };
+    expect(await summary()).toMatchObject({ status: 'complete', runStatus: 'awaiting-approval', runAwaiting: false });
+    expect(await store.getProject(project.id)).toEqual(before);
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      revisions: [{ id: 'synthetic-revision', status: 'open', sections: [] }],
+    } }));
+    expect(await summary()).toMatchObject({ runAwaiting: true });
+  });
+
   it('drafts storyboard shots for planned scenes, taking camera and transition from the Cast & Sets world', async () => {
     await save({ ...draft, storyboard: [] });
     await store.mutateProjectRecord(project.id, current => ({ project: { ...current,

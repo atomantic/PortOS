@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
+import { summarizeMusicVideoProject } from '../../../../server/lib/musicVideoSummary.js';
+import { autopilotStatus, deriveNextAction, deriveStages, describeProjectStatus } from '../../lib/musicVideoStages.js';
+import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
 
 vi.mock('../../services/apiImageVideo.js', () => ({
   getVideoHistoryItem: vi.fn(async (id) => ({ id, filename: `${id}.mp4` })),
@@ -242,5 +245,85 @@ describe('MusicVideoProjectCard run pill and version switcher', () => {
     fireEvent.click(screen.getByLabelText('Older version'));
     expect(onVersionStep).toHaveBeenCalledWith(1);
     expect(screen.getByLabelText('Newer version').disabled).toBe(true);
+  });
+});
+
+
+describe('completed project with an old stills checkpoint', () => {
+  const finished = () => ({
+    ...BASE_PROJECT, status: 'complete', renderHistoryId: 'example-final',
+    renderDependencyState: { status: 'current' },
+    scenes: [{ sceneId: 's1', referenceImageId: 'example-frame', videoHistoryId: 'example-clip' }],
+    productionReadiness: { art: { approved: true }, storyboard: { approved: true }, proof: { approved: false } },
+    publishKit: { builtAt: '2026-01-01', posts: { example: { url: 'https://example.com/video' } } },
+    autonomousRun: { id: 'auto-example', status: 'awaiting-approval', awaiting: 'stills', stage: 'produce', output: { productionRunId: 'production-example' } },
+    productionRuns: [{ id: 'production-example', status: 'awaiting-video' }],
+  });
+
+  it('keeps the summary card, full card and header past the obsolete checkpoint without changing run history', () => {
+    const project = finished();
+    const original = structuredClone(project);
+    const summary = summarizeMusicVideoProject(project, project.productionReadiness);
+    expect(summary).toMatchObject({ status: 'complete', runStatus: 'awaiting-approval', runAwaiting: false });
+    const { rerender } = render(<MusicVideoProjectCard project={summary} />);
+    expect(screen.getByText('complete')).toBeInTheDocument();
+    expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
+    rerender(<MusicVideoProjectCard project={project} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Done');
+    const progress = deriveStages(project);
+    const nextAction = deriveNextAction(project);
+    expect(nextAction.id).toBe('goto-publish');
+    expect(describeProjectStatus(project, { progress, nextAction })).toMatchObject({ headline: 'Published', needsYouStage: null });
+    expect(autopilotStatus(project).short).toBe('Autopilot');
+    expect(deriveAttentionItems(project)).toEqual([]);
+    expect(project).toEqual(original);
+  });
+
+  it.each([
+    ['incomplete project', (p) => { p.status = 'ready'; p.renderHistoryId = null; }],
+    ['stale final', (p) => { p.renderDependencyState.status = 'stale'; }],
+    ['unverified final', (p) => { delete p.renderDependencyState; }],
+    ['unapproved storyboard', (p) => { p.productionReadiness.storyboard.approved = false; }],
+    ['changed art approval', (p) => { p.productionReadiness.art.stale = { changed: [] }; }],
+    ['different checkpoint', (p) => { p.autonomousRun.awaiting = 'song'; }],
+    ['failed child', (p) => { p.productionRuns[0].status = 'failed'; }],
+    ['child needing review', (p) => { p.productionRuns[0].status = 'needs-human'; }],
+    ['unrelated child', (p) => { p.autonomousRun.output.productionRunId = 'different-run'; }],
+  ])('retains actionable attention for %s in both card payloads', (_label, change) => {
+    const project = finished();
+    change(project);
+    const summary = summarizeMusicVideoProject(project, project.productionReadiness);
+    expect(summary.runAwaiting).toBe(true);
+    const { rerender } = render(<MusicVideoProjectCard project={summary} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    rerender(<MusicVideoProjectCard project={project} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    expect(deriveAttentionItems(project).some((item) => item.kind === 'autonomous')).toBe(true);
+  });
+
+  it('preserves failures, live work, interruptions and unrelated revision attention after a final render', () => {
+    const project = finished();
+    const { rerender } = render(<MusicVideoProjectCard project={{ ...project, autonomousRun: { ...project.autonomousRun, status: 'failed' } }} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    rerender(<MusicVideoProjectCard project={{ ...project, productionRuns: [], autonomousRun: { ...project.autonomousRun, status: 'running' } }} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Running');
+    for (const target of ['autonomousRun', 'productionRuns']) {
+      const interrupted = structuredClone(project);
+      (target === 'autonomousRun' ? interrupted.autonomousRun : interrupted.productionRuns[0]).interrupted = true;
+      rerender(<MusicVideoProjectCard project={interrupted} />);
+      expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Interrupted');
+      expect(summarizeMusicVideoProject(interrupted, interrupted.productionReadiness).runInterrupted).toBe(true);
+    }
+    const revised = { ...project, revisions: [{ id: 'revision-example', status: 'open', sections: [] }] };
+    rerender(<MusicVideoProjectCard project={revised} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    expect(deriveAttentionItems(revised).map((item) => item.kind)).toContain('revision');
+    rerender(<MusicVideoProjectCard project={summarizeMusicVideoProject(revised, revised.productionReadiness)} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    const otherRun = { ...project, productionRuns: [...project.productionRuns, { id: 'other-run', status: 'blocked' }] };
+    rerender(<MusicVideoProjectCard project={otherRun} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
+    rerender(<MusicVideoProjectCard project={summarizeMusicVideoProject(otherRun, otherRun.productionReadiness)} />);
+    expect(screen.getByTestId('mv-run-pill-mv-card-1')).toHaveTextContent('Needs you');
   });
 });
