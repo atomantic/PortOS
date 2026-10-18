@@ -1,12 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
+import { workflowJobs } from './lib/workflowJobs.js';
 
 import {
   ALWAYS_RUN_TESTS,
@@ -14,9 +15,11 @@ import {
   buildCiTestPlan,
   classifyDependencyChange,
   collectPlanInputs,
+  emitGitHubPlan,
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
+  LINUX_CONTAINMENT_TESTS,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
   PLATFORM_PACKAGE_RES,
@@ -1867,5 +1870,83 @@ describe('dependency manifest Windows escalation', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('path-gated single-purpose jobs', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const realPlan = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: repo });
+    return buildCiTestPlan(inputs.changedFiles, inputs);
+  };
+  const gates = (plan) => ({ promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment });
+
+  it('runs each job only when the real diff reaches its inputs', () => {
+    expect(gates(realPlan(['docs/README.md']))).toEqual({ promptHistory: false, linuxContainment: false });
+    // Reached only through the hash-declaring migrations' import closure.
+    expect(gates(realPlan(['server/lib/fileUtils.js']))).toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
+      .toEqual({ promptHistory: false, linuxContainment: true });
+    expect(gates(realPlan(['data.reference/prompts/stages/example.md'])))
+      .toEqual({ promptHistory: true, linuxContainment: false });
+    expect(gates(realPlan(['server/package-lock.json'])).linuxContainment).toBe(true);
+    expect(gates(realPlan(['.github/workflows/ci.yml']))).toEqual({ promptHistory: true, linuxContainment: true });
+  });
+
+  it('gates linux-containment on the whole closure of the tests the job runs', () => {
+    // A transitive dependency of the route test that its name never mentions:
+    // only the import walk can select it.
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
+    const closure = staticImportClosure(join(repo, 'server/routes/codeAnimationExecution.test.js')).files;
+    expect(closure).toContain(join(repo, 'server/services/codeAnimation/execution.js'));
+    for (const file of closure) {
+      expect(inputs.linuxContainmentInputs).toContain(file.slice(repo.length).split('\\').join('/'));
+    }
+  });
+
+  it('runs both jobs when forced full or when an input walk is inconclusive', () => {
+    expect(gates(buildCiTestPlan(['docs/README.md'], { forceFull: true })))
+      .toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: null, linuxContainmentInputs: null })))
+      .toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] })))
+      .toEqual({ promptHistory: false, linuxContainment: false });
+  });
+
+  it('still runs a job when the diff deletes one of its entry points', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-plan-gates-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      const deleted = LINUX_CONTAINMENT_TESTS[0];
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [deleted], cwd: root });
+      expect(buildCiTestPlan(inputs.changedFiles, inputs).linuxContainment).toBe(true);
+      expect(buildCiTestPlan(['docs/README.md'], inputs).linuxContainment).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('emits both decisions and ci.yml gates the jobs on them', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      emitGitHubPlan(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] }));
+      const outputs = JSON.parse(log.mock.calls.at(-1)[0]);
+      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false });
+    } finally {
+      log.mockRestore();
+    }
+
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    expect(jobs.impact).toContain('prompt_history: ${{ steps.plan.outputs.prompt_history }}');
+    expect(jobs.impact).toContain('linux_containment: ${{ steps.plan.outputs.linux_containment }}');
+    expect(jobs['prompt-history']).toContain('needs: impact');
+    expect(jobs['prompt-history']).toContain("if: needs.impact.outputs.prompt_history == 'true'");
+    expect(jobs['linux-containment']).toContain("if: needs.impact.outputs.linux_containment == 'true'");
+    // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
+    const run = jobs['linux-containment'].match(/run: npm test --prefix server -- --run (.*)/)[1];
+    expect(run.split(' ').map((path) => `server/${path}`)).toEqual(LINUX_CONTAINMENT_TESTS);
+    // A skipped gated job still reports to CI Gate, which treats skipped as passing.
+    expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
+    expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
   });
 });
