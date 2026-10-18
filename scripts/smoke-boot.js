@@ -32,7 +32,7 @@ import { dirname, join } from 'path';
 import { DATA_ROOT_ENV, DISPOSABLE_ROOT_MARKER } from '../server/lib/dataRoot.js';
 import { SMOKE_BOOT_ENV } from '../server/lib/runtimeEnv.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
+import { seedDataDir } from './lib/seedDataDir.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +69,7 @@ export function createSmokeRoot({ codeRoot = CODE_ROOT, tmpBase = tmpdir() } = {
     const referenceDir = join(root, 'data.reference');
     const dataDir = join(root, 'data');
     cpSync(join(codeRoot, 'data.reference'), referenceDir, { recursive: true, dereference: true });
-    cpSync(referenceDir, dataDir, { recursive: true, filter: isSeedableReferencePath(referenceDir) });
+    seedDataDir({ referenceDir, dataDir });
     rewriteAppsPortosRoot(dataDir, codeRoot);
   } catch (err) {
     rmSync(root, { recursive: true, force: true });
