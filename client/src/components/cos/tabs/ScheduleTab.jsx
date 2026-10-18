@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -7,9 +7,12 @@ import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
+
+const SCHEDULE_EVENTS = ['cos:schedule:changed'];
 
 export function mergeUpdatedTaskInterval(schedule, taskType, interval, status) {
   if (!schedule) return schedule;
@@ -43,9 +46,10 @@ function mergeOnDemandRequest(schedule, request) {
 // same data.
 export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId, daemonRunning }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [schedule, setSchedule] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data: schedule, updateData: setSchedule, loading, error, refetch: fetchSchedule } = useSocketResource(
+    () => api.getCosSchedule({ silent: true }),
+    { namespace: 'cos', events: SCHEDULE_EVENTS }
+  );
 
   const label = searchParams.get('label') || '';
   const setLabel = next => {
@@ -84,23 +88,6 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const fetchSchedule = useCallback(async () => {
-    const data = await api.getCosSchedule({ silent: true }).catch(err => {
-      setError(err?.message || 'Failed to load task schedule');
-      return null;
-    });
-    if (data) {
-      setSchedule(data);
-      setError(null);
-    }
-    setLoading(false);
-    return data;
-  }, []);
-
-  useEffect(() => {
-    fetchSchedule();
-  }, [fetchSchedule]);
-
   // Resolves a boolean so optimistic callers (the card's quick model pins) can
   // roll their local selection back — this handler owns the error toast, so it
   // never rejects. Stable identity: every card holds it through useTaskModelPins,
@@ -119,7 +106,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     // stale render while a background refetch is still in flight.
     setSchedule(current => mergeUpdatedTaskInterval(current, taskType, result.interval, result.status));
     return true;
-  }, []);
+  }, [setSchedule]);
 
   const handleTriggerTask = useCallback(async (taskType, appId = null) => {
     const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
@@ -145,7 +132,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     }
     fetchSchedule();
     return result.request || true;
-  }, [apps, fetchSchedule, daemonRunning]);
+  }, [apps, fetchSchedule, daemonRunning, setSchedule]);
 
   const handleTriggerAppImprovement = handleTriggerTask;
 
@@ -197,7 +184,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
       {error && (
         <Banner tone="error" icon={AlertCircle} title="Schedule unavailable — showing the last loaded schedule">
-          {error}
+          {error.message || String(error)}
         </Banner>
       )}
 

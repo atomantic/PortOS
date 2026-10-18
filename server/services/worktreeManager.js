@@ -1527,6 +1527,7 @@ export async function listWorktrees(sourceWorkspace) {
     } else if (line === 'locked' || line.startsWith('locked ')) {
       // `git worktree list --porcelain` emits a bare `locked` line, or `locked <reason>`.
       current.locked = true;
+      current.lockReason = line.startsWith('locked ') ? line.slice(7) : null;
     } else if (line === 'prunable' || line.startsWith('prunable ')) {
       // Same two spellings. Set when git considers the registration disposable —
       // its directory is gone, or its .git pointer no longer resolves.

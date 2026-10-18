@@ -51,6 +51,34 @@ function renderCardWithPins(overrides = {}, props = {}) {
 }
 
 describe('AppTaskCard', () => {
+  it('exposes held checkout evidence and recovery prerequisites independently of coordinator success', () => {
+    renderCard({ perpetual: false, reconcileOutcomes: {
+      example: { status: 'incomplete', reason: 'merged-branches-held-back', observedAt: '2026-10-01T00:00:00Z', nextAction: 'Resolve the listed holds and run again.', remaining: [
+        { path: '/example/held', branch: 'fix/example', head: 'abc123', locked: true, lockReason: '<script>owner handoff</script>', managed: false, reason: 'worktree-locked' },
+      ] },
+    } }, { apps: [{ id: 'example', name: 'Example App' }] }, 'branch-reconcile');
+    fireEvent.click(screen.getByText(/Example App · Incomplete/));
+    expect(screen.getByText('/example/held')).toBeVisible();
+    expect(screen.getByText('HEAD: abc123')).toBeVisible();
+    expect(screen.getByText('Lock: <script>owner handoff</script>')).toBeVisible();
+    expect(document.querySelector('script')).toBeNull();
+    expect(screen.getByText('Outside managed worktree roots')).toBeVisible();
+    expect(screen.getByText(/Checkout recovery requires verified owner authority/)).toBeVisible();
+    expect(screen.getByText('Resolve the listed holds and run again.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Remove|Unlock|Retire/i })).toBeNull();
+  });
+
+  it('distinguishes an unreadable inventory from a completed empty scan', () => {
+    renderCard({ reconcileOutcomes: {
+      example: { status: 'incomplete', remaining: null, observedAt: null },
+      empty: { status: 'drained', remaining: [], observedAt: '2026-10-01T00:00:00Z' },
+    } }, {}, 'branch-reconcile');
+    expect(screen.getByText(/example · Incomplete/)).toBeTruthy();
+    expect(screen.getByText('Remaining work is unknown.')).toBeTruthy();
+    expect(screen.getByText('No readable inventory yet.')).toBeTruthy();
+    expect(screen.getByText(/empty · No remaining work in last scan · 0 remaining/)).toBeTruthy();
+  });
+
   it('shows app coverage prominently', () => {
     renderCard();
     expect(screen.getByText('3/5 apps')).toBeTruthy();

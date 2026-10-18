@@ -54,7 +54,7 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
   readVerdictLedger: async () => [],
 }));
 
-const { reconcile, cleanupMerged, reapSupersededBranches } = await import('./branchReconcile.js');
+const { reconcile, cleanupMerged, reapSupersededBranches, describeIdleReconcilePark } = await import('./branchReconcile.js');
 const { clearAgentDispatching, getActiveAgentIds, markAgentDispatching } = await import('./agentState.js');
 const { deleteMergedBranches } = await import('./git.js');
 
@@ -90,6 +90,33 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   }
 
   const branches = async () => (await execGit(['branch', '--format=%(refname:short)'], repo)).stdout.trim().split('\n');
+  // Git expands Windows' short TEMP spelling and emits forward slashes; the
+  // inventory promises Git's checkout path, not Node's fixture-input spelling.
+  const gitCheckoutPath = async (path) => (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+
+  it('reports an unmerged detached checkout without discarding its tracked, untracked or ignored content', async () => {
+    const path = await addTree(join(external, 'detached-work'), 'temporary-work');
+    await writeFile(join(path, 'tracked.txt'), 'unique committed work\n');
+    await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
+    await execGit(['add', 'tracked.txt', '.gitignore'], path);
+    await execGit(['commit', '-m', 'feat: synthetic detached work'], path);
+    const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    await execGit(['checkout', '--detach'], path);
+    await execGit(['branch', '-D', 'temporary-work'], repo);
+    await writeFile(join(path, 'untracked.txt'), 'unique untracked work\n');
+    await writeFile(join(path, 'ignored.txt'), 'unique ignored work\n');
+    await execGit(['worktree', 'lock', '--reason', 'explicit owner handoff required', path], repo);
+
+    const result = await reconcile(repo, { activeAgentIds: new Set() });
+    expect(result.detachedWorktrees).toEqual([]); // old merged-only projection cannot see it
+    const report = describeIdleReconcilePark(result.skipped, [], { worktreeInventory: result.worktreeInventory });
+    expect(report.remaining).toEqual([{
+      path: await gitCheckoutPath(path), head, detached: true, locked: true, lockReason: 'explicit owner handoff required',
+      managed: false, reason: 'worktree-locked',
+    }]);
+    for (const name of ['tracked.txt', 'untracked.txt', 'ignored.txt']) expect(existsSync(join(path, name))).toBe(true);
+    expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
+  });
 
   it('retires inactive managed trees but never a fresh or old unmanaged one', async () => {
     const claudeRoot = join(repo, '.claude', 'worktrees');
@@ -98,10 +125,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     const old = await addTree(join(external, 'old-workspace'), 'old-workspace', { ageMs: 30 * DAY });
     const staleClaim = await addTree(join(claudeRoot, 'claim-issue-5'), 'claim/issue-5', { ageMs: 30 * DAY });
     const lockedClaim = await addTree(join(claudeRoot, 'claim-issue-6'), 'claim/issue-6', { ageMs: 30 * DAY });
-    await execGit(['worktree', 'lock', lockedClaim], repo);
+    await execGit(['worktree', 'lock', '--reason', 'await scoped owner release', lockedClaim], repo);
     const dirtyClaim = await addTree(join(claudeRoot, 'claim-issue-7'), 'claim/issue-7');
     await writeFile(join(dirtyClaim, 'wip.txt'), 'unsaved\n');
     await utimes(dirtyClaim, new Date(Date.now() - 30 * DAY), new Date(Date.now() - 30 * DAY));
+    const staleClaimPath = await gitCheckoutPath(staleClaim);
 
     const result = await reconcile(repo, { activeAgentIds: new Set() });
     const reasonFor = (branch) => result.skipped.find((s) => s.branch === branch)?.reason;
@@ -118,6 +146,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(staleClaim)).toBe(false);
     expect(reasonFor('claim/issue-6'), context).toBe('worktree-locked');
     expect(existsSync(lockedClaim)).toBe(true);
+    const report = describeIdleReconcilePark(result.skipped, [], {
+      wip: result.wip, worktreeInventory: result.worktreeInventory,
+    });
+    expect(report.remaining).toContainEqual(expect.objectContaining({
+      branch: 'claim/issue-6', path: await gitCheckoutPath(lockedClaim), reason: 'worktree-locked',
+      head: expect.any(String), locked: true, lockReason: 'await scoped owner release', managed: true,
+    }));
+    expect(report.remaining).toContainEqual(expect.objectContaining({
+      branch: 'old-workspace', path: await gitCheckoutPath(old), reason: 'worktree-unmanaged-location', managed: false,
+    }));
+    expect(report.remaining.some(entry => entry.path === staleClaimPath)).toBe(false);
     expect(result.cleaned, context).not.toContain('claim/issue-7');
     expect(existsSync(dirtyClaim)).toBe(true);
 

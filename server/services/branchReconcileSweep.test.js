@@ -87,6 +87,9 @@ describe('manual branch reconciliation sweep', () => {
   it.each([
     [{ skipped: [{ branch: 'moved', reason: 'not-merged-on-recheck' }] }, { branch: 'moved', reason: 'not-merged-on-recheck' }],
     [{ orphanRemotes: { remoteUnavailable: true, reported: [] } }, { reason: 'remote-state-unavailable' }],
+    [{ worktreeInventory: null }, { reason: 'worktree-inventory-unavailable' }],
+    [{ worktreeInventory: [{ path: '/example/unmerged-detached', detached: true, head: 'abc123', locked: true, lockReason: 'owner handoff', managed: false, reason: 'worktree-locked' }] },
+      { path: '/example/unmerged-detached', detached: true, head: 'abc123', locked: true, lockReason: 'owner handoff', managed: false, reason: 'worktree-locked' }],
   ])('does not report drained when the final scan has incomplete evidence (%j)', async (extra, remaining) => {
     reconcile.mockResolvedValue(scan([], extra));
     expect(await run()).toEqual({ skip: true });

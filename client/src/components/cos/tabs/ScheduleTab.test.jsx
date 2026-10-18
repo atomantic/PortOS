@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
@@ -263,4 +263,22 @@ it('keeps the last saved schedule after a refresh failure', async () => {
   await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
   expect(screen.getByText('Security')).toBeVisible();
   expect(screen.queryByText('Failed to load task schedule')).not.toBeInTheDocument();
+});
+
+it('refreshes the reconciliation inventory on a schedule event without polling', async () => {
+  const config = { type: 'on-demand', enabled: true, displayName: 'Branch Reconciler' };
+  api.getCodeReviewDefaults.mockResolvedValue({});
+  api.getCosSchedule.mockReset().mockResolvedValueOnce({ tasks: { 'branch-reconcile': config } })
+    .mockResolvedValueOnce({ tasks: { 'branch-reconcile': { ...config, reconcileOutcomes: {
+      example: { status: 'incomplete', reason: 'worktree-locked', observedAt: '2026-10-01T00:00:00Z', remaining: [
+        { path: '/example/held', reason: 'worktree-locked', locked: true, lockReason: 'owner handoff' },
+      ] },
+    } } } });
+  render(<MemoryRouter><ScheduleTab apps={[{ id: 'example', name: 'Example App' }]} providers={[]} providersLoaded /></MemoryRouter>);
+  await screen.findByText('Branch Reconciler');
+  const handler = socket.on.mock.calls.findLast(([event]) => event === 'cos:schedule:changed')[1];
+  await act(async () => handler());
+  expect(await screen.findByText(/Example App · Incomplete/)).toBeTruthy();
+  expect(screen.getByText('Lock: owner handoff')).toBeTruthy();
+  expect(api.getCosSchedule).toHaveBeenCalledTimes(2);
 });
