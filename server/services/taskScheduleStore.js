@@ -58,7 +58,7 @@ function migrateScheduleV1toV2(schedule) {
   const migrated = {
     version: 2,
     lastUpdated: new Date().toISOString(),
-    tasks: { ...DEFAULT_TASK_INTERVALS },
+    tasks: structuredClone(DEFAULT_TASK_INTERVALS),
     executions: {},
     templates: schedule.templates || [],
     onDemandRequests: schedule.onDemandRequests || []
@@ -183,7 +183,7 @@ async function readSchedule() {
 
   const loaded = await readJSONFile(SCHEDULE_FILE, null, { strict: true });
   if (!loaded) {
-    return { schedule: { ...DEFAULT_SCHEDULE }, needsSave: false };
+    return { schedule: structuredClone(DEFAULT_SCHEDULE), needsSave: false };
   }
 
   // Auto-migrate v1 → v2
