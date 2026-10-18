@@ -220,6 +220,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     remoteBranchPresent,
     branchMerged,
     prState: pr.prState,
+    autoMergeEnabled: pr.autoMergeEnabled === true,
     prUrl: pr.prUrl,
     prNumber: pr.prNumber,
     forgeCli: pr.cli,
@@ -309,7 +310,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
       emitLog('info', `🔎 Repo state only partly readable for ${agentId} (${branchName}) — could not check: ${observed.unreadable.join(', ')}`, { agentId, branchName });
       return { verified: false, skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE, issues: [], observed, recoveryTaskId: null };
     }
-    emitLog('info', `🔎 Agent branch ${branchName} verified clean for ${agentId}`, { agentId, branchName });
+    emitLog('info', `🔎 Agent branch ${branchName} ${observed.autoMergeEnabled ? 'verified pending GitHub auto-merge' : 'verified clean'} for ${agentId}`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
   }
 
@@ -373,7 +374,8 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
  * `PR_UNMERGED` delegates to branch-reconcile's `driveToMerge`, which carries the
  * caveats a hand-written line loses: merge from the repo ROOT (gh cannot delete a
  * branch checked out elsewhere), retry `--squash`/`--rebase` on "not allowed",
- * never `--auto`, and remove the worktree before deleting the branch.
+ * verify the GitHub auto-merge handoff, or remove the worktree after merging
+ * before deleting the branch.
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>

@@ -22,7 +22,10 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
     expect(section).toContain('gh pr merge "<PR_URL>" --merge --delete-branch');
-    expect(section.indexOf('4. **Wait for CI to finish**')).toBeLessThan(section.indexOf('gh pr merge'));
+    expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
+    expect(section).toContain('allow_auto_merge: true');
+    expect(section).toContain('autoMergeRequest.enabledAt');
+    expect(section).toContain('all configured reviews pass');
     expect(section).toContain('8. Write a short markdown summary');
   });
 
@@ -65,7 +68,7 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).toContain('Authorization: Bearer');
     expect(prompt).toContain('never a fan-out child');
     // Ordering: CI-verified head → acquire → final PR re-read → pinned merge.
-    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', '--match-head-commit'];
+    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', 'then merge pinned to the CI-verified head'];
     const positions = order.map((marker) => prompt.indexOf(marker));
     expect(positions.every((at) => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((x, y) => x - y));

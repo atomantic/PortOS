@@ -200,6 +200,17 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(result.issues.map(i => i.code)).toEqual([REPO_STATE_ISSUES.WORKTREE_PRESENT]);
   });
 
+  it('does not file recovery against GitHub-confirmed auto-merge while its branch survives', async () => {
+    localBranch(true);
+    hasBranchMergeEvidence.mockResolvedValue(false);
+    listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'abc123']]));
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled: true });
+    const result = await run();
+    expect(result.issues).toEqual([]);
+    expect(result.observed).toMatchObject({ prState: 'OPEN', autoMergeEnabled: true });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('reports an unmerged PR the agent left open', async () => {
     localBranch(true);
     hasBranchMergeEvidence.mockResolvedValue(false);

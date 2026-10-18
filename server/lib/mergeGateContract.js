@@ -77,6 +77,8 @@ export function summaryStatesLeaveOpen(summary) {
  *   one that's CLOSED rather than merged). Either way there is nothing here
  *   to act on: finalize normally and let the post-teardown audit
  *   (`agentRepoStateVerification.js`) be the backstop, as today.
+ * - `auto-merge-enabled` — GitHub confirms a pending handoff; finalize without
+ *   claiming it has merged.
  * - `leave-open-stated` — the agent said, in its own words, that it is
  *   deliberately leaving the PR open; that is a correct terminal state.
  * - `needs-reprompt` — the PR is open and the summary names no blocker: send
@@ -85,12 +87,13 @@ export function summaryStatesLeaveOpen(summary) {
  * @param {object} params
  * @param {{prState: string|null, readable: boolean}|null} params.prProbe
  * @param {string|null|undefined} params.summary
- * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'needs-reprompt'}
+ * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'auto-merge-enabled'|'needs-reprompt'}
  */
 export function resolveMergeGateVerdict({ prProbe, summary }) {
   if (!prProbe || prProbe.readable === false) return 'no-pr-action';
   if (prProbe.prState === 'MERGED') return 'merged';
   if (prProbe.prState !== 'OPEN') return 'no-pr-action';
+  if (prProbe.autoMergeEnabled === true) return 'auto-merge-enabled';
   if (summaryStatesLeaveOpen(summary)) return 'leave-open-stated';
   return 'needs-reprompt';
 }
@@ -106,7 +109,12 @@ export function resolveMergeGateVerdict({ prProbe, summary }) {
 export function buildMergeGateReprompt(prUrl) {
   return [
     `Your Merge Gate is not finished: ${prUrl} is still OPEN and your last summary did not say you were leaving it open.`,
-    'Work through the Merge Gate steps from your original instructions now: watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
+    'Work through the Merge Gate steps from your original instructions now: use the verified GitHub auto-merge handoff when eligible, otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
     'If it truly cannot merge (a required check is red after a genuine fix attempt, or there is a conflict only a human can resolve), say so explicitly and leave it open.',
   ].join('\n');
+}
+
+/** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
+export function buildAutoMergeHandoffInstructions(prRef) {
+  return `**GitHub auto-merge handoff (before waiting for CI):** After local validation and all configured reviews pass on the published head, inspect \`gh pr view ${prRef} --json state,isDraft,headRefOid,mergeable,statusCheckRollup,reviewDecision\` and \`gh api repos/{owner}/{repo}\` (use the PR's BASE repository). If that repository has \`allow_auto_merge: true\`, the PR is ready (not draft), conflict-free, reviews are satisfied, no check has failed, and CI is queued or running on that same head, enable GitHub auto-merge with \`gh pr merge ${prRef} --auto --merge --match-head-commit <published-head>\`. Use \`--squash\` or \`--rebase\` instead only when the repository disallows merge commits. Never use \`--admin\`, change branch protection, or enable repository auto-merge settings. Read back \`gh pr view ${prRef} --json state,headRefOid,autoMergeRequest\`: require the same published head and OPEN with a non-null \`autoMergeRequest.enabledAt\`, or confirm MERGED. A command's exit status alone is not proof. Verified auto-merge is a successful terminal HANDOFF: report the PR URL and head, explicitly say auto-merge enabled with CI pending, write the completion sentinel if required, and stop without waiting for MERGED. Preserve the unmerged branch; do not close its issue or claim the work landed. This handoff overrides subsequent in-session CI waits and MERGED-only completion instructions, including delegated slashdo workflows. GitHub enforces its required checks/reviews at the later merge instant, so this handoff does not acquire or hold local merge admission. If auto-merge is unavailable, rejected, or cannot be verified, follow the normal CI/merge gate below; failed checks still require a real fix.`;
 }

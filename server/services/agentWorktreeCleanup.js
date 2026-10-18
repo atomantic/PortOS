@@ -541,12 +541,20 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
   return queuedDeterministicMerge;
 }
 
-async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings }, disposition) {
+async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings, skipMerge }, disposition) {
   // Default: auto-merge on success, just cleanup on failure.
   // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
   // handled the merge upstream — re-merging the worktree branch into the local
   // source workspace would duplicate the squashed commits.
   const shouldMerge = disposition.merge;
+  if (skipMerge) {
+    const pr = await import('./prProbe.js').then(({ probePrForBranch }) =>
+      probePrForBranch(sourceWorkspace, worktreeBranch)).catch(() => null);
+    if (pr?.readable && pr.prState === 'OPEN' && pr.autoMergeEnabled === true) {
+      emitLog('info', `🌳 Preserving pending GitHub auto-merge worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
+      return;
+    }
+  }
   emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${shouldMerge})`, {
     agentId, branchName: worktreeBranch, merge: shouldMerge
   });

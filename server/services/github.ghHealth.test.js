@@ -259,6 +259,16 @@ describe('findPullRequestForBranch (#3358)', () => {
     await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7, body: 'Closes #1' });
   });
 
+  it.each([
+    [false, { enabledAt: '2026-10-18T00:00:00Z' }, true],
+    [true, { enabledAt: '2026-10-18T00:00:00Z' }, false],
+    [false, null, false],
+    [false, {}, false],
+  ])('reads auto-merge evidence for draft=%s request=%j', async (isDraft, autoMergeRequest, autoMergeEnabled) => {
+    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([{ number: 7, state: 'OPEN', isDraft, autoMergeRequest }]) }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled });
+  });
+
   it('reports `none` for an ANSWERED empty list', async () => {
     spawnMock.mockImplementation(() => ghChild({ stdout: '[]' }));
     await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'none', number: null });

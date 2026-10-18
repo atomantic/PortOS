@@ -69,6 +69,7 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
     prNumber: found.number ?? null,
     cli,
     readable: !!found.detail,
+    ...(cli === 'gh' && found.autoMergeEnabled === true ? { autoMergeEnabled: true } : {}),
   };
 }
 

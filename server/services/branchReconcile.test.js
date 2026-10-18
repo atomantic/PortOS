@@ -2104,11 +2104,12 @@ describe('desiredEndState', () => {
     }
   });
 
-  it('makes both merge-bound states wait for CI in-session and forbid queued auto-merge', () => {
+  it('offers verified auto-merge before the fallback CI wait in both merge-bound states', () => {
     for (const state of ['NEEDS_PR', 'IN_REVIEW']) {
       const instruction = desiredEndState(state, {});
       expect(instruction).toContain('gh pr checks <num> --required');
-      expect(instruction).toContain('Never `--auto`');
+      expect(instruction).toContain('--auto --merge --match-head-commit <published-head>');
+      expect(instruction).toContain('autoMergeRequest.enabledAt');
     }
   });
 

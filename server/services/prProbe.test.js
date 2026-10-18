@@ -35,6 +35,11 @@ describe('probePrForBranch', () => {
     expect(result).toEqual({ prState: 'MERGED', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true });
   });
 
+  it('propagates GitHub-confirmed pending auto-merge without claiming MERGED', async () => {
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', autoMergeEnabled: true });
+    expect(await probePrForBranch('/repo', 'my-branch')).toMatchObject({ prState: 'OPEN', readable: true, autoMergeEnabled: true });
+  });
+
   it('uppercases whatever case the forge returned for prState', async () => {
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', number: 1, detail: 'open' });
     const result = await probePrForBranch('/repo', 'my-branch');
