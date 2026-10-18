@@ -167,7 +167,9 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     quotaBurnId: 'test-gap-audit',
     label: 'Test coverage',
     description: 'Test-coverage audit — configurable: file issues or add tests',
-    defaultFileIssues: false,
+    // Files by default (#12087): unattended test addition is a CI-time cost with
+    // no reviewer judging whether the regression named is worth the suite time.
+    defaultFileIssues: true,
     filing: filing({
       slugPrefix: 'test-gap-',
       label: 'test-gap-audit',

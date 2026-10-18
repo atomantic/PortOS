@@ -119,6 +119,7 @@ import {
   getTaskInterval,
   updateTaskInterval,
   recordExecution,
+  recordRecommendedAudits,
   getExecutionHistory,
   shouldRunTask,
   shouldContinuePerpetualDrain,
@@ -3836,5 +3837,32 @@ describe('boundParkedUntil', () => {
 
   it('returns the recheck unchanged when it is itself unparseable', () => {
     expect(boundParkedUntil('never', '2026-01-12T00:00:00.000Z', NOW)).toBe('never')
+  })
+})
+
+// The code-quality lane's ranked triage output lives beside its execution
+// record and surfaces on the Schedule card (#12085).
+describe('recordRecommendedAudits', () => {
+  it('stores the ranked list on the execution record and exposes it on schedule status', async () => {
+    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 2, perApp: {} } } })
+    const recorded = await recordRecommendedAudits('code-quality', 'app-1', [
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ])
+    expect(recorded).toMatchObject({ appId: 'app-1', items: [expect.stringContaining('better-structural-drift'), expect.stringContaining('ux —')] })
+    expect(Date.parse(recorded.at)).toBeGreaterThan(0)
+    const history = await getExecutionHistory('code-quality')
+    expect(history.count).toBe(2)
+    expect(history.recommendedAudits.items).toHaveLength(2)
+    const status = await getScheduleStatus()
+    expect(status.tasks['code-quality'].recommendedAudits).toEqual(history.recommendedAudits)
+    expect(status.tasks['security'].recommendedAudits).toBeNull()
+  })
+
+  it('keeps the previous recommendation when a run produced none', async () => {
+    const previous = { at: '2026-10-01T00:00:00Z', appId: 'app-1', items: ['ux — one'] }
+    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 1, perApp: {}, recommendedAudits: previous } } })
+    expect(await recordRecommendedAudits('code-quality', 'app-1', [])).toBeNull()
+    expect((await getExecutionHistory('code-quality')).recommendedAudits).toEqual(previous)
   })
 })

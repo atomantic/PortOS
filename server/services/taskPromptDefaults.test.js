@@ -217,7 +217,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('code-quality v4 keeps conventional defects and cedes drift to its sibling lanes', () => {
     const current = DEFAULT_TASK_PROMPTS['code-quality'];
 
-    expect(PROMPT_VERSIONS['code-quality']).toBe(5);
+    expect(PROMPT_VERSIONS['code-quality']).toBe(6);
     // Still its own: the conventional maintainability defects.
     expect(current).toContain('Brittle conditionals');
     expect(current).toContain('Unexplained magic values');
@@ -230,6 +230,20 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // The drift hunts themselves are gone from this body.
     expect(current).not.toContain('Derived artifacts committed as a second source of truth');
     expect(current).not.toContain('regeneration-only churn');
+  });
+
+  // v6: the triage lane must say which focused audit to run next (#12085), and
+  // test-coverage files by default and pays for a new test in a budgeted suite (#12087).
+  it('code-quality v6 ranks the next audits and test-coverage v4 pays for its tests', () => {
+    const quality = DEFAULT_TASK_PROMPTS['code-quality'];
+    expect(quality).toContain('## Lane recommendation');
+    expect(quality).toMatch(/Rank\sthe three focused audits \(by scheduled task type\)/);
+    expect(quality).toContain('`Recommended next audits`');
+    expect(quality).not.toContain('Missing boundary error handling');
+    expect(quality).toContain('failure-path work');
+    const coverage = DEFAULT_TASK_PROMPTS['test-coverage'];
+    expect(PROMPT_VERSIONS['test-coverage']).toBe(4);
+    expect(coverage).toContain('name the redundant test you removed to pay for it');
   });
 
   it('better-structural-drift owns the hunts code-quality gave up', () => {

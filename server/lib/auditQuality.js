@@ -99,6 +99,33 @@ export function parseAuditQualityReport(summary, category) {
   return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;
 }
 
+const RECOMMENDED_AUDITS_HEADING = /^\s*(?:#{1,6}\s*|\*\*)?Recommended next audits\b/i;
+const RECOMMENDED_AUDIT_LINE = /^\s*(?:\d+[.)]|[-*])\s+(.+?)\s*$/;
+const MAX_RECOMMENDED_AUDITS = 3;
+
+/**
+ * The code-quality lane's triage output (#12085): the ranked audits listed
+ * under a `Recommended next audits` heading in the completion summary. Reads
+ * the list lines that follow the heading, up to the first blank line, another
+ * heading, or three entries; each entry keeps the line text the agent wrote
+ * (`<task-type> — <evidence>: <paths>`) with the list marker stripped. Returns
+ * `[]` for a summary with no such block, and ignores a second block.
+ */
+export function parseRecommendedAudits(summary) {
+  if (typeof summary !== 'string') return [];
+  const lines = summary.split(/\r?\n/);
+  const start = lines.findIndex(line => RECOMMENDED_AUDITS_HEADING.test(line));
+  if (start < 0) return [];
+  const items = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim() || /^\s*#/.test(line) || items.length >= MAX_RECOMMENDED_AUDITS) break;
+    const match = RECOMMENDED_AUDIT_LINE.exec(line);
+    if (!match) break;
+    items.push(match[1].slice(0, 300));
+  }
+  return items;
+}
+
 export const AUDIT_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Whether an assessment taken at `assessedAt` still counts at `now` (not future-dated, not older than the window). */

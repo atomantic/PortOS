@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality } from './appQuality.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
-import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory } from '../lib/auditQuality.js';
+import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory } from '../lib/auditQuality.js';
 
 const report = (overrides = {}) => ({ version: 1, category: 'better-complexity', score: 35, worstSeverity: 8,
   coverage: 'broad', confidence: 'high', summary: 'The checkout has a major branching hotspot in the job dispatcher.', scannedFiles: 100, totalFiles: 100, ...overrides });
@@ -181,4 +181,37 @@ it('records honest unscored partial Deep evidence without inventing a score or c
   expect(parseAuditQualityReport(sentinel({ ...partial, coverage: 'broad', scannedFiles: 10636 }), 'observability')).toBeNull();
   expect(parseAuditQualityReport(sentinel({ ...partial, scannedFiles: 0 }), 'observability')).toBeNull();
   expect(auditQualityInstructions('observability')).toContain('For partial coverage, use score:null');
+});
+
+// The code-quality lane's triage output (#12085): a ranked list under a
+// `Recommended next audits` heading in the completion summary.
+describe('parseRecommendedAudits', () => {
+  it('reads the ranked list under the heading, stripping markers and stopping at the block end', () => {
+    const summary = [
+      'Reviewed server/routes. Filed 2 issues.',
+      '## Recommended next audits',
+      '1. better-structural-drift — three hand-synced registries drifted: server/lib/navManifest.js, client/src/lib/navPresentation.js',
+      '2) better-runtime-safety — floating promises in socket handlers: server/services/sockets/',
+      '- error-handling — unhandled fetch failures: client/src/services/api.js',
+      '4. extra-lane — should be ignored beyond three',
+      '',
+      'QUALITY_AUDIT_JSON: {"version":1}',
+    ].join('\n');
+    expect(parseRecommendedAudits(summary)).toEqual([
+      'better-structural-drift — three hand-synced registries drifted: server/lib/navManifest.js, client/src/lib/navPresentation.js',
+      'better-runtime-safety — floating promises in socket handlers: server/services/sockets/',
+      'error-handling — unhandled fetch failures: client/src/services/api.js',
+    ]);
+  });
+
+  it('accepts a bold or plain heading and stops at the next heading', () => {
+    const summary = '**Recommended next audits**\n1. ux — buried primary action: client/src/pages/Apps.jsx\n## Next\n2. privacy — not part of the block';
+    expect(parseRecommendedAudits(summary)).toEqual(['ux — buried primary action: client/src/pages/Apps.jsx']);
+  });
+
+  it('returns an empty list for a summary with no block, a heading with no list, or a non-string', () => {
+    expect(parseRecommendedAudits('Reviewed and filed nothing.')).toEqual([]);
+    expect(parseRecommendedAudits('## Recommended next audits\n\n1. late — after a blank line')).toEqual([]);
+    expect(parseRecommendedAudits(null)).toEqual([]);
+  });
 });
