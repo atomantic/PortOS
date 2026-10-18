@@ -37,7 +37,7 @@ beforeEach(() => {
               has_catalog_scraps:process.env.EXAMPLE_PROBE_FAILURE!=='schema',
               ...(process.env.EXAMPLE_PROBE_FAILURE==='identity'?{database:'different_test'}:{})}]};
           } return {rows:[]};
-        }, release(discard){log({released:discard})}
+        }, on(){}, removeListener(){}, release(discard){log({released:discard})}
       }}
     }};`;
   loader = join(root, 'loader.mjs');

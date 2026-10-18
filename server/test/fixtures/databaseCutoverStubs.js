@@ -41,6 +41,8 @@ function Pool(config) {
           return { rows: [{ database: config.database, user: config.user, has_memories: true, has_links: true,
             has_sync: true, has_catalog: true, has_catalog_scraps: true }] };
         },
+        on() {},
+        removeListener() {},
         release() {},
       };
     },
