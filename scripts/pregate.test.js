@@ -9,10 +9,10 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import {
@@ -108,6 +108,7 @@ describe('pregate hidden-content invocation', () => {
   const write = (path, content) => writeFileSync(join(root, path), content);
   const run = (...args) => spawnSync(process.execPath, ['scripts/pregate.js', '--base', base, ...args], {
     cwd: root, encoding: 'utf8',
+    env: { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` },
   });
   const snapshot = () => ({
     status: git('--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'),
@@ -119,13 +120,14 @@ describe('pregate hidden-content invocation', () => {
     root = template.repo;
     scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // No runners or test files: docs-only changes produce an empty test plan.
     for (const path of [
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
     ]) {
@@ -133,6 +135,11 @@ describe('pregate hidden-content invocation', () => {
       copyFileSync(join(REPO_ROOT, path), join(root, path));
     }
     write('package.json', '{"type":"module"}\n');
+    write('.gitignore', 'node_modules\n');
+    for (const workspace of ['', 'client', 'server', 'autofixer']) {
+      mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
+      write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
+    }
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');
@@ -158,6 +165,89 @@ describe('pregate hidden-content invocation', () => {
 
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
+  });
+
+  // This regression catches stale inherited packages before any lint/test child
+  // can produce a misleading product failure or repair the shared source tree.
+  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling'])(
+    'checks %s linked dependencies read-only before executing stages', (state) => {
+      const shared = join(scratch, 'source', 'server', 'node_modules');
+      const installed = join(shared, 'express', 'package.json');
+      const modules = join(root, 'server', 'node_modules');
+      mkdirSync(dirname(installed), { recursive: true });
+      writeFileSync(installed, state === 'unreadable-package' ? '{broken' : JSON.stringify({ version: state === 'stale' ? '5.2.1' : '5.3.0' }));
+      if (state === 'missing-package') rmSync(installed);
+      const sourceReceipt = join(scratch, 'source', 'deps-hashes.json');
+      writeFileSync(sourceReceipt, '{"server":"legacy"}');
+      writeFileSync(join(shared, '.package-lock.json'), '{"packages":{"node_modules/express":{"version":"5.3.0"}}}');
+      const sourceSnapshot = () => Object.fromEntries(readdirSync(join(scratch, 'source'), { recursive: true })
+        .filter(path => lstatSync(join(scratch, 'source', path)).isFile())
+        .map(path => [path, readFileSync(join(scratch, 'source', path), 'utf8')]));
+      const before = sourceSnapshot();
+      const fakeBin = join(scratch, 'fake-bin');
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, 'npm'), '#!/usr/bin/env node\nrequire("fs").writeFileSync("unexpected-npm", "called");', { mode: 0o755 });
+      writeFileSync(join(fakeBin, 'npm.cmd'), '@node "%~dp0npm" %*\r\n');
+      rmSync(modules, { recursive: true });
+      const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
+      symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
+      write('server/package-lock.json', JSON.stringify({ packages: {
+        '': {}, 'node_modules/express': { version: '5.3.0' },
+        'node_modules/optional-platform-package': { version: '1.0.0', optional: true },
+      } }));
+      // Changing scripts selects full lint; any accidental stage run leaves a
+      // durable marker. Startup/package-manager repair is a separate trap.
+      for (const name of ['run-ci-lint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
+        write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
+      }
+      const result = run();
+      if (state === 'matching') {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain('Dependency consistency preflight passed');
+        expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('server (linked node_modules)');
+        expect(result.stderr).toContain('owning source checkout');
+        expect(result.stderr).toContain('Never run npm install/ci through worktree links');
+        const diagnostic = {
+          stale: 'expected 5.3.0, installed 5.2.1',
+          'missing-package': 'missing package.json (ENOENT)',
+          'unreadable-package': 'unreadable package.json (invalid JSON)',
+          dangling: 'linked target unavailable',
+        }[state];
+        expect(result.stderr).toContain(diagnostic);
+        expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
+      }
+      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
+      expect(sourceSnapshot()).toEqual(before);
+      expect(existsSync(join(root, 'unexpected-npm'))).toBe(false);
+      expect(readFileSync(sourceReceipt, 'utf8')).toBe('{"server":"legacy"}');
+      if (state === 'dangling') expect(existsSync(target)).toBe(false);
+    },
+  );
+
+  it('diagnoses a production-only install before spawning development checks', () => {
+    write('server/package-lock.json', JSON.stringify({ packages: {
+      '': {}, 'node_modules/vitest': { version: '5.0.4', dev: true },
+    } }));
+    write('scripts/run-ci-tests.js', 'throw new Error("unexpected test stage");');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('node_modules/vitest: missing package.json');
+    expect(result.stderr).toContain('pregate requires development dependencies (--include=dev)');
+    expect(result.stderr).not.toContain('unexpected test stage');
+  });
+
+  it('refuses missing and unreadable lock evidence rather than calling it a match', () => {
+    rmSync(join(root, 'client', 'package-lock.json'));
+    write('autofixer/package-lock.json', '{invalid');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('client (owned node_modules)');
+    expect(result.stderr).toContain('package-lock.json missing (ENOENT)');
+    expect(result.stderr).toContain('autofixer (owned node_modules)');
+    expect(result.stderr).toContain('package-lock.json unreadable (invalid JSON)');
   });
 
   it.each(['committed', 'staged', 'unstaged', 'untracked'])(
@@ -526,7 +616,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
       ]) {
