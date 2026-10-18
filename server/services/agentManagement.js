@@ -26,7 +26,7 @@ import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAg
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -1228,6 +1228,7 @@ async function runCleanupOrphanedAgents() {
 
   for (const agent of agents) {
     if (agent.status === 'running') {
+      if (completingAgents.has(agent.id)) continue;
       const inRemoteRunner = await runnerEntryShieldsRunningRecord(
         runnerById.get(agent.id),
         isPidAlive,
@@ -1278,6 +1279,9 @@ async function runCleanupOrphanedAgents() {
           continue;
         }
       }
+
+      // Recheck after the awaited pid probes: completion owns its terminal write.
+      if (completingAgents.has(agent.id)) continue;
 
       const interrupted = interruptedByRestart.has(agent.id);
       const errorMessage = interrupted

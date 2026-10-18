@@ -666,7 +666,7 @@ export async function cleanupZombieAgents() {
   // Direct-spawn handles in this process (not leftover runnerAgents adopts —
   // those are only a handle, same as GET /agents). Read from the side-effect-free
   // state module, not subAgentSpawner.
-  const { activeAgents, spawningTasks } = await import('./agentState.js');
+  const { activeAgents, completingAgents, spawningTasks } = await import('./agentState.js');
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
@@ -727,6 +727,10 @@ export async function cleanupZombieAgents() {
         const ageMs = Date.now() - startedAt;
         if (ageMs < 30000) continue;
       }
+
+      // Completion may have started while the liveness probes awaited. Its
+      // hook/validation/persistence chain owns the outcome even after PTY exit.
+      if (completingAgents.has(agent.id)) continue;
 
       // Agent is not tracked anywhere and process is dead — it's a zombie.
       // A record that never recorded a pid never spawned at all (the pid is
