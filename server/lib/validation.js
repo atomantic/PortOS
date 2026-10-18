@@ -2833,6 +2833,15 @@ export const cosAgentFeedbackBodySchema = z.object({
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
+// A scoped release names the exact inventory row the operator saw (#12002).
+export const heldCheckoutRetireBodySchema = z.object({
+  appId: nonEmptyString,
+  path: nonEmptyString,
+  head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
+  branch: z.string().min(1).nullable(),
+  locked: z.boolean(),
+  lockReason: z.string().nullable(),
+});
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

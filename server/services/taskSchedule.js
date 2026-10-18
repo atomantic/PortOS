@@ -753,6 +753,36 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
   });
 }
 
+export async function getBranchReconcileOutcome(appId) {
+  const schedule = await loadSchedule();
+  return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
+}
+
+const RETIRED_CHECKOUTS_KEPT = 20;
+
+/**
+ * Drop a retired checkout from the last inventory and keep a short record of
+ * where its archive went. Status is untouched: only the next sweep can say the
+ * repository converged.
+ */
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir }) {
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome || {};
+    const retiredAt = new Date().toISOString();
+    record.branchReconcileOutcome = {
+      ...outcome,
+      updatedAt: retiredAt,
+      remaining: Array.isArray(outcome.remaining)
+        ? outcome.remaining.filter(entry => entry.path !== path && !(branchDeleted && branch && entry.branch === branch))
+        : outcome.remaining ?? null,
+      retired: [{ path, ...(branch && { branch }), head, branchDeleted, archiveDir, retiredAt }, ...(outcome.retired || [])]
+        .slice(0, RETIRED_CHECKOUTS_KEPT),
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
+}
+
 /**
  * A perpetual drain's convergence state, read in ONE pass: the actionable
  * signature its last dispatch was handed, and how many times it has dispatched

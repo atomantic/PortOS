@@ -18,17 +18,27 @@ unmerged work are included, even though merged-checkout cleanup cannot retire
 them. A failed or empty Git checkout listing is unknown evidence and prevents a
 completed empty-scan outcome. Lock text is descriptive data, never authority.
 
-This is a recovery inventory, not an unlock or retirement control. Retained
-checkouts remain protected. Before a future recovery action can retire one, it
-must prove existing owner authority or an explicit scoped release, recheck the
-exact checkout/HEAD, merge evidence and ownership immediately before mutation,
-and verify a recoverable archive of all unique tracked, untracked and ignored
-content. An archive failure must leave the checkout and branch intact. Lock age,
-an absent process, and natural-language lock text do not prove release; live
-owners and manual handoffs remain protected.
+Lock age, an absent process, and natural-language lock text never release a
+checkout on their own. Long-lived protected branches and the primary checkout
+remain governed by the existing reconciliation policy; an empty reported work
+list is not permission to remove them.
 
-The remaining scope of #12002 is an enforceable scoped release and archived
-retirement workflow with ownership-change and archive-failure integration tests.
-The inventory does not grant that authority. Long-lived protected branches and
-the primary checkout remain governed by the existing reconciliation policy;
-an empty reported work list is not permission to remove them.
+## Retiring a held checkout
+
+A row with a checkout path and HEAD offers **Archive and retire checkout**. The
+inline confirmation is a scoped release of that exact row: its path, HEAD,
+branch and lock text. The server refuses unless the row is in the app's last
+persisted inventory and a fresh Git read still matches it — a changed lock,
+HEAD or branch is an ownership change. It then requires merge evidence on the
+default branch and no live owner, claim binding or manual completion handoff.
+
+Before any mutation, every unique byte is archived under
+`data/cos/held-checkout-archives/`: commits not on the default branch, the
+tracked diff, verbatim copies of untracked and ignored files (hash-verified),
+and symlink targets. A nested repository, an oversized file or a write during
+archiving fails the archive, which leaves the checkout, its lock and its
+branch untouched and removes the partial archive. The lock is released only
+after a second fresh match, and ownership, HEAD and content are rechecked
+immediately before removal; if that recheck refuses, the original lock is
+restored. A retired row leaves the inventory and appears under *Recently
+retired* with its archive path; only the next sweep can report convergence.
