@@ -754,6 +754,49 @@ describe('syncAccount', () => {
     expect(mockIo.emit).toHaveBeenCalledWith('messages:sync:completed', expect.objectContaining({ status: 'partial' }));
   });
 
+  it('refuses a second sync while the first is still reading the account', async () => {
+    let resolveAccount;
+    getAccount.mockImplementationOnce(() => new Promise((resolve) => { resolveAccount = resolve; }));
+    readFile.mockResolvedValue(JSON.stringify({ messages: [] }));
+    syncGmail.mockResolvedValue([]);
+    updateSyncStatus.mockResolvedValue();
+
+    const firstSync = syncAccount(VALID_UUID, mockIo);
+    await Promise.resolve();
+
+    const secondResult = await syncAccount(VALID_UUID, mockIo);
+    expect(secondResult).toEqual({ error: 'Sync already in progress', status: 409 });
+    expect(getAccount).toHaveBeenCalledTimes(1);
+    expect(mockIo.emit).not.toHaveBeenCalled();
+
+    resolveAccount({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    await firstSync;
+
+    const after = await syncAccount(VALID_UUID, mockIo);
+    expect(after).not.toHaveProperty('status', 409);
+  });
+
+  it('releases the lock when the account is missing, disabled, or the mode is unsupported', async () => {
+    getAccount.mockResolvedValueOnce(null);
+    expect(await syncAccount(VALID_UUID, mockIo)).toEqual({ error: 'Account not found' });
+
+    getAccount.mockResolvedValueOnce({ id: VALID_UUID, name: 'Test', type: 'gmail', enabled: false });
+    expect(await syncAccount(VALID_UUID, mockIo)).toEqual({ error: 'Account is disabled', status: 400 });
+
+    getAccount.mockResolvedValueOnce({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    expect(await syncAccount(VALID_UUID, mockIo, { mode: 'not-a-mode' })).toEqual({
+      error: 'gmail accounts do not support not-a-mode sync', status: 400,
+    });
+
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [] }));
+    syncGmail.mockResolvedValue([]);
+    updateSyncStatus.mockResolvedValue();
+    const after = await syncAccount(VALID_UUID, mockIo);
+    expect(after).not.toHaveProperty('status', 409);
+    expect(syncGmail).toHaveBeenCalledTimes(1);
+  });
+
   it('should return 409 when sync is already in progress (lock)', async () => {
     // Use a deferred promise to keep loadCache hanging so the lock stays held
     let resolveReadFile;
