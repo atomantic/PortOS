@@ -393,6 +393,8 @@ function schedule(config) {
     runCount: 0,
     active: true,
     lastRunSucceeded: null,
+    lastRunSkipped: null,
+    lastSkipReason: null,
     lastError: null,
     consecutiveFailures: 0,
     // The promise of the run in progress, or null. One run per event at a
@@ -540,7 +542,7 @@ function rearm(event) {
  * @param {boolean} result.success - Whether the handler completed
  * @param {string|null} result.error - Handler failure message, if any
  */
-function recordEventHistory(event, { startTime, success, error }) {
+function recordEventHistory(event, { startTime, success, error, skipped, skipReason }) {
   // push + truncate is faster than unshift + pop for large arrays
   eventHistory.push({
     eventId: event.id,
@@ -548,7 +550,9 @@ function recordEventHistory(event, { startTime, success, error }) {
     runAt: startTime,
     duration: Date.now() - startTime,
     success,
-    error
+    error,
+    skipped,
+    skipReason
   })
 
   if (eventHistory.length > MAX_HISTORY) {
@@ -584,9 +588,17 @@ async function executeEvent(event) {
 
   let success = true
   let error = null
+  let skipped = false
+  let skipReason = null
 
   try {
-    await event.handler(event)
+    const result = await event.handler(event)
+    // A handler that did no work reports `{ skipped: true, reason }` so the
+    // slot is recorded as skipped rather than as a successful run (#12023).
+    if (result?.skipped === true) {
+      skipped = true
+      skipReason = typeof result.reason === 'string' ? result.reason : null
+    }
   } catch (err) {
     success = false
     error = err.message
@@ -599,14 +611,16 @@ async function executeEvent(event) {
     })
   } finally {
     event.lastRunSucceeded = success
+    event.lastRunSkipped = skipped
+    event.lastSkipReason = skipReason
     event.lastError = error
     event.consecutiveFailures = success ? 0 : event.consecutiveFailures + 1
 
-    recordEventHistory(event, { startTime, success, error })
+    recordEventHistory(event, { startTime, success, error, skipped, skipReason })
 
     // A synchronous listener that throws must not cost the schedule its re-arm
     try {
-      cosEvents.emit('scheduler:ran', { id: event.id, success, runCount: event.runCount })
+      cosEvents.emit('scheduler:ran', { id: event.id, success, skipped, runCount: event.runCount })
     } catch (err) {
       console.error(`⚠️ Event ${event.id} scheduler:ran listener threw: ${err.message}`)
     }
@@ -731,6 +745,8 @@ function getEvent(id) {
     lastRunAt: event.lastRunAt,
     runCount: event.runCount,
     lastRunSucceeded: event.lastRunSucceeded,
+    lastRunSkipped: event.lastRunSkipped,
+    lastSkipReason: event.lastSkipReason,
     lastError: event.lastError,
     consecutiveFailures: event.consecutiveFailures,
     metadata: event.metadata
@@ -764,7 +780,8 @@ function getHistory(options = {}) {
  */
 function getStats() {
   const events = Array.from(scheduledEvents.values())
-  const recent = eventHistory.slice(-100).reverse()
+  // A skipped slot did no work, so it counts toward neither side of the rate.
+  const recent = eventHistory.slice(-100).reverse().filter(h => !h.skipped)
 
   return {
     totalEvents: events.length,
