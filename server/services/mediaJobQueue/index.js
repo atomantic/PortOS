@@ -41,6 +41,7 @@ import {
   broadcastSse,
   attachSseClient as attachSse,
   closeJobAfterDelay,
+  SSE_CLEANUP_DELAY_MS,
 } from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -820,8 +821,9 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
     job.status === 'completed' ? { type: 'complete', result: job.result }
     : job.status === 'canceled' ? { type: 'canceled', reason: job.error }
     : { type: 'error', error: job.error };
-  broadcastSse(ensureSseEntry(job.id), ssePayload);
-  closeJobAfterDelay(sseJobs, job.id);
+  const entry = ensureSseEntry(job.id);
+  broadcastSse(entry, ssePayload);
+  closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
   // Hooks that publish files or rows acquire their own admission; see
   // runOutsideBackupAssetPublication.
   runOutsideBackupAssetPublication(() => mediaJobEvents.emit(job.status, job));
@@ -1024,7 +1026,7 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     for (const id of restartedFailedIds) {
       const entry = ensureSseEntry(id);
       broadcastSse(entry, { type: 'error', error: 'interrupted by restart' });
-      closeJobAfterDelay(sseJobs, id);
+      closeJobAfterDelay(sseJobs, id, SSE_CLEANUP_DELAY_MS, entry);
     }
     // Pre-seed SSE entries for recovered queued jobs too. Without this, a
     // client reconnecting to /:jobId/events between boot and the worker
@@ -1075,13 +1077,17 @@ function requeueRetainedReservation(entry) {
   // transient terminal state (terminating, providerInvoked, ...) that would
   // make the re-run look already settled.
   const { id, kind, owner, queuedAt, startedAt, completedAt, result, error, progress, statusMsg, etaMs } = entry;
-  queue.push({
+  const reconciled = {
     id, kind, owner, queuedAt, startedAt, completedAt, result, error, progress, statusMsg, etaMs,
     status: 'queued',
     cancelRequested: marker?.cancelRequested === true,
     params: restoredParams({ ...entry, params: { ...entry.params, remoteMedia: { ...marker, reconcile: true } } }),
-  });
+  };
+  queue.push(reconciled);
   recomputeQueuePositions();
+  // The old terminal grace timer owns the old subscribers. A new stream for
+  // this attempt keeps that timer from evicting reconciliation or its clients.
+  sseJobs.set(id, { clients: [], lastPayload: { type: 'queued', position: reconciled.position } });
   console.log(`🔁 media-job [${entry.id.slice(0, 8)}] remote ${entry.kind} ended without a terminal peer report — re-enqueued for reconciliation`);
   return true;
 }
@@ -1206,9 +1212,10 @@ function startLaneJob(job, { lane }) {
           j.error = j.cancelRequested ? 'Canceled' : err instanceof ServerError ? err.message : `runJob threw: ${err.message}`;
           j.completedAt = new Date().toISOString();
         }, () => {
-          broadcastSse(ensureSseEntry(job.id), job.cancelRequested
+          const entry = ensureSseEntry(job.id);
+          broadcastSse(entry, job.cancelRequested
             ? { type: 'canceled', reason: job.error } : { type: 'error', error: job.error });
-          closeJobAfterDelay(sseJobs, job.id);
+          closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
           mediaJobEvents.emit(job.status, job);
           finalizeLane();
         });
@@ -1245,9 +1252,10 @@ async function settleQueuedJob(job, { status, error }) {
       await safeUnlinkUpload(job.params?.uploadedTempPath);
       await safeUnlinkUpload(job.params?.audioFilePath);
       for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) await safeUnlinkUpload(p);
-      broadcastSse(ensureSseEntry(job.id), status === 'canceled'
+      const entry = ensureSseEntry(job.id);
+      broadcastSse(entry, status === 'canceled'
         ? { type: 'canceled', reason: error } : { type: 'error', error });
-      closeJobAfterDelay(sseJobs, job.id);
+      closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
       mediaJobEvents.emit(status, job);
     })());
   });
