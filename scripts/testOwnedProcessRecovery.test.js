@@ -1,16 +1,45 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
 
 afterEach(() => vi.useRealTimers());
 
 describe('test process ownership boundaries', () => {
+  it('keeps the known ancestor chain when a listing omits a parent, but rejects cycles', () => {
+    const records = [{ pid: 900001, ppid: 900002 }, { pid: 900002, ppid: 900003 }];
+    expect(processAncestors(records, 900004)).toBeNull();
+    expect(processAncestors(records, 900001)).toEqual(new Set([1, 900001, process.ppid, 900002, 900003]));
+    expect(processAncestors([...records, { pid: 900003, ppid: 900001 }], 900001)).toBeNull();
+  });
+
+  it.each(['missing ancestor', 'unavailable reader', 'cyclic ancestry'])('reclaims dead roots and gates the age fallback with %s', mode => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-snapshot-'));
+    const dead = join(host, 'pvt-dead');
+    const live = join(host, 'pvt-live');
+    const unknown = join(host, 'pvt-unknown');
+    const records = [{ pid: process.pid, ppid: process.ppid }];
+    if (mode === 'cyclic ancestry') records.push({ pid: process.ppid, ppid: process.pid });
+    const read = () => mode === 'unavailable reader' ? null : records;
+    const aged = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+    try {
+      for (const [root, pid] of [[dead, 900001], [live, 900002], [unknown, 900003]]) {
+        mkdirSync(root);
+        writeFileSync(join(root, '.owner.pid'), `${pid} 0\n`);
+        utimesSync(root, aged, aged);
+      }
+      sweepStaleRunRoots(host, { read, probe: ({ pid }) => pid === 900001 ? false : pid === 900002 ? true : null });
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live)).toBe(true);
+      expect(existsSync(unknown)).toBe(mode !== 'missing ancestor');
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
   it.skipIf(process.platform === 'win32')('retains only legacy browser ownership when the optional Darwin reader is unavailable', () => {
     const exec = vi.fn((command) => {
       if (command !== 'ps') throw Error('reader unavailable');
