@@ -75,13 +75,16 @@ describe('derived render retention', () => {
   });
 
   it('preserves canonical render URLs during automatic and explicit cleanup', async () => {
-    await seed([entry('current'), entry('path'), entry('url'), entry('unused')]);
-    state.others = [{ composition: { media: '/data/videos/path.mp4' } }];
-    state.collections = [{ items: [{ url: 'https://example.test/data/videos/url.mp4?download=1' }] }];
+    await seed([entry('current'), entry('path'), entry('url'), entry('proof'), entry('poster', { thumbnail: 'poster sample.jpg' }), entry('unused')]);
+    writeFileSync(join(PATHS.videoThumbnails, 'proof-proof.png'), 'proof');
+    state.others = [{ composition: { media: '/data/videos/path.mp4' }, proof: '/data/video-thumbnails/proof-proof.png' }];
+    state.collections = [{ items: [{ url: 'https://example.test/data/videos/url.mp4?download=1' }, { poster: 'https://example.test/data/video-thumbnails/poster%20sample.jpg' }] }];
     expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
     const result = await cleanupRenders('example-project');
-    expect(result.finals.map(item => [item.id, !!item.reason])).toEqual([['path', true], ['url', true]]);
-    for (const id of ['current', 'path', 'url']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
+    expect(result.finals.map(item => [item.id, !!item.reason])).toEqual([['path', true], ['url', true], ['proof', true], ['poster', true]]);
+    expect(existsSync(join(PATHS.videoThumbnails, 'proof-proof.png'))).toBe(true);
+    expect(existsSync(join(PATHS.videoThumbnails, 'poster sample.jpg'))).toBe(true);
+    for (const id of ['current', 'path', 'url', 'proof', 'poster']) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
     expect(existsSync(join(PATHS.videos, 'unused.mp4'))).toBe(false);
   });
 

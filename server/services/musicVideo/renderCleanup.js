@@ -1,7 +1,7 @@
 /** Retire regenerable renders without touching source takes or the cutting-room floor. */
 import { unlink, stat } from 'node:fs/promises';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -72,8 +72,12 @@ async function finalInventory(projectId, history, pending = []) {
   for (const entry of retirementEntries(history, pending)) {
     // Only the full-render pipeline owns this tag. Source clips use musicVideo.projectId.
     if (entry.musicVideoProjectId !== projectId || !['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse'].includes(entry.modelId) || entry.id === project.renderHistoryId) continue;
-    const ids = new Set([entry.id, entry.filename, safeUnder(PATHS.videos, entry.filename),
-      `/data/videos/${entry.filename}`, `/data/videos/${encodeURIComponent(entry.filename)}`]);
+    const ids = new Set([entry.id]);
+    for (const path of renderFiles(entry)) {
+      const name = basename(path);
+      const base = path === safeUnder(PATHS.videos, entry.filename) ? '/data/videos' : '/data/video-thumbnails';
+      for (const identity of [name, path, `${base}/${name}`, `${base}/${encodeURIComponent(name)}`]) ids.add(identity);
+    }
     const referenced = owners.some(owner => references(owner, ids))
       || history.some(other => other.id !== entry.id && references(other, ids));
     const reason = !hasCurrent ? 'No completed replacement' : referenced ? 'Referenced by saved media or production records' : null;
