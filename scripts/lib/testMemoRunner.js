@@ -110,17 +110,18 @@ export function vitestShardRange(count, index, total) {
 }
 
 /**
- * The string Vitest hashes for a test file when sharding:
- * `resolve(slash(root), slash(moduleId)).slice(root.length)` — the absolute
- * path as the platform's `path.resolve` builds it (backslashes on Windows)
- * with the root prefix sliced off, so an in-workspace file hashes as
- * `/lib/x.test.js` or `\\lib\\x.test.js` and a file outside the workspace
- * hashes its remaining absolute tail. `path` is injectable so both
- * separators are pinned in the tests.
+ * The string Vitest hashes for a test file when sharding (`BaseSequencer.shard`
+ * in vitest/dist/chunks/index.*.js): `resolve(slash(root), slash(moduleId))`
+ * with pathe's forward-slash `resolve`, sliced at `root.length` (the
+ * unslashed root has the same length). So on every platform an in-workspace
+ * file hashes as `/lib/x.test.js` and a file outside the workspace hashes the
+ * forward-slashed tail of its absolute path. `path` is injectable so a
+ * Windows-shaped root is pinned in the tests.
  */
 export function vitestShardHashInput(rel, { repoRoot, scope, path = nodePath }) {
+  const slash = (value) => value.replace(/\\/g, '/');
   const root = path.resolve(repoRoot, scope);
-  return path.resolve(repoRoot, ...rel.split('/')).slice(root.length);
+  return slash(path.resolve(repoRoot, ...rel.split('/'))).slice(root.length);
 }
 
 /**
