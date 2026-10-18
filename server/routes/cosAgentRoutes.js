@@ -33,6 +33,21 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
   res.json(await claimMergeAdmission(input));
 }));
 
+// A registered run hands its published, reviewed head to the server's
+// pending-merge coordinator instead of waiting for CI itself (#12247). The
+// repository, branch, checkout and policy come from the run's registration.
+const mergeHandoffSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  prUrl: z.string().url().max(2048),
+  headSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
+  worktreePath: z.string().min(1).max(4096).optional(),
+});
+router.post('/merge-handoff', asyncHandler(async (req, res) => {
+  const input = validateRequest(mergeHandoffSchema, req.body ?? {});
+  const { handoffPendingMerge } = await import('../services/cosMergeHandoff.js');
+  res.json(await handoffPendingMerge(input));
+}));
+
 // A claim run binds (or hands off) the concrete branch it checks out; a
 // branch-reconcile worker rechecks live ownership right before mutating (#10089).
 const claimBranchSchema = z.string().min(1).max(200);

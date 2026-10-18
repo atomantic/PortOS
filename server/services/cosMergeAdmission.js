@@ -23,7 +23,7 @@ export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
 const serverOwner = randomUUID();
 const sweepTokens = new Set();
 const refuse = (reason) => ({ admitted: false, reason, retryAfterMs });
-const repositoryKey = (origin) => origin?.host && origin?.fullName
+export const repositoryKey = (origin) => origin?.host && origin?.fullName
   ? `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase()
   : null;
 const ownerPath = (agent) => agent?.metadata?.sourceWorkspace || agent?.sourceWorkspace
@@ -216,6 +216,41 @@ async function verifiedWorktreeDelivery(agent, repository) {
 async function verifiedParticipant(agent, repository) {
   if (isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch) return true;
   return await verifiedReviewCoordinator(agent, repository) || verifiedWorktreeDelivery(agent, repository);
+}
+
+/**
+ * The registered run a pending-merge handoff may bind (#12247): the same live
+ * participant proof acquire uses, plus which branch that run owns and the
+ * registered checkout holding it (null for a claim run, which cuts its own).
+ * Nothing here is taken from the request. Fork review targets are refused —
+ * the coordinator merges same-repository heads only.
+ */
+export async function resolveMergeHandoffOwner(agentId) {
+  const { readMergeAdmissionStateForSafetyCheck } = await import('./cosState.js');
+  const snapshot = await readMergeAdmissionStateForSafetyCheck().catch(() => null);
+  if (!snapshot?.trusted || !isPlainObject(snapshot.agents)) return { refused: 'ownership-unreadable' };
+  const agent = snapshot.agents[agentId];
+  if (!agent || agent.id !== agentId || agent.status !== 'running' || !agent.startedAt || !agent.taskId) {
+    return { refused: 'handoff-owner-unverified' };
+  }
+  const repository = ownerPath(agent) ? repositoryKey(await getOriginInfo(ownerPath(agent)).catch(() => null)) : null;
+  if (!repository) return { refused: 'repository-unreadable' };
+  const task = await liveTask(agent);
+  if (!task) return { refused: 'handoff-owner-unverified' };
+  const meta = agent.metadata || {};
+  if (meta.reviewLoopMergeTarget?.fork || task.metadata?.forkHead) return { refused: 'fork-target-unsupported' };
+  const owner = { agent, task, repository };
+  if (isTruthyMeta(meta.claimPicksOwnBranch) || meta.claimBranch) {
+    const { ownsClaimBranch } = await import('../lib/claimContinuation.js');
+    return { ...owner, owns: (branch) => ownsClaimBranch(agent, branch), workspacePath: null };
+  }
+  if (await verifiedReviewCoordinator(agent, repository) === true) {
+    return { ...owner, owns: (branch) => branch === meta.reviewLoopMergeTarget.branch, workspacePath: meta.workspacePath };
+  }
+  if (await verifiedWorktreeDelivery(agent, repository)) {
+    return { ...owner, owns: (branch) => branch === meta.prDeliveryTarget.branch, workspacePath: meta.prDeliveryTarget.workspacePath };
+  }
+  return { refused: 'handoff-owner-unverified' };
 }
 
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
