@@ -31,6 +31,12 @@ export function markUpgradeClaimed(socket) {
   }
 }
 
+function isSocketIoUpgrade(req) {
+  if (!req?.url) return false;
+  const pathname = req.url.split('?', 1)[0];
+  return pathname === '/socket.io' || pathname.startsWith('/socket.io/');
+}
+
 /**
  * Install an upgrade fallback listener on an HTTP/HTTPS server.
  * Unclaimed sockets that receive no response after `timeoutMs` are ended.
@@ -38,9 +44,13 @@ export function markUpgradeClaimed(socket) {
  * @param {import('node:http').Server|import('node:https').Server|null|undefined} server
  * @param {object} [options]
  * @param {number} [options.timeoutMs=1000]
+ * @param {((req: import('node:http').IncomingMessage, socket: import('node:net').Socket) => boolean)} [options.isClaimed]
  * @returns {(() => void)} Cleanup function to detach listener
  */
-export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIMEOUT_MS } = {}) {
+export function installUpgradeFallback(server, {
+  timeoutMs = DEFAULT_UPGRADE_TIMEOUT_MS,
+  isClaimed = () => false,
+} = {}) {
   if (!server || typeof server.on !== 'function') {
     return () => {};
   }
@@ -49,8 +59,11 @@ export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIM
   }
   mountedUpgradeFallbackServers.add(server);
 
-  const onUpgrade = (_req, socket) => {
-    if (socket.portosUpgradeClaimed) return;
+  const onUpgrade = (req, socket) => {
+    if (socket.portosUpgradeClaimed || isSocketIoUpgrade(req) || isClaimed(req, socket)) {
+      socket.portosUpgradeClaimed = true;
+      return;
+    }
     const initialBytes = socket.bytesWritten;
 
     let timer = null;

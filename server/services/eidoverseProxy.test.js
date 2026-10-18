@@ -332,5 +332,28 @@ describe('main-server eidoverse reverse-proxy', () => {
     expect(client.connected).toBe(true);
     client.disconnect();
   });
+
+  it('preserves Socket.IO upgrades with delayed allowRequest authorization', async () => {
+    const app = express();
+    const server = createServer(app);
+    const io = new SocketIoServer(server, {
+      destroyUpgrade: false,
+      path: '/socket.io',
+      allowRequest: async (_req, callback) => {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        callback(null, true);
+      },
+    });
+    ioServers.push(io);
+    installUpgradeFallback(server);
+    const port = await listen(server);
+
+    const client = SocketIoClient(`http://127.0.0.1:${port}`, {
+      path: '/socket.io',
+      transports: ['websocket'],
+    });
+    await once(client, 'connect');
+    expect(client.connected).toBe(true);
+    client.disconnect();
   });
 });
