@@ -5,13 +5,16 @@ import { execFile } from '../lib/childProcess.js';
 import { startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const fixture = vi.hoisted(() => ({ state: null, apiBase: '', unreadable: false }));
+const fixture = vi.hoisted(() => ({ state: null, apiBase: '', unreadable: false, stateGate: null, onStateQueued: null }));
 vi.mock('../services/cos.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
 vi.mock('../services/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: !fixture.unreadable, agents: fixture.unreadable ? null : fixture.state.agents }),
-  withStateLock: (work) => work(),
+  withStateLock: async work => {
+    if (fixture.stateGate) { fixture.onStateQueued(); await fixture.stateGate; }
+    return work();
+  },
   loadState: async () => structuredClone(fixture.state),
   saveState: async (state) => { fixture.state = structuredClone(state); },
 }));
@@ -38,7 +41,7 @@ vi.mock('../lib/networkExposure.js', () => ({ localApiBaseUrl: () => fixture.api
 
 import routes from './cosAgentRoutes.js';
 import { formatInFlightForPrompt } from '../services/branchReconcile.js';
-import { updateClaimOwnership } from '../services/cosClaimOwnership.js';
+import { updateClaimOwnership, withClaimOwnershipLock, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } from '../services/cosClaimOwnership.js';
 
 const execute = promisify(execFile);
 const coordinator = 'synthetic-coordinator';
@@ -47,6 +50,7 @@ let server;
 
 beforeEach(async () => {
   fixture.unreadable = false;
+  fixture.stateGate = fixture.onStateQueued = null;
   fixture.state = { agents: {
     [coordinator]: { id: coordinator, status: 'running', workspacePath: '/synthetic/repo', metadata: {} },
   } };
@@ -66,6 +70,7 @@ beforeEach(async () => {
 afterEach(async () => {
   if (server) await closeLoopbackServer(server);
   server = null;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -121,6 +126,27 @@ describe('generated ownership recheck raw HTTP response (#11348)', () => {
     expect(capture.status).toBe(200);
     expect(capture.body.toString('utf8')).toBe(JSON.stringify({ admitted: false, reason }));
     expect(capture.parsed).toEqual({ admitted: false, reason });
+    expect(fixture.state).toEqual(before);
+  });
+
+  it('returns a bounded JSON refusal for a queued reservation and cannot reserve after the response', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let resume;
+    fixture.stateGate = new Promise(resolve => { resume = resolve; });
+    const queued = new Promise(resolve => { fixture.onStateQueued = resolve; });
+    const before = structuredClone(fixture.state);
+    const response = fetch(`${fixture.apiBase}/api/cos/claim-ownership`, {
+      method: 'POST', headers: { Authorization: 'Bearer synthetic-test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check', appId: 'synthetic-app', branch, agentId: coordinator }),
+    });
+    await queued;
+    await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    const result = await response;
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ admitted: false, reason: 'state-queue-timeout', retryAfterMs: 5000 });
+    resume();
+    await withClaimOwnershipLock(() => {});
     expect(fixture.state).toEqual(before);
   });
 
