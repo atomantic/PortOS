@@ -26,7 +26,7 @@ import {
 
 const DOMAIN_ARRAYS = [
   'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl', 'reviewQueueTriageDdl', 'cosAgentFeedbackDdl', 'aiGraphDdl', 'peerExecutionDdl',
-  'catalogDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
+  'catalogDdl', 'catalogIdentityDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
   'libraryDdl', 'pipelineDdl', 'writersRoomDdl', 'loraDdl', 'privacyDdl', 'stackerNewsDdl', 'xDdl',
   'beeperDdl', 'mindToolRecipesDdl',
   'auditDdl', 'syncFeedDdl',
@@ -59,6 +59,8 @@ describe('db/schema barrel + composer (#2832)', () => {
   it('buildCatalogDdl composes the phase-2 modules in order, with catalog_user_types after media', () => {
     const expected = [
       ...schema.catalogDdl,
+      ...schema.catalogIdentityDdl,
+      ...schema.catalogIdentityViewsDdl(),
       ...schema.mediaDdl,
       ...schema.catalogUserTypesDdl,
       ...schema.universesDdl,
