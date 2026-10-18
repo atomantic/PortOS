@@ -6,17 +6,20 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
+import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
 
 import {
   ALWAYS_RUN_TESTS,
   BROWSER_SUITES,
   buildCiTestPlan,
+  classifyDependencyChange,
   collectPlanInputs,
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
+  PLATFORM_PACKAGE_RES,
   shardIndexes,
   SLASHDO_GITLINK_PATH,
   sourceReferencePattern,
@@ -1481,7 +1484,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
     // touches server/index.js downgrades Windows on a diff that must escalate.
     expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
 
-    for (const escalating of ['server/index.js', 'package-lock.json', 'server/lib/validation.js']) {
+    // package-lock.json carries no manifest comparison here, so it fails closed.
+    for (const escalating of ['server/index.js', 'package-lock.json', '.npmrc']) {
       const combined = plan(['client/src/App.jsx', escalating]);
       expect(combined.reason, escalating).toContain('client composition root changed');
       expect(combined.windowsMode, escalating).toBe('full');
@@ -1727,5 +1731,141 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan([BROWSER_SUITES[0]], { trackedFiles: BROWSER_SUITES });
 
     expect(plan.browserFiles).toEqual([BROWSER_SUITES[0]]);
+  });
+});
+
+describe('dependency manifest Windows escalation', () => {
+  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
+  const LOCK = 'server/package-lock.json';
+  const lockfile = (packages, root = {}) => JSON.stringify({
+    name: 'portos-server',
+    version: '1.0.0',
+    lockfileVersion: 3,
+    requires: true,
+    packages: { '': { name: 'portos-server', version: '1.0.0', ...root }, ...packages },
+  });
+  const BASE_PACKAGES = {
+    'node_modules/@googleapis/gmail': { version: '16.1.1', resolved: 'https://registry.example.com/g-16.1.1.tgz' },
+    'node_modules/node-pty': { version: '1.2.0', hasInstallScript: true },
+  };
+  const BASE = lockfile(BASE_PACKAGES);
+  const planFor = (files, dependencyChanges) => buildCiTestPlan(files, {
+    trackedFiles: TRACKED_WITH_CONTRACTS,
+    dependencyChanges,
+  });
+  const lockPlan = (headText, baseText = BASE) => planFor([LOCK], { [LOCK]: classifyDependencyChange(LOCK, baseText, headText) });
+
+  it('keeps a pure-JS version bump on the Windows contract baseline and names the package', () => {
+    const plan = lockPlan(lockfile({
+      ...BASE_PACKAGES,
+      'node_modules/@googleapis/gmail': { version: '17.0.0', resolved: 'https://registry.example.com/g-17.0.0.tgz' },
+    }));
+
+    // The Linux side stays complete; only Windows narrows.
+    expect(plan.full).toBe(true);
+    expect(plan.server.mode).toBe('full');
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS);
+    expect(plan.shards.windows).toEqual([1]);
+    expect(plan.suiteReasons.windows).toContain('Windows contract baseline');
+    expect(plan.suiteReasons.windows).toContain('@googleapis/gmail');
+  });
+
+  it('escalates Windows for a native, install-script, platform-gated or optional package', () => {
+    const cases = {
+      'install script': { 'node_modules/fresh-addon': { version: '1.0.0', hasInstallScript: true } },
+      'os field': { 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } },
+      optional: { 'node_modules/maybe-native': { version: '1.0.0', optional: true } },
+      // Removing a trusted rebuild escalates too: either side of the diff counts.
+      'trusted rebuild removed': { 'node_modules/node-pty': undefined },
+      // sharp's entry carries no platform metadata; the family list catches it.
+      'platform family': { 'node_modules/sharp': { version: '0.35.6' } },
+    };
+    for (const [label, change] of Object.entries(cases)) {
+      const packages = Object.fromEntries(Object.entries({ ...BASE_PACKAGES, ...change })
+        .filter(([, entry]) => entry !== undefined));
+      const plan = lockPlan(lockfile(packages));
+      expect(plan.full, label).toBe(true);
+      expect(plan.windowsMode, label).toBe('full');
+      expect(plan.shards.windows, label).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
+      expect(plan.suiteReasons.windows, label).toContain('escalates Windows: platform-sensitive package changed');
+    }
+  });
+
+  it('treats every trusted-rebuild package as platform-sensitive', () => {
+    // The planner mirrors the allowlist instead of importing it (see
+    // PLATFORM_PACKAGE_RES); this keeps the two from drifting.
+    const trusted = Object.values(TRUSTED_REBUILDS).flatMap((groups) => groups.flatMap(({ pkgs }) => pkgs));
+    expect(trusted.length).toBeGreaterThan(0);
+    expect(trusted.filter((name) => !PLATFORM_PACKAGE_RES.some((re) => re.test(name)))).toEqual([]);
+  });
+
+  it('fails closed when the lockfile cannot be compared', () => {
+    for (const [label, baseText, headText] of [
+      ['unparsable head', BASE, '{ "packages": '],
+      ['missing base', null, BASE],
+      ['deleted head', BASE, null],
+      ['no packages map', JSON.stringify({ lockfileVersion: 1 }), BASE],
+    ]) {
+      expect(classifyDependencyChange(LOCK, baseText, headText).escalate, label).toBe(true);
+      expect(lockPlan(headText, baseText).windowsMode, label).toBe('full');
+    }
+    // No verdict at all — a caller that skipped the comparison — escalates too.
+    expect(planFor([LOCK], {}).windowsMode).toBe('full');
+  });
+
+  it('escalates Windows for engines, overrides and npm configuration changes', () => {
+    const manifest = { name: 'portos-server', dependencies: { express: '^5.2.1' }, engines: { node: '>=24.14' } };
+    const verdict = (head) => classifyDependencyChange('server/package.json', JSON.stringify(manifest), JSON.stringify(head));
+
+    expect(verdict({ ...manifest, dependencies: { express: '^5.3.0' } })).toMatchObject({ escalate: false, packages: ['express'] });
+    expect(verdict({ ...manifest, engines: { node: '>=26' } }).escalate).toBe(true);
+    expect(verdict({ ...manifest, overrides: { braces: '3.0.3' } }).escalate).toBe(true);
+    expect(verdict({ ...manifest, dependencies: { ...manifest.dependencies, 'node-pty': '^1.2.0' } }).escalate).toBe(true);
+    // The lockfile mirrors engines into its root entry.
+    expect(classifyDependencyChange(LOCK, BASE, lockfile(BASE_PACKAGES, { engines: { node: '>=26' } })).escalate).toBe(true);
+
+    for (const npmrc of ['.npmrc', 'server/.npmrc']) {
+      const plan = planFor([npmrc], {});
+      expect(plan.full, npmrc).toBe(true);
+      expect(plan.reason, npmrc).toContain('npm configuration changed');
+      expect(plan.windowsMode, npmrc).toBe('full');
+    }
+  });
+
+  it('runs the shared server contracts as a full plan on the Windows baseline', () => {
+    for (const path of ['server/lib/validation.js', 'server/lib/schemaVersions.js']) {
+      const plan = planFor([path], {});
+      expect(plan.full, path).toBe(true);
+      expect(plan.server.mode, path).toBe('full');
+      // ci.yml publishes Full CI Gate only for windows_mode 'full' (pinned in
+      // ci-base-sha.test.js), so this plan cannot vouch for Windows coverage.
+      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.windowsFiles, path).toEqual(WINDOWS_CONTRACT_TESTS);
+    }
+  });
+
+  it('compares the manifest at the real diff base through git', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-lockfile-'));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=CI', '-c', 'user.email=ci@example.com',
+      '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-q');
+      mkdirSync(join(root, 'server'));
+      writeFileSync(join(root, LOCK), BASE);
+      git('add', '--all');
+      git('commit', '-q', '--no-verify', '-m', 'base');
+      const bumped = lockfile({ ...BASE_PACKAGES, 'node_modules/@googleapis/gmail': { version: '17.0.0' } });
+      writeFileSync(join(root, LOCK), bumped);
+
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [LOCK], cwd: root });
+      expect(inputs.dependencyChanges[LOCK]).toMatchObject({ escalate: false, packages: ['@googleapis/gmail'] });
+
+      // A base commit that does not exist in the checkout fails closed.
+      const missing = collectPlanInputs({ baseSha: '0'.repeat(40), changedFiles: [LOCK], cwd: root });
+      expect(missing.dependencyChanges[LOCK]).toMatchObject({ escalate: true, reason: 'base version unavailable' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
