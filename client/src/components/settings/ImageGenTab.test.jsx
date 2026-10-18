@@ -106,6 +106,9 @@ describe('ImageGenTab grouped tabs', () => {
         },
       });
       await renderTab(['/media/image?mediaTab=codex']);
+      // The Codex section's model list loads late (getProviders). Wait for it to
+      // land so its state update happens inside the waitFor, not after the edit.
+      await waitFor(() => expect(screen.getByRole('option', { name: 'gpt-5.6-luna' })).toBeTruthy());
       const input = screen.getByLabelText('Parallel render limit');
       expect(input.value).toBe('25');
       fireEvent.change(input, { target: { value: '50' } });
