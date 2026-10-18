@@ -12,13 +12,40 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * or `agentManagement.js` (enforced by `agentImportCycles.test.js`).
  */
 
-import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { isAgentOwnedLocally, runnerAgents } from './agentState.js';
+import { isAgentOwnedLocally, runnerAgents, spawningTasks } from './agentState.js';
 import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from './shell.js';
+
+// Recovery cannot replay a paste safely: it may already be sitting unsent in
+// the composer. Stop only a PTY whose runner positively knows no task submit
+// reached it; normal completion owns task retry and workspace cleanup.
+const startupErrorAnalysis = {
+  category: 'startup-failure',
+  origin: 'runner',
+  actionable: false,
+  message: 'Server restarted before the TUI task prompt was submitted',
+  suggestedFix: 'Retry the task in a fresh terminal; the recovered startup terminal was stopped without replaying its prompt.',
+};
+
+async function stopInterruptedStartup(agentId) {
+  try {
+    const result = await terminateAgentViaRunner(agentId, { onlyIfPromptUnsubmitted: true });
+    // Submission can land between GET /agents and the guarded stop. The runner
+    // decides atomically; preserve the now-working run and its normal verdict.
+    if (result.terminated === false) {
+      const owned = runnerAgents.get(agentId);
+      if (owned) delete owned.startupErrorAnalysis;
+    }
+  } catch (err) {
+    // Keep ownership and retry on the next recovery sweep. An RPC failure is
+    // not proof of exit and must not finalize a still-live PTY.
+    console.error(`❌ Failed to stop interrupted TUI startup ${agentId}: ${err.message}`);
+  }
+}
 
 /**
  * Sync running agents from the runner (recovery after server restart).
@@ -75,7 +102,15 @@ export async function syncRunnerAgents() {
     // re-adopt — adopting it would put it in runnerAgents and the orphan
     // sweep would treat that local map as ownership. Live rows still sync.
     if (!(await runnerEntryShieldsRunningRecord(agent))) continue;
+    // A reconnect can list a PTY while this process still awaits its spawn
+    // acknowledgement/ledger write. Its controller owns startup already, even
+    // though it has not registered in activeAgents yet.
+    if (spawningTasks.has(agent.taskId)) continue;
     maintenance.recoverOwned('agent', agent.id);
+    if (runnerAgents.get(agent.id)?.startupErrorAnalysis) {
+      await stopInterruptedStartup(agent.id);
+      continue;
+    }
     // Only sync if this process isn't already driving it
     if (!isAgentOwnedLocally(agent.id)) {
       const task = taskMap.get(agent.taskId);
@@ -118,7 +153,8 @@ export async function syncRunnerAgents() {
         workspacePath: persisted?.metadata?.workspacePath || agent.workspacePath || null,
         recoveredFromRunner: true,
         hasStartedWorking: true,
-        startedAt: agent.startedAt
+        startedAt: agent.startedAt,
+        ...(agent.kind === 'tui' && agent.promptSubmitted === false ? { startupErrorAnalysis } : {}),
       });
       if (!recoveredRunId) {
         console.warn(`⚠️ Recovered agent ${agent.id} has no run id on record — its run stays open and unbilled`);
@@ -173,6 +209,10 @@ export async function syncRunnerAgents() {
       }
       console.log(`🔄 Recovered agent ${agent.id} (task: ${agent.taskId})`);
       syncedCount++;
+      if (runnerAgents.get(agent.id)?.startupErrorAnalysis) {
+        console.warn(`⚠️ Stopping recovered TUI ${agent.id}: ${startupErrorAnalysis.message}`);
+        await stopInterruptedStartup(agent.id);
+      }
     }
   }
 

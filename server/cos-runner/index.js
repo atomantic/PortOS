@@ -41,7 +41,7 @@ import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiv
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
 import { createTuiExitHandler } from './tuiExit.js';
-import { bodyErrorMessage, btwBodySchema, pauseBodySchema, spawnBodySchema, spawnTuiBodySchema } from './requestSchemas.js';
+import { bodyErrorMessage, btwBodySchema, pauseBodySchema, spawnBodySchema, spawnTuiBodySchema, terminateBodySchema } from './requestSchemas.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
@@ -215,6 +215,8 @@ app.get('/agents', async (req, res) => {
       command: agent.command || null,
       workspacePath: agent.workspacePath || null,
       securityScan: agent.securityScan || null,
+      // null means an older caller did not opt into submission tracking.
+      promptSubmitted: agent.promptSubmitted ?? null,
     });
   }
   res.json(agents);
@@ -244,6 +246,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     cols = 80,
     rows = 24,
     doneSentinelPath = null,
+    trackPromptSubmission = false,
   } = body.data;
 
   // Name the offending field. A single opaque "missing or invalid fields" 400
@@ -348,6 +351,9 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     command,
     doneSentinelPath,
     completedBySentinel: false,
+    // Kept beside the live PTY, so a portos-server restart cannot erase the
+    // distinction between a running task and an empty startup composer.
+    promptSubmitted: trackPromptSubmission ? false : null,
     doneWatcher: null,
     // node-pty reports pid 0 for ConPTY on Windows, so a pid probe is not a
     // liveness signal. onExit is the runner's authority; GET /agents reads this.
@@ -784,6 +790,8 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
  * Terminate an agent (graceful with SIGTERM, then SIGKILL after timeout)
  */
 app.post('/terminate/:agentId', async (req, res) => {
+  const body = terminateBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
   const { agentId } = req.params;
   const agent = activeAgents.get(agentId);
 
@@ -791,12 +799,21 @@ app.post('/terminate/:agentId', async (req, res) => {
     return res.status(404).json({ error: 'Agent not found or not running' });
   }
 
+  if (body.data.onlyIfPromptUnsubmitted === true) {
+    if (agent.kind !== 'tui' || agent.promptSubmitted !== false) {
+      return res.json({ success: true, agentId, terminated: false });
+    }
+    // Claim cancellation synchronously with the receipt check, before scanner
+    // settlement yields. Late server writes must not start this canceled task.
+    agent.startupInterrupted = true;
+  }
+
   console.log(`🔪 Terminating agent ${agentId}`);
   await agent.stopSecurityScan?.();
   killProcessTree(agent.process, 'SIGTERM');
   armForceKill(agentId, agent);
 
-  res.json({ success: true, agentId });
+  res.json({ success: true, agentId, terminated: true });
 });
 
 /**
@@ -946,10 +963,17 @@ io.on('connection', (socket) => {
   });
   console.log(`🔌 Client connected: ${socket.id}`);
 
-  socket.on('tui:input', ({ sessionId, data }) => {
+  socket.on('tui:input', ({ sessionId, data, promptSubmission }) => {
     try {
       const agent = [...activeAgents.values()].find(candidate => candidate.sessionId === sessionId);
-      if (agent?.kind === 'tui' && typeof data === 'string') agent.process.write(data);
+      if (agent?.kind === 'tui' && !agent.startupInterrupted && typeof data === 'string') {
+        agent.process.write(data);
+        // The write and receipt are synchronous in the runner. A queued socket
+        // write in the server is not evidence that the Enter reached the PTY.
+        if (promptSubmission === true && data === '\r' && agent.promptSubmitted !== null) {
+          agent.promptSubmitted = true;
+        }
+      }
     } catch (err) {
       console.error(`❌ TUI input relay failed: ${err.message}`);
     }

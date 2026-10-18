@@ -590,7 +590,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // the persisted record stores an ISO string; toEpochMs handles both.
     const runStartedAt = toEpochMs(agent.startedAt);
     let effectiveSuccess = success;
-    if (!effectiveSuccess && task?.id) {
+    if (!effectiveSuccess && task?.id && !agent.startupErrorAnalysis) {
       const commitFound = workspacePath && await committedDuringRun(workspacePath, runStartedAt);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
@@ -611,7 +611,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     }
 
     // Analyze failure if applicable
-    const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
+    const errorAnalysis = effectiveSuccess ? null : agent.startupErrorAnalysis || analyzeAgentFailure(outputBuffer, task, model);
 
     // The gate for finalizeAgent's PR-claim verification (#3358): a PortOS-owned
     // PR is created by `runAgentCompletionCleanup` below, i.e. AFTER finalize, so

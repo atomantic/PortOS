@@ -693,12 +693,15 @@ export function getSessionProcess(sessionId) {
 /**
  * Write input to a shell session
  */
-export function writeToSession(sessionId, data) {
+export function writeToSession(sessionId, data, options) {
   const session = shellSessions.get(sessionId);
   if (session) {
     session.lastInputAt = Date.now();
     session.inputRevision = (session.inputRevision || 0) + 1;
-    session.pty.write(data);
+    // Runner proxies carry submission evidence alongside the Enter. Native
+    // node-pty sessions retain their ordinary one-argument write contract.
+    if (session.external && options?.promptSubmission) session.pty.write(data, options);
+    else session.pty.write(data);
     return true;
   }
   return false;

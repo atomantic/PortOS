@@ -266,7 +266,7 @@ function createPasteRetryController({
     }
     markPromptSubmitted();
     submitEnterTimer = scheduleSubmitEnters(
-      () => write(SUBMIT_KEY),
+      () => write(SUBMIT_KEY, { promptSubmission: true }),
       () => isFinalized()
     );
   };
@@ -1675,7 +1675,9 @@ export function createTuiSessionController({
     pasteController = createPasteRetryController({
       agentId,
       sessionLabel,
-      write: (keys) => session.write(sessionId, keys),
+      write: (keys, options) => options
+        ? session.write(sessionId, keys, options)
+        : session.write(sessionId, keys),
       paste: (text, options) => (sessionId ? session.paste(sessionId, text, options) : false),
       hasLiveChild: () => session.hasLiveChild(pid),
       launchShape,
