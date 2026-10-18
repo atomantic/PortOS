@@ -10,7 +10,7 @@ export const getHistory = (options = {}) => {
   return request(`/history?${params}`);
 };
 export const getHistoryStats = () => request('/history/stats');
-export const getHistoryActions = () => request('/history/actions');
+export const getHistoryActions = (options = {}) => request('/history/actions', options);
 export const clearHistory = (olderThanDays) => request(
   olderThanDays ? `/history?olderThanDays=${olderThanDays}` : '/history',
   { method: 'DELETE' }

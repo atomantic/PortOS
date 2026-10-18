@@ -50,14 +50,7 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
  * Pages still carrying a collapse, with how many. Lower or remove a row when a
  * site is migrated to `useListResource`; never raise one.
  */
-const KNOWN = Object.freeze({
-  'src/pages/AIProviders.jsx': 2,
-  'src/pages/HistoryPage.jsx': 1,
-  'src/pages/Privacy.jsx': 1,
-  'src/pages/ProcessesPage.jsx': 1,
-  'src/pages/RunnerPage.jsx': 2,
-  'src/pages/Templates.jsx': 1,
-});
+const KNOWN = Object.freeze({});
 
 const countIn = (source) => (source.match(LIST_COLLAPSE) || []).length;
 

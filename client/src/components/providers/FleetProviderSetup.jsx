@@ -6,6 +6,7 @@ import FleetHostSetup from './FleetHostSetup';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
+import ListLoadError from '../ui/ListLoadError';
 import { commandBasename, isApiProvider, isLocalEndpoint, isPrivateNetworkEndpoint, isTuiProvider, mergeProviderUpdate } from '../../utils/providers';
 import { getFleetLlmHost, revealFleetLlmHostKey, revealFleetPeerHostKey } from '../../services/apiProviders';
 import { PORTS } from '../../lib/ports.js';
@@ -82,7 +83,17 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
   };
 };
 
-export default function FleetProviderSetup({ peers = [], providers = [], onClose, onCreate, onUpdate, onConfigured }) {
+export default function FleetProviderSetup({
+  peers = [],
+  peersState = 'ready',
+  peersError = null,
+  onRetryPeers = null,
+  providers = [],
+  onClose,
+  onCreate,
+  onUpdate,
+  onConfigured
+}) {
   const [searchParams] = useSearchParams();
   const initialPeerId = searchParams.get('peerId') || '';
   // `?selfHost=1` is how the host's own status card (FleetHostSetup) links
@@ -319,7 +330,15 @@ export default function FleetProviderSetup({ peers = [], providers = [], onClose
             </FormField>
           )}
 
-          {availablePeers.length > 0 && !selfHost && (
+          {peersState === 'error' && !selfHost && (
+            <ListLoadError
+              what="fleet peers"
+              error={peersError}
+              onRetry={onRetryPeers}
+            />
+          )}
+
+          {peersState === 'ready' && availablePeers.length > 0 && !selfHost && (
             <FormField label="Known PortOS peer">
               <select
                 value={selectedPeerId}
@@ -334,6 +353,10 @@ export default function FleetProviderSetup({ peers = [], providers = [], onClose
                 ))}
               </select>
             </FormField>
+          )}
+
+          {peersState === 'ready' && availablePeers.length === 0 && !selfHost && (
+            <p className="text-xs text-gray-500">No known PortOS peers discovered on your network.</p>
           )}
 
           <FormField label="GPU host endpoint" hint={`Use the runtime endpoint, not the PortOS :${PORTS.API} address.`}>

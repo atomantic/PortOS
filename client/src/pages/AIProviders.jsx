@@ -13,6 +13,8 @@ import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import useMounted from '../hooks/useMounted.js';
+import useListResource from '../hooks/useListResource.js';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useSocketResource } from '../hooks/useSocketResource';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
@@ -105,14 +107,18 @@ export default function AIProviders() {
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [orchestrationProfiles, setOrchestrationProfiles] = useState([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
-  const [apps, setApps] = useState([]);
+  const loadApps = useCallback(async () => {
+    const list = await api.getApps({ silent: true });
+    return Array.isArray(list) ? list : [];
+  }, []);
+  const appsResource = useListResource(loadApps);
+  const { items: apps, state: appsState, error: appsError, retry: retryApps } = appsResource;
   const [activeRun, setActiveRun] = useState(null);
   const [runOutput, setRunOutput] = useState('');
   const [showSamples, setShowSamples] = useState(false);
   const [sampleProviders, setSampleProviders] = useState([]);
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [addingSample, setAddingSample] = useState({});
-  const [fleetPeers, setFleetPeers] = useState([]);
   // Samples this machine could actually run. One the server marked
   // hardware-`unavailable` has no path to becoming usable here, so it is not
   // listed at all rather than listed with a dead "Unavailable" button.
@@ -240,12 +246,13 @@ export default function AIProviders() {
 
   useEffect(() => { loadRuntimes(); }, [loadRuntimes]);
 
-  useEffect(() => {
-    if (!fleetSetupOpen || typeof api.getInstances !== 'function') return;
-    api.getInstances({ silent: true })
-      ?.then((data) => setFleetPeers(Array.isArray(data?.peers) ? data.peers : []))
-      ?.catch(() => setFleetPeers([]));
-  }, [fleetSetupOpen]);
+  const loadFleetPeers = useCallback(async () => {
+    if (typeof api.getInstances !== 'function') return [];
+    const data = await api.getInstances({ silent: true });
+    return Array.isArray(data?.peers) ? data.peers : [];
+  }, []);
+  const fleetPeersResource = useListResource(loadFleetPeers, { enabled: fleetSetupOpen });
+  const { items: fleetPeers, state: fleetPeersState, error: fleetPeersError, retry: retryFleetPeers } = fleetPeersResource;
 
   useEffect(() => {
     if (!activeRun) return;
@@ -281,12 +288,11 @@ export default function AIProviders() {
     setLoadError(false);
     let providersFailed = false;
     const statusRevision = ++observationRevision.current.status;
-    const [providersData, appsData, statusData, orchestrationProfilesData] = await Promise.all([
+    const [providersData, statusData, orchestrationProfilesData] = await Promise.all([
       api.getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),
-      api.getApps().catch(() => []),
       api.getProviderStatuses().catch(() => ({ providers: {} })),
       api.getOrchestrationProfiles?.({ silent: true }).catch(() => ({ profiles: [] })),
     ]);
@@ -304,7 +310,6 @@ export default function AIProviders() {
         ? providersData.runnerAllowedCommands
         : null);
     }
-    setApps(appsData);
     if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
     const profList = Array.isArray(orchestrationProfilesData)
       ? orchestrationProfilesData
@@ -1039,17 +1044,22 @@ export default function AIProviders() {
               ))}
             </select>
 
-            <select
-              aria-label="Workspace"
-              value={selectedWorkspace}
-              onChange={(e) => setSelectedWorkspace(e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-            >
-              <option value="">No workspace</option>
-              {apps.map(app => (
-                <option key={app.id} value={app.id}>{app.name}</option>
-              ))}
-            </select>
+            {appsState === 'error' && (
+              <ListLoadError what="workspaces" error={appsError} onRetry={retryApps} />
+            )}
+            {appsState !== 'error' && (
+              <select
+                aria-label="Workspace"
+                value={selectedWorkspace}
+                onChange={(e) => setSelectedWorkspace(e.target.value)}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
+              >
+                <option value="">{appsState === 'ready' && apps.length === 0 ? 'No workspaces found' : 'No workspace'}</option>
+                {apps.map(app => (
+                  <option key={app.id} value={app.id}>{app.name}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {(() => {
@@ -1270,6 +1280,9 @@ export default function AIProviders() {
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}
+          peersState={fleetPeersState}
+          peersError={fleetPeersError}
+          onRetryPeers={retryFleetPeers}
           providers={providers}
           onClose={closeForm}
           onCreate={handleCreateFleetProvider}
