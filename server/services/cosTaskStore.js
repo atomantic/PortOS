@@ -1238,7 +1238,18 @@ export async function sweepResolvedFailureTasks({
     const updated = await updateTask(task.id, {
       status: 'completed',
       metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-    }, type, { now, expectedStatus: task.status });
+    }, type, {
+      now,
+      expectedStatus: task.status,
+      // A revived task can fail again before this write and return to blocked.
+      // Preserve the category and every age fallback that justified this sweep.
+      expectedMetadata: reason === 'stale-failure-block' ? {
+        blockedCategory: task.metadata?.blockedCategory,
+        blockedAt: task.metadata?.blockedAt,
+        lastFailureAt: task.metadata?.lastFailureAt,
+        updatedAt: task.metadata?.updatedAt,
+      } : null,
+    });
     if (updated?.error || updated?.statusChanged) continue;
     if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
   }

@@ -151,7 +151,7 @@ import {
   __resetTaskCache
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
-import { PRIORITY_VALUES, generateTasksMarkdown } from '../lib/taskParser.js';
+import { PRIORITY_VALUES, generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
@@ -2466,6 +2466,33 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       const after = await getUserTasks();
       const statuses = after.tasks.filter(t => t.id.startsWith('task-race')).map(t => t.status).sort();
       expect(statuses).toEqual(['completed', 'in_progress']);
+    });
+
+    it.each([
+      ['blockedAt', new Date(NOW).toISOString()],
+      ['blockedCategory', 'provider-config'],
+    ])('preserves a new blocked episode when %s changes after the reaper snapshot', async (key, value) => {
+      for (const id of ['task-episode1', 'task-episode2']) {
+        await addTask({ description: `failure episode ${id}`, id, priority: 'HIGH' }, 'user', { now: NOW });
+        await updateTask(id, {
+          status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
+        }, 'user', { now: NOW });
+      }
+      mock.afterWrite = (path) => {
+        if (path !== USER_FILE) return false;
+        // Model a fresh failure or user-decision hold after the snapshot, with
+        // the same status as before. The completed first row stays untouched.
+        const tasks = parseTasksMarkdown(mock.files.get(path));
+        tasks.find(task => task.status === 'blocked').metadata[key] = value;
+        mock.files.set(path, generateTasksMarkdown(tasks));
+        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+        return true;
+      };
+      expect(await sweepResolvedFailureTasks({ now: NOW })).toMatchObject({ reaped: 1, staleBlocks: 1 });
+      const tasks = (await getUserTasks()).tasks;
+      const held = tasks.find(task => task.status === 'blocked');
+      expect(held.metadata[key]).toBe(value);
+      expect(held.metadata.resolution).toBeUndefined();
     });
 
     it('bounds the number of flips per sweep to the limit', async () => {
