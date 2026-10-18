@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import socket from '../../../services/socket';
 import CleanupStage from './CleanupStage.jsx';
 import { cleanupMusicVideoRenders, getMusicVideoRenderCleanup } from '../../../services/apiMusicVideo.js';
 
@@ -35,6 +36,30 @@ describe('production cleanup', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove superseded renders' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Wait for shot renders to finish');
     expect(screen.getByText('Superseded — safe to remove')).toBeInTheDocument();
+  });
+
+  it('keeps mutation failures visible when cleanup socket events refresh the inventory', async () => {
+    let rejectCleanup;
+    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((resolve, reject) => { rejectCleanup = reject; }));
+    render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove superseded renders' }));
+    const onCleanup = socket.on.mock.calls.find(([event]) => event === 'music-video:render-cleanup')[1];
+    await act(async () => { onCleanup({ projectId: 'example-project' }); });
+    await act(async () => { rejectCleanup(new Error('Segment removal failed')); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Segment removal failed');
+    await act(async () => { onCleanup({ projectId: 'example-project' }); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Segment removal failed');
+  });
+
+  it('drops a cleanup failure after switching to another project', async () => {
+    let rejectCleanup;
+    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((resolve, reject) => { rejectCleanup = reject; }));
+    const { rerender } = render(<CleanupStage board={{ project: { id: 'old-project' } }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove superseded renders' }));
+    rerender(<CleanupStage board={{ project: { id: 'new-project' } }} />);
+    await screen.findByText('Superseded — safe to remove');
+    await act(async () => { rejectCleanup(new Error('Old project failure')); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('drops a previous project inventory response after switching projects', async () => {

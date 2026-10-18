@@ -1099,7 +1099,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     });
     await retireOldFinals(projectId, jobId);
     // Older takes of each shot are dropped once the new cut is published.
-    const pruned = await pruneSegments(plan, { startedAtMs }).catch(err => { console.warn(`⚠️ Music-video segment cleanup failed: ${err.message}`); return 0; });
+    const pruned = await pruneSegments(plan, { startedAtMs, current: true }).catch(err => { console.warn(`⚠️ Music-video segment cleanup failed: ${err.message}`); return 0; });
     finish('complete');
     console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });

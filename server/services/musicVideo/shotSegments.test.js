@@ -215,6 +215,23 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(existsSync(after.segments[2].path)).toBe(true);
   }, 60000);
 
+  it('keeps an older cached take selected after a final render snapshot', async () => {
+    fixture.project = project({ id: 'mv-current-cache' });
+    const originalClips = fixture.clips;
+    try {
+      const original = await planShotSegments(fixture.project);
+      await renderMissingSegments(original, { concurrency: 2 });
+      fixture.clips = originalClips.map(clip => clip.sceneId === 'c' ? { ...clip, inSec: 0.1, outSec: 1.1 } : clip);
+      const rendered = await planShotSegments(fixture.project);
+      await renderMissingSegments(rendered, { concurrency: 2 });
+      // The director switches back to a previously cached take as finalization runs.
+      fixture.clips = originalClips;
+      await pruneSegments(rendered, { current: true });
+      expect(existsSync(original.segments[2].path)).toBe(true);
+      expect(existsSync(rendered.segments[2].path)).toBe(false);
+    } finally { fixture.clips = originalClips; }
+  });
+
   it('retires only a successfully replaced shot while another edited shot still needs its replacement', async () => {
     fixture.project = project({ id: 'mv-shot-replacement' });
     const originalClips = fixture.clips;

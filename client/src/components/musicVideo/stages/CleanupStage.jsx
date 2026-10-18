@@ -10,20 +10,28 @@ const bytes = files => files.reduce((sum, file) => sum + file.bytes, 0);
 export default function CleanupStage({ board }) {
   const { project } = board;
   const [inventory, setInventory] = useState(null);
-  const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [mutationError, setMutationError] = useState(null);
+  const error = mutationError || loadError;
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const identityGeneration = useRef(0);
   const cleaning = useRef(false);
   const refresh = useRef(null);
   refresh.current = () => {
     const ticket = ++generation.current;
     getMusicVideoRenderCleanup(project.id, { silent: true }).then(next => {
-      if (ticket === generation.current) { setInventory(next); setError(null); }
-    }).catch(err => { if (ticket === generation.current) setError(err.message); });
+      if (ticket === generation.current) { setInventory(next); setLoadError(null); }
+    }).catch(err => { if (ticket === generation.current) setLoadError(err.message); });
   };
   useEffect(() => {
+    identityGeneration.current += 1;
+    setMutationError(null);
+    return () => { identityGeneration.current += 1; };
+  }, [project.id]);
+  useEffect(() => {
     setInventory(null);
-    setError(null);
+    setLoadError(null);
     refresh.current();
     const onChange = event => { if (event.projectId === project.id) refresh.current(); };
     const onConnect = () => refresh.current();
@@ -42,10 +50,12 @@ export default function CleanupStage({ board }) {
     if (cleaning.current) return;
     cleaning.current = true;
     setBusy(true);
+    setMutationError(null);
+    const identity = identityGeneration.current;
     const ticket = ++generation.current;
     cleanupMusicVideoRenders(project.id, { unusedLooks }, { silent: true }).then(next => {
-      if (ticket === generation.current) { setInventory(next); setError(null); }
-    }).catch(err => { if (ticket === generation.current) setError(err.message); })
+      if (ticket === generation.current) { setInventory(next); setLoadError(null); }
+    }).catch(err => { if (identity === identityGeneration.current) setMutationError(err.message); })
       .finally(() => { cleaning.current = false; setBusy(false); });
   };
   const finals = inventory?.finals || [];

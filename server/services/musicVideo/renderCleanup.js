@@ -36,7 +36,12 @@ async function finalInventory(projectId, history) {
   const [{ listCollections }, timeline, director] = await Promise.all([
     import('../mediaCollections.js'), import('../videoTimeline/local.js'), import('../creativeDirector/local.js'),
   ]);
-  const owners = (await Promise.all([listProjects(), listCollections(), timeline.listProjects(), director.listProjects()])).flat();
+  // Completed run receipts describe history, rather than a live media dependency.
+  const projects = (await listProjects()).map(({ productionRuns, autonomousRun, ...record }) => ({
+    ...record, productionRuns: productionRuns?.filter(run => run.status !== 'completed'),
+    autonomousRun: autonomousRun?.status === 'completed' ? null : autonomousRun,
+  }));
+  const owners = [projects, ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects()]))].flat();
   const current = history.find(entry => entry.id === project.renderHistoryId);
   const hasCurrent = current && await size(safeUnder(PATHS.videos, current.filename)) > 0;
   const finals = [];

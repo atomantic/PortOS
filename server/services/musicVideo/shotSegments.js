@@ -446,7 +446,14 @@ async function staleSegmentFiles(plan, { startedAtMs = Infinity, unusedLooks = f
   return stale;
 }
 
-export async function pruneSegments(plan, { reserved = false, ...options } = {}) {
+export async function pruneSegments(plan, { reserved = false, current = false, ...options } = {}) {
+  if (current) {
+    const { withProjectMediaMutation } = await import('./projects.js');
+    return withProjectMediaMutation(async () => {
+      const { plan: latest } = await planForLooks(plan.project.id);
+      return latest && !latest.error ? pruneSegments(latest, { reserved, ...options }) : 0;
+    });
+  }
   const prune = async () => {
     assertSegmentCleanupIdle(plan.project.id);
     const stale = await staleSegmentFiles(plan, options);
