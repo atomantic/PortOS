@@ -1896,4 +1896,24 @@ describe('source provenance', () => {
     }]);
     expect((await svc.getCollection('c-remote')).source).toBe('user');
   });
+
+  it('removeItemFromAllCollections drops the item everywhere, bumps updatedAt, and spares other items', async () => {
+    const a = await svc.createCollection({ name: 'A' });
+    const b = await svc.createCollection({ name: 'B' });
+    const c = await svc.createCollection({ name: 'C' });
+    await svc.bulkUpdateCollectionItems(a.id, { add: [{ kind: 'image', ref: 'gone.png' }, { kind: 'image', ref: 'keep.png' }] });
+    await svc.bulkUpdateCollectionItems(b.id, { add: [{ kind: 'image', ref: 'gone.png' }, { kind: 'video', ref: 'gone.png' }] });
+    await svc.bulkUpdateCollectionItems(c.id, { add: [{ kind: 'image', ref: 'keep.png' }] });
+    const cBefore = await readStored(c.id);
+    await svc.updateCollection(a.id, { coverKey: 'image:gone.png' });
+
+    expect(await svc.removeItemFromAllCollections('image', 'gone.png')).toBe(2);
+
+    const aAfter = await readStored(a.id);
+    expect(aAfter.items.map((i) => i.ref)).toEqual(['keep.png']);
+    expect(aAfter.coverKey).toBeNull();
+    expect((await readStored(b.id)).items).toEqual([expect.objectContaining({ kind: 'video', ref: 'gone.png' })]);
+    expect(await readStored(c.id)).toEqual(cBefore);
+    expect(await svc.removeItemFromAllCollections('image', 'gone.png')).toBe(0);
+  });
 });
