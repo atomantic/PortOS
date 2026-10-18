@@ -1773,6 +1773,71 @@ describe('createCachedStore', () => {
     expect(JSON.parse(await readFile(file, 'utf-8')).n).toBe(N);
   });
 
+  it('does not let an in-flight stale read replace a persisted mutation', async () => {
+    const file = join(dir, 'feed-state.json');
+    const store = createCachedStore(file, { items: [] }, { ttl: 60_000 });
+    await store.save({ items: [] });
+    store.invalidateCache();
+
+    let releaseRead;
+    let signalReadStarted;
+    const heldRead = new Promise((resolve) => { releaseRead = resolve; });
+    const readStarted = new Promise((resolve) => { signalReadStarted = resolve; });
+    fsPromises.readFile.mockImplementationOnce(async (...args) => {
+      const bytes = await realFsPromises.readFile(...args);
+      signalReadStarted();
+      await heldRead;
+      return bytes;
+    });
+
+    const staleRead = store.load();
+    await readStarted;
+    try {
+      await store.mutate((data) => { data.items.push('first'); });
+      releaseRead();
+      await expect(staleRead).resolves.toEqual({ items: ['first'] });
+
+      await store.mutate((data) => { data.items.push('second'); });
+      expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ items: ['first', 'second'] });
+    } finally {
+      releaseRead();
+      restoreFsMocks();
+    }
+  });
+
+  it('re-reads after an in-flight stale read races a persist and cache invalidation', async () => {
+    const file = join(dir, 'invalidated-state.json');
+    const store = createCachedStore(file, { items: [] }, { ttl: 60_000 });
+    await store.save({ items: [] });
+    store.invalidateCache();
+
+    let releaseRead;
+    let signalReadStarted;
+    const heldRead = new Promise((resolve) => { releaseRead = resolve; });
+    const readStarted = new Promise((resolve) => { signalReadStarted = resolve; });
+    fsPromises.readFile.mockImplementationOnce(async (...args) => {
+      const bytes = await realFsPromises.readFile(...args);
+      signalReadStarted();
+      await heldRead;
+      return bytes;
+    });
+
+    const staleRead = store.load();
+    await readStarted;
+    try {
+      await store.mutate((data) => { data.items.push('first'); });
+      store.invalidateCache();
+      releaseRead();
+      await expect(staleRead).resolves.toEqual({ items: ['first'] });
+
+      await store.mutate((data) => { data.items.push('second'); });
+      expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ items: ['first', 'second'] });
+    } finally {
+      releaseRead();
+      restoreFsMocks();
+    }
+  });
+
   it('mutate that returns undefined persists the mutated input', async () => {
     const store = createCachedStore(join(dir, 'x.json'), { items: [] });
     await store.mutate((data) => { data.items.push('a'); });

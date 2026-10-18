@@ -581,6 +581,7 @@ export async function writeJSONLines(filePath, values) {
 export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '' } = {}) {
   let cache = null;
   let cacheTimestamp = 0;
+  let writeSeq = 0;
   const dir = dirname(filePath);
   const queueWrite = createFileWriteQueue();
   // Safe clone for plain JSON defaults (structuredClone requires Node 17+)
@@ -589,6 +590,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   const load = async () => {
     const now = Date.now();
     if (cache && (now - cacheTimestamp) < ttl) return cache;
+    const readSeq = writeSeq;
     await ensureDir(dir);
     // Strict (#4115): `mutate` is load → fn → persist over this value, so a
     // present-but-unreadable file must reject here rather than read as the
@@ -598,6 +600,10 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
     if (!ok) {
       throw new Error(`Unreadable JSON file: ${filePath}${context ? ` (${context})` : ''}`);
     }
+    // A serialized write may have completed while this disk read was in
+    // flight. In that case the bytes we just read can predate the persisted
+    // state, so keep and return the newer cache instead of replacing it.
+    if (readSeq !== writeSeq) return cache === null ? load() : cache;
     cache = value === null ? cloneDefault() : value;
     cacheTimestamp = now;
     return cache;
@@ -607,6 +613,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   // it via the serialized `save`/`mutate`, never directly.
   const persist = async (data) => {
     await atomicWrite(filePath, data);
+    writeSeq += 1;
     cache = data;
     cacheTimestamp = Date.now();
     return data;
