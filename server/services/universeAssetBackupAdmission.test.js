@@ -52,7 +52,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
   },
   getJob: id => queuedJobs.get(id),
 }));
-vi.mock('./mediaCollections.js', () => ({ addItem: vi.fn(), ERR_DUPLICATE: 'DUPLICATE' }));
+vi.mock('./mediaCollections.js', () => ({ addItem: vi.fn(), removeItemFromAllCollections: async () => 0, ERR_DUPLICATE: 'DUPLICATE' }));
 // This suite owns universe references; music-video pool cleanup has its own contracts.
 vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ indexImage: async () => {}, unindexImage: async () => {} }));

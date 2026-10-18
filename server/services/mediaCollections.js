@@ -979,6 +979,28 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
   return result;
 }
 
+/**
+ * Drop one media item from every live collection that holds it — the sweep a
+ * deleted asset needs so no collection keeps a dangling row. Goes through
+ * `bulkUpdateCollectionItems`, so each touched collection bumps `updatedAt`
+ * (the LWW stamp peers sync on) and clears a cover that pointed at the item.
+ * Returns the number of collections changed.
+ */
+export async function removeItemFromAllCollections(kind, ref) {
+  const key = `${kind}:${ref}`;
+  const holders = (await listCollections()).filter((c) => c.items.some((it) => itemKey(it) === key));
+  let changed = 0;
+  for (const c of holders) {
+    // A collection tombstoned between the listing and the write is not a failure.
+    const res = await bulkUpdateCollectionItems(c.id, { remove: [key] }).catch((err) => {
+      if (err?.code === ERR_NOT_FOUND) return null;
+      throw err;
+    });
+    if (res?.removed) changed += 1;
+  }
+  return changed;
+}
+
 export async function removeItem(id, key) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
