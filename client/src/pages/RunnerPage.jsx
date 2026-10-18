@@ -5,6 +5,7 @@ import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { processScreenshotUploads } from '../services/apiMedia';
 import { filterSelectableModels } from '../utils/providers';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -111,6 +112,9 @@ export function RunnerPage() {
       socket.off(`run:${runId}:complete`, handleComplete);
     };
   }, [runId]);
+
+  // Command output is only broadcast to subscribed sockets (#12019).
+  useSocketSubscription('command');
 
   // Subscribe to command output
   useEffect(() => {

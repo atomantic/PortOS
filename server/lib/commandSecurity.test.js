@@ -221,6 +221,25 @@ describe('commandSecurity', () => {
       expect(redactOutput(input)).toBe(input)
     })
 
+    // Operator command output is dotenv / `git config --list` shaped as often
+    // as JSON (#12019): the key must name a secret as its own segment.
+    it.each([
+      ['a dotenv line', 'API_TOKEN=abc123\nPORT=3000', 'API_TOKEN=[REDACTED]\nPORT=3000'],
+      ['an exported shell assignment', 'export GITHUB_TOKEN=ghp_example', 'export GITHUB_TOKEN=[REDACTED]'],
+      ['a git config key', 'github.token=example\nuser.name=Example', 'github.token=[REDACTED]\nuser.name=Example'],
+      ['a kebab-case key', 'my-secret-key=value', 'my-secret-key=[REDACTED]'],
+    ])('redacts %s', (_label, input, expected) => {
+      expect(redactOutput(input)).toBe(expected)
+    })
+
+    it.each([
+      ['a key that only contains a secret word', 'author=Example Author'],
+      ['an empty assignment', 'API_TOKEN='],
+      ['a value on a different line from the key', 'API_TOKEN\n=value'],
+    ])('leaves %s alone', (_label, input) => {
+      expect(redactOutput(input)).toBe(input)
+    })
+
     it('should redact multiple sensitive values', () => {
       const input = '{"API_KEY": "key1", "SECRET_TOKEN": "tok2", "name": "app"}'
       const result = redactOutput(input)

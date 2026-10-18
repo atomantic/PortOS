@@ -45,7 +45,7 @@ import { trackedSourceFiles } from './test/trackedFiles.js';
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The namespaces `registerSubscriber` wires up in server/services/socket.js.
-const SUBSCRIBER_NAMESPACES = ['cos', 'errors', 'notifications', 'agents', 'instances', 'loops', 'beeper'];
+const SUBSCRIBER_NAMESPACES = ['cos', 'errors', 'notifications', 'agents', 'instances', 'loops', 'beeper', 'command'];
 
 const SUBSCRIBE_CALL = new RegExp(
   `emit\\(\\s*['"](?:${SUBSCRIBER_NAMESPACES.join('|')}):subscribe['"]`

@@ -199,6 +199,27 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     expect(client.connected).toBe(false);
   });
 
+  it('a peer-token-authenticated socket is disconnected by command:subscribe, so it never joins the command-output audience (#12019)', async () => {
+    await setInstancePassword();
+    instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];
+    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await stage('import peerHttpClient.js', import('../lib/peerHttpClient.js'));
+
+    await startServer();
+    const client = connectClient({
+      [PEER_INSTANCE_HEADER]: PEER_ID,
+      [PEER_AUTH_HEADER]: derivePeerAuthToken(PAIR_SECRET, PEER_ID),
+    });
+
+    await waitFor(client, 'connect');
+    const subscribedAck = vi.fn();
+    client.on('command:subscribed', subscribedAck);
+    const disconnected = waitFor(client, 'disconnect');
+    client.emit('command:subscribe');
+    await disconnected;
+    expect(client.connected).toBe(false);
+    expect(subscribedAck).not.toHaveBeenCalled();
+  });
+
   it('a Basic-authenticated socket also survives cos:subscribe but is disconnected by a shell:* event', async () => {
     await setInstancePassword();
 

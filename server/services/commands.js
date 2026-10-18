@@ -1,6 +1,6 @@
 import { spawn } from '../lib/childProcess.js';
 import { logAction } from './history.js';
-import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
+import { ALLOWED_COMMANDS, redactOutput, validateCommand } from '../lib/commandSecurity.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
@@ -52,16 +52,20 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
 
   activeCommands.set(commandId, child);
 
+  // Every copy of the output leaves this function redacted (#12019): each
+  // streamed chunk on its own, and the accumulated buffer once more at close
+  // so a secret split across two chunks is still caught in the persisted and
+  // completion copies.
   child.stdout.on('data', (data) => {
     const text = data.toString();
     output += text;
-    onData?.(text, 'stdout');
+    onData?.(redactOutput(text), 'stdout');
   });
 
   child.stderr.on('data', (data) => {
     const text = data.toString();
     output += text;
-    onData?.(text, 'stderr');
+    onData?.(redactOutput(text), 'stderr');
   });
 
   child.on('close', (code) => {
@@ -70,20 +74,21 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
     activeCommands.delete(commandId);
     const runtime = Date.now() - startTime;
     const success = code === 0;
+    const redacted = redactOutput(output);
 
     logAction('command', null, command.substring(0, 50), {
       command,
       workspacePath,
       exitCode: code,
       runtime,
-      output: output.substring(0, 10000) // Truncate to prevent huge history
+      output: redacted.substring(0, 10000) // Truncate to prevent huge history
     }, success, success ? null : `Exit code ${code}`);
 
     onComplete?.({
       success,
       exitCode: code,
       runtime,
-      output
+      output: redacted
     });
   });
 
