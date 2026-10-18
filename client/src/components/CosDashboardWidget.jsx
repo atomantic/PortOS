@@ -15,7 +15,30 @@ import {
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
+import { sameJsonShape } from '../lib/sameJsonShape';
 import { timeAgo, formatWeekdayDate, formatCount } from '../utils/formatters';
+
+/**
+ * The snapshot minus its volatile, unrendered fields. `status.lastEvaluation`
+ * is stamped on every daemon evaluation; `task.completedRelative` is the
+ * server's relative-time label, which the widget replaces with a client-side
+ * `timeAgo(task.completedAt)` refreshed by its own minute tick.
+ */
+const comparableSnapshot = (snapshot) => {
+  if (!snapshot) return snapshot;
+  const { summary, recentTasks } = snapshot;
+  return {
+    ...snapshot,
+    summary: summary && {
+      ...summary,
+      status: summary.status && { ...summary.status, lastEvaluation: undefined },
+    },
+    recentTasks: recentTasks && {
+      ...recentTasks,
+      tasks: recentTasks.tasks?.map(({ completedRelative: _volatile, ...task }) => task),
+    },
+  };
+};
 
 const RESOURCE_EVENTS = ['cos:day:changed', 'cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed', 'cos:agents:changed', 'cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:learning:changed'];
 
@@ -40,92 +63,14 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     return { summary, learningSummary, recentTasks, activityCalendar };
   }, {
     namespace: 'cos', events: RESOURCE_EVENTS,
-    // Re-render only when one of the aggregated counts actually moves —
-    // running agents, completed/failed counts, queue depth, learning
-    // success rate, every visible recent-task field, every per-day heatmap
-    // cell, and the heatmap summary. Without this
-    // guard each invalidation re-renders the activity heatmap + recent tasks list
-    // even when nothing changed.
-    //
-    // Recent-tasks comparison walks every rendered field per row (id,
-    // description, taskType, app, durationFormatted, success). The relative-
-    // time label is rendered client-side from `task.completedAt` via timeAgo
-    // and refreshed by the useTimeTick(60000) below, so the server's
-    // `task.completedRelative` string is intentionally ignored — it ships in
-    // the payload but would freeze across unchanged snapshots if we used it.
-    //
-    // Heatmap comparison walks every cell's (date, tasks, isToday) tuple plus
-    // summary totals — the per-day distribution can shift without changing
-    // top-level totals (e.g. a run moving from one day to another in
-    // late-arriving telemetry).
-    compare: (prev, next) => {
-      if (!prev) return false;
-      const prevTasks = prev.recentTasks?.tasks;
-      const nextTasks = next.recentTasks?.tasks;
-      const prevLen = prevTasks?.length ?? 0;
-      const nextLen = nextTasks?.length ?? 0;
-      if (prevLen !== nextLen) return false;
-      for (let i = 0; i < prevLen; i++) {
-        const a = prevTasks[i];
-        const b = nextTasks[i];
-        if (
-          a?.id !== b?.id
-          || a?.success !== b?.success
-          || a?.description !== b?.description
-          || a?.taskType !== b?.taskType
-          || a?.app !== b?.app
-          || a?.durationFormatted !== b?.durationFormatted
-          // completedAt is the input to timeAgo(...) below — if the server
-          // corrects a task's completion time without changing other fields
-          // (rare but possible) we want the relative-time label to refresh
-          // immediately, not on the next minute tick.
-          || a?.completedAt !== b?.completedAt
-        ) return false;
-      }
-      // Heatmap weeks: array of arrays of {date, tasks, isToday, isFuture}.
-      // Compare every cell — a single boundary-cross (isToday rolls from one
-      // date to the next) flips the comparator naturally because (date,
-      // isToday) on the prior+next today differ.
-      const prevWeeks = prev.activityCalendar?.weeks;
-      const nextWeeks = next.activityCalendar?.weeks;
-      const prevWeeksLen = prevWeeks?.length ?? 0;
-      const nextWeeksLen = nextWeeks?.length ?? 0;
-      if (prevWeeksLen !== nextWeeksLen) return false;
-      for (let w = 0; w < prevWeeksLen; w++) {
-        const pw = prevWeeks[w];
-        const nw = nextWeeks[w];
-        if ((pw?.length ?? 0) !== (nw?.length ?? 0)) return false;
-        for (let d = 0; d < pw.length; d++) {
-          const pd = pw[d];
-          const nd = nw[d];
-          if (
-            pd?.date !== nd?.date
-            || pd?.tasks !== nd?.tasks
-            || pd?.isToday !== nd?.isToday
-          ) return false;
-        }
-      }
-      return (
-        prev.summary?.status?.running === next.summary?.status?.running
-          && prev.summary?.status?.paused === next.summary?.status?.paused
-          && prev.summary?.today?.succeeded === next.summary?.today?.succeeded
-          && prev.summary?.today?.failed === next.summary?.today?.failed
-          && prev.summary?.today?.running === next.summary?.today?.running
-          && prev.summary?.today?.completed === next.summary?.today?.completed
-          && prev.summary?.today?.timeWorked === next.summary?.today?.timeWorked
-          && prev.summary?.queue?.total === next.summary?.queue?.total
-          && prev.summary?.queue?.pendingApprovals === next.summary?.queue?.pendingApprovals
-          && prev.learningSummary?.overallSuccessRate === next.learningSummary?.overallSuccessRate
-          && prev.learningSummary?.skipped === next.learningSummary?.skipped
-          && prev.learningSummary?.status === next.learningSummary?.status
-          && prev.learningSummary?.totalCompleted === next.learningSummary?.totalCompleted
-          && prev.recentTasks?.summary?.total === next.recentTasks?.summary?.total
-          && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
-          && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
-          && prev.activityCalendar?.summary?.activeDays === next.activityCalendar?.summary?.activeDays
-          && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
-      );
-    },
+    // Re-render only when the snapshot actually changed. Structural equality
+    // (as #11664 did for useSystemActivity) rather than a hand-written field
+    // list: a rendered field the list forgot was silently frozen across
+    // invalidations (#12036). The fields the server recomputes on every read
+    // but this widget never renders are dropped first, so a tick of the
+    // daemon's evaluation clock or a server-side relative-time label does not
+    // re-render the heatmap and task list by itself.
+    compare: (prev, next) => prev != null && sameJsonShape(comparableSnapshot(prev), comparableSnapshot(next)),
   });
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
