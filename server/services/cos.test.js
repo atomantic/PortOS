@@ -2621,11 +2621,16 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
 
   it('drives the interval off PENDING_MERGE_SWEEP_INTERVAL_MS, not a local literal', () => {
     expect(sweepBlock).toMatch(/intervalMs:\s*PENDING_MERGE_SWEEP_INTERVAL_MS/);
-    expect(COS_SRC).toMatch(/PENDING_MERGE_SWEEP_INTERVAL_MS\s*\}\s*=\s*await import\('\.\/prWatcher\.js'\)/);
+    expect(COS_SRC).toMatch(/\{\s*PENDING_MERGE_SWEEP_INTERVAL_MS\b[^}]*\}\s*=\s*await import\('\.\/prWatcher\.js'\)/);
   });
 
-  it('gates the sweep on !paused AND cos auto-run === execute', () => {
-    expect(sweepBlock).toMatch(/s\.paused\s*\|\|\s*getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
+  it('gates the sweep and the handoff follow-up poll on !paused AND cos auto-run === execute', () => {
+    expect(sweepBlock).toMatch(/if \(await pendingMergeSweepBlocked\(\)\) return;/);
+    expect(COS_SRC).toMatch(/setHandoffFollowUpGate\(pendingMergeSweepBlocked\)/);
+    const gateFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function pendingMergeSweepBlocked'));
+    expect(gateFn).toMatch(/!isDaemonRunning\(\)/);
+    expect(gateFn).toMatch(/s\.paused\)/);
+    expect(gateFn).toMatch(/getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
   });
 
   it('keeps the opportunistic drain in evaluateTasks so the call site cannot be deleted silently', () => {

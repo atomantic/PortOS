@@ -79,9 +79,14 @@ vi.mock('./persistentMindSupervisor.js', async (importOriginal) => ({
   shutdownPersistentMindSupervisor: vi.fn(async () => {}),
   registerPersistentMindTurnAdapter: vi.fn(async () => {}),
 }));
+// The handoff follow-up poll lives in prWatcher; the daemon arms its gate and
+// cancels it, so "armed" here is the registered gate.
+const handoffFollowUp = vi.hoisted(() => ({ gate: null }));
 vi.mock('./prWatcher.js', () => ({
   PENDING_MERGE_SWEEP_INTERVAL_MS: 1800000,
   sweepPendingMergePrs: vi.fn(async () => null),
+  setHandoffFollowUpGate: (gate) => { handoffFollowUp.gate = gate; },
+  cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
 const { start, stop } = await import('./cos.js');
@@ -128,9 +133,24 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     await expect(stopping).resolves.toEqual({ success: true });
 
     expect(cosEventIds()).toEqual([]);
+    expect(handoffFollowUp.gate).toBe(null);
     expect(isDaemonRunning()).toBe(false);
     expect(persisted.running).toBe(false);
     expect(statuses.at(-1)).toEqual({ running: false });
+  });
+
+  it('the handoff follow-up poll shares the pending-merge gate and is cancelled on stop', async () => {
+    persisted = { ...persisted, paused: false, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
+    const starting = start();
+    await waitFor(() => typeof releaseRecovery === 'function');
+    releaseRecovery();
+    await starting;
+    expect(await handoffFollowUp.gate()).toBe(null);
+    persisted = { ...persisted, paused: true };
+    expect(await handoffFollowUp.gate()).toBe('daemon paused');
+
+    await stop();
+    expect(handoffFollowUp.gate).toBe(null);
   });
 
   it('a boot step that throws rolls the daemon back so the next start() succeeds', async () => {
