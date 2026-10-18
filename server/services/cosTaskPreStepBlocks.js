@@ -518,6 +518,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     remaining: [
       ...idlePark.remaining,
       ...allActionable.map(b => ({ branch: b.branch, reason: 'actionable' })),
+      ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
       ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
     ],
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',

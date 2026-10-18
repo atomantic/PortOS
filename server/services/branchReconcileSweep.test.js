@@ -84,6 +84,15 @@ describe('manual branch reconciliation sweep', () => {
     ] });
   });
 
+  it.each([
+    [{ skipped: [{ branch: 'moved', reason: 'not-merged-on-recheck' }] }, { branch: 'moved', reason: 'not-merged-on-recheck' }],
+    [{ orphanRemotes: { remoteUnavailable: true, reported: [] } }, { reason: 'remote-state-unavailable' }],
+  ])('does not report drained when the final scan has incomplete evidence (%j)', async (extra, remaining) => {
+    reconcile.mockResolvedValue(scan([], extra));
+    expect(await run()).toEqual({ skip: true });
+    expect(outcome()).toMatchObject({ status: 'incomplete', remaining: [remaining] });
+  });
+
   it('preserves the last observation across a failed scan or unavailable ownership state', async () => {
     reconcile.mockResolvedValueOnce(scan([branch('a')])).mockRejectedValueOnce(new Error('git unavailable'));
     await run();

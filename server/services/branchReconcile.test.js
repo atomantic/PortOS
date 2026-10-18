@@ -2661,14 +2661,14 @@ describe('describeIdleReconcilePark', () => {
   });
 
   it('reports disabled cleanup and deletion failure as blockers', () => {
-    // A branch no longer merged is reclassified next pass. Disabled cleanup
-    // and a failed deletion still leave concrete work that must remain visible.
+    // A failed merge recheck leaves a surviving branch, just like disabled
+    // cleanup and a failed deletion. A one-shot sweep must report all three.
     const out = describeIdleReconcilePark([
       { branch: 'a', reason: 'cleanup-disabled' },
       { branch: 'b', reason: 'not-merged-on-recheck' },
       { branch: 'c', reason: 'delete-failed: boom' }
     ], []);
-    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 2, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'branch-delete-failed': 1 }, remaining: [{ branch: 'a', reason: 'cleanup-disabled' }, { branch: 'c', reason: 'branch-delete-failed' }], notLaterThan: null });
+    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 3, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'not-merged-on-recheck': 1, 'branch-delete-failed': 1 }, remaining: [{ branch: 'a', reason: 'cleanup-disabled' }, { branch: 'b', reason: 'not-merged-on-recheck' }, { branch: 'c', reason: 'branch-delete-failed' }], notLaterThan: null });
   });
 
   it('ignores an unreadable retryAt rather than parking on NaN', () => {

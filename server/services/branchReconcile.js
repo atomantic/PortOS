@@ -1031,7 +1031,6 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
     }
   };
   for (const entry of skipped) {
-    if (entry.reason === 'not-merged-on-recheck') continue;
     const cause = entry.reason?.startsWith('delete-failed') ? 'branch-delete-failed' : entry.reason || 'cleanup-failed';
     add(entry, cause);
   }
