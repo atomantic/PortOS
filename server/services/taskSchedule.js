@@ -348,6 +348,26 @@ export async function getExecutionHistory(taskType) {
   return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
 }
 
+/**
+ * Keep the latest triage output of an audit beside its execution record so the
+ * Schedule card can show it (#12085). Machine-local: the execution store never
+ * federates. An empty list clears nothing — a run that produced no
+ * recommendation leaves the previous one visible rather than erasing it.
+ */
+export async function recordRecommendedAudits(taskType, appId, items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return updateSchedule(async (schedule) => {
+    const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+    schedule.executions[key] ||= { lastRun: null, count: 0, perApp: {} };
+    schedule.executions[key].recommendedAudits = {
+      at: new Date().toISOString(),
+      appId: appId || null,
+      items: items.slice(0, 3).map(item => String(item).slice(0, 300)),
+    };
+    return { result: schedule.executions[key].recommendedAudits, changed: true };
+  });
+}
+
 // ============================================================
 // Perpetual (drain-until-done) park state
 // ============================================================
@@ -1489,6 +1509,8 @@ export async function getScheduleStatus() {
       runCount: execution.count,
       globalLastRun: execution.lastRun,
       globalRunCount: execution.count,
+      // The triage lane's last ranked "Recommended next audits" (#12085).
+      recommendedAudits: execution.recommendedAudits || null,
       perAppCount: Object.keys(execution.perApp).length,
       appOverrides,
       enabledAppCount,

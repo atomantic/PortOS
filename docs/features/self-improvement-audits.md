@@ -75,7 +75,7 @@ the operator's live checkout.
 |---|---|---|---|---|
 | `security` | Exposure real under the app's own threat model | `security` | implement | |
 | `code-quality` | Conventional maintainability defects | `code-quality` | implement | |
-| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | implement | |
+| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | file | |
 | `performance` | Provably wasted work on a hot path | `performance`, `perf` | implement | |
 | `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
 | `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
@@ -113,6 +113,14 @@ Lanes only pay off if they do not file each other's findings. Every
 mission body names what it cedes and to whom, so two lanes cannot both claim one
 problem:
 
+- **`code-quality` is the triage lane.** After ceding drift, complexity,
+  cognitive load, module hygiene, dead code, runtime defects, logging, and
+  unhandled boundary calls to their owners, its second deliverable is a ranked
+  `Recommended next audits` list in the completion summary; dispatch parses it
+  (`parseRecommendedAudits`) onto the task's execution record, and the Schedule
+  card shows it under the last run (#12085). `test-coverage` files by default
+  for the same reason the other filing lanes do: an unattended test addition
+  has no reviewer weighing the regression it names against suite time (#12087).
 - **Complexity is split three ways.** `better-complexity` owns *counted*
   branching and must report the number. `better-cognitive-load` owns reader cost
   that no metric captures — mixed abstraction levels, flag arguments, names that

@@ -79,6 +79,7 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(defaultFileIssuesFor('data-safety')).toBe(true);
     expect(defaultFileIssuesFor('simplify')).toBe(true);
     expect(defaultFileIssuesFor('module-hygiene')).toBe(true);
+    expect(defaultFileIssuesFor('test-coverage')).toBe(true); // #12087
     expect(defaultFileIssuesFor('security')).toBe(false);
     expect(defaultFileIssuesFor('accessibility')).toBe(false);
     expect(defaultFileIssuesFor('unknown')).toBe(false);

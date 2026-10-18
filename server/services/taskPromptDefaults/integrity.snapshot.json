@@ -15,7 +15,7 @@
     "claim-issue": "cea12f4209a3f20ebe1a5ad8cc7b38b5",
     "claim-issue-gitlab": "29f025187d20a8583292bb53bb974c06",
     "claim-issue-jira": "d0df766dd9ef326c8578efe2953af13e",
-    "code-quality": "dc69db26844c074393a59b5a32331676",
+    "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
     "code-reviewer-review": "10037a8a366f5c98482d2de11cdb127a",
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
@@ -56,7 +56,7 @@
     "security": "a66f5ec9d0ed0b42b6e59087783eb9fb",
     "simplify": "2eee5529c3bb57d04ba823eed3f5f6ff",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
-    "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
+    "test-coverage": "1956a18f937cda50343dfa4259d1af30",
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
@@ -79,7 +79,7 @@
     "claim-issue": 41,
     "claim-issue-gitlab": 37,
     "claim-issue-jira": 24,
-    "code-quality": 5,
+    "code-quality": 6,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
     "console-errors": 4,
@@ -116,7 +116,7 @@
     "security": 6,
     "simplify": 3,
     "stash-cleanup": 2,
-    "test-coverage": 3,
+    "test-coverage": 4,
     "typing": 3,
     "ui-bugs": 4,
     "ui-lifecycle": 3,
@@ -286,7 +286,8 @@
       "62752723eba7a39aa94e010911923cc8",
       "b1cce8f89218844746746ceb576553c1",
       "c34792a374dd9868e6381557da582dc1",
-      "6762542233cdffb86d4e2244945bf52b"
+      "6762542233cdffb86d4e2244945bf52b",
+      "dc69db26844c074393a59b5a32331676"
     ],
     "console-errors": [
       "23b1a2e33cb414f27d4002b51d315e83",
@@ -458,7 +459,8 @@
     "test-coverage": [
       "ec70fb2b8e193b6a98bec2fbf337b190",
       "c2b0f0dee5bc881239684e706ea88324",
-      "0d8359170529da12cd63356610b2e220"
+      "0d8359170529da12cd63356610b2e220",
+      "36beffc0c2959be5d818ded54b3fe298"
     ],
     "typing": [
       "d8fd1423cf2a523b528ed7d2d7a2bb55",

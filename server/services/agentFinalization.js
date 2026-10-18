@@ -2054,6 +2054,18 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
         emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
       });
     }
+    if (taskType === 'code-quality' && success) {
+      // The triage lane's ranked "Recommended next audits" (#12085) lands on the
+      // task's execution record so the Schedule card shows where to look next.
+      const { parseRecommendedAudits } = await import('../lib/auditQuality.js');
+      const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+      const { recordRecommendedAudits } = await import('./taskSchedule.js');
+      const path = doneSentinelPath(hookPayloadDir({ task, workspacePath, recovery }), agentId);
+      const summary = path ? parseSentinelPayload(await tryReadFile(path)).summary : null;
+      await recordRecommendedAudits(taskType, task.metadata?.app || null, parseRecommendedAudits(summary)).catch(err => {
+        emitLog('warn', `⚠️ Recommended next audits were not saved for ${agentId}: ${err.message}`, { agentId });
+      });
+    }
     const auditDisposition = Number(task.metadata?.auditDispositionVersion) === 1
       ? await (await import('./auditFindings.js')).settleAuditFindings({
         task, agentId, workspacePath: hookPayloadDir({ task, workspacePath, recovery }),

@@ -222,8 +222,15 @@ Repository: {repoPath}
   documents for itself, including the non-issues it explicitly declares.
 - **Stale TODOs and comments that lie** — a comment describing behavior the code
   no longer has, or a TODO whose work already shipped.
-- **Missing boundary error handling** — a call across a process, network, or
-  filesystem boundary whose failure mode is simply unhandled.
+
+## Lane recommendation
+
+This is the triage lane: its second deliverable is where to look next. Rank
+the three focused audits (by scheduled task type) that the evidence says would
+find the most, each with one sentence of evidence and the paths it points at.
+Put the ranked list in the completion summary under the heading
+\`Recommended next audits\`, one audit per line as
+\`1. <task-type> — <evidence>: <paths>\`.
 
 ## Owned by sibling audits — do not file here
 
@@ -240,7 +247,8 @@ what you found, then leave it to its owner:
 - Pure dead-code removal and copy-paste consolidation belong to the
   simplification work.
 - Latent runtime defects belong to the runtime-safety work; logging gaps to the
-  observability work.
+  observability work; a boundary call whose failure is simply unhandled to the
+  failure-path work.
 
 ## The evidence bar
 
@@ -296,6 +304,8 @@ test.
 
 Follow the project's existing test conventions — its runner, file placement,
 naming, and mocking patterns — rather than importing a style from elsewhere.
+In implement mode, when you add a test to a suite over the project's documented
+size budget, name the redundant test you removed to pay for it.
 
 ## Not yours
 

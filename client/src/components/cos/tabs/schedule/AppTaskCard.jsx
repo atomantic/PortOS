@@ -93,6 +93,18 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           {config.runAfter?.length > 0 && (
             <div className="truncate" title={`Blocked until these run: ${config.runAfter.join(', ')}`}>waits for: {config.runAfter.join(', ')}</div>
           )}
+          {/* The code-quality lane's triage output (#12085): the ranked audits
+              its last run said would find the most. */}
+          {config.recommendedAudits?.items?.length > 0 && (
+            <div className="pt-1" title={`From the last run${config.recommendedAudits.at ? ` ${timeAgo(config.recommendedAudits.at)}` : ''}`}>
+              <div className="text-gray-400">Recommended next audits</div>
+              <ol className="list-decimal list-inside text-gray-300 space-y-0.5">
+                {config.recommendedAudits.items.map((item) => (
+                  <li key={item} className="truncate" title={item}>{item}</li>
+                ))}
+              </ol>
+            </div>
+          )}
         </div>}
       </button>
 

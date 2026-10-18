@@ -75,6 +75,7 @@ import { emitLog } from './cosEvents.js';
 vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeFailure: vi.fn(async () => null),
   recordTaskTypeSuccess: vi.fn(async () => null),
+  recordRecommendedAudits: vi.fn(async () => null),
 }));
 import { updateTask, addTask } from './cos.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -166,6 +167,18 @@ describe('recovery output-hook dispatch (#3182)', () => {
       auditAssessment: { status: 'recorded' }, executionInterruption: { category: 'content-refusal' } });
     await dispatchTaskOutputHookOnce(args);
     expect(persistedAgent.metadata.securityScan.status).toBe('time-limit');
+  });
+
+  it("lands the code-quality lane's ranked next audits on the execution record (#12085)", async () => {
+    const { recordRecommendedAudits } = await import('./taskSchedule.js');
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'code-quality' } };
+    tryReadFile.mockResolvedValueOnce('Filed 2 issues.\n## Recommended next audits\n1. better-structural-drift — drifted registries: server/lib\n2. ux — buried action: client/src\nQUALITY_AUDIT_JSON: {}');
+    await dispatchTaskOutputHookOnce({ agentId: 'agent-triage', task, success: true, workspacePath: '/worktree' });
+    expect(recordRecommendedAudits).toHaveBeenCalledWith('code-quality', 'app-example', [
+      'better-structural-drift — drifted registries: server/lib',
+      'ux — buried action: client/src',
+    ]);
+    expect(persistedAgent.metadata).toMatchObject({ auditAssessment: { status: 'recorded' } });
   });
 
   it('captures audit telemetry on the shared completion path without waiving fix-mode delivery criteria', async () => {

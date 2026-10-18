@@ -179,6 +179,24 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('Never run')).toBeTruthy();
   });
 
+  it("lists the last run's recommended next audits when the triage lane recorded them (#12085)", () => {
+    renderCard({ recommendedAudits: { at: '2026-06-20T10:00:00Z', appId: 'app-1', items: [
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ] } }, {}, 'code-quality');
+    expect(screen.getByText('Recommended next audits')).toBeTruthy();
+    const items = screen.getAllByRole('listitem').map((item) => item.textContent);
+    expect(items).toEqual([
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ]);
+  });
+
+  it('omits the recommendation block when the last run recorded none', () => {
+    renderCard({ recommendedAudits: null }, {}, 'code-quality');
+    expect(screen.queryByText('Recommended next audits')).toBeNull();
+  });
+
   it('shows a swarm badge when swarmCount ≥ 2 and hides it otherwise', () => {
     renderCard({ taskMetadata: { swarmCount: 3 } });
     expect(screen.getByText('×3')).toBeTruthy();
