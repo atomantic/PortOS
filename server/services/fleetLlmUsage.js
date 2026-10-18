@@ -28,7 +28,7 @@
  */
 
 import { dataPath } from '../lib/paths.js';
-import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createFleetHostUsageLedger, normalizeClientAddress } from '../lib/fleetHostUsage.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -46,13 +46,26 @@ const queue = createFileWriteQueue();
 let ledger = null;
 let hydrating = null;
 let persistTimer = null;
+let persistBlocked = false;
+let loggedReadFailure = false;
 
-/** The process-wide ledger, hydrated from disk exactly once. */
+/** The process-wide ledger, hydrated from disk exactly once unless a read failed. */
 export async function getFleetHostUsageLedger() {
-  if (ledger) return ledger;
+  if (ledger && !persistBlocked) return ledger;
   if (!hydrating) {
-    const next = createFleetHostUsageLedger();
-    hydrating = readJSONFile(USAGE_FILE, null, { logError: false }).then((stored) => {
+    const next = ledger || createFleetHostUsageLedger();
+    hydrating = readJSONFileStrict(USAGE_FILE, null, { logError: false }).then(({ ok, value: stored }) => {
+      hydrating = null;
+      if (!ok) {
+        if (!loggedReadFailure) {
+          loggedReadFailure = true;
+          console.error(`❌ Could not read fleet host usage from ${USAGE_FILE}; in-memory ledger will not overwrite disk until a read succeeds`);
+        }
+        persistBlocked = true;
+        ledger = next;
+        return next;
+      }
+      persistBlocked = false;
       next.hydrate(stored);
       ledger = next;
       return next;
@@ -62,7 +75,7 @@ export async function getFleetHostUsageLedger() {
 }
 
 async function writeLedger() {
-  if (!ledger) return;
+  if (!ledger || persistBlocked) return;
   const payload = ledger.toJSON();
   await queue(() => atomicWrite(USAGE_FILE, JSON.stringify(payload, null, 2)))
     // Outside the request lifecycle (a debounce timer), so a throw here would
@@ -92,6 +105,8 @@ export function __resetFleetHostUsage() {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
   ledger = null;
   hydrating = null;
+  persistBlocked = false;
+  loggedReadFailure = false;
 }
 
 /**
