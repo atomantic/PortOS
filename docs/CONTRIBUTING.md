@@ -89,7 +89,36 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
-Pregate proves only the stages it runs; it does not replace required CI or resource-dependent checks. A full-suite plan runs only the always-run guards unless `--full` is supplied; DB suites, Windows, client build, and boot smoke are reported but not run by pregate.
+Pregate proves only the stages it runs, and it says which it did not. A scoped
+plan runs every suite CI would run for it, in CI's dependency order and with
+CI's environment: the hidden-content scan, lint, server and client tests, the
+client build plus the API Explorer bundle pin, the boot smoke, the
+cross-workspace browser suites (smoke profile), and the serial `portos_test`
+DB suite last and alone — never concurrently with the other suites, and never
+against `portos` (both `PGDATABASE` and `PGTESTDATABASE` are pinned and
+`TEST_DB_OK` is removed from the stage's environment). A full-suite plan runs
+only the always-run guards unless `--full` is supplied, which runs everything
+above as well.
+
+A suite stays with CI, and is named as not run in the summary, when:
+
+- you pass `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`;
+- a full plan was downgraded (no `--full`);
+- a prerequisite is missing — no Postgres answering at the resolved endpoint
+  (exported `PG*`, then the checkout's `.env`, then `localhost:5432`), or no
+  Chrome, ffmpeg or client bundler for the browser suites. The line names the
+  remedy; the run continues.
+
+The shipped prompt-history guard (CI's `prompt-history` job) runs locally
+when the planner selects it. The Windows job and the Linux worker-containment
+job (bubblewrap namespaces) are the two suites only CI can prove; both are
+named as not run. Every run writes a receipt to
+`.cache/pregate/report.json` (gitignored): the plan, each stage's outcome and
+duration, the suites not run and why, the base and HEAD SHAs, the Node
+version, platform and worker budget, and the hash of the exact working tree
+that was validated — untracked and uncommitted files included, so a later
+commit of that state yields the same `HEAD^{tree}`. A green summary never
+claims a suite it skipped; required CI checks still apply.
 
 PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
 and on the release PR. To check them on a rendering PR before merging, run
@@ -209,7 +238,9 @@ PORTOS_PREGATE_MAX_WORKERS=4 npm test
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 ```
 
-For release validation, run `npm run test:db` after the server and client
+`npm run pregate` runs the DB suite itself when the plan selects it, after
+every other stage, against `portos_test` only. For release validation by
+hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
 the database restore suite drains a timed-out case before the next one touches
 `portos_test` — but its per-case budgets assume an

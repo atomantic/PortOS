@@ -166,6 +166,25 @@ the job instead of silently skipping if the submodule still isn't there
 (`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
 CI run that never needed it — they keep the documented skip.
 
+### Local equivalent: `npm run pregate`
+
+`scripts/pregate.js` runs the same planner over the committed and uncommitted
+diff and hands its plan to the same runners, so a scoped plan is reproduced
+locally stage for stage: hidden-content scan, lint, server and client tests,
+the client build and its API Explorer bundle pin, the boot smoke, the browser
+suites (smoke profile, prerequisites required rather than skipped), and the
+serial `portos_test` DB suite last and alone. Each stage receives the
+environment the matching job sets. A full plan runs only the always-run guards
+unless `--full` is passed. A suite the machine cannot run (no reachable test
+Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
+`--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
+as not run — in the summary and in the receipt `.cache/pregate/report.json`,
+which records the plan, stage outcomes and durations, the skipped suites, the
+base and HEAD SHAs, and the hash of the exact working tree validated. The
+shipped prompt-history guard runs locally when selected; the Windows job and
+the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
+contract: `docs/CONTRIBUTING.md`.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
@@ -691,7 +710,8 @@ traversal to 57 explicit selectors and a ~941-file, ~40-minute local run
 because `MAX_TARGETED_TEST_FILES` counts only explicit selectors. It now plans
 full (Windows escalates, since the module owns cross-platform worktree
 lifecycle). Default `npm run pregate` therefore runs only its always-run guards
-for it, `--full` runs everything, and CI runs the full sharded suite. Its test
+for it, `--full` runs everything (the build, smoke, browser and DB suites
+included), and CI runs the full sharded suite. Its test
 file alone stays scoped; the #9673 consumer traversal is unchanged elsewhere.
 
 Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
