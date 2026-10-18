@@ -1,12 +1,16 @@
 // Creative approval behavior is covered through production review routes and orchestration.
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 import { bindAuthoredPreviewPlayback } from './authoredPreviewPlayback.js';
 import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+
+// Fail-fast cancellation stops Vitest waiting, not an authoring body's I/O: drain
+// owned bodies before the lazy data root is removed (#12254).
+const { it, drain } = ownTestBodies(vitestIt);
 
 const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null, onPrepare: null, provider: { id: 'stub-provider' }, args: null }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
@@ -34,7 +38,9 @@ const source = (color) => `function render(ctx, env) { ctx.fillStyle = '${color}
 const response = (colors) => JSON.stringify({ sections: Object.entries(colors).map(([id, color]) => ({ id, source: source(color) })) });
 const manifestAt = async (document) => JSON.parse(await readFile(join(PATHS.data, document.directory, 'manifest.json'), 'utf8'));
 
-afterAll(() => cleanupTempDataRoots());
+afterAll(async () => {
+  try { await drain(); } finally { cleanupTempDataRoots(); }
+});
 beforeEach(() => { h.provider = { id: 'stub-provider' }; h.args = null; h.onSubmit = null; h.onPrepare = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
 
 async function fixture() {
@@ -540,32 +546,34 @@ describe('treatment-driven mixed-media document authoring', () => {
     await expect(readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it.each(['treatment', 'media', 'storyboard'])('discards staged local sections after a %s basis edit (#10528)', async (change) => {
-    const id = await fixture();
-    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-    const budget = h.prompt.length - 200;
-    h.provider = { id: 'ollama', type: 'api' };
-    let calls = 0;
-    h.onSubmit = async () => {
-      if (++calls === 2) throw new Error('Later batch failed');
-      h.response = response({ intro: '#010203', still: '#010203', clip: '#010203' });
-    };
-    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
-    await projects.mutateProjectRecord(id, (current) => ({ project: {
-      ...current,
-      ...(change === 'treatment' ? { treatment: { ...current.treatment, revision: 2 } } : {}),
-      ...(change === 'media' ? { scenes: current.scenes.map((scene) => scene.sceneId === 's-clip' ? { ...scene, takes: [{ ...scene.takes[0], shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 8 } } }] } : scene) } : {}),
-      ...(change === 'storyboard' ? { productionReview: { draft: { storyboard: [{ sceneId: 's-intro', action: 'Revised movement' }] } } } : {}),
-    } }));
-    const asked = [];
-    h.onSubmit = async () => {
-      asked.push(...['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
-      h.response = response({ intro: '#aabbcc', still: '#aabbcc', clip: '#aabbcc' });
-    };
-    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
-    expect(asked).toEqual(['intro', 'still', 'clip']);
-    expect((await manifestAt(document)).sections.map((section) => section.source)).toEqual(['intro', 'still', 'clip'].map(() => source('#aabbcc')));
-  });
+  for (const change of ['treatment', 'media', 'storyboard']) {
+    it(`discards staged local sections after a ${change} basis edit (#10528)`, async () => {
+      const id = await fixture();
+      await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+      const budget = h.prompt.length - 200;
+      h.provider = { id: 'ollama', type: 'api' };
+      let calls = 0;
+      h.onSubmit = async () => {
+        if (++calls === 2) throw new Error('Later batch failed');
+        h.response = response({ intro: '#010203', still: '#010203', clip: '#010203' });
+      };
+      await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+      await projects.mutateProjectRecord(id, (current) => ({ project: {
+        ...current,
+        ...(change === 'treatment' ? { treatment: { ...current.treatment, revision: 2 } } : {}),
+        ...(change === 'media' ? { scenes: current.scenes.map((scene) => scene.sceneId === 's-clip' ? { ...scene, takes: [{ ...scene.takes[0], shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 8 } } }] } : scene) } : {}),
+        ...(change === 'storyboard' ? { productionReview: { draft: { storyboard: [{ sceneId: 's-intro', action: 'Revised movement' }] } } } : {}),
+      } }));
+      const asked = [];
+      h.onSubmit = async () => {
+        asked.push(...['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+        h.response = response({ intro: '#aabbcc', still: '#aabbcc', clip: '#aabbcc' });
+      };
+      const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+      expect(asked).toEqual(['intro', 'still', 'clip']);
+      expect((await manifestAt(document)).sections.map((section) => section.source)).toEqual(['intro', 'still', 'clip'].map(() => source('#aabbcc')));
+    });
+  }
 
   it('rechecks the production reservation when all local sections were staged before publication failed', async () => {
     const id = await fixture();
