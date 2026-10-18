@@ -95,7 +95,7 @@ import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
-import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './agentState.js';
 
 afterAll(cleanupTempDataRoots);
 
@@ -767,6 +767,22 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
   afterEach(async () => {
     spawningTasks.clear();
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('leaves an exited runner to its in-flight completion, then reaps if completion failed', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state.agents['agent-finishing'] = {
+      id: 'agent-finishing', status: 'running', pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    completingAgents.add('agent-finishing');
+    try {
+      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
+      expect(mockCosState.state.agents['agent-finishing'].status).toBe('running');
+    } finally {
+      completingAgents.delete('agent-finishing');
+    }
+    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-finishing']);
   });
 
   it('does not reap a pid-less record while its task is still being dispatched', async () => {

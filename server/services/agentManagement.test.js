@@ -142,7 +142,7 @@ import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
-import { activeAgents, runnerAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
 /**
  * A direct-mode agent's spawned handle. Its prototype is ChildProcess so it
@@ -1715,6 +1715,18 @@ describe('orphan retries resume what the dead run left behind', () => {
 
   // The sweep is the only place that knows an agent DIED rather than exited, so
   // it is the only place that can put that distinction in the ledger (#4540).
+  it('does not retire or retry an exited runner while completion owns its outcome', async () => {
+    completingAgents.add(deadAgent.id);
+    try {
+      await cleanupOrphanedAgents();
+      expect(retireDeadAgent).not.toHaveBeenCalled();
+      expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+    } finally {
+      completingAgents.delete(deadAgent.id);
+    }
+  });
+
   it('records the reap in the lifecycle ledger, keyed by agent when no run id survived', async () => {
     await cleanupOrphanedAgents();
 

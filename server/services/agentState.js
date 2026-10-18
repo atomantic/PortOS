@@ -13,6 +13,10 @@ export const activeAgents = new Map();
 // runnerAgents: runner-spawned agents (Map<agentId, { taskId, task, runId, model, ... }>)
 export const runnerAgents = new Map();
 
+// Completion events can outlive the runner process (hooks, forge checks and
+// persistence all await). Sweeps must not race them to the first terminal write.
+export const completingAgents = new Set();
+
 // userTerminatedAgents: agents the user explicitly killed (Set<agentId>)
 export const userTerminatedAgents = new Set();
 

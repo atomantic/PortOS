@@ -64,7 +64,7 @@ vi.mock('./agentCompletionCleanup.js', () => ({
 }));
 
 import { handleAgentCompletion } from './agentLifecycle.js';
-import { runnerAgents, pausedAgents } from './agentState.js';
+import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
 import { completeAgent } from './cosAgentLifecycle.js';
 import { getAgent, getAgentRecord, getTaskById, updateTask } from './cos.js';
 import { retireDeadAgent } from './agentFinalization.js';
@@ -200,5 +200,28 @@ describe('handleAgentCompletion — post-restart recovery hand-off', () => {
     await handleAgentCompletion('agent-unknown', 0, true, 500);
 
     expect(completeAgent).not.toHaveBeenCalled();
+  });
+});
+
+// A recovered TUI's process has exited, but output hooks/validation still own
+// its verdict. Watchdogs must see that ownership through success AND failure.
+describe('runner completion ownership', () => {
+  it.each([false, true])('holds ownership until retirement settles (reject=%s)', async (reject) => {
+    let settle;
+    const pending = new Promise((resolve, rejectPromise) => { settle = reject ? rejectPromise : resolve; });
+    getAgent.mockResolvedValue({ id: 'agent-finishing', status: 'running', metadata: {} });
+    retireDeadAgent.mockImplementationOnce(async () => {
+      expect(completingAgents.has('agent-finishing')).toBe(true);
+      await pending;
+      return { success: true };
+    });
+    const done = handleAgentCompletion('agent-finishing', 0, true, 1000);
+    const assertion = reject ? expect(done).rejects.toThrow('write failed') : expect(done).resolves.toBeUndefined();
+    expect(completingAgents.has('agent-finishing')).toBe(true);
+    await handleAgentCompletion('agent-finishing', 0, true, 1000);
+    settle(reject ? new Error('write failed') : undefined);
+    await assertion;
+    expect(retireDeadAgent).toHaveBeenCalledTimes(1);
+    expect(completingAgents.has('agent-finishing')).toBe(false);
   });
 });
