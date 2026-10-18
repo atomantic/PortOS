@@ -1598,18 +1598,25 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
 //
 // A local `npm run pregate` that ran a stage to green, followed by
 // `node scripts/pregate-attest.js` after the push, leaves a `pregate` commit
-// status on the head whose description names the validated TREE and the
-// stages that passed (scripts/lib/pregateAttestation.js). This section reads
-// that status back and lets the plan skip those stages — never Windows, the
-// Linux containment job, or the Node-minimum check, which have no local run.
+// status on the head whose description names the validated TREE, the platform
+// and Node major it ran on, and the stages that passed
+// (scripts/lib/pregateAttestation.js). This section reads that status back
+// and lets the plan skip those stages — never Windows, the Linux containment
+// job, or the Node-minimum check, which have no local run.
 //
 // Fail closed at every step: anything other than a same-repository pull
 // request into a non-release base, with a head commit the owner attested
-// whose tree is exactly the head tree, leaves the plan untouched and the
-// reason in the outputs. The planner never has to be right about a fork or a
-// bot for this to be safe — a fork's token cannot create a status here and a
-// bot's login is not the owner's — but it refuses them explicitly so the
-// summary says why.
+// whose tree is exactly the head commit's tree, leaves the plan untouched and
+// the reason in the outputs. The planner never has to be right about a fork
+// or a bot for this to be safe — a fork's token cannot create a status here
+// and a bot's login is not the owner's — but it refuses them explicitly so
+// the summary says why.
+//
+// What the receipt vouches for is the HEAD COMMIT's tree; what CI tests is
+// the merge ref, that tree plus whatever the base branch gained since the
+// branch forked. `attestationDrift` closes that gap per stage: a base-side
+// change that could reach a stage's runner refuses the attestation for that
+// stage, and docs-only or other-runner movement keeps it.
 // ---------------------------------------------------------------------------
 
 /** Stages a receipt may attest to, mapped to the plan fields they clear. */
@@ -1622,6 +1629,11 @@ const ATTESTATION_SKIPS = Object.freeze({
   db: () => ({ db: false }),
   'prompt-history': () => ({ promptHistory: false }),
 });
+
+/** How long after the head commit a just-posted status may still be on its way. */
+const ATTESTATION_YOUNG_HEAD_SECONDS = 300;
+const ATTESTATION_POLL_TOTAL_MS = 90_000;
+const ATTESTATION_POLL_INTERVAL_MS = 10_000;
 
 /**
  * Whether this run may honor an attestation at all, and the head it would
@@ -1648,21 +1660,77 @@ export function attestationEligibility(env) {
   return { eligible: true, reason: 'same-repository pull request', headSha, repository, owner };
 }
 
+const isRunnerConfig = (path) => FULL_TRIGGER_RULES.some((rule) => rule.re.test(path)) || WORKSPACE_CACHE_COMMON_INPUTS.has(path);
+const isSourceUnder = (path, prefixes) => isExecutable(path) && !isTestFile(path) && !isDocumentationOnly(path)
+  && prefixes.some((prefix) => path.startsWith(prefix));
+
+/**
+ * Per stage, whether a base-side path could change that stage's outcome:
+ * (a) a test file the plan selected for the runner, (b) a non-test source
+ * under the runner's roots, or (c) a runner config or setup file. Each entry
+ * is the first offending path, for the refusal reason.
+ */
+const STAGE_DRIFT_RULES = Object.freeze({
+  server: (plan, path) => plan.server.files.includes(path) || isSourceUnder(path, RUNNER_ROOTS.server) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  client: (plan, path) => plan.client.files.includes(path) || isSourceUnder(path, RUNNER_ROOTS.client) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  lint: (plan, path) => isLintSurface(path),
+  build: (plan, path) => isSourceUnder(path, ['client/']) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  smoke: (plan, path) => isSourceUnder(path, ['server/']) || path === 'scripts/smoke-boot.js' || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  browser: (plan, path) => plan.browserFiles.includes(path) || BROWSER_SUITES.includes(path)
+    || isSourceUnder(path, ['server/', 'client/src/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  db: (plan, path) => resolveDbTestFiles([path]).length > 0 || isSourceUnder(path, ['server/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  'prompt-history': (plan, path) => PROMPT_HISTORY_PATH_RE.test(path),
+});
+
+/**
+ * The stages a base-side diff refuses, each with the path that refuses it.
+ *
+ * `driftPaths` is `git diff --name-only HEAD^2 HEAD` on the merge ref: exactly
+ * what the base branch added since the branch forked. A runner config or
+ * workflow change refuses every stage; otherwise each stage answers for its
+ * own runner. Null (the diff could not be read) refuses everything.
+ *
+ * @param {object} plan - the finished plan
+ * @param {string[]|null} driftPaths
+ * @returns {Record<string, string>} stage → reason
+ */
+export function attestationDrift(plan, driftPaths) {
+  const refused = {};
+  if (!Array.isArray(driftPaths)) {
+    for (const stage of Object.keys(STAGE_DRIFT_RULES)) refused[stage] = 'base movement could not be read';
+    return refused;
+  }
+  const paths = uniqueSorted(driftPaths.filter((path) => typeof path === 'string' && path.length > 0));
+  const config = paths.find(isRunnerConfig);
+  for (const [stage, touches] of Object.entries(STAGE_DRIFT_RULES)) {
+    const hit = config ?? paths.find((path) => touches(plan, path));
+    if (hit) refused[stage] = `base branch moved: ${hit}`;
+  }
+  return refused;
+}
+
 /**
  * The attestation on the pull request's head, or null and why.
  *
  * The checkout is the merge ref at depth 2, which carries the head commit as
  * `HEAD^2`: that is what makes `<head>^{tree}` resolvable without a wider
  * fetch, and the first check — the event's head must BE that second parent,
- * or the tree compared would not be the tree being tested.
+ * or the attested tree would be compared with some other commit's. It is NOT
+ * the tree under test: the merge ref also carries the base branch's movement,
+ * which `attestationDrift` weighs per stage in applyAttestation from the
+ * `baseDrift` returned here.
+ *
+ * A status posted moments after the push can still be on its way when the
+ * run starts, so a head younger than five minutes with no `pregate` status
+ * is re-read for up to 90 seconds before "no attestation" is concluded.
  *
  * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
  * and the tests parse, so every human-readable line here stays off it.
  *
- * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void}} [options]
- * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, stages?: string[], creator?: string, createdAt?: string}}
+ * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void, now?: () => number, sleep?: (ms: number) => void}} [options]
+ * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, os?: string, node?: number, stages?: string[], creator?: string, createdAt?: string, baseDrift?: string[]|null, waitedMs?: number}}
  */
-export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn } = {}) {
+export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn, now = Date.now, sleep = sleepMs } = {}) {
   const none = (reason) => {
     log(`⏭️ Pregate attestation not honored: ${reason}.`);
     return { attested: false, reason };
@@ -1683,40 +1751,67 @@ export function resolveCiAttestation({ env = process.env, exec = execFileSync, c
   }
   const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
   if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
-  const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
-  if (typeof body !== 'string') return none(`statuses API failed: ${body.error}`);
-  let statuses;
-  try {
-    statuses = JSON.parse(body);
-  } catch {
-    return none('statuses API returned unreadable JSON');
+  const committed = capture('git', ['show', '-s', '--format=%ct', headSha]);
+  const headAgeSeconds = typeof committed === 'string' && /^\d+$/.test(committed) ? Math.floor(now() / 1000) - Number(committed) : null;
+
+  const readStatuses = () => {
+    const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
+    if (typeof body !== 'string') return { error: `statuses API failed: ${body.error}` };
+    try {
+      return { statuses: JSON.parse(body) };
+    } catch {
+      return { error: 'statuses API returned unreadable JSON' };
+    }
+  };
+  const started = now();
+  let waitedMs = 0;
+  let selected;
+  for (;;) {
+    const read = readStatuses();
+    if (read.error) return none(read.error);
+    selected = selectAttestation(read.statuses, { owner, headTree });
+    const missing = !selected.attestation && selected.reason.startsWith('no "');
+    const young = headAgeSeconds !== null && headAgeSeconds >= 0 && headAgeSeconds < ATTESTATION_YOUNG_HEAD_SECONDS;
+    if (!missing || !young || now() - started >= ATTESTATION_POLL_TOTAL_MS) break;
+    sleep(ATTESTATION_POLL_INTERVAL_MS);
+    waitedMs = now() - started;
   }
-  const { attestation, reason } = selectAttestation(statuses, { owner, headTree });
-  if (!attestation) return none(reason);
-  log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}.`);
-  return { attested: true, reason, sha: headSha, ...attestation };
+  if (waitedMs > 0) log(`⏳ Waited ${Math.round(waitedMs / 1000)}s for a pregate status on the ${headAgeSeconds}s-old head ${headSha.slice(0, 9)}.`);
+  if (!selected.attestation) return none(selected.reason);
+  const drift = capture('git', ['diff', '--name-only', 'HEAD^2', 'HEAD']);
+  const baseDrift = typeof drift === 'string' ? drift.split('\n').filter(Boolean) : null;
+  const { attestation, reason } = selected;
+  log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}; base moved by ${baseDrift ? `${baseDrift.length} file(s)` : 'an unreadable diff'}.`);
+  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs };
+}
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
  * The plan with every attested stage skipped and the decision recorded.
  *
- * The server job owns the boot smoke (`smoke == 'true' && matrix.shard == 1`
- * on a job gated by `server_mode != 'skip'`), so `server` is skipped only when
- * the smoke is attested too or was never selected; otherwise skipping the job
- * would drop an unattested smoke on the floor. `full` is forced false so the
- * `Full CI Gate` is never published for a run that skipped anything on the
- * strength of a local receipt. Windows, Linux containment, the Node-minimum
- * check and the shard matrices are left as the plan computed them.
+ * Stages the base-side drift refuses (`attestationDrift`) stay as planned and
+ * say why. The server job owns the boot smoke (`smoke == 'true' &&
+ * matrix.shard == 1` on a job gated by `server_mode != 'skip'`), so `server`
+ * is skipped only when the smoke is attested too or was never selected;
+ * otherwise skipping the job would drop an unattested smoke on the floor.
+ * `full` is forced false so the `Full CI Gate` is never published for a run
+ * that skipped anything on the strength of a local receipt. Windows, Linux
+ * containment, the Node-minimum check and the shard matrices are left as the
+ * plan computed them.
  *
  * @param {object} plan - a finished plan (buildCiTestPlan)
- * @param {{attested: boolean, reason: string, stages?: string[], sha?: string, tree?: string, creator?: string, createdAt?: string}} attestation
+ * @param {{attested: boolean, reason: string, stages?: string[], sha?: string, tree?: string, os?: string, node?: number, creator?: string, createdAt?: string, baseDrift?: string[]|null}} attestation
  */
 export function applyAttestation(plan, attestation) {
   const base = { ...plan, attestation, attestedStages: [] };
   if (!attestation?.attested) {
     return { ...base, suiteReasons: { ...plan.suiteReasons, attestation: `not honored: ${attestation?.reason ?? 'unknown'}` } };
   }
-  const attested = new Set(attestation.stages ?? []);
+  const refused = attestationDrift(plan, attestation.baseDrift ?? null);
+  const attested = new Set((attestation.stages ?? []).filter((stage) => !refused[stage]));
   const smokeCovered = attested.has('smoke') || !plan.smoke;
   const skips = { ...ATTESTATION_SKIPS, server: smokeCovered ? (current) => ({ server: { ...current.server, mode: 'skip' } }) : null };
   let next = base;
@@ -1726,13 +1821,18 @@ export function applyAttestation(plan, attestation) {
     next = { ...next, ...skips[stage](next) };
     skipped.push(stage);
   }
-  const label = `attested by pregate on ${String(attestation.sha ?? '').slice(0, 9)} (tree ${String(attestation.tree ?? '').slice(0, 12)})`;
+  const label = `attested by pregate on ${String(attestation.sha ?? '').slice(0, 9)} (tree ${String(attestation.tree ?? '').slice(0, 12)}, ${attestation.os ?? '?'}/node ${attestation.node ?? '?'})`;
+  const driftRefused = Object.fromEntries((attestation.stages ?? []).filter((stage) => refused[stage]).map((stage) => [stage, refused[stage]]));
   const suiteReasons = { ...plan.suiteReasons, attestation: `${label}: skipping ${skipped.join(', ') || 'nothing'}` };
-  for (const stage of skipped) suiteReasons[stage === 'prompt-history' ? 'promptHistory' : stage] = `skipped: ${label}`;
+  const reasonKey = (stage) => (stage === 'prompt-history' ? 'promptHistory' : stage);
+  for (const stage of skipped) suiteReasons[reasonKey(stage)] = `skipped: ${label}`;
+  for (const [stage, reason] of Object.entries(driftRefused)) {
+    if (stage !== 'scan') suiteReasons[reasonKey(stage)] = `${plan.suiteReasons[reasonKey(stage)] ?? 'planned'}; attestation refused: ${reason}`;
+  }
   if (attested.has('server') && !smokeCovered) {
     suiteReasons.server = `${plan.suiteReasons.server}; server job kept: the boot smoke was not attested`;
   }
-  return { ...next, full: false, attestedStages: skipped, suiteReasons };
+  return { ...next, full: false, attestedStages: skipped, attestation: { ...attestation, driftRefused }, suiteReasons };
 }
 
 function main() {

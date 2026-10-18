@@ -29,6 +29,7 @@ const PRE_INSTALL_ENTRYPOINTS = [
   'scripts/ci-dependabot-admission.js',
   'scripts/ci-base-sha.js',
   'scripts/ci-test-plan.js',
+  'scripts/check-import-case.js',
   'scripts/scan-diff-hidden-content.js',
 ];
 

@@ -1,48 +1,61 @@
 /**
  * The attestation posted after a push must never vouch for more than pregate
  * proved: a failed or unstable receipt, a tree other than the one validated,
- * a commit the remote does not have, or a stage that was skipped is each a
- * refusal — exercised here through `runAttest` with an injected exec, so the
- * only thing left to a live run is `gh`'s own authentication.
+ * a commit the remote does not have, a plan computed against a narrowed base,
+ * or a stage that was skipped is each a refusal — exercised here through
+ * `runAttest` with an injected exec, so the only thing left to a live run is
+ * `gh`'s own authentication.
  */
 import { describe, expect, it } from 'vitest';
-import { parseArgs, planAttestation, runAttest, statusRequest, USAGE } from './pregate-attest.js';
+import { parseArgs, planAttestation, resolveRepository, runAttest, statusRequest, USAGE } from './pregate-attest.js';
 import {
-  ATTESTABLE_STAGES, attestedStagesFromReceipt, encodeAttestation, parseAttestation, parseRemoteRepository,
-  PREGATE_STATUS_CONTEXT, selectAttestation, STATUS_DESCRIPTION_MAX_LENGTH,
+  ATTESTABLE_STAGES, attestedStagesFromReceipt, encodeAttestation, encodeRevocation, nodeMajor, parseAttestation,
+  parseRemoteRepository, PREGATE_STATUS_CONTEXT, selectAttestation, STATUS_DESCRIPTION_MAX_LENGTH,
 } from './lib/pregateAttestation.js';
 import { buildPregateReport } from './lib/pregateReport.js';
 
 const TREE = 'a'.repeat(40);
 const OTHER_TREE = 'b'.repeat(40);
 const SHA = 'c'.repeat(40);
+const BASE = 'e'.repeat(40);
+const OS = 'darwin';
+const NODE = 26;
+const encode = (stages, tree = TREE) => encodeAttestation({ tree, stages, os: OS, node: NODE });
 
 const stage = (suite, status = 'passed', name = suite) => ({ name, suite, command: `node scripts/${suite}.js`, status, durationMs: 1, exitCode: status === 'passed' ? 0 : 1 });
 const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: [], sources: [] }, client: { mode: 'skip', files: [], sources: [] }, lint: { mode: 'full', files: [] }, browser: { files: [] }, db: false, build: false, smoke: false, windows: false, promptHistory: false, linuxContainment: false, suiteReasons: {} };
 
 /** A receipt as pregate writes it, with the given stage outcomes. */
-const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [] }) => buildPregateReport({
-  plan, options: {}, base: { ref: 'origin/main', sha: 'base' }, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
+const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [], base = { ref: 'origin/main', sha: BASE } }) => buildPregateReport({
+  plan, options: { base: base.ref }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
   runtime: {}, startedAt: 's', finishedAt: 'f', downgraded,
 });
 
 describe('attestation encoding', () => {
-  it('round-trips every stage and stays within the status description limit', () => {
-    const description = encodeAttestation({ tree: TREE, stages: [...ATTESTABLE_STAGES].reverse() });
-    expect(description.length).toBeLessThanOrEqual(STATUS_DESCRIPTION_MAX_LENGTH);
-    expect(description).toBe(`tree=${TREE} stages=${ATTESTABLE_STAGES.join(',')}`);
-    expect(parseAttestation(description)).toEqual({ tree: TREE, stages: [...ATTESTABLE_STAGES] });
-    expect(parseAttestation(encodeAttestation({ tree: TREE, stages: ['db', 'lint'] }))).toEqual({ tree: TREE, stages: ['lint', 'db'] });
+  it('round-trips every stage plus platform and Node major within the status description limit', () => {
+    for (const os of ['darwin', 'linux', 'win32']) {
+      const description = encodeAttestation({ tree: TREE, stages: [...ATTESTABLE_STAGES].reverse(), os, node: 999 });
+      expect(description.length).toBeLessThanOrEqual(STATUS_DESCRIPTION_MAX_LENGTH);
+      expect(parseAttestation(description)).toEqual({ tree: TREE, os, node: 999, stages: [...ATTESTABLE_STAGES] });
+    }
+    expect(encode(['db', 'lint'])).toBe(`tree=${TREE} os=darwin node=26 stages=lint,db`);
+    expect(parseAttestation(encode(['db', 'lint']))).toEqual({ tree: TREE, os: OS, node: NODE, stages: ['lint', 'db'] });
+    expect(nodeMajor('v26.10.0')).toBe(26);
+    expect(nodeMajor('garbage')).toBeNull();
   });
 
-  it('rejects what it did not write: unknown stages, a short tree, duplicates, extra fields', () => {
-    expect(() => encodeAttestation({ tree: TREE, stages: ['windows'] })).toThrow(/unknown attestation stage/);
-    expect(() => encodeAttestation({ tree: TREE.slice(1), stages: ['lint'] })).toThrow(/40-hex/);
-    expect(() => encodeAttestation({ tree: TREE, stages: [] })).toThrow(/at least one stage/);
-    expect(parseAttestation(`tree=${TREE} stages=lint,windows`)).toBeNull();
-    expect(parseAttestation(`tree=${TREE} stages=lint,lint`)).toBeNull();
-    expect(parseAttestation(`tree=${TREE} stages=lint extra=1`)).toBeNull();
-    expect(parseAttestation(`tree=${TREE.slice(2)} stages=lint`)).toBeNull();
+  it('rejects what it did not write: unknown stages, a short tree, duplicates, extra or missing fields', () => {
+    expect(() => encode(['windows'])).toThrow(/unknown attestation stage/);
+    expect(() => encode(['lint'], TREE.slice(1))).toThrow(/40-hex/);
+    expect(() => encode([])).toThrow(/at least one stage/);
+    expect(() => encodeAttestation({ tree: TREE, stages: ['lint'], os: 'Mac OS', node: NODE })).toThrow(/platform/);
+    expect(() => encodeAttestation({ tree: TREE, stages: ['lint'], os: OS, node: NaN })).toThrow(/Node major/);
+    expect(parseAttestation(`tree=${TREE} os=darwin node=26 stages=lint,windows`)).toBeNull();
+    expect(parseAttestation(`tree=${TREE} os=darwin node=26 stages=lint,lint`)).toBeNull();
+    expect(parseAttestation(`tree=${TREE} os=darwin node=26 stages=lint extra=1`)).toBeNull();
+    expect(parseAttestation(`tree=${TREE} stages=lint`)).toBeNull();
+    expect(parseAttestation(`tree=${TREE.toUpperCase()} os=darwin node=26 stages=lint`)).toBeNull();
+    expect(parseAttestation(`tree=${TREE} os=darwin node=26 stages=`)).toBeNull();
     expect(parseAttestation(undefined)).toBeNull();
   });
 
@@ -52,51 +65,86 @@ describe('attestation encoding', () => {
     expect(attestedStagesFromReceipt(receipt({ stages, downgraded: true }))).toEqual(['scan', 'lint']);
     expect(attestedStagesFromReceipt({})).toEqual([]);
   });
+
+  it('encodes a revocation as a bounded failure description', () => {
+    expect(encodeRevocation('tests were flaky')).toBe('revoked: tests were flaky');
+    expect(encodeRevocation('')).toBe('revoked: pregate result withdrawn');
+    expect(encodeRevocation('x'.repeat(200)).length).toBe(STATUS_DESCRIPTION_MAX_LENGTH);
+    expect(encodeRevocation('a\nb')).toBe('revoked: a b');
+  });
 });
 
 describe('selectAttestation', () => {
-  const status = (overrides) => ({ context: PREGATE_STATUS_CONTEXT, state: 'success', creator: { login: 'owner' }, description: encodeAttestation({ tree: TREE, stages: ['lint'] }), created_at: '2026-10-18T10:00:00Z', ...overrides });
+  const status = (overrides) => ({ context: PREGATE_STATUS_CONTEXT, state: 'success', creator: { login: 'owner' }, description: encode(['lint']), created_at: '2026-10-18T10:00:00Z', ...overrides });
 
-  it('takes the newest successful pregate status by the owner whose tree is the head tree', () => {
-    const older = status({ description: encodeAttestation({ tree: TREE, stages: ['lint', 'server'] }), created_at: '2026-10-18T09:00:00Z' });
+  it('takes the newest pregate status by the owner whose tree is the head tree', () => {
+    const older = status({ description: encode(['lint', 'server']), created_at: '2026-10-18T09:00:00Z' });
     const newer = status({ created_at: '2026-10-18T11:00:00Z' });
-    const result = selectAttestation([older, newer, status({ context: 'ci/other' })], { owner: 'owner', headTree: TREE });
-    expect(result.attestation).toMatchObject({ tree: TREE, stages: ['lint'], creator: 'owner' });
+    const result = selectAttestation([older, newer, status({ context: 'ci/other', created_at: '2026-10-18T12:00:00Z' })], { owner: 'owner', headTree: TREE });
+    expect(result.attestation).toMatchObject({ tree: TREE, stages: ['lint'], creator: 'owner', os: OS, node: NODE });
     expect(result.reason).toContain('attested by owner');
+    expect(result.reason).toContain('darwin/node 26');
   });
 
-  it('refuses the wrong creator, a mismatched tree, an unreadable description and a failed state', () => {
+  it('lets the newest status of ANY state decide: a later failure, pending or error revokes an earlier success', () => {
+    const success = status({ created_at: '2026-10-18T09:00:00Z' });
+    for (const state of ['failure', 'pending', 'error']) {
+      const later = status({ state, description: 'revoked: flaky run', created_at: '2026-10-18T10:00:00Z' });
+      const result = selectAttestation([success, later], { owner: 'owner', headTree: TREE });
+      expect(result.attestation).toBeNull();
+      expect(result.reason).toBe(`newest pregate status is ${state}, not success (revoked: flaky run)`);
+    }
+    // And a newer success by someone else blocks the owner's older one.
+    const foreign = status({ creator: { login: 'someone' }, created_at: '2026-10-18T12:00:00Z' });
+    expect(selectAttestation([success, foreign], { owner: 'owner', headTree: TREE }).reason).toMatch(/created by "someone"/);
+  });
+
+  it('refuses the wrong creator, a mismatched tree, an unreadable description and no status at all', () => {
     expect(selectAttestation([status({ creator: { login: 'someone' } })], { owner: 'owner', headTree: TREE }).reason).toMatch(/created by "someone"/);
     expect(selectAttestation([status()], { owner: 'owner', headTree: OTHER_TREE }).reason).toMatch(/is not the head tree/);
     expect(selectAttestation([status({ description: 'pregate passed' })], { owner: 'owner', headTree: TREE }).reason).toMatch(/unreadable description/);
-    expect(selectAttestation([status({ state: 'failure' })], { owner: 'owner', headTree: TREE }).reason).toMatch(/no successful/);
+    expect(selectAttestation([status({ context: 'ci/other' })], { owner: 'owner', headTree: TREE }).reason).toMatch(/^no "pregate" status/);
     expect(selectAttestation('not an array', { owner: 'owner', headTree: TREE }).reason).toMatch(/unreadable/);
-    // A newer status by someone else outranks and so blocks an older owner one:
-    // the newest word on the commit wins, and it is not the owner's.
-    const owned = status({ created_at: '2026-10-18T09:00:00Z' });
-    const foreign = status({ creator: { login: 'someone' }, created_at: '2026-10-18T12:00:00Z' });
-    expect(selectAttestation([owned, foreign], { owner: 'owner', headTree: TREE }).attestation).toBeNull();
   });
 });
 
-describe('parseRemoteRepository', () => {
-  it('reads owner/repo from the SSH and HTTPS remote shapes and rejects extra segments', () => {
-    expect(parseRemoteRepository('git@github.com:acme/widget.git')).toEqual({ host: 'github.com', owner: 'acme', repo: 'widget' });
-    expect(parseRemoteRepository('git@ssh.github.com:443/acme/widget.git')).toEqual({ host: 'ssh.github.com', owner: 'acme', repo: 'widget' });
-    expect(parseRemoteRepository('https://github.com/acme/widget')).toEqual({ host: 'github.com', owner: 'acme', repo: 'widget' });
-    expect(parseRemoteRepository('ssh://git@github.com:443/acme/widget.git')).toEqual({ host: 'github.com', owner: 'acme', repo: 'widget' });
+describe('repository resolution', () => {
+  it('reads owner/repo from the SSH and HTTPS remote shapes, folds ssh.github.com, and flags an alias host', () => {
+    expect(parseRemoteRepository('git@github.com:acme/widget.git')).toEqual({ host: 'github.com', owner: 'acme', repo: 'widget', hostIsResolvable: true });
+    expect(parseRemoteRepository('git@ssh.github.com:443/acme/widget.git')).toMatchObject({ host: 'github.com', owner: 'acme', repo: 'widget' });
+    expect(parseRemoteRepository('ssh://git@ssh.github.com:443/acme/widget.git')).toMatchObject({ host: 'github.com' });
+    expect(parseRemoteRepository('https://github.com/acme/widget')).toMatchObject({ host: 'github.com', owner: 'acme', repo: 'widget' });
+    expect(parseRemoteRepository('git@ghe.example.com:org/repo.git')).toMatchObject({ host: 'ghe.example.com', owner: 'org', repo: 'repo', hostIsResolvable: true });
+    expect(parseRemoteRepository('git@github-acme:acme/widget.git')).toMatchObject({ host: 'github-acme', hostIsResolvable: false });
     expect(parseRemoteRepository('git@github.com:acme/widget/extra')).toBeNull();
     expect(parseRemoteRepository('')).toBeNull();
+  });
+
+  it('asks gh repo view for the real host behind an ssh alias, and only then', () => {
+    let asked = 0;
+    const ghRepoView = () => { asked += 1; return { nameWithOwner: 'acme/widget', url: 'https://github.com/acme/widget' }; };
+    expect(resolveRepository('git@github.com:acme/widget.git', { ghRepoView })).toMatchObject({ host: 'github.com', owner: 'acme', repo: 'widget' });
+    expect(asked).toBe(0);
+    expect(resolveRepository('git@github-acme:acme/widget.git', { ghRepoView })).toEqual({ host: 'github.com', owner: 'acme', repo: 'widget', hostIsResolvable: true });
+    expect(asked).toBe(1);
+    expect(resolveRepository('git@github-acme:acme/widget.git', { ghRepoView: () => null })).toBeNull();
+    expect(resolveRepository('not a url', { ghRepoView: () => ({ nameWithOwner: 'o/r', url: 'https://ghe.example.com/o/r' }) })).toMatchObject({ host: 'ghe.example.com', owner: 'o', repo: 'r' });
+  });
+
+  it('targets a non-github.com host explicitly and github.com implicitly', () => {
+    expect(statusRequest({ owner: 'o', repo: 'r', host: 'github.com' }, { sha: SHA, description: 'd' }).args).not.toContain('--hostname');
+    expect(statusRequest({ owner: 'o', repo: 'r', host: 'ghe.example.com' }, { sha: SHA, description: 'd' }).args).toEqual(expect.arrayContaining(['--hostname', 'ghe.example.com']));
+    expect(statusRequest({ owner: 'o', repo: 'r', host: 'github.com' }, { sha: SHA, description: 'revoked: x', state: 'failure' }).args).toContain('state=failure');
   });
 });
 
 describe('planAttestation', () => {
-  const commit = { sha: SHA, treeOf: () => TREE, isPushed: () => true, remote: 'origin' };
+  const commit = { sha: SHA, treeOf: () => TREE, isPushed: () => true, remote: 'origin', defaultMergeBase: BASE, os: OS, node: NODE };
   const green = receipt({ stages: [stage('scan'), stage('lint'), stage('server'), stage('smoke')] });
 
   it('attests exactly the passed stages of a green, stable receipt on a pushed commit with that tree', () => {
     expect(planAttestation(green, commit)).toEqual({
-      sha: SHA, tree: TREE, stages: ['scan', 'lint', 'server', 'smoke'], description: `tree=${TREE} stages=scan,lint,server,smoke`,
+      sha: SHA, tree: TREE, stages: ['scan', 'lint', 'server', 'smoke'], description: `tree=${TREE} os=darwin node=26 stages=scan,lint,server,smoke`, notes: [],
     });
   });
 
@@ -114,6 +162,20 @@ describe('planAttestation', () => {
     expect(() => planAttestation(green, { ...commit, treeOf: () => OTHER_TREE })).toThrow(/something changed after pregate; rerun/);
     expect(() => planAttestation(green, { ...commit, treeOf: () => null })).toThrow(/cannot resolve/);
     expect(() => planAttestation(green, { ...commit, isPushed: () => false })).toThrow(/not on origin yet: push it first/);
+  });
+
+  it('drops the diff-selected stages when the receipt was planned against a narrowed or unknown base', () => {
+    const narrowed = receipt({ stages: [stage('scan'), stage('lint'), stage('server'), stage('client'), stage('smoke'), stage('db')], base: { ref: 'HEAD~1', sha: 'f'.repeat(40) } });
+    const result = planAttestation(narrowed, commit);
+    expect(result.stages).toEqual(['scan', 'smoke', 'db']);
+    expect(result.notes[0]).toMatch(/not attesting lint, server, client: the receipt was planned against base fffffffff \(HEAD~1\), not the default branch's merge base eeeeeeeee/);
+    // The probe shape: no base sha recorded at all.
+    const probe = { passed: true, treeStable: true, tree: TREE, options: { base: 'HEAD~1' }, base: { ref: 'HEAD~1' }, plan: { downgraded: false }, stages: [stage('scan'), stage('server')] };
+    expect(planAttestation(probe, commit).stages).toEqual(['scan']);
+    // An unresolved default merge base fails the same way.
+    expect(planAttestation(green, { ...commit, defaultMergeBase: null }).stages).toEqual(['scan', 'smoke']);
+    // Nothing left after the drop is a refusal that says why.
+    expect(() => planAttestation(receipt({ stages: [stage('server')], base: { ref: 'HEAD~1', sha: 'f'.repeat(40) } }), commit)).toThrow(/attests no stage.*not attesting server/);
   });
 
   it('refuses when nothing attestable passed', () => {
@@ -140,25 +202,29 @@ describe('runAttest', () => {
     [/^git remote get-url upstream$/, 'git@github.com:acme/widget.git'],
     [/^git rev-parse --verify --quiet .*\^\{tree\}$/, TREE],
     [/^git branch -r --contains .* --format=/, 'upstream/feature\nfork/feature'],
+    [/^git symbolic-ref --short -q refs\/remotes\/upstream\/HEAD$/, 'upstream/main'],
+    [/^git merge-base upstream\/main /, BASE],
   ];
   const green = receipt({ stages: [stage('scan'), stage('lint'), stage('db', 'passed', 'provision'), stage('db', 'passed', 'suite')] });
   const io = () => { const out = []; const err = []; return { out, err, log: (line) => out.push(line), error: (line) => err.push(line) }; };
+  const run = (options) => runAttest({ platform: OS, nodeVersion: 'v26.10.0', ...options });
 
   it('posts the status through gh on the upstream remote with the receipt-derived description', () => {
     const calls = [];
     const { out, err, log, error } = io();
     const exec = fakeExec([...gitTable(), [/^gh api --method POST /, '{}']], calls);
-    const code = runAttest({ argv: [], exec, log, error, readReceipt: () => green });
+    const code = run({ argv: [], exec, log, error, readReceipt: () => green });
     expect(err).toEqual([]);
     expect(code).toBe(0);
-    expect(calls.at(-1)).toBe(`gh api --method POST repos/acme/widget/statuses/${SHA} -f state=success -f context=pregate -f description=tree=${TREE} stages=scan,lint,db`);
+    expect(calls.at(-1)).toBe(`gh api --method POST repos/acme/widget/statuses/${SHA} -f state=success -f context=pregate -f description=tree=${TREE} os=darwin node=26 stages=scan,lint,db`);
     expect(out.at(-1)).toContain(`Attested ${SHA} tree=${TREE} stages=scan,lint,db`);
+    expect(calls.some((call) => call.startsWith('gh repo view'))).toBe(false);
   });
 
   it('posts nothing on --dry-run and prints the payload it would send', () => {
     const calls = [];
     const { out, log, error } = io();
-    const code = runAttest({ argv: ['--dry-run', '--target-url', 'https://example.com/run/1'], exec: fakeExec(gitTable(), calls), log, error, readReceipt: () => green });
+    const code = run({ argv: ['--dry-run', '--target-url', 'https://example.com/run/1'], exec: fakeExec(gitTable(), calls), log, error, readReceipt: () => green });
     expect(code).toBe(0);
     expect(calls.some((call) => call.startsWith('gh '))).toBe(false);
     const payload = JSON.parse(out[0]);
@@ -175,7 +241,7 @@ describe('runAttest', () => {
     ]) {
       const calls = [];
       const { err, log, error } = io();
-      const code = runAttest({ argv: [], exec: fakeExec(table, calls), log, error, readReceipt: () => report });
+      const code = run({ argv: [], exec: fakeExec(table, calls), log, error, readReceipt: () => report });
       expect(code).toBe(1);
       expect(err[0]).toMatch(/^⛔ Not attested: /);
       expect(err[0]).toMatch(message);
@@ -183,39 +249,79 @@ describe('runAttest', () => {
     }
   });
 
+  it('narrows the attestation when the receipt base is not the default branch merge base, and says so', () => {
+    const { out, log, error } = io();
+    const calls = [];
+    const exec = fakeExec([[/^git merge-base upstream\/main /, 'f'.repeat(40)], ...gitTable(), [/^gh api --method POST /, '{}']], calls);
+    expect(run({ argv: [], exec, log, error, readReceipt: () => green })).toBe(0);
+    expect(out.some((line) => /⚠️ not attesting lint: the receipt was planned against base/.test(line))).toBe(true);
+    expect(calls.at(-1)).toContain('stages=scan,db');
+  });
+
   it('attests --sha instead of HEAD and refuses a branch with no upstream remote', () => {
     const other = 'd'.repeat(40);
     const calls = [];
     const { log, error } = io();
-    const code = runAttest({ argv: ['--sha', other], exec: fakeExec([...gitTable(), [/^gh api/, '{}']], calls), log, error, readReceipt: () => green });
+    const code = run({ argv: ['--sha', other], exec: fakeExec([...gitTable(), [/^gh api/, '{}']], calls), log, error, readReceipt: () => green });
     expect(code).toBe(0);
     expect(calls.some((call) => call === 'git rev-parse HEAD')).toBe(false);
     expect(calls.at(-1)).toContain(`statuses/${other}`);
 
     const { err: noUpstreamErr, log: log2, error: error2 } = io();
     const detached = fakeExec([[/^git rev-parse HEAD$/, SHA], [/^git config --get/, { status: 1, stdout: '', stderr: '' }], ...gitTable()]);
-    expect(runAttest({ argv: [], exec: detached, log: log2, error: error2, readReceipt: () => green })).toBe(1);
+    expect(run({ argv: [], exec: detached, log: log2, error: error2, readReceipt: () => green })).toBe(1);
     expect(noUpstreamErr[0]).toMatch(/no upstream remote; push it with `git push -u <remote> feature`/);
+  });
+
+  it('resolves an ssh-alias remote through gh repo view before posting', () => {
+    const calls = [];
+    const { log, error } = io();
+    const exec = fakeExec([
+      [/^git remote get-url upstream$/, 'git@github-acme:acme/widget.git'],
+      [/^gh repo view --json nameWithOwner,url$/, JSON.stringify({ nameWithOwner: 'acme/widget', url: 'https://github.com/acme/widget' })],
+      ...gitTable(), [/^gh api --method POST /, '{}'],
+    ], calls);
+    expect(run({ argv: [], exec, log, error, readReceipt: () => green })).toBe(0);
+    expect(calls.at(-1)).toMatch(/^gh api --method POST repos\/acme\/widget\/statuses\//);
+    expect(calls.at(-1)).not.toContain('--hostname');
+
+    const { err, log: log2, error: error2 } = io();
+    const unresolved = fakeExec([[/^git remote get-url upstream$/, 'git@github-acme:acme/widget.git'], [/^gh repo view/, { status: 1, stdout: '', stderr: 'no' }], ...gitTable()]);
+    expect(run({ argv: [], exec: unresolved, log: log2, error: error2, readReceipt: () => green })).toBe(1);
+    expect(err[0]).toMatch(/gh repo view` could not name the repository/);
+  });
+
+  it('revokes with a failure status carrying the reason, without reading a receipt', () => {
+    const calls = [];
+    const { out, log, error } = io();
+    const exec = fakeExec([...gitTable(), [/^gh api --method POST /, '{}']], calls);
+    expect(run({ argv: ['--revoke', 'flaky DB run'], exec, log, error, readReceipt: () => { throw new Error('must not read'); } })).toBe(0);
+    expect(calls.at(-1)).toBe(`gh api --method POST repos/acme/widget/statuses/${SHA} -f state=failure -f context=pregate -f description=revoked: flaky DB run`);
+    expect(out.at(-1)).toMatch(/^⛔ Revoked the pregate attestation/);
+    // Dry-run revocation posts nothing; an unpushed commit has nothing to revoke.
+    const dry = [];
+    expect(run({ argv: ['--revoke', '--dry-run'], exec: fakeExec(gitTable(), dry), ...io(), readReceipt: () => null })).toBe(0);
+    expect(dry.some((call) => call.startsWith('gh api'))).toBe(false);
+    const { err, log: log3, error: error3 } = io();
+    expect(run({ argv: ['--revoke'], exec: fakeExec(gitTable([[/^git branch -r --contains/, 'fork/feature']])), log: log3, error: error3 })).toBe(1);
+    expect(err[0]).toMatch(/no status to revoke/);
   });
 
   it('reports a gh failure as a refusal, naming the repository', () => {
     const { err, log, error } = io();
     const exec = fakeExec([...gitTable(), [/^gh api/, { status: 1, stdout: '', stderr: 'HTTP 403: Resource not accessible' }]]);
-    expect(runAttest({ argv: [], exec, log, error, readReceipt: () => green })).toBe(1);
+    expect(run({ argv: [], exec, log, error, readReceipt: () => green })).toBe(1);
     expect(err[0]).toMatch(/gh could not create the status on acme\/widget: HTTP 403/);
   });
 
   it('parses its flags and rejects the rest with usage', () => {
-    expect(parseArgs(['--sha', SHA, '--dry-run'])).toEqual({ sha: SHA, dryRun: true, targetUrl: null, help: false });
+    expect(parseArgs(['--sha', SHA, '--dry-run'])).toEqual({ sha: SHA, dryRun: true, targetUrl: null, help: false, revoke: null });
+    expect(parseArgs(['--revoke'])).toMatchObject({ revoke: '' });
+    expect(parseArgs(['--revoke', 'why', '--dry-run'])).toMatchObject({ revoke: 'why', dryRun: true });
     expect(() => parseArgs(['--sha', 'abc'])).toThrow(/40-character/);
     expect(() => parseArgs(['--nope'])).toThrow(/Unknown option/);
     const { err, log, error } = io();
-    expect(runAttest({ argv: ['--nope'], exec: fakeExec([]), log, error })).toBe(2);
+    expect(run({ argv: ['--nope'], exec: fakeExec([]), log, error })).toBe(2);
     expect(err[0]).toContain(USAGE);
-  });
-
-  it('targets a non-github.com host explicitly and github.com implicitly', () => {
-    expect(statusRequest({ owner: 'o', repo: 'r', host: 'github.com' }, { sha: SHA, description: 'd' }).args).not.toContain('--hostname');
-    expect(statusRequest({ owner: 'o', repo: 'r', host: 'ghe.example.com' }, { sha: SHA, description: 'd' }).args).toEqual(expect.arrayContaining(['--hostname', 'ghe.example.com']));
   });
 });

@@ -6,23 +6,31 @@
  * `npm run pregate` leaves a receipt (`.cache/pregate/report.json`) that names
  * the stages it ran and the hash of the exact working tree it validated. This
  * script turns a green receipt into a commit status — context `pregate`, state
- * `success`, description `tree=<hash> stages=<…>` — on the commit that carries
- * that same tree, so the pull request's impact planner can skip the attested
- * stages (`applyAttestation` in scripts/ci-test-plan.js). It runs AFTER the
- * push: GitHub only accepts a status on a commit it has.
+ * `success`, description `tree=<hash> os=<platform> node=<major> stages=<…>` —
+ * on the commit that carries that same tree, so the pull request's impact
+ * planner can skip the attested stages (`applyAttestation` in
+ * scripts/ci-test-plan.js). It runs AFTER the push: GitHub only accepts a
+ * status on a commit it has. When you open the pull request yourself, attest
+ * before `gh pr create`, so the status exists when the `pull_request` event
+ * starts the run.
  *
  *   node scripts/pregate-attest.js [--sha <40-hex>] [--dry-run] [--target-url <url>]
+ *   node scripts/pregate-attest.js --revoke [<reason>] [--sha <40-hex>]
  *
  * Refuses, with the command to rerun, when the receipt did not pass or the
  * tree changed while pregate ran, when the commit's tree is not the receipt's
  * tree (something changed after pregate: rerun it on this exact state), when
  * the commit is not on the upstream remote yet, or when no stage qualifies.
  * Only stages that ran and passed are attested; a skipped or uncovered suite
- * is CI's to prove, exactly as the pregate summary said.
+ * is CI's to prove, exactly as the pregate summary said. A receipt planned
+ * against a `--base` other than the default branch's merge base attests no
+ * server, client or lint stage: its selection was narrower than CI's.
  *
- * Authentication is the operator's own `gh` login; nothing here reads or asks
- * for the PortOS instance password. Builtins only, like the other pregate
- * scripts, so it runs from any checkout without an install.
+ * `--revoke` posts a `failure` status with the reason, which withdraws every
+ * earlier attestation on that commit (the planner honors only the newest
+ * `pregate` status). Authentication is the operator's own `gh` login; nothing
+ * here reads or asks for the PortOS instance password. Builtins only, like
+ * the other pregate scripts, so it runs from any checkout without an install.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -31,26 +39,31 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
-  attestedStagesFromReceipt, encodeAttestation, parseRemoteRepository, PREGATE_STATUS_CONTEXT,
+  attestedStagesFromReceipt, encodeAttestation, encodeRevocation, nodeMajor, parseRemoteRepository, PREGATE_STATUS_CONTEXT,
 } from './lib/pregateAttestation.js';
 import { PREGATE_REPORT_PATH } from './lib/pregateReport.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SHA_RE = /^[0-9a-f]{40}$/;
 const RERUN = 'rerun `npm run pregate` on this exact tree, then push and attest again';
+/** Stages whose selection depends on the diff base; a narrowed base under-selects them. */
+const BASE_DEPENDENT_STAGES = new Set(['server', 'client', 'lint']);
 
 export const USAGE = `Usage: node scripts/pregate-attest.js [--sha <40-hex>] [--dry-run] [--target-url <url>]
+       node scripts/pregate-attest.js --revoke [<reason>] [--sha <40-hex>] [--dry-run]
 
   --sha <40-hex>      attest this commit instead of HEAD (must carry the receipt's tree)
   --dry-run           print the status payload without posting it
   --target-url <url>  optional link to show beside the status
+  --revoke [reason]   post a failure status that withdraws earlier attestations on the commit
   -h, --help          display this usage
 
-Run it AFTER \`git push\`: a commit status can only be created on a pushed commit.`;
+Run it AFTER \`git push\` (and, for a new pull request, BEFORE \`gh pr create\`):
+a commit status can only be created on a pushed commit.`;
 
 /** Parse argv before any Git inspection. */
 export function parseArgs(argv) {
-  const options = { sha: null, dryRun: false, targetUrl: null, help: false };
+  const options = { sha: null, dryRun: false, targetUrl: null, help: false, revoke: null };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     switch (flag) {
@@ -68,6 +81,12 @@ export function parseArgs(argv) {
         index += 1;
         break;
       }
+      case '--revoke': {
+        const value = argv[index + 1];
+        options.revoke = value && !value.startsWith('-') ? value : '';
+        if (options.revoke) index += 1;
+        break;
+      }
       case '--dry-run': options.dryRun = true; break;
       case '--help':
       case '-h': options.help = true; break;
@@ -82,14 +101,14 @@ const refusal = (message) => Object.assign(new Error(message), { refusal: true }
 
 /**
  * What to attest, given the receipt and the commit's own facts. Pure: the
- * caller supplies the tree lookup and the push check so this is testable
- * without a repository.
+ * caller supplies the tree lookup, the push check and the default merge base
+ * so this is testable without a repository.
  *
  * @param {object} report - the parsed receipt
- * @param {{sha: string, treeOf: (sha: string) => string|null, isPushed: (sha: string) => boolean, remote: string}} commit
- * @returns {{sha: string, tree: string, stages: string[], description: string}}
+ * @param {{sha: string, treeOf: (sha: string) => string|null, isPushed: (sha: string) => boolean, remote: string, defaultMergeBase?: string|null, os?: string, node?: number}} commit
+ * @returns {{sha: string, tree: string, stages: string[], description: string, notes: string[]}}
  */
-export function planAttestation(report, { sha, treeOf, isPushed, remote }) {
+export function planAttestation(report, { sha, treeOf, isPushed, remote, defaultMergeBase = null, os = process.platform, node = nodeMajor(process.version) }) {
   if (!report || typeof report !== 'object') throw refusal(`no receipt at ${PREGATE_REPORT_PATH}; ${RERUN}`);
   if (typeof report.plan?.downgraded !== 'boolean') {
     throw refusal(`receipt at ${PREGATE_REPORT_PATH} predates attestation (no plan.downgraded); ${RERUN}`);
@@ -106,20 +125,49 @@ export function planAttestation(report, { sha, treeOf, isPushed, remote }) {
   if (!isPushed(sha)) {
     throw refusal(`commit ${sha.slice(0, 9)} is not on ${remote} yet: push it first (\`git push\`), then attest. A status can only be posted on a pushed commit.`);
   }
-  const stages = attestedStagesFromReceipt(report);
-  if (stages.length === 0) throw refusal(`the receipt attests no stage: nothing ran and passed beyond what CI must prove itself; ${RERUN}`);
-  return { sha, tree, stages, description: encodeAttestation({ tree, stages }) };
+  let stages = attestedStagesFromReceipt(report);
+  const notes = [];
+  // The receipt's plan was computed against its recorded base. CI plans
+  // against the default branch's merge base; a `--base` nearer the head (or an
+  // unknown one) selected fewer tests, so the diff-selected stages are not
+  // CI's stages and cannot be attested. The resource suites run whole.
+  const receiptBase = typeof report.base?.sha === 'string' ? report.base.sha : null;
+  if (!receiptBase || !defaultMergeBase || receiptBase !== defaultMergeBase) {
+    const dropped = stages.filter((stage) => BASE_DEPENDENT_STAGES.has(stage));
+    stages = stages.filter((stage) => !BASE_DEPENDENT_STAGES.has(stage));
+    if (dropped.length > 0) {
+      notes.push(`not attesting ${dropped.join(', ')}: the receipt was planned against base ${receiptBase ? receiptBase.slice(0, 9) : '(unknown)'} (${report.base?.ref ?? report.options?.base ?? '--base'}), not the default branch's merge base ${defaultMergeBase ? defaultMergeBase.slice(0, 9) : '(unresolved)'}; rerun pregate without --base to attest them`);
+    }
+  }
+  if (stages.length === 0) throw refusal(`the receipt attests no stage: nothing ran and passed beyond what CI must prove itself${notes.length ? ` (${notes.join('; ')})` : ''}; ${RERUN}`);
+  return { sha, tree, stages, description: encodeAttestation({ tree, stages, os, node }), notes };
 }
 
-/** The `gh api` invocation that creates the status; exported so tests can pin it. */
-export function statusRequest({ owner, repo, host }, { sha, description, targetUrl }) {
+/** The `gh api` invocation that creates a status; exported so tests can pin it. */
+export function statusRequest({ owner, repo, host }, { sha, description, targetUrl, state = 'success' }) {
   const args = [
     'api', '--method', 'POST', `repos/${owner}/${repo}/statuses/${sha}`,
-    '-f', 'state=success', '-f', `context=${PREGATE_STATUS_CONTEXT}`, '-f', `description=${description}`,
+    '-f', `state=${state}`, '-f', `context=${PREGATE_STATUS_CONTEXT}`, '-f', `description=${description}`,
   ];
   if (targetUrl) args.push('-f', `target_url=${targetUrl}`);
   if (host && host !== 'github.com') args.push('--hostname', host);
   return { command: 'gh', args };
+}
+
+/**
+ * The repository the status goes to. The upstream remote's URL is the first
+ * word; when its host is an ssh alias (`git@github-acme:…`) or unparseable,
+ * `gh repo view` from the checkout — which resolves the alias through the
+ * same ssh config git does — names the real host and owner/repo.
+ */
+export function resolveRepository(remoteUrl, { ghRepoView }) {
+  const parsed = parseRemoteRepository(remoteUrl ?? '');
+  if (parsed?.hostIsResolvable) return parsed;
+  const viewed = ghRepoView();
+  const url = viewed?.url ? parseRemoteRepository(viewed.url) : null;
+  const [owner, repo] = typeof viewed?.nameWithOwner === 'string' ? viewed.nameWithOwner.split('/') : [];
+  if (url?.hostIsResolvable && owner && repo) return { host: url.host, owner, repo, hostIsResolvable: true };
+  return parsed?.hostIsResolvable ? parsed : null;
 }
 
 /**
@@ -128,7 +176,7 @@ export function statusRequest({ owner, repo, host }, { sha, description, targetU
  *
  * @returns {number} the process exit code
  */
-export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = console.log, error = console.error, readReceipt = defaultReadReceipt } = {}) {
+export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = console.log, error = console.error, readReceipt = defaultReadReceipt, platform = process.platform, nodeVersion = process.version } = {}) {
   let options;
   try {
     options = parseArgs(argv);
@@ -158,9 +206,18 @@ export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = 
     if (!remote) {
       throw refusal(`branch ${branch ?? '(detached HEAD)'} has no upstream remote; push it with \`git push -u <remote> ${branch ?? '<branch>'}\` first.`);
     }
-    const remoteUrl = git(['remote', 'get-url', remote]);
-    const repository = parseRemoteRepository(remoteUrl ?? '');
-    if (!repository) throw refusal(`remote ${remote} has no owner/repo URL this script can read.`);
+    const ghRepoView = () => {
+      const viewed = run('gh', ['repo', 'view', '--json', 'nameWithOwner,url']);
+      if (!viewed.ok) return null;
+      try {
+        return JSON.parse(viewed.stdout);
+      } catch {
+        return null;
+      }
+    };
+    const repository = resolveRepository(git(['remote', 'get-url', remote]), { ghRepoView });
+    if (!repository) throw refusal(`remote ${remote} has no owner/repo URL this script can read, and \`gh repo view\` could not name the repository.`);
+    const target = `${repository.owner}/${repository.repo}`;
 
     const treeOf = (commit) => git(['rev-parse', '--verify', '--quiet', `${commit}^{tree}`]);
     // Remote-tracking refs are current right after a push; a commit nothing
@@ -169,9 +226,28 @@ export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = 
       const branches = git(['branch', '-r', '--contains', commit, '--format=%(refname:short)']);
       return branches !== null && branches.split('\n').some((name) => name.startsWith(`${remote}/`));
     };
-    const attestation = planAttestation(readReceipt(cwd), { sha, treeOf, isPushed, remote });
+
+    if (options.revoke !== null) {
+      if (!isPushed(sha)) throw refusal(`commit ${sha.slice(0, 9)} is not on ${remote}: there is no status to revoke.`);
+      const description = encodeRevocation(options.revoke);
+      const request = statusRequest(repository, { sha, description, state: 'failure' });
+      if (options.dryRun) {
+        log(JSON.stringify({ repository: target, sha, context: PREGATE_STATUS_CONTEXT, state: 'failure', description, command: [request.command, ...request.args] }, null, 2));
+        return 0;
+      }
+      const posted = run(request.command, request.args);
+      if (!posted.ok) throw refusal(`gh could not create the revocation on ${target}: ${posted.stderr || posted.stdout || 'gh api failed'}`);
+      log(`⛔ Revoked the pregate attestation on ${sha} — status "${PREGATE_STATUS_CONTEXT}" is now failure (${description}); the pull request's CI runs every stage.`);
+      return 0;
+    }
+
+    // The default branch of the upstream remote, as `git clone` records it;
+    // `<remote>/main` when the symbolic ref was never set.
+    const defaultBranch = git(['symbolic-ref', '--short', '-q', `refs/remotes/${remote}/HEAD`]) || `${remote}/main`;
+    const defaultMergeBase = git(['merge-base', defaultBranch, sha]);
+    const attestation = planAttestation(readReceipt(cwd), { sha, treeOf, isPushed, remote, defaultMergeBase, os: platform, node: nodeMajor(nodeVersion) });
+    attestation.notes.forEach((note) => log(`⚠️ ${note}.`));
     const request = statusRequest(repository, { ...attestation, targetUrl: options.targetUrl });
-    const target = `${repository.owner}/${repository.repo}`;
 
     if (options.dryRun) {
       log(JSON.stringify({ repository: target, sha, context: PREGATE_STATUS_CONTEXT, state: 'success', description: attestation.description, target_url: options.targetUrl, command: [request.command, ...request.args] }, null, 2));

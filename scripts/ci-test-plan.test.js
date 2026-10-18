@@ -14,6 +14,7 @@ import { encodeAttestation } from './lib/pregateAttestation.js';
 import {
   ALWAYS_RUN_TESTS,
   applyAttestation,
+  attestationDrift,
   attestationEligibility,
   BROWSER_SUITES,
   buildCiTestPlan,
@@ -1961,28 +1962,38 @@ describe('pregate attestation', () => {
   const TREE = 'a'.repeat(40);
   const HEAD = 'c'.repeat(40);
   const REPOSITORY = 'acme/widget';
+  const ALL = ['scan', 'lint', 'server', 'smoke', 'client', 'build', 'db', 'browser', 'prompt-history'];
+  const encode = (stages, tree = TREE) => encodeAttestation({ tree, stages, os: 'darwin', node: 26 });
   const prEnv = {
     CI_EVENT_NAME: 'pull_request', CI_REPOSITORY: REPOSITORY, CI_REPOSITORY_OWNER: 'acme', CI_PR_HEAD_REPO: REPOSITORY,
     CI_PR_HEAD_SHA: HEAD, CI_PR_AUTHOR: 'acme', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
   };
   const status = (overrides = {}) => ({
-    context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z',
-    description: encodeAttestation({ tree: TREE, stages: ['scan', 'lint', 'server', 'smoke', 'client', 'build', 'db', 'browser', 'prompt-history'] }),
-    ...overrides,
+    context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z', description: encode(ALL), ...overrides,
   });
-  /** An execFileSync double: git answers from `git`, gh from `statuses`; a thrown entry throws. */
-  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null } = {}) => (command, args) => {
+  const NOW = 1_800_000_000_000;
+  /** An execFileSync double: git answers from the options, gh from `statuses`; a thrown entry throws. */
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], committedAt = Math.floor(NOW / 1000) - 3600, calls = [] } = {}) => (command, args) => {
     const key = `${command} ${args.join(' ')}`;
+    calls.push(key);
     if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
     if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
+    if (key === `git show -s --format=%ct ${HEAD}`) return `${committedAt}\n`;
+    if (key === 'git diff --name-only HEAD^2 HEAD') {
+      if (drift === null) throw new Error('diff failed');
+      return `${drift.join('\n')}\n`;
+    }
     if (key.startsWith('gh api ')) {
       if (apiError) throw Object.assign(new Error('gh failed'), { stderr: apiError });
       expect(key).toBe(`gh api repos/${REPOSITORY}/commits/${HEAD}/statuses?per_page=100`);
-      return typeof statuses === 'string' ? statuses : JSON.stringify(statuses);
+      const page = typeof statuses === 'function' ? statuses() : statuses;
+      return typeof page === 'string' ? page : JSON.stringify(page);
     }
     throw new Error(`unexpected ${key}`);
   };
   const quiet = () => {};
+  const clock = () => { let t = NOW; return { now: () => t, sleep: (ms) => { t += ms; } }; };
+  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...clock(), ...extra });
   const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
 
   it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
@@ -1996,38 +2007,92 @@ describe('pregate attestation', () => {
     expect(attestationEligibility({}).eligible).toBe(false);
   });
 
-  it('honors the owner\'s newest successful status whose tree is the head tree, and nothing else', () => {
-    const honored = resolveCiAttestation({ env: prEnv, exec: fakeExec(), log: quiet });
-    expect(honored).toMatchObject({ attested: true, sha: HEAD, tree: TREE, creator: 'acme' });
+  it('honors the owner\'s newest pregate status whose tree is the head tree, and nothing else', () => {
+    const honored = resolve();
+    expect(honored).toMatchObject({ attested: true, sha: HEAD, tree: TREE, creator: 'acme', os: 'darwin', node: 26, baseDrift: [], waitedMs: 0 });
     expect(honored.stages).toContain('server');
 
-    const older = status({ created_at: '2026-10-18T09:00:00Z', description: encodeAttestation({ tree: TREE, stages: ['lint'] }) });
-    const newest = status({ created_at: '2026-10-18T11:00:00Z', description: encodeAttestation({ tree: TREE, stages: ['db'] }) });
-    expect(resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: [older, newest] }), log: quiet }).stages).toEqual(['db']);
+    const older = status({ created_at: '2026-10-18T09:00:00Z', description: encode(['lint']) });
+    const newest = status({ created_at: '2026-10-18T11:00:00Z', description: encode(['db']) });
+    expect(resolve({ statuses: [older, newest] }).stages).toEqual(['db']);
 
     const reasons = [];
     const log = (line) => reasons.push(line);
     const refused = (options, env = prEnv) => {
-      const result = resolveCiAttestation({ env, exec: fakeExec(options), log });
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log, ...clock() });
       expect(result.attested).toBe(false);
       return result.reason;
     };
     expect(refused({ statuses: [status({ creator: { login: 'someone' } })] })).toMatch(/created by "someone"/);
+    expect(refused({ statuses: [status(), status({ state: 'failure', description: 'revoked: flaky', created_at: '2026-10-18T12:00:00Z' })] })).toMatch(/newest pregate status is failure, not success \(revoked: flaky\)/);
     expect(refused({ headTree: 'b'.repeat(40) })).toMatch(/is not the head tree/);
     expect(refused({ mergeHead: 'd'.repeat(40) })).toMatch(/not the merge ref of head/);
     expect(refused({ apiError: 'HTTP 403: Resource not accessible by integration' })).toMatch(/statuses API failed: HTTP 403/);
     expect(refused({ statuses: '<html>captive portal</html>' })).toMatch(/unreadable JSON/);
-    expect(refused({ statuses: [] })).toMatch(/no successful "pregate" status/);
+    expect(refused({ statuses: [] })).toMatch(/no "pregate" status/);
     expect(refused({}, { ...prEnv, CI_PR_HEAD_REPO: 'someone/widget' })).toMatch(/head repository/);
     // Every refusal is logged with its reason — the summary's only evidence.
     expect(reasons.every((line) => line.startsWith('⏭️ Pregate attestation not honored: '))).toBe(true);
-    expect(reasons).toHaveLength(7);
+    expect(reasons).toHaveLength(8);
+  });
+
+  it('waits up to 90 s for a status on a head younger than five minutes, and not on an older one', () => {
+    // The status is posted after the push that started this run, so a young
+    // head with no status yet is re-read at 10 s intervals.
+    let reads = 0;
+    const lateStatuses = () => { reads += 1; return reads < 4 ? [] : [status()]; };
+    const calls = [];
+    const young = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: lateStatuses, committedAt: Math.floor(NOW / 1000) - 60, calls }), log: quiet, ...clock() });
+    expect(young).toMatchObject({ attested: true, waitedMs: 30_000 });
+    expect(reads).toBe(4);
+
+    reads = 0;
+    const lines = [];
+    const never = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }), log: (line) => lines.push(line), ...clock() });
+    expect(never.attested).toBe(false);
+    expect(reads).toBe(10);
+    expect(lines.some((line) => /^⏳ Waited 90s for a pregate status on the 60s-old head/.test(line))).toBe(true);
+
+    reads = 0;
+    expect(resolve({ statuses: () => { reads += 1; return []; } }).attested).toBe(false);
+    expect(reads).toBe(1);
+    // A revocation or a mismatch is final: no waiting for it to change.
+    reads = 0;
+    expect(resolve({ statuses: () => { reads += 1; return [status({ state: 'failure' })]; }, committedAt: Math.floor(NOW / 1000) - 60 }).attested).toBe(false);
+    expect(reads).toBe(1);
+  });
+
+  it('refuses, per stage, the stages a base-side change could reach', () => {
+    const plan = { ...fullPlan(), server: { mode: 'files', files: ['server/lib/picked.test.js'], sources: [] }, client: { mode: 'files', files: ['client/src/picked.test.jsx'], sources: [] }, browserFiles: [BROWSER_SUITES[0]] };
+    const refusedBy = (drift) => Object.keys(attestationDrift(plan, drift)).sort();
+    expect(refusedBy([])).toEqual([]);
+    expect(refusedBy(['docs/GUIDE.md', 'README.md', 'client/public/logo.png'])).toEqual([]);
+    // (a) a test file the plan selected for that runner (every server or
+    // client module is also a lint surface: lint runs the whole tree)
+    expect(refusedBy(['server/lib/picked.test.js'])).toEqual(['lint', 'server']);
+    expect(refusedBy(['client/src/picked.test.jsx'])).toEqual(['client', 'lint']);
+    expect(refusedBy(['server/lib/unpicked.test.js'])).toEqual(['lint']);
+    expect(refusedBy([BROWSER_SUITES[0]])).toEqual(['browser', 'lint']);
+    expect(refusedBy(['server/services/backup.db.test.js'])).toEqual(['db', 'lint']);
+    // (b) a non-test source under the runner's roots
+    expect(refusedBy(['server/services/thing.js'])).toEqual(['browser', 'db', 'lint', 'server', 'smoke']);
+    expect(refusedBy(['client/src/components/Thing.jsx'])).toEqual(['browser', 'build', 'client', 'lint']);
+    expect(refusedBy(['scripts/tool.js'])).toEqual(['server']);
+    expect(refusedBy(['scripts/migrations/999-x.js'])).toEqual(['prompt-history', 'server']);
+    expect(refusedBy(['data.reference/prompts/stages/x.md'])).toEqual(['prompt-history']);
+    // (c) runner config and setup files refuse everything
+    for (const config of ['server/vitest.config.js', 'client/vitest.config.js', 'scripts/vitestCiPool.js', 'server/package-lock.json', '.github/workflows/ci.yml', 'scripts/run-ci-tests.js']) {
+      expect(refusedBy([config]), config).toEqual(['browser', 'build', 'client', 'db', 'lint', 'prompt-history', 'server', 'smoke']);
+    }
+    expect(attestationDrift(plan, ['server/services/thing.js']).server).toBe('base branch moved: server/services/thing.js');
+    // Unreadable drift refuses everything.
+    expect(refusedBy(null)).toHaveLength(8);
   });
 
   it('skips the attested stages, reports full=false, and leaves the CI-only jobs alone', () => {
     const plan = fullPlan();
     expect(plan).toMatchObject({ full: true, windows: true, linuxContainment: true, promptHistory: true, db: true, build: true, smoke: true });
-    const attested = applyAttestation(plan, resolveCiAttestation({ env: prEnv, exec: fakeExec(), log: quiet }));
+    const attested = applyAttestation(plan, resolve());
     expect(attested).toMatchObject({
       full: false,
       server: { mode: 'skip' }, client: { mode: 'skip' }, lint: { mode: 'skip' },
@@ -2037,16 +2102,35 @@ describe('pregate attestation', () => {
       shards: plan.shards,
     });
     expect(attested.attestedStages).toEqual(['prompt-history', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db']);
-    expect(attested.suiteReasons.server).toBe(`skipped: attested by pregate on ${HEAD.slice(0, 9)} (tree ${TREE.slice(0, 12)})`);
+    expect(attested.attestation.driftRefused).toEqual({});
+    expect(attested.suiteReasons.server).toBe(`skipped: attested by pregate on ${HEAD.slice(0, 9)} (tree ${TREE.slice(0, 12)}, darwin/node 26)`);
     expect(attested.suiteReasons.promptHistory).toMatch(/^skipped: attested by pregate/);
     expect(attested.suiteReasons.windows).toBe(plan.suiteReasons.windows);
     expect(attested.suiteReasons.attestation).toMatch(/^attested by pregate .*: skipping prompt-history, lint, server/);
     expect(attested.changedFiles).toEqual(plan.changedFiles);
   });
 
+  it('keeps every stage the base movement refuses, with the path, and skips the rest', () => {
+    const plan = fullPlan();
+    const moved = resolve({ drift: ['server/services/thing.js', 'docs/x.md'] });
+    const attested = applyAttestation(plan, moved);
+    expect(attested.attestedStages).toEqual(['prompt-history', 'client', 'build']);
+    expect(attested).toMatchObject({ full: false, server: { mode: plan.server.mode }, lint: { mode: plan.lint.mode }, smoke: true, db: true, client: { mode: 'skip' }, build: false, promptHistory: false });
+    expect(attested.browserFiles).toEqual(plan.browserFiles);
+    expect(attested.attestation.driftRefused).toEqual({
+      server: 'base branch moved: server/services/thing.js', lint: 'base branch moved: server/services/thing.js', smoke: 'base branch moved: server/services/thing.js',
+      browser: 'base branch moved: server/services/thing.js', db: 'base branch moved: server/services/thing.js',
+    });
+    expect(attested.suiteReasons.server).toBe(`${plan.suiteReasons.server}; attestation refused: base branch moved: server/services/thing.js`);
+    // The probe: a merge tree that differs from the head tree in runner source attests nothing for that runner.
+    const unreadable = applyAttestation(plan, resolve({ drift: null }));
+    expect(unreadable.attestedStages).toEqual([]);
+    expect(unreadable.server.mode).toBe(plan.server.mode);
+  });
+
   it('keeps the server job when the boot smoke it owns was not attested', () => {
     const plan = fullPlan();
-    const partial = { attested: true, reason: 'r', sha: HEAD, tree: TREE, stages: ['scan', 'server', 'lint'] };
+    const partial = { attested: true, reason: 'r', sha: HEAD, tree: TREE, os: 'linux', node: 24, stages: ['scan', 'server', 'lint'], baseDrift: [] };
     const attested = applyAttestation(plan, partial);
     expect(attested.server.mode).toBe(plan.server.mode);
     expect(attested.smoke).toBe(true);
@@ -2073,8 +2157,8 @@ describe('pregate attestation', () => {
   // the decision logic on every platform; this one proves the CLI wiring.
   it.skipIf(process.platform === 'win32')('emits the attestation through the planner CLI', () => {
     // A merge-ref checkout (HEAD^2 is the pull request head) with a fake `gh`
-    // on PATH, so the whole wiring — env in, statuses API, plan outputs — runs
-    // exactly as the impact job does.
+    // on PATH, so the whole wiring — env in, statuses API, base drift, plan
+    // outputs — runs exactly as the impact job does.
     const root = mkdtempSync(join(tmpdir(), 'portos-ci-attest-'));
     const bin = join(root, 'bin');
     const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
@@ -2097,20 +2181,24 @@ describe('pregate attestation', () => {
       const head = git('rev-parse', 'HEAD');
       const headTree = git('rev-parse', 'HEAD^{tree}');
       git('checkout', '-q', 'main');
+      // The base moves by a docs file only: the attestation survives it.
+      write('docs/note.md', 'base moved\n');
+      git('add', '--all');
+      git('commit', '-qm', 'docs on main');
       git('merge', '-q', '--no-ff', '--no-edit', 'feature');
       const base = git('rev-parse', 'HEAD^1');
 
       mkdirSync(bin, { recursive: true });
       writeFileSync(join(bin, 'gh.js'), 'process.stdout.write(process.env.FAKE_GH_STATUSES);\n');
       writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
-      const statuses = JSON.stringify([status({ description: encodeAttestation({ tree: headTree, stages: ['scan', 'lint', 'server', 'smoke', 'client', 'build'] }) })]);
+      const statuses = JSON.stringify([status({ description: encode(['scan', 'lint', 'server', 'smoke', 'client', 'build'], headTree) })]);
       const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
       }));
 
       const honored = plan({});
-      expect(JSON.parse(honored.attestation)).toMatchObject({ attested: true, sha: head, tree: headTree, creator: 'acme' });
+      expect(JSON.parse(honored.attestation)).toMatchObject({ attested: true, sha: head, tree: headTree, creator: 'acme', os: 'darwin', node: 26, baseDrift: ['docs/note.md'], driftRefused: {} });
       expect(JSON.parse(honored.attested_stages)).toEqual(['lint', 'server', 'client', 'build', 'smoke']);
       expect(honored).toMatchObject({ full: false, server_mode: 'skip', client_mode: 'skip', lint_mode: 'skip', build: false, smoke: false });
       expect(JSON.parse(honored.suite_reasons).attestation).toMatch(/^attested by pregate/);
@@ -2140,7 +2228,8 @@ describe('pregate attestation', () => {
     ]) expect(planStep).toContain(line);
     expect(jobs.impact).toContain('attestation: ${{ steps.plan.outputs.attestation }}');
     expect(jobs.impact).toContain('attested_stages: ${{ steps.plan.outputs.attested_stages }}');
-    // The summary is where a reader learns a stage was skipped on a receipt.
+    // The summary is where a reader learns a stage was skipped on a receipt,
+    // and the attestation JSON carries the platform and Node it ran on.
     expect(jobs.impact).toContain('ATTESTATION: ${{ steps.plan.outputs.attestation }}');
     expect(jobs.impact).toMatch(/echo "- Pregate attestation: \\`\$\{ATTESTATION\}\\`"/);
     // The full gate must stay withheld: `full` is reported false on an attested run.

@@ -106,6 +106,13 @@ jobs:
       - name: Scan the diff for hidden content
         run: node scripts/scan-diff-hidden-content.js
 
+      # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not. A
+      # pregate attestation lets a macOS run stand in for the Linux test jobs,
+      # so the one Linux-only failure it cannot see is checked here, on every
+      # pull request, before any job is skipped on its strength.
+      - name: Check relative imports match the tracked path case
+        run: node scripts/check-import-case.js
+
       - name: Select affected test surfaces
         id: plan
         env:
@@ -187,6 +194,32 @@ jobs:
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
             echo "- Pregate attestation: \`${ATTESTATION}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # `autofixer/` is a real install target — its own package.json, its own
+      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
+      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
+      # it, so a lockfile that no longer installs (a yanked version, a corrupted
+      # integrity hash, a manifest/lockfile mismatch) would ship green and only
+      # break on a user's machine at setup time. The parity assertions in
+      # server/dependency-overrides.test.js are static — they parse the JSON;
+      # only `npm ci` proves the tree still resolves.
+      #
+      # Here rather than on the server job because this job always runs: a
+      # pregate attestation can skip the server job, and this check must never
+      # go with it. Deliberately uncached and ungated: a cache hit that skipped
+      # the install would skip the very check this step exists for. 67
+      # packages, well under a second, on the runner's own Node (no setup-node
+      # in this job; the lockfile resolves the same on any supported major).
+      #
+      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
+      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
+      # workspace, because nothing it depends on ships a native addon.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
+
+      # Same reason: the entry-point syntax check must not ride a skippable job.
+      - name: Check server entry-point syntax
+        run: node --check server/index.js
 
   prompt-history:
     name: Shipped prompt history
@@ -340,33 +373,6 @@ jobs:
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
-
-      # `autofixer/` is a real install target — its own package.json, its own
-      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
-      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
-      # it, so a lockfile that no longer installs (a yanked version, a corrupted
-      # integrity hash, a manifest/lockfile mismatch) would ship green and only
-      # break on a user's machine at setup time. The parity assertions in
-      # server/dependency-overrides.test.js are static — they parse the JSON;
-      # only `npm ci` proves the tree still resolves.
-      #
-      # Deliberately uncached and deliberately ungated within the job: a cache
-      # hit that skipped the install would skip the very check this step exists
-      # for, and the job as a whole already gates on the planner's server_mode
-      # (autofixer/ is one of the server runner's roots in ci-test-plan.js, so a
-      # change here selects this job). Unlike the once-only steps that pin to
-      # shard 1, it runs on every shard: autofixer/*.test.js is globbed by the
-      # server runner, and which shard picks up a file that imports `express` is
-      # not knowable from here. 67 packages, well under a second.
-      #
-      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
-      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
-      # workspace, because nothing it depends on ships a native addon.
-      - name: Install autofixer dependencies
-        run: npm ci --prefix autofixer
-
-      - name: Check server entry-point syntax
-        run: node --check server/index.js
 
       # The submodule ships no source into this checkout by default (see
       # AGENTS.md "Slashdo Commands"), so the planner's `slashdo` output is

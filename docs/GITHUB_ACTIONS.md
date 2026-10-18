@@ -201,46 +201,87 @@ pushed head, and the impact planner skips what it attests to:
   by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
   prerequisite — is not attested, and a downgraded full plan never attests
   its server or client stage (it ran the always-run guards, not CI's
-  selection). The vocabulary is `ATTESTABLE_STAGES` in
-  `scripts/lib/pregateAttestation.js`.
+  selection). A receipt planned with `--base` against anything other than the
+  default branch's merge base attests no server, client or lint stage either:
+  its diff-selected plan was narrower than CI's. The vocabulary is
+  `ATTESTABLE_STAGES` in `scripts/lib/pregateAttestation.js`.
 - **The tree binding.** The status description is
-  `tree=<40-hex> stages=<list>`: the receipt's `git write-tree` hash of the
-  exact working tree pregate validated, untracked and uncommitted files
-  included. `pregate-attest.js` refuses unless `<commit>^{tree}` equals it —
-  anything changed after pregate means a rerun — and the planner compares it
-  with the head commit's tree on the PR. A SHA is never compared, for the same
-  reason `scripts/verify-ci-status.js` compares trees: the content is what was
-  tested. The commit must already be on the upstream remote (the one
-  `branch.<name>.remote` names); GitHub only accepts a status on a commit it
-  has, which is why attesting is a step after `git push`, not a pregate flag.
+  `tree=<40-hex> os=<platform> node=<major> stages=<list>`: the receipt's
+  `git write-tree` hash of the exact working tree pregate validated, untracked
+  and uncommitted files included, plus the platform and Node major the stages
+  ran on. `pregate-attest.js` refuses unless `<commit>^{tree}` equals the
+  receipt's tree — anything changed after pregate means a rerun — and the
+  planner compares it with the head commit's tree on the PR. A SHA is never
+  compared, for the same reason `scripts/verify-ci-status.js` compares trees:
+  the content is what was tested. The commit must already be on the upstream
+  remote (the one `branch.<name>.remote` names); GitHub only accepts a status
+  on a commit it has, which is why attesting is a step after `git push`, not a
+  pregate flag.
+- **The merge ref is not the head tree.** The receipt vouches for the head
+  commit's tree; CI tests the merge ref, that tree plus whatever `main`
+  gained since the branch forked. The planner reads that base-side diff
+  (`git diff --name-only HEAD^2 HEAD`) and refuses the attestation **per
+  stage** when it contains a test file the plan selected for that runner, a
+  non-test source under the runner's roots (`server/`, `scripts/`, `lib/`,
+  `autofixer/` for the server stages; `client/src/` for the client ones), or a
+  runner config, setup, workflow or dependency-manifest file (which refuses
+  every stage). Docs-only movement, or movement in the other runner, keeps
+  the attestation. Each refusal names the path in `suite_reasons` and in the
+  `attestation` output's `driftRefused`. In practice the local workflow
+  re-syncs the branch onto `main` before pregate, so the drift is usually
+  empty.
 - **Who can post one.** A commit status on this repository can only be created
   by an actor with write access, and the planner honors only the newest
-  successful `pregate` status whose `creator.login` is the repository owner.
-  The `GITHUB_TOKEN` of a `pull_request` run from a fork is read-only and
-  cannot create one; a Dependabot pull request is refused by author; a status
-  by anyone else is ignored. The impact job holds `statuses: read` and nothing
-  more (`release.yml` grants the same scope to the called workflow). CI is
-  still the authority for every outsider.
+  `pregate` status — of any state — when it is a success whose
+  `creator.login` is the repository owner. The `GITHUB_TOKEN` of a
+  `pull_request` run from a fork is read-only and cannot create one; a
+  Dependabot pull request is refused by author; a status by anyone else is
+  ignored, and a newer one by anyone else blocks the owner's older success.
+  The impact job holds `statuses: read` and nothing more (`release.yml`
+  grants the same scope to the called workflow). CI is still the authority
+  for every outsider.
+- **Revocation.** `node scripts/pregate-attest.js --revoke "<reason>"` posts a
+  `failure` status on the commit; because the newest status decides, every
+  earlier attestation on that commit is withdrawn and the next run plans as
+  if none existed. Use it when a local result turns out to be wrong (a flaky
+  pass, a suite that was not really run).
+- **Platform.** A macOS pregate may attest the Linux jobs: per the project's
+  policy, other platforms are checked only when a change could plausibly
+  break them, and the Windows job is the one platform-specific proof CI keeps.
+  The one Linux-only failure a case-insensitive filesystem cannot see — a
+  relative import whose case differs from the tracked path — is closed by
+  `scripts/check-import-case.js`, which the impact job runs on every pull
+  request before any stage can be skipped (it resolves every relative
+  `import`, `import()` literal and `new URL(…, import.meta.url)` in the
+  changed modules against `git ls-files` with exact spelling). The platform
+  and Node major of the attesting run are in the status and in the plan
+  summary's `Pregate attestation` line.
 - **When it applies.** Only a same-repository pull request into a non-`release`
   base that was not forced full. The planner verifies the merge-ref checkout's
-  second parent is the event's head (so the tree compared is the tree under
-  test) and reads `repos/{repo}/commits/{head}/statuses`. Any failure — API
-  error, unreadable description, tree mismatch, wrong creator — leaves the
-  plan exactly as computed and records the reason.
-- **What CI still runs.** The impact job and its hidden-content scan, the
-  Windows job, the Linux worker-containment job, the Node-minimum check and
-  the `CI Gate` itself always run as planned. The server job stays when its
-  boot smoke is selected but not attested, because the smoke runs on that job.
-  An attested run reports `full: false`, so `Full CI Gate` is never published
-  on the strength of a receipt. The planner reads the plan from the merge ref,
-  so a test added on `main` after the local run can still be selected and
-  then skipped under the attestation — the same class of gap the nightly
-  full run on `main` exists to catch.
+  second parent is the event's head (so the attested tree is compared with
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. A head
+  committed less than five minutes ago with no `pregate` status yet is re-read
+  for up to 90 seconds (10-second interval; the summary says how long it
+  waited), because the status is posted after the push that started the run.
+  When you open the pull request yourself, the order is push, attest, then
+  `gh pr create`, so the status precedes the `pull_request` event. Any
+  failure — API error, unreadable description, tree mismatch, wrong creator,
+  a non-success newest status — leaves the plan exactly as computed and
+  records the reason.
+- **What CI still runs.** The impact job — its hidden-content scan, the
+  import-case check, `npm ci --prefix autofixer` and the `node --check` of
+  the server entry point (both moved here from the server job so an attested
+  run cannot skip them) — the Windows job, the Linux worker-containment job,
+  the Node-minimum check and the `CI Gate` itself always run as planned. The
+  server job stays when its boot smoke is selected but not attested, because
+  the smoke runs on that job. An attested run reports `full: false`, so
+  `Full CI Gate` is never published on the strength of a receipt.
 - **How to inspect it.** The impact job's summary prints a `Pregate
-  attestation` line (`attested`, the head and tree, the stages, or the reason
-  none applied) and `suite_reasons` names each skipped suite as attested.
+  attestation` line (`attested`, the head and tree, the platform and Node,
+  the stages, `driftRefused`, or the reason none applied) and `suite_reasons`
+  names each skipped suite as attested and each refused one with its path.
   On the commit: `gh api repos/<owner>/<repo>/commits/<sha>/statuses` lists
-  every `pregate` status with its creator, description and timestamp;
+  every `pregate` status with its creator, state, description and timestamp;
   `node scripts/pregate-attest.js --dry-run` shows what would be posted for
   the current receipt and HEAD without posting it.
 
@@ -542,13 +583,15 @@ The selected work is split across parallel jobs:
   `PORTOS_SMOKE_BOOT=1` so no scheduler, agent recovery, or peer sync starts —
   `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
-  restored and its trusted-rebuild mark checks out. This job also runs
+  restored and its trusted-rebuild mark checks out. The impact job (which
+  always runs, even when a pregate attestation skips this one) runs
   `npm ci --prefix autofixer` — uncached and never skipped, because resolving
-  that workspace's tracked lockfile *is* the check. It is the only CI step that
-  installs `autofixer/`, which `npm run setup` and `scripts/ensure-deps.js`
-  install on every user's machine; without it a lockfile that stopped resolving
-  shipped green and failed at setup time. (`browser/` gets no such step: zero
-  dependencies, and its lockfile is deliberately gitignored.)
+  that workspace's tracked lockfile *is* the check — and `node --check
+  server/index.js`. It is the only CI step that installs `autofixer/`, which
+  `npm run setup` and `scripts/ensure-deps.js` install on every user's
+  machine; without it a lockfile that stopped resolving shipped green and
+  failed at setup time. (`browser/` gets no such step: zero dependencies, and
+  its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests, plus the production build
   whenever client source changed. Build and the Scalar-removal bundle pin run on
   shard 1 only.
