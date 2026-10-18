@@ -55,12 +55,12 @@ npm test --prefix client         # Vitest (happy-dom) — component/unit tests
 # inherits it aims at the real Postgres.
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 
-npm run pregate                  # BEFORE EVERY PUSH — local CI-plan checks; limits below
+npm run pregate                  # BEFORE EVERY PUSH — CI's plan run locally; receipt in .cache/pregate/report.json
 ```
 
 **Run `npm run pregate` before every push and again after rebasing onto a moved base.** It uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. The local plan includes both committed and uncommitted changes, including untracked files.
 
-A full-suite plan runs only the always-run guards unless `--full` is supplied. DB suites, Windows, client build, and boot smoke are reported but not run by pregate. A green pregate proves only the stages it ran; required CI checks still apply.
+A scoped plan runs every suite it selects, in CI's order and with CI's environment: lint, server and client tests, the client build and its bundle pin, the boot smoke, the browser suites, and the serial `portos_test` DB suite last and alone (it is pinned to `portos_test` and can never target `portos`). A full-suite plan runs only the always-run guards unless `--full` is supplied, which runs everything. A suite left to CI — by `--skip-db`, `--skip-browser`, `--skip-build`, `--skip-smoke`, by the downgrade, or because the machine lacks a prerequisite (a reachable test Postgres; Chrome, ffmpeg and the client bundler) — is named as not run in the summary and in the receipt `.cache/pregate/report.json` (plan, stage outcomes and durations, base and HEAD SHAs, and the hash of the exact working tree validated, uncommitted and untracked files included). The shipped prompt-history guard runs locally when the planner selects it. A green pregate proves only the stages it ran; the Windows job and the Linux worker-containment job are the two only CI can prove, and required CI checks still apply.
 
 ## Test Strategy: Value Over Assertion Count
 
