@@ -1181,6 +1181,9 @@ export function isReapableBlockedFailure(task, { now = Date.now(), maxAgeMs = DE
 export function isReapableInvestigation(task, tasksById) {
   if (!isInvestigationTask(task)) return false;
   if (task.status === 'completed') return false; // already terminal
+  // An in-progress investigation has a live agent diagnosing it; reaping it
+  // would let a later finalize regress the status or spawn a second run (#12059).
+  if (task.status === 'in_progress') return false;
   const affected = Array.isArray(task.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
   if (affected.length === 0) return false;
   return affected.every((id) => {
@@ -1230,11 +1233,13 @@ export async function sweepResolvedFailureTasks({
   let staleBlocks = 0;
   let investigations = 0;
   for (const { task, type, reason } of targets) {
+    // Guard the flip under the write lock: a Resume/Run or dequeue that landed
+    // after the snapshot must not be overwritten by a stale auto-expire (#12059).
     const updated = await updateTask(task.id, {
       status: 'completed',
       metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-    }, type, { now });
-    if (updated?.error) continue;
+    }, type, { now, expectedStatus: task.status });
+    if (updated?.error || updated?.statusChanged) continue;
     if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
   }
 
