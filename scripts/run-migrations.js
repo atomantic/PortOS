@@ -129,17 +129,16 @@ async function acquireMigrationLock(lockDir, { waitMs = LOCK_WAIT_MS, pollMs = L
 }
 
 /**
- * Scan for migration files (*.js, sorted by filename). Co-located vitest
+ * Scan for numbered migration files (NNN-name.js, sorted by filename). Co-located vitest
  * files (*.test.js) are excluded — they don't export `up()` and would
  * throw the runner if imported as migrations. The vitest config picks
  * them up via its own scripts test glob in server/vitest.config.js.
- * `_`-prefixed files (e.g. `_lib.js`, `_testHelpers.js`) are shared
- * helpers consumed by migration files and their tests — they're never
- * migrations themselves.
+ * Unnumbered modules include shared helpers and executable tooling; importing
+ * them here can run unrelated checks or exit the process before migrations finish.
  */
 async function scanMigrationFiles(migrationsDir) {
   return (await readdir(migrationsDir))
-    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js') && !f.startsWith('_'))
+    .filter(f => /^\d+-.*\.js$/.test(f) && !f.endsWith('.test.js'))
     .sort();
 }
 
