@@ -225,6 +225,18 @@ describe('pregate hidden-content invocation', () => {
     },
   );
 
+  it('diagnoses a production-only install before spawning development checks', () => {
+    write('server/package-lock.json', JSON.stringify({ packages: {
+      '': {}, 'node_modules/vitest': { version: '5.0.4', dev: true },
+    } }));
+    write('scripts/run-ci-tests.js', 'throw new Error("unexpected test stage");');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('node_modules/vitest: missing package.json');
+    expect(result.stderr).toContain('pregate requires development dependencies (--include=dev)');
+    expect(result.stderr).not.toContain('unexpected test stage');
+  });
+
   it('refuses missing and unreadable lock evidence rather than calling it a match', () => {
     rmSync(join(root, 'client', 'package-lock.json'));
     write('autofixer/package-lock.json', '{invalid');

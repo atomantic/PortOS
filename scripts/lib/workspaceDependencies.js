@@ -53,7 +53,7 @@ export function inspectWorkspaceDependencies({ dir, label }) {
       const installed = readJson(join(dir, path, 'package.json'));
       if (installed.error) {
         if (installed.error === 'missing' && expected.optional) continue;
-        issues.push(`${path}: ${installed.error} package.json (${installed.code}); expected ${expected.version}`);
+        issues.push(`${path}: ${installed.error} package.json (${installed.code}); expected ${expected.version}${expected.dev || expected.devOptional ? ' — pregate requires development dependencies (--include=dev)' : ''}`);
       } else if (typeof installed.value?.version !== 'string') {
         issues.push(`${path}: unreadable package version; expected ${expected.version}`);
       } else if (installed.value.version !== expected.version) {

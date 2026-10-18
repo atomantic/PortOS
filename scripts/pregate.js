@@ -393,8 +393,8 @@ async function main() {
     for (const { label, linked, owner, issues } of dependencyProblems) {
       console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
       console.error(linked
-        ? `    Reconcile dependencies in the owning source checkout (${owner}), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
-        : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci in the owning workspace), then rerun pregate.`);
+        ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+        : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
     }
     process.exit(1);
   }
