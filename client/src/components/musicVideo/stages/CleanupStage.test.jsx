@@ -40,7 +40,7 @@ describe('production cleanup', () => {
 
   it('keeps mutation failures visible when cleanup socket events refresh the inventory', async () => {
     let rejectCleanup;
-    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((resolve, reject) => { rejectCleanup = reject; }));
+    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectCleanup = reject; }));
     render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Remove superseded renders' }));
     const onCleanup = socket.on.mock.calls.find(([event]) => event === 'music-video:render-cleanup')[1];
@@ -53,7 +53,7 @@ describe('production cleanup', () => {
 
   it('drops a cleanup failure after switching to another project', async () => {
     let rejectCleanup;
-    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((resolve, reject) => { rejectCleanup = reject; }));
+    cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectCleanup = reject; }));
     const { rerender } = render(<CleanupStage board={{ project: { id: 'old-project' } }} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Remove superseded renders' }));
     rerender(<CleanupStage board={{ project: { id: 'new-project' } }} />);
