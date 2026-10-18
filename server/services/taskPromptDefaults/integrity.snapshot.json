@@ -37,7 +37,7 @@
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
     "mobile-responsive": "a1ad3c87dc4c2fc55a3f041f0f61e726",
     "model-comparison-refresh": "f66e070fa08e30edda2c3020289f0c67",
-    "module-hygiene": "e4ba7f0375bf816b85564bcc6545474d",
+    "module-hygiene": "1637fd164737e20db284fe5c2b440453",
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
     "performance": "4f8ddada54d7c6f31b7fb35aeb0f29db",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
@@ -61,7 +61,7 @@
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "41b02e644f3dc5dcb713700c56a56454",
+    "ux": "14d790bd65e540d00786ecb4e787a61e",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
   },
   "PROMPT_VERSIONS": {
@@ -101,7 +101,7 @@
     "media-render-research": 1,
     "mobile-responsive": 4,
     "model-comparison-refresh": 4,
-    "module-hygiene": 2,
+    "module-hygiene": 3,
     "observability": 2,
     "performance": 6,
     "plan-feature": 6,
@@ -121,7 +121,7 @@
     "ui-bugs": 4,
     "ui-lifecycle": 3,
     "user-action-review": 2,
-    "ux": 7,
+    "ux": 8,
     "workflow-recovery": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 4,
@@ -381,7 +381,8 @@
       "219ed3aac32a878ee6f78a90e98daec1"
     ],
     "module-hygiene": [
-      "3b7671cd44f719d4b2116b96a279e6d0"
+      "3b7671cd44f719d4b2116b96a279e6d0",
+      "e4ba7f0375bf816b85564bcc6545474d"
     ],
     "observability": [
       "fdb4d77df5891cfb653a5da2553ecf8a"
@@ -485,7 +486,8 @@
       "b8c0bde4075685625443a405b2c70b50",
       "f90b5f38a7c6264e0d40919a2933ba4c",
       "9f346b8be4408c5a8207d9a8b6080ff0",
-      "bb8670c1e6eb28434ad2d45b6dc62177"
+      "bb8670c1e6eb28434ad2d45b6dc62177",
+      "41b02e644f3dc5dcb713700c56a56454"
     ]
   }
 }

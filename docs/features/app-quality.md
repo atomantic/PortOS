@@ -74,7 +74,14 @@ The run's recorded start time orders measurements so delayed recovery cannot
 replace newer evidence. PostgreSQL retains each run measurement and projects the
 recent runs per app/category into the rolling score, locally and within the
 ordinary database backup; no old runs are guessed into scores and no extra
-audit batch is enabled automatically. Peers and the `.quality.json` snapshot
+audit batch is enabled automatically. The summary also carries one
+`AUDIT_SLICE: <paths or areas deep-reviewed>` line, stored in the measurement's
+`slice` column (null for runs that predate it, or the v2 report's `slice` when
+the line is missing). Every audit lane preloads its last eight slices for the
+app through the `audit-slice-history` task data input ("Recent audit slices")
+so consecutive runs rotate to other areas instead of re-scanning the same
+inventory; the `ux` and `module-hygiene` prompts read that block for their
+route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
 an older install keeps reading it; the slice text never leaves the machine.
 

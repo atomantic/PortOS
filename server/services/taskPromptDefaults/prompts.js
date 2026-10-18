@@ -908,9 +908,10 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    enough: most work happens on record pages. Also open the detail or editor
    route (the \`/:id\` view) of each domain that has records, choosing a record
    partway through its workflow — in progress, awaiting review, failed — over a
-   fresh or finished one. Rotate coverage: prefer routes and domains with no
-   finding from this audit in the tracker in the last 30 days, and list the
-   routes you chose and why. Describe records by their state, never by their
+   fresh or finished one. Rotate coverage: prefer routes and domains the
+   preloaded Recent audit slices block does not list and with no finding from
+   this audit in the tracker in the last 30 days, and list the routes you chose
+   and why. Describe records by their state, never by their
    names or contents. Walk each chosen route with the browser automation
    available to this run (a CDP tab, Playwright, or the host's browser tool);
    if none is reachable, exit cleanly as step 2 says. For every route:
@@ -1121,9 +1122,9 @@ Repository: {repoPath}
 
 Audit one coherent slice. Rank candidates using several signals together:
 size, recent churn, import
-fan-in, mixed responsibilities, and whether prior audit history already covered
-the area. Prefer a previously uncovered slice over repeatedly scanning the same
-hotspot. Name the chosen slice before investigating it.
+fan-in, mixed responsibilities, and whether the preloaded Recent audit slices
+block already lists the area. Prefer a slice that block does not name over
+repeatedly scanning the same hotspot. Name the chosen slice before investigating it.
 
 These numeric thresholds generate candidates only; crossing one is never a
 finding by itself:

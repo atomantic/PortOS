@@ -3,6 +3,8 @@ import { AUDIT_DEFINITIONS, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
+const SLICE_PREFIX = 'AUDIT_SLICE: ';
+const MAX_SLICE_CHARS = 500;
 
 // Each lens must explain how to find candidates before choosing a slice.
 export const AUDIT_DISCOVERY = Object.freeze({
@@ -53,7 +55,7 @@ This contract overrides narrower slice-selection or ranking advice in the missio
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
 5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 no material defect found in the slice after real inspection; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
-7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Keep ordinary completion/PR instructions and summaries too.
+7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
 Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.`;
 }
@@ -129,6 +131,18 @@ export function parseAuditQualityReport(summary, category) {
     ? { ...raw, coverage: 'partial' } : raw;
   const parsed = auditQualityReportSchema.safeParse(claim);
   return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;
+}
+
+/**
+ * The `AUDIT_SLICE: <paths or areas>` line from a completion summary (#12090),
+ * trimmed and bounded, or null when absent or empty. The first such line wins;
+ * the stored value drives the lane's slice rotation on later runs.
+ */
+export function parseAuditSlice(summary) {
+  if (typeof summary !== 'string') return null;
+  const line = summary.split(/\r?\n/).find(candidate => candidate.startsWith(SLICE_PREFIX));
+  const slice = line ? line.slice(SLICE_PREFIX.length).trim().slice(0, MAX_SLICE_CHARS) : '';
+  return slice || null;
 }
 
 const RECOMMENDED_AUDITS_HEADING = /^\s*(?:#{1,6}\s*|\*\*)?Recommended next audits\b/i;

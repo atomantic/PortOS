@@ -19,7 +19,36 @@ describe('taskDataInputs', () => {
       'open-issues',
       'open-pull-requests',
       'closed-unmerged-pull-requests',
+      'audit-slice-history',
     ]);
+  });
+
+  // #12090: the lane's recent slices are preloaded so it rotates coverage; an
+  // empty history and an unreadable store each say so instead of reading as empty.
+  it('renders the lane\'s recent audit slices, an empty history, and an unreadable store without a forge call', async () => {
+    const resolveTracker = vi.fn();
+    const listAuditSlices = vi.fn().mockResolvedValue([
+      { assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/auth, server/lib/commandSecurity.js' },
+      { assessedAt: '2026-09-03T10:00:00.000Z', slice: 'client/src/components/apps' },
+    ]);
+    const options = { app: APP, taskType: 'better-runtime-safety', dependencies: { resolveTracker, listAuditSlices } };
+    const [section] = await resolveTaskDataInputs(['audit-slice-history'], options);
+    expect(section.label).toBe('Recent audit slices');
+    expect(section.content).toContain('Recently audited by this lane (prefer other areas unless evidence points here):');
+    expect(section.content).toContain('- 2026-09-10: server/services/auth, server/lib/commandSecurity.js');
+    expect(section.content).toContain('- 2026-09-03: client/src/components/apps');
+    expect(listAuditSlices).toHaveBeenCalledWith('app-1', 'better-runtime-safety');
+    expect(resolveTracker).not.toHaveBeenCalled();
+    expect(appendTaskDataInputs('Audit.', [section])).toContain('### Recent audit slices');
+
+    listAuditSlices.mockResolvedValueOnce([]);
+    expect((await resolveTaskDataInputs(['audit-slice-history'], options))[0].content).toContain('No slice recorded for this lane on this app yet');
+    listAuditSlices.mockRejectedValueOnce(new Error('db offline'));
+    expect((await resolveTaskDataInputs(['audit-slice-history'], options))[0].content).toContain('could not be preloaded (measurement store unavailable)');
+    // A self-directed PortOS task has no app id; the lane's measurements live under PortOS's own.
+    await resolveTaskDataInputs(['audit-slice-history'], { ...options, app: { id: null, name: 'PortOS', repoPath: '/repo' } });
+    expect(listAuditSlices).toHaveBeenLastCalledWith('portos-default', 'better-runtime-safety');
+    expect((await resolveTaskDataInputs(['audit-slice-history'], { ...options, taskType: 'plan-feature' }))[0].content).toContain('applies to audit lanes only');
   });
 
   it('resolves selected sources in configured order and reuses one forge resolution', async () => {

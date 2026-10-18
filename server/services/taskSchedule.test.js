@@ -1972,9 +1972,10 @@ describe('taskSchedule', () => {
     // product decision ("an unattended scheduled run must not land code"), so
     // asserting it in two places 20 lines apart just means a future flag gets
     // added to one of them. Every audit includes open issues; some also preload
-    // PRs to dedup against work in flight without spending forge calls.
-    const OPEN_ISSUES_ONLY = ['open-issues']
-    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests']
+    // PRs to dedup against work in flight without spending forge calls. Every
+    // audit also preloads its recent slices so runs rotate coverage (#12090).
+    const OPEN_ISSUES_ONLY = ['open-issues', 'audit-slice-history']
+    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests', 'audit-slice-history']
     const FILE_ISSUES_LANES = [
       ['data-safety', OPEN_ISSUES_ONLY],
       ['simplify', OPEN_ISSUES_ONLY],
@@ -1999,9 +2000,10 @@ describe('taskSchedule', () => {
       ])
     })
 
-    it('ships open issues for every scheduled quality audit', () => {
+    it('ships open issues and the slice rotation record for every scheduled quality audit', () => {
       for (const taskType of AUDIT_TASK_TYPES) {
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
+        expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('audit-slice-history')
       }
     })
 

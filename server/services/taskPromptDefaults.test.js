@@ -115,7 +115,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(7);
+    expect(PROMPT_VERSIONS.ux).toBe(8);
+    // v8 (#12090): route rotation reads the preloaded slice block, not only the tracker.
+    expect(current).toMatch(/preloaded Recent audit slices block does not list/);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
@@ -194,7 +196,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 
-    expect(PROMPT_VERSIONS['module-hygiene']).toBe(2);
+    expect(PROMPT_VERSIONS['module-hygiene']).toBe(3);
+    // v3 (#12090): slice choice reads the preloaded slice block.
+    expect(current).toMatch(/Prefer a slice that block does not name/);
     expect(current).toContain('{appName}');
     expect(current).toContain('{repoPath}');
     expect(current).toContain('{modeInstructions}');
