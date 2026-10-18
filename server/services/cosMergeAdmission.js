@@ -9,6 +9,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
 
 const retryAfterMs = 5000;
 export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
@@ -211,10 +212,43 @@ async function verifiedWorktreeDelivery(agent, repository) {
   return checkoutOnBranch(target.workspacePath, target.branch, repository);
 }
 
+const isCleanupRecovery = (agent) => agent.metadata?.isRecovery === true
+  && agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
+
+// Repository-cleanup recovery (#12251): lands the PR of the completed parent
+// whose audit filed it. Its registered target must match the live task, and
+// the parent must carry the server-written backlink to this task, branch and
+// PR. Needs no checkout: the parent's worktree is usually already gone.
+async function verifiedCleanupRecovery(agent, repository, agents) {
+  const meta = agent.metadata;
+  const target = meta.recoveryMergeTarget;
+  const { parentAgentId, parentTaskId } = meta.recoveryOrigin;
+  if (!isPlainObject(target) || !parentTaskId || meta.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) return false;
+  const task = await liveTask(agent);
+  const live = repositoryCleanupMergeTarget(task);
+  if (!live || live.url !== target.url || live.branch !== target.branch || leavesPrForHuman(task)
+    || isTruthyMeta(task.metadata.readOnly) || task.metadata.recoveryOrigin.parentAgentId !== parentAgentId
+    || task.metadata.recoveryOrigin.parentTaskId !== parentTaskId) return false;
+  const pr = parsePullRequestUrl(target.url);
+  if (repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository) return false;
+  let parent = agents[parentAgentId];
+  if (!parent) {
+    const { readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
+    parent = await readAgentRecordOrUnreadable(parentAgentId);
+  }
+  const link = parent?.metadata?.repoStateRecovery;
+  if (!isPlainObject(parent) || parent.id !== parentAgentId || parent.taskId !== parentTaskId || parent.status !== 'completed'
+    || parent.metadata.worktreeBranch !== target.branch || parent.metadata.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || !isPlainObject(link) || link.taskId !== agent.taskId || link.url !== target.url || link.branch !== target.branch
+    || !parent.metadata.sourceWorkspace) return false;
+  return repositoryKey(await getOriginInfo(parent.metadata.sourceWorkspace).catch(() => null)) === repository;
+}
+
 // Claim parents carry their registered claim binding; every other participant
 // must prove its registered target against live task and checkout state.
-async function verifiedParticipant(agent, repository) {
+async function verifiedParticipant(agent, repository, agents) {
   if (isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch) return true;
+  if (isCleanupRecovery(agent)) return verifiedCleanupRecovery(agent, repository, agents);
   return await verifiedReviewCoordinator(agent, repository) || verifiedWorktreeDelivery(agent, repository);
 }
 
@@ -265,7 +299,11 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!repository) return refuse('repository-unreadable');
     // Releasing an owned token must remain possible after merge deletes or
     // switches the checkout. Acquire/check still require the assigned target.
-    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository));
+    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository, state.agents));
+    if (!participant && isCleanupRecovery(agent)) {
+      return { admitted: false, reason: 'recovery-merge-target-unverified', retryable: false,
+        message: 'Leave the PR and branch intact and report this blocker: this recovery has no verified registered parent PR target. Retrying cannot change that; only a freshly filed recovery can.' };
+    }
     if (!participant) {
       const task = await liveTask(agent);
       if (agent.metadata?.reviewLoopMergeTarget?.fork || (task?.taskType === 'internal'

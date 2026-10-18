@@ -513,6 +513,20 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toContain('## Claim ownership binding');
   });
 
+  it.each([true, false])('gives a repository-cleanup recovery with a parent PR target admission on the %s light/full path (#12251)', async (light) => {
+    const recoveryOrigin = { parentAgentId: 'agent-0', parentTaskId: 'task-0', subsystem: 'repository-cleanup', attempt: 1, observation: 'a'.repeat(64), noProgress: false };
+    const target = { url: 'https://github.com/example/repo/pull/7', branch: 'cos/task-0/agent-0' };
+    const build = (metadata) => light
+      ? buildLightContextPrompt(makeTask({ metadata }), '/repo', null, { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId: 'agent-1' })
+      : buildAgentPrompt(makeTask({ metadata }), {}, '/repo', null, { providerType: 'api', agentId: 'agent-1' });
+    const prompt = await build({ isRecovery: true, recoveryOrigin, recoveryMergeTarget: target });
+    expect(prompt.split(ADMISSION)).toHaveLength(2);
+    expect(prompt).toContain('--match-head-commit <sha>');
+    // Copied prose or a target without the recovery lineage grants nothing.
+    expect(await build({ recoveryMergeTarget: target })).not.toContain(ADMISSION);
+    expect(await build({ isRecovery: true, recoveryOrigin })).not.toContain(ADMISSION);
+  });
+
   it('leaves an API run, whose PR PortOS opens and a follow-up merges, unbound', async () => {
     const promptTrace = {};
     const prompt = await buildAgentPrompt(makeTask({ metadata: { openPR: true } }), {}, '/repo', worktree,
