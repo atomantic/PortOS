@@ -383,6 +383,17 @@ describe('merge-only PR watcher', () => {
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
   });
 
+  it('joins an overlapping sweep of the same app instead of escalating its entry twice', async () => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValue(JSON.stringify({ state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'FAILURE' }] }));
+
+    const [timer, generator] = await Promise.all([processPendingMergePrs(app), processPendingMergePrs(app)]);
+
+    expect(timer).toBe(generator);
+    expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledTimes(1);
+  });
+
   it('stops polling and notifies after the bounded pending-merge budget', async () => {
     const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
     mockApps.set(app.id, app);

@@ -108,6 +108,26 @@ check or conflict does the same; an unreadable binding never merges and is
 handed to the operator by notification; a PR that never settles times out to a
 notification as before.
 
+The merge-admission prompt section offers this handoff to every participant
+before its CI wait. When a local review round returns clean, the run records
+`REVIEW_HEAD=$(git rev-parse HEAD)` beside `REVIEW_STATUS` (one line, replacing
+any earlier one); a later commit means that head was not reviewed. On
+`queued: true` with a receipt for its head, the run stops: it does not wait for
+CI, merge, enable auto-merge, close the issue or remove its branch or worktree,
+and it reports the PR as handed off and not yet merged. Any other answer keeps
+the run on the in-session CI wait and admission-gated merge.
+
+A receipt is a pending end state. `probePrForBranch` reports
+`mergeHandoffQueued` only when the queue holds a binding for that PR, branch and
+the published local head, so the merge-gate check finalizes without a nudge
+(`merge-handoff-queued`), worktree cleanup keeps the branch, and the repo-state
+audit treats the queued entry as the branch's owner. The receipt starts one
+immediate sweep of the app, which merges a head whose CI already settled
+without waiting for the 30-minute timer and spends no tick budget. Overlapping
+sweeps of one app (timer, task generator, receipt) join a single pass; a receipt
+that lands during a pass which already read the queue gets one follow-up pass
+after it settles.
+
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
 seed, migration, or federation payload. Admission waits at most 15 seconds to

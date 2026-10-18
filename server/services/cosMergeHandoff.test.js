@@ -57,7 +57,7 @@ vi.mock('./notifications.js', () => ({
 const followUpMock = vi.fn(async () => ({ id: 'follow-up-1' }));
 vi.mock('./agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: (...args) => followUpMock(...args) }));
 
-import { handoffPendingMerge } from './cosMergeHandoff.js';
+import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
 
@@ -71,6 +71,14 @@ const claimAgent = (id, branch) => ({
 });
 const handoff = (overrides = {}) => handoffPendingMerge({ agentId: 'agent-1', prUrl: PR_URL, headSha: HEAD, worktreePath: workspace, ...overrides });
 const pending = () => readPendingMergePrs(f.apps.get('app1'));
+// A receipt starts an immediate sweep; joining it keeps each test's forge reads
+// ordered. Imported at call time: the restart case resets the module registry.
+const handedOff = async (overrides) => {
+  const result = await handoff(overrides);
+  await (await import('./prWatcher.js')).sweepPendingMergeApp('app1');
+  return result;
+};
+const greenChecks = () => { f.pr.statusCheckRollup = [{ conclusion: 'SUCCESS' }]; };
 
 beforeAll(async () => { workspace = await mkdtemp(join(tmpdir(), 'merge-handoff-')); });
 afterAll(async () => { await rm(workspace, { recursive: true, force: true }); });
@@ -88,7 +96,7 @@ beforeEach(async () => {
     number: 7, title: 'Example change', body: 'Closes #101', author: { login: 'example-user' },
     commits: [{ messageHeadline: 'fix: example', messageBody: '' }], state: 'OPEN', isDraft: false,
     isCrossRepository: false, headRefName: 'claim/issue-1', headRefOid: HEAD,
-    mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }],
+    mergeStateStatus: 'CLEAN', statusCheckRollup: [{ status: 'IN_PROGRESS' }],
   };
   await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=clean\nREVIEW_HEAD=${HEAD}\n`);
   execGhMock.mockReset().mockImplementation(async (args) => {
@@ -104,8 +112,10 @@ beforeEach(async () => {
 
 describe('pending-merge handoff', () => {
   it('persists the verified binding and merges only that head once a concurrent lease releases, across a restart', async () => {
-    const result = await handoff();
+    const result = await handedOff();
     expect(result).toMatchObject({ queued: true, receipt: { appId: 'app1', prNumber: 7, headSha: HEAD, repository: 'github.com/example/repo' } });
+    // The receipt's immediate sweep found CI pending and spent no tick budget.
+    expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toEqual([expect.objectContaining({
       prBranch: 'claim/issue-1', sourceAgentId: 'agent-1', ticks: 0,
       handoff: expect.objectContaining({ receiptId: result.receipt.id, headSha: HEAD, prCompletion: 'review-then-merge', reviewStatus: 'clean' }),
@@ -113,6 +123,7 @@ describe('pending-merge handoff', () => {
 
     // Another run holds repository admission: the coordinator waits without
     // spending its budget and never merges around the lease.
+    greenChecks();
     const lease = await claimMergeAdmission({ agentId: 'agent-2', action: 'acquire' });
     expect(lease.admitted).toBe(true);
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ waiting: 1, merged: 0 });
@@ -147,15 +158,53 @@ describe('pending-merge handoff', () => {
     expect(pending()).toEqual([]);
   });
 
+  it('merges at once when CI already settled before the receipt, without waiting for the timer', async () => {
+    greenChecks();
+    expect(await handoff()).toMatchObject({ queued: true });
+    await vi.waitFor(() => expect(pending()).toEqual([]));
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
+  });
+
+  it('rechecks the queue after an overlapping sweep that read it before the receipt', async () => {
+    greenChecks();
+    let releaseRead;
+    const blocked = new Promise((resolve) => { releaseRead = resolve; });
+    const other = { ...f.pr, number: 8, headRefName: 'cos/other', headRefOid: 'b'.repeat(40), statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    const forge = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation(async (args) => (args[0] === 'pr' && args[1] === 'view' && args[2] === '8'
+      ? blocked.then(() => JSON.stringify(other)) : forge(args)));
+    f.apps.set('app1', { ...f.apps.get('app1'), pendingMergePrs: [{
+      prUrl: 'https://github.com/example/repo/pull/8', prNumber: 8, prBranch: 'cos/other', ticks: 0,
+      sourceTask: { id: 'task-other', priority: 'MEDIUM', description: 'Other change', metadata: { app: 'app1' } },
+    }] });
+
+    // The live module instance, the one the handoff's receipt sweep joins.
+    const timer = (await import('./prWatcher.js')).processPendingMergePrs(f.apps.get('app1'));
+    expect(await handoff()).toMatchObject({ queued: true });
+    releaseRead();
+    await timer;
+    await vi.waitFor(() => expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD }));
+    expect(pending().map((entry) => entry.prNumber)).toEqual([8]);
+  });
+
+  it('reports a queued receipt only for the exact handed-off PR, branch and head', async () => {
+    await handedOff();
+    const target = { prUrl: 'https://GitHub.com/Example/Repo/pull/7', prBranch: 'claim/issue-1', headSha: HEAD.toUpperCase() };
+    expect(await hasQueuedMergeHandoff(target)).toBe(true);
+    expect(await hasQueuedMergeHandoff({ ...target, headSha: 'b'.repeat(40) })).toBe(false);
+    expect(await hasQueuedMergeHandoff({ ...target, prBranch: 'claim/issue-2' })).toBe(false);
+    expect(await hasQueuedMergeHandoff({ ...target, prUrl: 'https://github.com/example/other/pull/7' })).toBe(false);
+  });
+
   it('accepts a merge-on-green run with no local reviewers', async () => {
     f.tasks['task-agent-1'].metadata.prCompletion = 'merge-on-green';
     await rm(join(workspace, 'portos-review-status'));
-    expect(await handoff()).toMatchObject({ queued: true });
+    expect(await handedOff()).toMatchObject({ queued: true });
     expect(pending()[0]).toMatchObject({ handoff: { reviewStatus: 'not-configured', prCompletion: 'merge-on-green' }, followUp: { reviewers: [] } });
   });
 
   it('invalidates a binding whose head moved and dispatches the recorded review policy instead of merging', async () => {
-    await handoff();
+    await handedOff();
     f.pr.headRefOid = 'd'.repeat(40);
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 0, escalated: 1, invalidated: 1 });
     expect(mergePrMock).not.toHaveBeenCalled();
@@ -166,7 +215,8 @@ describe('pending-merge handoff', () => {
   });
 
   it('withholds the merge when the head moves inside the admission window', async () => {
-    await handoff();
+    await handedOff();
+    greenChecks();
     const views = [{ ...f.pr }, { ...f.pr, headRefOid: 'e'.repeat(40) }];
     const forge = execGhMock.getMockImplementation();
     execGhMock.mockImplementation(async (args) => (args[0] === 'pr' && args[1] === 'view'
@@ -177,7 +227,7 @@ describe('pending-merge handoff', () => {
   });
 
   it('keeps the head binding when an unbound duplicate is queued for the same PR', async () => {
-    await handoff();
+    await handedOff();
     const { queuePendingMerge } = await import('./prWatcher.js');
     const { handoff: _binding, followUp: _roster, ...unbound } = pending()[0];
     expect(await queuePendingMerge('app1', unbound)).toBe(true);
@@ -185,7 +235,7 @@ describe('pending-merge handoff', () => {
   });
 
   it('never merges an unreadable binding and hands it to the operator', async () => {
-    await handoff();
+    await handedOff();
     f.apps.set('app1', { ...f.apps.get('app1'), pendingMergePrs: [{ ...pending()[0], handoff: { headSha: 'not-a-sha' } }] });
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 0, invalidated: 1 });
     expect(mergePrMock).not.toHaveBeenCalled();

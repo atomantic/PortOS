@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
@@ -94,5 +98,39 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
+  });
+});
+
+describe('pending-merge handoff instructions (#12247)', () => {
+  it('offers the server handoff before the CI wait and stops on a receipt without merging', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(prompt).toContain('/api/cos/merge-handoff');
+    expect(prompt).toContain('"agentId":"parent-example","prUrl":"PR_URL","headSha":"HEAD_SHA","worktreePath":"WORKTREE_PATH"');
+    expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('Once required CI is green'));
+    expect(prompt).toContain('NOT yet merged');
+    expect(prompt).toContain('A refusal never permits merging without admission');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-handoff');
+  });
+
+  // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS
+  // kept, exactly one REVIEW_HEAD naming the reviewed commit.
+  it.skipIf(process.platform === 'win32')('records exactly one REVIEW_HEAD for the reviewed commit beside REVIEW_STATUS', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const command = prompt.split('\n').find((line) => line.includes('REVIEW_HEAD=%s'));
+    const repo = mkdtempSync(join(tmpdir(), 'review-head-'));
+    try {
+      const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+      git('init', '-q');
+      git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
+      const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
+      // No reviewers ran: the record must not invent a status file the server would read as unreadable.
+      execFileSync('sh', ['-c', command], { cwd: repo });
+      expect(existsSync(statusFile)).toBe(false);
+      writeFileSync(statusFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`);
+      execFileSync('sh', ['-c', command], { cwd: repo });
+      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=clean\nREVIEW_HEAD=${git('rev-parse', 'HEAD')}\n`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

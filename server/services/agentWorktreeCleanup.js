@@ -541,6 +541,11 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
   return queuedDeterministicMerge;
 }
 
+// A healthy handoff owns the branch until it merges (#12247); anything else
+// open or unreadable is preserved for recovery.
+const preservedPrState = (pr) => (pr?.mergeHandoffQueued === true ? 'pending-merge handoff'
+  : pr?.autoMergeEnabled === true ? 'pending GitHub auto-merge' : 'unconfirmed PR recovery');
+
 async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings, skipMerge }, disposition) {
   // Default: auto-merge on success, just cleanup on failure.
   // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
@@ -553,7 +558,7 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
     if (!pr?.readable || (pr.prState && pr.prState !== 'MERGED')) {
       // Failed/unreadable CI or unpublished commits need recovery, which needs this
       // branch. Only a healthy handoff suppresses the post-cleanup audit.
-      emitLog('info', `🌳 Preserving ${pr?.autoMergeEnabled === true ? 'pending GitHub auto-merge' : 'unconfirmed PR recovery'} worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
+      emitLog('info', `🌳 Preserving ${preservedPrState(pr)} worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
       return;
     }
   }

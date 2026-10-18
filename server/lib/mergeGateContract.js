@@ -79,21 +79,25 @@ export function summaryStatesLeaveOpen(summary) {
  *   (`agentRepoStateVerification.js`) be the backstop, as today.
  * - `auto-merge-enabled` — GitHub confirms a pending handoff; finalize without
  *   claiming it has merged.
+ * - `merge-handoff-queued` — the server's pending-merge coordinator holds a
+ *   verified receipt for the published head (#12247); finalize without claiming
+ *   it has merged. The branch is the coordinator's until it merges or recovers.
  * - `leave-open-stated` — the agent said, in its own words, that it is
  *   deliberately leaving the PR open; that is a correct terminal state.
  * - `needs-reprompt` — the PR is open and the summary names no blocker: send
  *   one corrective re-prompt.
  *
  * @param {object} params
- * @param {{prState: string|null, readable: boolean}|null} params.prProbe
+ * @param {{prState: string|null, readable: boolean, autoMergeEnabled?: boolean, mergeHandoffQueued?: boolean}|null} params.prProbe
  * @param {string|null|undefined} params.summary
- * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'auto-merge-enabled'|'needs-reprompt'}
+ * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'auto-merge-enabled'|'merge-handoff-queued'|'needs-reprompt'}
  */
 export function resolveMergeGateVerdict({ prProbe, summary }) {
   if (!prProbe || prProbe.readable === false) return 'no-pr-action';
   if (prProbe.prState === 'MERGED') return 'merged';
   if (prProbe.prState !== 'OPEN') return 'no-pr-action';
   if (prProbe.autoMergeEnabled === true) return 'auto-merge-enabled';
+  if (prProbe.mergeHandoffQueued === true) return 'merge-handoff-queued';
   if (summaryStatesLeaveOpen(summary)) return 'leave-open-stated';
   return 'needs-reprompt';
 }
@@ -109,7 +113,7 @@ export function resolveMergeGateVerdict({ prProbe, summary }) {
 export function buildMergeGateReprompt(prUrl) {
   return [
     `Your Merge Gate is not finished: ${prUrl} is still OPEN and your last summary did not say you were leaving it open.`,
-    'Work through the Merge Gate steps from your original instructions now: use the verified GitHub auto-merge handoff when eligible, otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
+    'Work through the Merge Gate steps from your original instructions now: use the verified PortOS pending-merge handoff (or, outside merge admission, the GitHub auto-merge handoff) when eligible, otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --delete-branch`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
     'If it truly cannot merge (a required check is red after a genuine fix attempt, or there is a conflict only a human can resolve), say so explicitly and leave it open.',
   ].join('\n');
 }
