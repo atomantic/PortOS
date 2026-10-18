@@ -6,7 +6,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getHfCacheRoot, repoToDirName } from '../../lib/hfCache.js';
-import manifest from '../../../scripts/moss-image/manifest.json' with { type: 'json' };
+import manifest from './moss-manifest.json' with { type: 'json' };
 
 export const MOSS_MANIFEST = manifest;
 export const mossRuntimeRoot = () => join(PATHS.data, 'repos', 'moss-swift-runtime');

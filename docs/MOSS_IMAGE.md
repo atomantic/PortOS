@@ -24,7 +24,7 @@ The runtime lives under `data/repos/moss-swift-runtime/`, the existing regenerab
 | Official architecture and inference | [OpenMOSS/MOSS-Image at c1355e6](https://github.com/OpenMOSS/MOSS-Image/tree/c1355e6b1986dfe8fba3c0455783a05899212342) |
 | Community Swift/MLX source, MIT | [xocialize/moss-image-swift at 6c26a02](https://github.com/xocialize/moss-image-swift/tree/6c26a0296ba2d2a09e061d89a9b9b758786cd186) |
 | SFT weights, Apache-2.0 | [OpenMOSS-Team/MOSS-Image-SFT at fc5de0d](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/tree/fc5de0d56fc910cbca6f6625a70f5f582b26deb1) |
-| Selected files and SHA-256 digests | [manifest.json](../scripts/moss-image/manifest.json) |
+| Selected files and SHA-256 digests | [moss-manifest.json](../server/services/imageGen/moss-manifest.json) |
 | Sixteen exact Swift package revisions | [Package.resolved](../scripts/moss-image/Package.resolved) |
 | PortOS argument validation and token preflight | [moss_image.swift](../scripts/moss_image.swift) |
 
