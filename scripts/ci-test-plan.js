@@ -91,6 +91,118 @@ const fansOut = (runner, { mode, files }, excludedFiles) => {
   return files.length > MAX_TARGETED_TEST_FILES || (runner === 'server' && mode === 'related');
 };
 
+const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
+
+// Packages whose installed files differ per platform although their lockfile
+// entry may carry no os/cpu/install-script metadata: runtime dispatchers that
+// pick a prebuilt binary (their per-platform children ARE os/cpu-tagged, and
+// usually move with them), browser-binary downloaders, and native addons.
+//
+// The first row is every TRUSTED_REBUILDS package (scripts/trusted-rebuilds.js).
+// It is matched here rather than imported: that module's spawn helpers would
+// pull ~20 server modules into a planner that runs before any install.
+// ci-test-plan.test.js fails when the allowlist names a package this list misses.
+export const PLATFORM_PACKAGE_RES = [
+  /^node-pty$/, /^sharp$/, /^onnxruntime-/, /^protobufjs$/,
+  /^@img\//, /^esbuild$/, /^@esbuild\//,
+  /^rollup$/, /^@rollup\/rollup-/, /^rolldown$/, /^@rolldown\//, /^@biomejs\//,
+  /^lightningcss(?:-|$)/, /^@tailwindcss\/oxide/, /^playwright(?:-core)?$/, /^@playwright\//,
+  /^@swc\//, /^fsevents$/, /^bufferutil$/, /^utf-8-validate$/,
+];
+// Lockfile entry metadata npm uses to install a package conditionally per
+// platform, or to run code at install time.
+const PLATFORM_ENTRY_FIELDS = ['hasInstallScript', 'os', 'cpu', 'libc', 'optional', 'devOptional'];
+// package.json fields whose change installs the same files on every platform.
+// Dependency maps are checked per changed name; any other field (engines,
+// overrides, optionalDependencies, scripts, os, cpu, …) escalates.
+const PLATFORM_NEUTRAL_MANIFEST_FIELDS = new Set([
+  'name', 'version', 'description', 'keywords', 'author', 'license', 'homepage', 'repository', 'bugs', 'private',
+]);
+const MANIFEST_DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'];
+// Lockfile root entry ("") fields that mirror the dependency maps; the
+// node_modules/* entries carry the real change.
+const LOCKFILE_ROOT_NEUTRAL_FIELDS = new Set(['name', 'version', 'license', ...MANIFEST_DEPENDENCY_FIELDS]);
+
+const isPlatformPackageName = (name) => PLATFORM_PACKAGE_RES.some((re) => re.test(name));
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const changedKeys = (base = {}, head = {}) => uniqueSorted([...Object.keys(base), ...Object.keys(head)])
+  .filter((key) => !sameJson(base[key], head[key]));
+const packageNameFromLockKey = (key, entry) => entry?.name
+  ?? key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const escalated = (reason, packages = []) => ({ escalate: true, reason, packages: uniqueSorted(packages) });
+
+function classifyLockfile(base, head) {
+  if (!isPlainObject(base.packages) || !isPlainObject(head.packages)) {
+    return escalated('lockfile has no packages map to compare');
+  }
+  const topLevel = changedKeys(base, head).filter((key) => !['packages', 'name', 'version'].includes(key));
+  if (topLevel.length > 0) return escalated(`lockfile ${topLevel.join(', ')} changed`);
+  const rootFields = changedKeys(base.packages[''], head.packages[''])
+    .filter((key) => !LOCKFILE_ROOT_NEUTRAL_FIELDS.has(key));
+  if (rootFields.length > 0) return escalated(`root ${rootFields.join(', ')} changed`);
+
+  const changed = changedKeys(base.packages, head.packages).filter((key) => key !== '').map((key) => {
+    const entries = [base.packages[key], head.packages[key]].filter(isPlainObject);
+    const name = packageNameFromLockKey(key, head.packages[key] ?? base.packages[key]);
+    const sensitive = isPlatformPackageName(name) || entries.some((entry) => PLATFORM_ENTRY_FIELDS
+      .some((field) => entry[field] !== undefined && entry[field] !== false));
+    return { name, sensitive };
+  });
+  const sensitive = changed.filter((pkg) => pkg.sensitive).map((pkg) => pkg.name);
+  if (sensitive.length > 0) return escalated('platform-sensitive package changed', sensitive);
+  return { escalate: false, reason: 'no platform-sensitive package changed', packages: uniqueSorted(changed.map((pkg) => pkg.name)) };
+}
+
+function classifyManifest(base, head) {
+  const fields = changedKeys(base, head).filter((key) => !PLATFORM_NEUTRAL_MANIFEST_FIELDS.has(key));
+  const unsafe = fields.filter((key) => !MANIFEST_DEPENDENCY_FIELDS.includes(key));
+  if (unsafe.length > 0) return escalated(`${unsafe.join(', ')} changed`);
+  const names = uniqueSorted(fields.flatMap((field) => changedKeys(
+    isPlainObject(base[field]) ? base[field] : {},
+    isPlainObject(head[field]) ? head[field] : {},
+  )));
+  const sensitive = names.filter(isPlatformPackageName);
+  if (sensitive.length > 0) return escalated('platform-sensitive package changed', sensitive);
+  return { escalate: false, reason: 'no platform-sensitive package changed', packages: names };
+}
+
+/**
+ * Should a change to one dependency manifest run the complete Windows suite?
+ *
+ * `baseText`/`headText` are the file's contents at the diff base and in the
+ * tree under test; null means unavailable (new, deleted, or unreadable). Any
+ * input the planner cannot read and compare fails closed to escalation, so
+ * only a proven platform-neutral change downgrades Windows.
+ *
+ * Returns { escalate, reason, packages } — `packages` names what drove the
+ * decision: the platform-sensitive packages when escalating, every changed
+ * package otherwise.
+ */
+export function classifyDependencyChange(path, baseText, headText) {
+  if (baseText == null) return escalated('base version unavailable');
+  if (headText == null) return escalated('removed or unreadable in the tree under test');
+  let base;
+  let head;
+  try {
+    base = JSON.parse(baseText);
+    head = JSON.parse(headText);
+  } catch {
+    return escalated('could not be parsed');
+  }
+  if (!isPlainObject(base) || !isPlainObject(head)) return escalated('could not be parsed');
+  return path.endsWith('-lock.json') ? classifyLockfile(base, head) : classifyManifest(base, head);
+}
+
+const MAX_NAMED_PACKAGES = 8;
+const describeDependencyVerdict = (path, { escalate, reason, packages }) => {
+  const named = packages.length > MAX_NAMED_PACKAGES
+    ? `${packages.slice(0, MAX_NAMED_PACKAGES).join(', ')} and ${packages.length - MAX_NAMED_PACKAGES} more`
+    : packages.join(', ');
+  return `${path} ${escalate ? 'escalates Windows' : 'keeps the Windows baseline'}: ${reason}${named ? ` (${named})` : ''}`;
+};
+
 // `windowsEscalates` decides whether a trigger widens the WINDOWS job too, not
 // only the Linux ones. Three windows-server shards are 3 of a full run's 12
 // jobs and 41% of its runner-minutes (58% at GitHub's 2x windows-latest
@@ -101,11 +213,20 @@ const fansOut = (runner, { mode, files }, excludedFiles) => {
 // baseline instead, the depth a Windows-risk scoped PR already gets. `true` is
 // the fail-closed default for anything unlisted, and a diff touching
 // WINDOWS_RISK_RULES escalates regardless of this flag (issue #7440).
+//
+// `windowsEscalates: 'dependencies'` defers the decision to the diff of the
+// manifest itself (classifyDependencyChange): a pure-JS version bump installs
+// the same files on every platform, so the full Linux matrix covers it and
+// Windows runs the baseline. A native, install-script, os/cpu-gated or optional
+// package, an `engines`/`overrides`/non-dependency field change, or a manifest
+// the planner could not read and compare escalates Windows.
 const FULL_TRIGGER_RULES = [
   // Defines the windows-server job itself.
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: true },
-  // Native rebuilds and platform-conditional resolution differ on Windows.
-  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed', windowsEscalates: true },
+  { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsEscalates: 'dependencies' },
+  // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
+  // it on the Windows install too.
+  { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsEscalates: true },
   { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
@@ -119,7 +240,9 @@ const FULL_TRIGGER_RULES = [
   // Client-only: the Windows job builds no client bundle.
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsEscalates: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsEscalates: true },
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: true },
+  // Widely imported, but pure cross-platform schema logic: no spawn, path or
+  // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
+  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
@@ -725,12 +848,13 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   // A full plan whose Windows job stayed at the contract baseline says so
   // explicitly, so the CI summary never reads "full matrix" beside a one-shard
   // Windows run (issue #7440).
+  // A dependency-manifest plan names the packages behind its Windows decision.
   windows: !plan.windows
     ? 'skipped: no Windows-sensitive surface changed'
     : plan.full
-      ? (plan.windowsMode === 'full'
+      ? `${plan.windowsMode === 'full'
         ? `full matrix: ${plan.reason}`
-        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`)
+        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`}${plan.windowsNote ? `; ${plan.windowsNote}` : ''}`
       : 'Windows-sensitive surface changed',
 });
 
@@ -758,6 +882,9 @@ export function buildCiTestPlan(changedFiles, {
   dbDependencies = [],
   // Registered suite → reachable files; null retains that suite conservatively.
   browserDependencies = {},
+  // Changed dependency manifest → classifyDependencyChange() verdict. A
+  // manifest with no verdict escalates Windows (fail closed).
+  dependencyChanges = {},
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -780,12 +907,19 @@ export function buildCiTestPlan(changedFiles, {
   // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
   // branch below returning before the triggers are even looked at — which
   // downgraded Windows for an App.jsx PR that also bumped a lockfile.
+  const dependencyVerdicts = [];
   const fullTriggers = changed
     .flatMap((path) => FULL_TRIGGER_RULES
       .filter(({ re }) => re.test(path))
-      .map(({ reason, windowsEscalates }) => ({ path, reason, windowsEscalates })));
+      .map(({ reason, windowsEscalates }) => {
+        if (windowsEscalates !== 'dependencies') return { path, reason, windowsEscalates };
+        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
+        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
+        return { path, reason, windowsEscalates: verdict.escalate };
+      }));
   const fullTrigger = fullTriggers.at(0);
   const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsEscalates);
+  const windowsNote = dependencyVerdicts.join('; ');
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
   if (appCompositionChanged && !appRouteOnly) {
@@ -795,6 +929,7 @@ export function buildCiTestPlan(changedFiles, {
       appRouteOnly,
       trackedSet,
       windowsEscalates: triggersEscalateWindows,
+      windowsNote,
     });
   }
 
@@ -803,6 +938,7 @@ export function buildCiTestPlan(changedFiles, {
       appRouteOnly,
       trackedSet,
       windowsEscalates: triggersEscalateWindows,
+      windowsNote,
     });
   }
 
@@ -1034,9 +1170,10 @@ const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) 
  *
  * `windowsEscalates` (default true, so an unlisted caller fails closed) is
  * false only for a trigger windows-server cannot observe: a client-only
- * surface, or a CAPACITY escalation (a wide diff) that
- * says the planner ran out of scoping headroom, not that anything risky
- * changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
+ * surface, pure cross-platform schema logic, a dependency-manifest change
+ * classifyDependencyChange() proved platform-neutral, or a CAPACITY escalation
+ * (a wide diff) that says the planner ran out of scoping headroom, not that
+ * anything risky changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
  *
  * Downgraded does not mean skipped: the job still runs WINDOWS_CONTRACT_TESTS,
  * the curated cross-platform baseline a Windows-risk scoped PR already gets.
@@ -1047,7 +1184,7 @@ const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) 
  * `options` is also forwarded to finishPlan(), which reads only appRouteOnly.
  */
 function fullPlan(changedFiles, reason, options = {}) {
-  const { trackedSet = new Set(), windowsEscalates = true } = options;
+  const { trackedSet = new Set(), windowsEscalates = true, windowsNote = '' } = options;
   // An empty `files` list makes run-ci-tests.js print "No server tests
   // selected" and exit 0 — a green Windows job that ran nothing. So the
   // baseline is only a downgrade while it actually resolves to tracked tests;
@@ -1069,6 +1206,7 @@ function fullPlan(changedFiles, reason, options = {}) {
     windowsMode: windowsFull ? 'full' : 'files',
     windowsFiles: windowsFull ? [] : baseline,
     windowsSources: [],
+    windowsNote,
   }, options);
 }
 
@@ -1325,8 +1463,30 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
       collectTestDependencies([suite], dependencyFiles, cwd, importCache)]))
     : {};
 
+  // Each changed manifest at the diff base vs the tree under test (the working
+  // tree: HEAD in CI, HEAD plus local edits under pregate). The base commit is
+  // inside the depth-2 checkout, so `git show` resolves it; any read failure
+  // becomes null, which classifyDependencyChange() treats as escalation.
+  const readAtBase = (path) => {
+    try {
+      return execFileSync('git', ['show', `${baseSha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+      return null;
+    }
+  };
+  const readInTree = (path) => {
+    try {
+      return readFileSync(join(cwd, path), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const dependencyChanges = Object.fromEntries(collectedChangedFiles
+    .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
+    .map((path) => [path, classifyDependencyChange(path, baseSha ? readAtBase(path) : null, readInTree(path))]));
+
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies };
+    clientDependencies, dbDependencies, browserDependencies, dependencyChanges };
 }
 
 function main() {
@@ -1350,7 +1510,7 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies } = collectPlanInputs({
+  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies, dependencyChanges } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
@@ -1364,6 +1524,7 @@ function main() {
     clientDependencies,
     dbDependencies,
     browserDependencies,
+    dependencyChanges,
   }));
 }
 

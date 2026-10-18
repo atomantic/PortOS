@@ -617,7 +617,7 @@ reason `windows-server` cannot observe:
 | targeted test set exceeded safety cap (no longer full; see "Full-suite sharding") | 17 | no — capacity, not risk |
 | wide change (>30 executable files) | 6 | no — capacity, not risk |
 | client composition root / build config / lint config / test setup | 1 | no — client-only |
-| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
+| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes at the time — manifests and server contracts are now narrowed (below) |
 
 So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
 and `fullPlan()` escalates Windows to the complete server suite only when **any**
@@ -628,6 +628,42 @@ before the trigger loop, so both read the same OR over every match. A diff that
 edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **one shard running
 `WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
 Windows-risk scoped PR already gets.
+
+**Dependency manifests decide per package.** The planner's 32-PR sample in
+October 2026 traced every full plan to a lockfile/manifest change (4),
+`server/lib/validation.js` (2) or `.github/workflows/ci.yml` (2). A lockfile
+bump that swapped one pure-JS Gmail client still ran the whole suite on three
+Windows shards (~11 min each), although nothing it installs differs by
+platform. A changed `package.json`/`package-lock.json` (root, `server`,
+`client`, `autofixer`) therefore still forces a full plan, but its trigger
+carries `windowsEscalates: 'dependencies'`: `collectPlanInputs()` reads each
+file at `CI_BASE_SHA` (`git show`; the base is inside the depth-2 checkout)
+and in the tree under test, and `classifyDependencyChange()` diffs them.
+Windows escalates when any added, removed or changed lockfile entry (either
+side) has `hasInstallScript`, `os`, `cpu`, `libc`, `optional` or
+`devOptional`, or matches `PLATFORM_PACKAGE_RES` — every `TRUSTED_REBUILDS`
+package (mirrored rather than imported, so the pre-install planner does not
+load the rebuild script's spawn helpers; a test fails on drift) plus the
+native/platform families (`sharp`,
+`@img/*`, `esbuild`, `@rollup/rollup-*`, `rolldown`, `@biomejs/*`,
+`playwright*`, …: dispatchers whose own entry carries no platform
+metadata); when the lockfile's top-level fields or its root entry's non-dependency
+fields (`engines`) change; when a `package.json` field other than metadata
+and the dependency maps changes (`engines`, `overrides`,
+`optionalDependencies`, `scripts`, …); and whenever a version cannot be read
+or parsed (fail closed: a new or deleted manifest, an unavailable base, or no
+verdict at all). Any `.npmrc` change escalates on its own trigger. Otherwise
+Windows runs the contract baseline, and `suite_reasons.windows` names the
+decision and the packages behind it. Replayed against recent server bumps:
+zod, express, undici and the Gmail swap keep the baseline; playwright-core
+and Vitest (rolldown bindings) escalate.
+
+`server/lib/validation.js` and `server/lib/schemaVersions.js` stay full-plan
+triggers for their import fan-out but no longer escalate Windows: they are pure
+schema logic with no spawn, path or filesystem semantics, and neither is in
+`WINDOWS_RISK_RULES`. `Full CI Gate` still requires `windows_mode == 'full'`,
+so none of these baseline plans can stand in for the complete Windows suite a
+release relies on.
 
 **Measured full trigger: `server/services/worktreeManager.js` (#9999).** A
 two-file change to this module expanded through Vitest's import-consumer
