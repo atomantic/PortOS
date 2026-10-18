@@ -1306,8 +1306,21 @@ export function hasSurvivingTrainer(runId) {
  * queued/running, so the `!job || terminal` guard below skips it and the reap
  * path only touches runs that genuinely died.
  */
+/** Postgres never accepted the session: missing database or no listener. */
+const loraDatabaseUnreachable = (err) => {
+  const code = err?.code;
+  if (code === '3D000' || code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT') return true;
+  return /database ".+" does not exist/i.test(String(err?.message ?? ''));
+};
+
 export async function initLoraTraining() {
   const active = await runsDb.listActiveRuns().catch((err) => {
+    // Unreachable database is a skip (hermetic smoke, Postgres down). A query
+    // that reached the database and then failed is a reconcile failure.
+    if (loraDatabaseUnreachable(err)) {
+      console.warn(`⚠️ loraTraining boot reconcile skipped: ${err?.message}`);
+      return [];
+    }
     console.error(`❌ loraTraining boot reconcile failed: ${err?.message}`);
     return [];
   });

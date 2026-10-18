@@ -675,10 +675,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
  * persisted jobs (otherwise they'd miss `completed` events for reloaded jobs).
  */
 const initMediaJobDependentHooks = () => {
-  // LoRA training run records reconcile against the live queue (interrupted
-  // runs → failed) and mirror queue-side cancels — must run after the queue
-  // has loaded its persisted jobs.
-  initLoraTraining().catch(err => logBootstrapFailure('❌ loraTraining init failed', err));
   // Universe Builder needs the media job queue running before it can listen
   // for `completed` events — so initialize the hook here.
   initUniverseBuilderCollectionHook();
@@ -963,6 +959,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // persistence + SSE + temp-file cleanup, and accepting requests with a
     // half-init queue silently corrupts state.
     initMediaJobQueue,
+    // LoRA run records reconcile against the live queue (interrupted runs →
+    // failed) and mirror queue-side cancels. Own step so the smoke boot can
+    // no-op it: the reconcile needs a database the hermetic root does not have.
+    initLoraTraining,
     initMediaJobDependentHooks,
 
     // Sharing: attach chokidar watchers to every registered share bucket so

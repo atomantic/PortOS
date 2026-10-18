@@ -20,8 +20,9 @@
 //   - a test-only database name, so even a reachable Postgres is never the
 //     install's real one;
 //   - PORTOS_SMOKE_BOOT=1, which makes boot skip schedulers, agent
-//     spawning/recovery, crash-recovery passes, peer polling/sync, and other
-//     external integrations (SMOKE_BOOT_DISABLED_STEPS in bootstrapSequence.js).
+//     spawning/recovery, crash-recovery passes (including the LoRA run
+//     reconcile), peer polling/sync, and other external integrations
+//     (SMOKE_BOOT_DISABLED_STEPS in bootstrapSequence.js).
 // The root is removed on every exit path, success or failure.
 
 import { spawn } from 'child_process';

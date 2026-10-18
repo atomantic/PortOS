@@ -47,6 +47,9 @@ export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
     'startBackgroundServices',
     'recoverStuckClassifications',
     'recoverInterruptedRepoClones',
+    // Interrupted-run reconcile needs the real database. A hermetic smoke names
+    // a database that does not exist; skipping it keeps that miss off stderr.
+    'initLoraTraining',
     'initSharing',
     'recoverCreativeDirectorProjects'
   ]),
@@ -353,9 +356,12 @@ export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcilePro
  *      Interrupted clone recovery is awaited so the first links request cannot
  *      observe an orphaned `cloning` state; inbox recovery remains best-effort
  *      in the background because nothing below reads its result.
- *   4. `initMediaJobQueue` awaited before `initMediaJobDependentHooks` — the
- *      hooks must be listening before the queue replays `completed` events for
- *      reloaded jobs, and before a route can enqueue against a half-init queue.
+ *   4. `initMediaJobQueue` awaited before `initLoraTraining` and
+ *      `initMediaJobDependentHooks` — the reconcile and the hooks read the
+ *      reloaded queue, and no route may enqueue against a half-init queue.
+ *      The lora reconcile is best-effort (a down database must not fail boot)
+ *      and smoke-disabled. The other hooks must be listening before the queue
+ *      replays `completed` events for reloaded jobs.
  *   5. The database phase before `startListening`, so no request can land on a
  *      partially-migrated install.
  *   6. The series-cover backfill MODULE is awaited but the backfill RUN is not:
@@ -372,6 +378,7 @@ export const runPostRouteSequence = ({
   recoverStuckClassifications,
   recoverInterruptedRepoClones,
   initMediaJobQueue,
+  initLoraTraining,
   initMediaJobDependentHooks,
   initSharing,
   recoverCreativeDirectorProjects,
@@ -390,6 +397,7 @@ export const runPostRouteSequence = ({
       return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
     })
     .then(() => initMediaJobQueue())
+    .then(() => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))
     .then(() => initMediaJobDependentHooks())
     .then(() => {
       // Sharing attaches chokidar watchers + drains the offline manifest

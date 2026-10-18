@@ -29,7 +29,8 @@ import {
   runDatabasePhase,
   runPostRouteSequence,
   runPostListenSequence,
-  gateStepsForSmokeBoot
+  gateStepsForSmokeBoot,
+  SMOKE_BOOT_DISABLED_STEPS
 } from './bootstrapSequence.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -660,6 +661,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       recoverStuckClassifications: step('recoverStuckClassifications', () => Promise.resolve()),
       recoverInterruptedRepoClones: step('recoverInterruptedRepoClones', () => Promise.resolve()),
       initMediaJobQueue: step('initMediaJobQueue', () => Promise.resolve()),
+      initLoraTraining: step('initLoraTraining', () => Promise.resolve()),
       initMediaJobDependentHooks: step('initMediaJobDependentHooks'),
       initSharing: step('initSharing', () => Promise.resolve()),
       recoverCreativeDirectorProjects: step('recoverCreativeDirectorProjects', () => Promise.resolve()),
@@ -683,6 +685,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'recoverStuckClassifications',
       'recoverInterruptedRepoClones',
       'initMediaJobQueue',
+      'initLoraTraining',
       'initMediaJobDependentHooks',
       'initSharing',
       'recoverCreativeDirectorProjects',
@@ -698,6 +701,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder);
     await runPostRouteSequence(gateStepsForSmokeBoot(deps, 'postRoute', true));
+    expect(SMOKE_BOOT_DISABLED_STEPS.postRoute).toContain('initLoraTraining');
     expect(recorder.calls).toEqual([
       'ensureSelf',
       'initSyncLog',
@@ -708,6 +712,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'backfillSeriesCoverImages',
       'startListening'
     ]);
+    expect(recorder.calls).not.toContain('initLoraTraining');
     expect(deps.onFatal).not.toHaveBeenCalled();
   });
 
