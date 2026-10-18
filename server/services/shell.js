@@ -808,8 +808,13 @@ export function getLastInputAt(sessionId) {
 export function resizeSession(sessionId, cols, rows) {
   const session = shellSessions.get(sessionId);
   if (session) {
-    session.pty.resize(cols, rows);
-    return true;
+    try {
+      session.pty.resize(cols, rows);
+      return true;
+    } catch (err) {
+      console.warn(`🐚 Failed to resize shell session ${sessionId}: ${err.message}`);
+      return false;
+    }
   }
   return false;
 }

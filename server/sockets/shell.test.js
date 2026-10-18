@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const createShellSession = vi.fn(() => 'sess-1');
+const resizeSession = vi.fn(() => true);
 vi.mock('../services/shell.js', () => ({
   createShellSession,
+  resizeSession,
   submitToSession: vi.fn(),
   attachSession: vi.fn(),
   detachSocketSessions: vi.fn()
@@ -33,5 +35,28 @@ describe('shell:start payload validation', () => {
     await handlers['shell:start'](undefined);
     expect(createShellSession).toHaveBeenCalledTimes(1);
     expect(socket.emit).toHaveBeenCalledWith('shell:started', { sessionId: 'sess-1' });
+  });
+});
+
+describe('shell:resize handler', () => {
+  beforeEach(() => resizeSession.mockClear());
+
+  it('resizes session when resizeSession succeeds', () => {
+    resizeSession.mockReturnValueOnce(true);
+    const { handlers, socket } = setup();
+    handlers['shell:resize']({ sessionId: 'sess-1', cols: 100, rows: 30 });
+    expect(resizeSession).toHaveBeenCalledWith('sess-1', 100, 30);
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+
+  it('emits shell:error when resizeSession returns false', () => {
+    resizeSession.mockReturnValueOnce(false);
+    const { handlers, socket } = setup();
+    handlers['shell:resize']({ sessionId: 'sess-1', cols: 100, rows: 30 });
+    expect(resizeSession).toHaveBeenCalledWith('sess-1', 100, 30);
+    expect(socket.emit).toHaveBeenCalledWith('shell:error', {
+      sessionId: 'sess-1',
+      error: 'Session not found or resize failed'
+    });
   });
 });
