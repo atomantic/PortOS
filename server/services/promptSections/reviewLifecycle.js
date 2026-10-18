@@ -1084,6 +1084,14 @@ export const LEAVE_PR_OPEN_STEP = (step, jiraTracked = false) => `${step}. **Lea
  *   forge command to show beside the primary merge command.
  * @returns {{lines: string[], nextStep: number}}
  */
+/**
+ * The post-push attestation step (GitHub only — it posts a commit status).
+ * Unnumbered like the auto-merge handoff above it, so every consumer's step
+ * numbers hold; it belongs between the push and the CI wait because the
+ * status must exist before the impact job plans the run.
+ */
+const PREGATE_ATTESTATION_STEP = '**Pregate attestation (GitHub, right after the push, before waiting for CI):** from the checkout you pushed, run `node scripts/pregate-attest.js`. It posts a `pregate` commit status bound to the exact tree your green `npm run pregate` validated, and the pull request\'s CI then skips the stages that receipt attests to (docs/GITHUB_ACTIONS.md "Pregate attestation"). If it refuses — no receipt, a receipt that did not pass, a tree that changed after pregate, an unpushed commit — do not rerun pregate just to attest and do not retry the post: say why it refused in your completion summary and wait for full CI as before. A refusal is never a failure of the work.';
+
 export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>', forge = 'github', alreadyMergedHint = ' (a saved `/do:pr` default can merge it for you)', localReviewers = [], localReviewRequired = false, reviewRecheckReviewers = [], mergeEquivalentLine = null, deleteBranch = true }) {
   const gh = forge !== 'gitlab';
   const glab = forge !== 'github';
@@ -1126,6 +1134,7 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
     localReviewMergeGuard || null,
     localReviewAfterCodeFix ? `**Code-changing CI fix gate:**${localReviewAfterCodeFix}` : null,
     gh ? buildAutoMergeHandoffInstructions(prRef) : null,
+    gh ? PREGATE_ATTESTATION_STEP : null,
     `${startStep}. **Wait for CI to finish**: ${checksCmd}. "No checks reported" is AMBIGUOUS — a just-opened PR reports it while checks are still attaching, and merging on it races the CI this gate exists to wait for. Treat it as green ONLY when the repo genuinely has no CI (${gh ? '`gh workflow list` is empty / nothing in `.github/workflows` triggers on pull_request, and no external status check is configured' : 'no `.gitlab-ci.yml` and no pipeline is configured'}). If CI IS expected, wait 30s and re-check for up to 5 minutes — and if it still hasn't attached, **leave the PR open and say so**; never merge on checks that were expected but never appeared.`,
     `${startStep + 1}. **Clear whatever blocks the merge, then re-check.** A conflict-free branch may merge behind the base when required checks pass for its current head and configured reviews are satisfied. Base movement alone does not require rebasing or restarting CI. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk; after any resulting head change, rerun affected validation and required reviews/checks. If a check failed, read the failing job's log (${gh ? `\`gh run view --log-failed\`${glab ? ' on GitHub, `glab ci trace` on GitLab' : ''}` : '`glab ci trace`'}), fix the cause here, run the project's tests, commit (\`fix:\` prefix, no Co-Authored-By), push.${reviewRecheckAfterCodeFix} Then go back to the previous step — cap this at 5 rounds. If ${mergeableCmd}, \`git fetch origin\`, rebase onto the base branch, resolve the conflicts keeping BOTH sides' intent,${rebaseReviewSuffix} re-run the tests, \`git push --force-with-lease\`, and re-check.`,
     `${startStep + 2}. **Merge** ${gh ? 'with these flags, replacing <verified-head> with the exact head whose required CI and configured reviews passed' : 'with exactly these flags, nothing else'} — a true merge commit keeps the branch tip in the base branch's history so automated worktree cleanup can prove the branch is merged, ${gh ? 'unless the verified GitHub auto-merge handoff above already completed this run' : 'and any merge-deferral flag leaves the PR open after you exit'}. If it is already merged${alreadyMergedHint}, skip to the next step:`,
