@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
-import MediaImage from '../MediaImage';
+import CatalogImagePreview from './CatalogImagePreview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
 import CatalogMediaTile from './CatalogMediaTile';
@@ -31,7 +31,7 @@ const universeCanonPath = (universeRef) => (universeRef?.refId
 function PointerSheetFigure({ variant, filename }) {
   return (
     <figure className="rounded border border-port-border overflow-hidden bg-port-bg">
-      <MediaImage src={`/data/image-refs/${filename}`} alt={`${variant} reference sheet`}
+      <CatalogImagePreview src={`/data/image-refs/${encodeURIComponent(filename)}`} fallbackSrc={`/data/images/${encodeURIComponent(filename)}`} alt={`${variant} reference sheet`}
         className="w-full object-contain max-h-[420px]" />
       <figcaption className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border">
         {variant}

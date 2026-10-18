@@ -58,6 +58,7 @@ const { detailsOf } = vi.hoisted(() => ({
 
 vi.mock('../services/apiCatalog', () => ({
   getCatalogIngredientDetails: vi.fn(async () => detailsOf(CHAR_FIXTURE)),
+  listCatalogRelatedImages: vi.fn(async () => ({ items: [], total: 0, limit: 24, offset: 0 })),
   updateCatalogIngredient: vi.fn(),
   deleteCatalogIngredient: vi.fn(),
   linkCatalogIngredientRelation: vi.fn(),
@@ -134,7 +135,8 @@ vi.mock('../components/TagPicker', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
-import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
+import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
+import { getCatalogIngredientDetails, listCatalogRelatedImages, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
 import toast from '../components/ui/Toast';
 
 const renderPage = async (path = '/catalog/character/cat-chr-1') => {
@@ -153,6 +155,7 @@ const renderPage = async (path = '/catalog/character/cat-chr-1') => {
 
 beforeEach(() => {
   getCatalogIngredientDetails.mockImplementation(async () => detailsOf(CHAR_FIXTURE));
+  listCatalogRelatedImages.mockReset().mockResolvedValue({ items: [], total: 0, limit: 24, offset: 0 });
   updateCatalogIngredient.mockReset();
   unlinkCatalogIngredientRelation.mockReset();
   detachCatalogIngredientMedia.mockReset();
@@ -892,6 +895,127 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     // Sheets don't carry the profile form or the general media panel.
     expect(screen.queryByLabelText('Name')).toBeNull();
     expect(screen.queryByAltText('mood.png')).toBeNull();
+  });
+
+  it.each([
+    ['character', '/casting/example/profile'],
+    ['place', '/environments/example/profile'],
+    ['object', '/objects/example/profile'],
+  ])('shows the %s cover on its profile with an accessible enlarged view', async (type, route) => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
+      id: 'example', type, name: 'Example subject', payload: { primaryImageRef: 'cover.png' },
+    }));
+    await renderPage(route);
+    expect(screen.getByAltText('Example subject cover')).toHaveAttribute('src', '/data/images/cover.png');
+    fireEvent.click(screen.getByRole('button', { name: 'Enlarge Example subject cover' }));
+    const preview = screen.getByRole('dialog', { name: 'Example subject cover' });
+    expect(within(preview).getByAltText('Example subject cover')).toHaveAttribute('data-fallback-src', '/data/image-refs/cover.png');
+    fireEvent.click(within(preview).getByRole('button', { name: 'Close image preview' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  });
+
+  it('shows a primary canon reference omitted from imageRefs and prefers a selected portrait for the cover', async () => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...HERO, payload: { primaryImageRef: 'primary.png' } }),
+      media: [{ kind: 'portrait', mediaKey: 'chosen.png' }, { kind: 'reference', mediaKey: 'chosen.png' }],
+    });
+    const page = await renderPage('/casting/cat-chr-hero/profile');
+    expect(screen.getByAltText('Example Hero cover')).toHaveAttribute('src', '/data/images/chosen.png');
+    page.unmount();
+    await renderPage('/casting/cat-chr-hero/references');
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/images/primary.png');
+    expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/images/chosen.png')).toHaveLength(1);
+  });
+
+  it('loads related renders only on the media tab, deduplicates known images and retries a failed next page', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: { imageRefs: ['known.png'] } }));
+    const profile = await renderPage('/casting/cat-chr-hero/profile');
+    expect(listCatalogRelatedImages).not.toHaveBeenCalled();
+    profile.unmount();
+    listCatalogRelatedImages
+      .mockResolvedValueOnce({ items: [
+        { filename: 'known.png', association: 'reference-input' },
+        { filename: 'render-one.png', association: 'reference-input', missing: true, provenanceStatus: 'legacy-unverified' },
+        { filename: 'render-omitted.png', association: 'requested-reference', provenanceStatus: 'not-supplied' },
+      ], total: 4 })
+      .mockRejectedValueOnce(new Error('Related render lookup unavailable'))
+      .mockResolvedValueOnce({ items: [{ filename: 'render-two.png', association: 'compiled-reference', provenanceStatus: 'provider-use-unverified' }], total: 4 });
+    await renderPage('/casting/cat-chr-hero/references');
+    const related = screen.getByRole('region', { name: 'Related renders' });
+    expect(within(related).getAllByRole('img')).toHaveLength(2);
+    expect(within(related).getByText('Image file unavailable')).toBeInTheDocument();
+    expect(within(related).getByText(/Legacy metadata · provider use unconfirmed/)).toBeInTheDocument();
+    expect(within(related).getByText('Not supplied to the provider')).toBeInTheDocument();
+    expect(within(related).getByText(/appearance has not been verified/)).toBeInTheDocument();
+    fireEvent.click(within(related).getByRole('button', { name: 'Load more related renders' }));
+    expect(await within(related).findByRole('alert')).toHaveTextContent('Related render lookup unavailable');
+    fireEvent.click(within(related).getByRole('button', { name: 'Retry loading' }));
+    expect(await within(related).findByAltText('Example Hero related render render-two.png')).toBeInTheDocument();
+    expect(within(related).getByText('Compiled reference request')).toBeInTheDocument();
+    expect(within(related).getByText('Requested input · provider use unconfirmed')).toBeInTheDocument();
+    expect(within(related).getAllByRole('img')).toHaveLength(3);
+    expect(listCatalogRelatedImages).toHaveBeenLastCalledWith('cat-chr-hero', expect.objectContaining({ limit: 24, offset: 3, silent: true }));
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  });
+
+  it('drops a late related-image response after switching catalog records', async () => {
+    let resolveFirst;
+    listCatalogRelatedImages.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce({ items: [{ filename: 'second-render.png', association: 'reference-input' }], total: 1 });
+    getCatalogIngredientDetails.mockImplementation(async (id) => detailsOf({ ...HERO, id }));
+    const { router } = await renderPage('/casting/first/references');
+    const firstSignal = listCatalogRelatedImages.mock.calls[0][1].signal;
+    await act(async () => { await router.navigate('/casting/second/references'); });
+    expect(await screen.findByAltText('Example Hero related render second-render.png')).toBeInTheDocument();
+    await act(async () => { resolveFirst({ items: [{ filename: 'stale.png', association: 'reference-input' }], total: 1 }); });
+    expect(firstSignal.aborted).toBe(true);
+    expect(screen.queryByAltText('Example Hero related render stale.png')).not.toBeInTheDocument();
+  });
+
+  it('stores preview identity in the URL and browser Back closes its single dialog', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: { imageRefs: ['one.png', 'two.png'] } }));
+    const { router } = await renderPage('/casting/cat-chr-hero/references');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Enlarge Example Hero canon reference' })[0]);
+    expect(new URLSearchParams(router.state.location.search).get('preview')).toBe('catalog-image:images:one.png');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await act(async () => { await router.navigate(-1); });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/casting/cat-chr-hero/references');
+  });
+
+  it('opens a direct image link beyond loaded results and preserves its static mount', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: {} }));
+    await renderPage('/casting/cat-chr-hero/references?preview=catalog-image%3Aimage-refs%3Aunlisted.png');
+    const dialog = await screen.findByRole('dialog', { name: 'Example Hero image unlisted.png' });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(within(dialog).getByRole('img')).toHaveAttribute('src', '/data/image-refs/unlisted.png');
+    expect(within(dialog).getByRole('img')).toHaveAttribute('data-fallback-src', '/data/images/unlisted.png');
+  });
+
+  it.each(['catalog-image:images:../private.png', 'catalog-image:videos:frame.png', 'https://example.com/image.png'])(
+    'does not resolve a preview outside a local image basename: %s', async (preview) => {
+      await renderPage(`/casting/cat-chr-hero/references?preview=${encodeURIComponent(preview)}`);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    },
+  );
+
+  it('refreshes related renders only when the source image set changes', async () => {
+    listCatalogRelatedImages.mockResolvedValueOnce({ items: [], total: 0 })
+      .mockResolvedValueOnce({ items: [{ filename: 'new-render.png', association: 'reference-input' }], total: 1 })
+      .mockResolvedValueOnce({ items: [], total: 0 });
+    const { rerender } = render(<CatalogRelatedImages ingredientId="example" name="Example" excludedFilenames={['one.png']} />);
+    expect(await screen.findByText('No renders with recorded links to this item’s images.')).toBeInTheDocument();
+    rerender(<CatalogRelatedImages ingredientId="example" name="Example" excludedFilenames={['one.png', 'one.png']} />);
+    expect(listCatalogRelatedImages).toHaveBeenCalledTimes(1);
+    rerender(<CatalogRelatedImages ingredientId="example" name="Example" excludedFilenames={['one.png', 'two.png']} />);
+    expect(await screen.findByAltText('Example related render new-render.png')).toBeInTheDocument();
+    rerender(<CatalogRelatedImages ingredientId="example" name="Example" excludedFilenames={['two.png', 'one.png']} />);
+    expect(listCatalogRelatedImages).toHaveBeenCalledTimes(2);
+    rerender(<CatalogRelatedImages ingredientId="example" name="Example" excludedFilenames={['one.png']} />);
+    expect(await screen.findByText('No renders with recorded links to this item’s images.')).toBeInTheDocument();
+    expect(screen.queryByAltText('Example related render new-render.png')).not.toBeInTheDocument();
+    expect(listCatalogRelatedImages).toHaveBeenCalledTimes(3);
   });
 
   it('shows existing canon images on References even when no catalog media is attached', async () => {

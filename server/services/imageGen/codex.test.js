@@ -432,7 +432,10 @@ describe('codex provider — image harvest', () => {
     const completedListener = vi.fn();
     imageGenEvents.on('completed', completedListener);
 
-    const job = await codex.generateImage({ prompt: 'a fox' });
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'source.png'), fakePngBytes);
+    await writeFile(join(FAKE_IMAGES_DIR, 'reference.png'), fakePngBytes);
+    const job = await codex.generateImage({ prompt: 'a fox', initImagePath: 'source.png', referenceImagePaths: ['reference.png', 'missing.png'] });
     const child = spawnCalls[0].child;
 
     // Drive the session id banner on stderr (codex prints it there).
@@ -462,6 +465,10 @@ describe('codex provider — image harvest', () => {
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
+    expect(JSON.parse(await readFile(sidecar, 'utf8'))).toMatchObject({
+      inputProvenance: 'provider-inputs',
+      initImageFilename: 'source.png', referenceImageFilenames: ['reference.png'],
+    });
   });
 
   it('crops an off-aspect frame to the requested ratio and records it in the sidecar', async () => {

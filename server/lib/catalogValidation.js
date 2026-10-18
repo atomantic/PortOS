@@ -288,6 +288,11 @@ export const catalogRevisionQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 }).strict();
 
+export const catalogRelatedImagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(24),
+  offset: z.coerce.number().int().min(0).max(1000000).default(0),
+}).strict();
+
 // /ingredients/:id/revisions/:revisionId/restore — re-applies a prior
 // revision's name/payload/tags. Optional `source`/`actor` label the NEW
 // revision the restore itself produces (defaults to 'user').

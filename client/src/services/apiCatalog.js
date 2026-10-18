@@ -113,6 +113,11 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
 export const getCatalogIngredientDetails = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/details`, options);
 
+export const listCatalogRelatedImages = (id, { limit = 24, offset = 0, ...options } = {}) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request(`/catalog/ingredients/${enc(id)}/related-images?${params}`, options);
+};
+
 // --- Tags (canonical taxonomy) ------------------------------------------
 
 // Autocomplete over the canonical catalog_tags table. `q` is an optional

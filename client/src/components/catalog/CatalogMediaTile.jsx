@@ -1,6 +1,6 @@
 import { Mic, Star, X } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
-import MediaImage from '../MediaImage';
+import CatalogImagePreview from './CatalogImagePreview';
 
 // One catalog media attachment tile. Images render via <MediaImage> (which
 // shows a "syncing" placeholder when the asset hasn't arrived — the same
@@ -21,7 +21,7 @@ export default function CatalogMediaTile({
   return (
     <div className="relative group rounded border border-port-border overflow-hidden bg-port-bg">
       {isImage && (
-        <MediaImage src={`/data/images/${m.mediaKey}`} alt={label || m.caption || m.kind}
+        <CatalogImagePreview src={`/data/images/${encodeURIComponent(m.mediaKey)}`} fallbackSrc={`/data/image-refs/${encodeURIComponent(m.mediaKey)}`} alt={label || m.caption || m.kind}
           className={contain ? 'w-full object-contain max-h-[420px]' : isPortrait ? 'w-full max-w-[180px] aspect-square object-cover' : 'w-full aspect-square object-cover'} />
       )}
       {isAudio && (

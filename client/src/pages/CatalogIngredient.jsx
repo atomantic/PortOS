@@ -52,6 +52,8 @@ import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
+import CatalogImagePreview, { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreview';
+import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
@@ -63,12 +65,13 @@ import GenericIngredientFields from '../components/GenericIngredientFields';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 import {
-  libraryForPathname, ingredientPath, resolveDetailTab, detailTabPath,
+  libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
   isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
+import { listSheetPointers } from '../lib/sheetPointers';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -603,6 +606,11 @@ export default function CatalogIngredient() {
     : [];
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
+  const coverUrl = ingredientCoverUrl({
+    ...record,
+    thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || record.thumbnailKey,
+    payload,
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference')?.mediaKey });
   const renderBlockedReason = (subject) => (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving
@@ -610,6 +618,7 @@ export default function CatalogIngredient() {
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
+    <CatalogImagePreviewProvider key={record.id} name={record.name}>
     <section className="h-full overflow-y-auto p-4 md:p-6">
       <UnsavedChangesConfirm
         guard={routeGuard}
@@ -618,7 +627,7 @@ export default function CatalogIngredient() {
         label={`Discard unsaved changes to ${record.name || 'this ingredient'}`}
         onDiscard={discardAndExit}
       />
-      <div className="max-w-4xl mx-auto space-y-5">
+      <div className="w-full min-w-0 space-y-5">
         <header className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-start gap-3 min-w-0">
             <Sparkles className="w-6 h-6 text-port-accent mt-1 flex-shrink-0" aria-hidden="true" />
@@ -634,7 +643,7 @@ export default function CatalogIngredient() {
                   {record.type}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mt-1 font-mono">{record.id}</p>
+              <p className="text-xs text-gray-500 mt-1 font-mono break-all">{record.id}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -690,29 +699,42 @@ export default function CatalogIngredient() {
         {activeTab === 'profile' && (
           <>
             <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
-              <div>
-                <label htmlFor="ingredient-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
-                <input id="ingredient-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={200}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+              <div className={coverUrl ? 'grid grid-cols-1 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] gap-5 items-start' : ''}>
+                {coverUrl && (
+                  <figure className="min-w-0 rounded-lg border border-port-border bg-port-bg overflow-hidden">
+                    <CatalogImagePreview key={coverUrl} src={coverUrl} fallbackSrc={coverUrl.replace('/data/images/', '/data/image-refs/')}
+                      alt={`${record.name || 'Ingredient'} cover`} className="w-full max-h-80 object-contain" loading="eager" />
+                    <figcaption className="text-xs text-gray-400 p-2">Cover image · select to enlarge</figcaption>
+                  </figure>
+                )}
+                <div className="min-w-0 space-y-4">
+                  <div>
+                    <label htmlFor="ingredient-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
+                    <input id="ingredient-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={200}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+                  </div>
+                  <div>
+                    <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                      Tags
+                    </label>
+                    <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
+                      placeholder="mentor, antagonist, season-1" />
+                  </div>
+                </div>
               </div>
-              <div>
-                <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-                  Tags
-                </label>
-                <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
-                  placeholder="mentor, antagonist, season-1" />
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+                {isUserType
+                  ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
+                  : sections
+                  ? sections.map((section) => (
+                      <SheetSection key={section.title} title={section.title}
+                        fields={section.fields} payload={payload} onChange={updatePayload} />
+                    ))
+                  : fields.map(([key, label, kind]) => (
+                      <SheetField key={key} fieldKey={key} label={label} kind={kind}
+                        value={payload[key] ?? ''} onChange={updatePayload} />
+                    ))}
               </div>
-              {isUserType
-                ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
-                : sections
-                ? sections.map((section) => (
-                    <SheetSection key={section.title} title={section.title}
-                      fields={section.fields} payload={payload} onChange={updatePayload} />
-                  ))
-                : fields.map(([key, label, kind]) => (
-                    <SheetField key={key} fieldKey={key} label={label} kind={kind}
-                      value={payload[key] ?? ''} onChange={updatePayload} />
-                  ))}
 
               {/* Structured array-field editors (aliases / color palette / stats).
                   Driven by the type's registry-declared `editableListFields`; the
@@ -807,8 +829,8 @@ export default function CatalogIngredient() {
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             media={tabs ? media.filter(isReferenceTabRow) : media}
-            canonImageRefs={Array.isArray(payload.imageRefs) ? payload.imageRefs.filter((ref) =>
-              !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref)) : []}
+            canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
+              !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
             primaryImageRef={payload.primaryImageRef}
             missingMedia={missingMedia}
             onAttach={handleAttachMedia}
@@ -824,6 +846,16 @@ export default function CatalogIngredient() {
           />
         )}
 
+        {(activeTab === 'references' || activeTab === 'images' || (!tabs && activeTab === 'profile')) && (
+          <CatalogRelatedImages key={record.id} ingredientId={record.id} name={record.name}
+            excludedFilenames={[
+              payload.primaryImageRef,
+              ...listSheetPointers(payload).map(({ filename }) => filename),
+              ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : []),
+              ...media.filter((m) => m.kind === 'portrait' || m.kind === 'reference').map((m) => m.mediaKey),
+            ]} />
+        )}
+
         {activeTab === 'profile' && (
           <RevisionsPanel
             revisions={revisions}
@@ -834,6 +866,7 @@ export default function CatalogIngredient() {
         )}
       </div>
     </section>
+    </CatalogImagePreviewProvider>
   );
 }
 
@@ -1383,7 +1416,14 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
   const [armedDetach, setArmedDetach] = useState(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
-  const others = list.filter((m) => m.kind !== 'portrait');
+  const seenImageKeys = new Set(portrait ? [portrait.mediaKey] : []);
+  const others = list.filter((m) => {
+    if (m.kind === 'portrait') return false;
+    if (m.kind !== 'reference') return true;
+    if (seenImageKeys.has(m.mediaKey)) return false;
+    seenImageKeys.add(m.mediaKey);
+    return true;
+  });
   const canonImages = [...new Set(canonImageRefs.filter((ref) => typeof ref === 'string' && ref.trim()))];
 
   const doUpload = async (file) => {
@@ -1483,7 +1523,7 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
       )}
 
       {others.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
           {others.map((m) => (
             <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
               onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
@@ -1496,10 +1536,10 @@ function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia,
         <div className="mt-3 space-y-2">
           <h3 className="text-xs font-semibold text-gray-300">Canon images</h3>
           <p className="text-xs text-gray-500">Existing canon references, shown read-only.</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
             {canonImages.map((filename) => (
               <figure key={filename} className="min-w-0 rounded border border-port-border overflow-hidden bg-port-bg">
-                <MediaImage src={`/data/images/${encodeURIComponent(filename)}`} alt={`${genName} canon reference`}
+                <CatalogImagePreview src={`/data/images/${encodeURIComponent(filename)}`} alt={`${genName} canon reference`}
                   fallbackSrc={`/data/image-refs/${encodeURIComponent(filename)}`}
                   className="w-full aspect-square object-contain" />
                 <figcaption className="text-xs text-gray-400 p-2 break-words">

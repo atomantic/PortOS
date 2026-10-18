@@ -35,6 +35,7 @@ import {
   catalogBulkEntrySchema,
   catalogExportQuerySchema,
   catalogRevisionQuerySchema,
+  catalogRelatedImagesQuerySchema,
   catalogRevisionRestoreSchema,
   catalogUrlIngestSchema,
   catalogFileIngestSchema,
@@ -302,6 +303,16 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     media,                                      // array of attachments
     missingMedia,                               // array of { mediaKey, ... }
   });
+}));
+
+// Lazy, bounded provenance lookup for the detail page's References tab.
+router.get('/ingredients/:id/related-images', asyncHandler(async (req, res) => {
+  const pagination = validateRequest(catalogRelatedImagesQuerySchema, req.query);
+  const ingredient = await catalogDB.getIngredient(req.params.id);
+  if (!ingredient) throw new ServerError('Ingredient not found', { status: 404 });
+  const media = await catalogDB.listMediaForIngredient(ingredient.id);
+  const { listRelatedImages } = await import('../services/catalogRelatedImages.js');
+  res.json(await listRelatedImages(ingredient, media, pagination));
 }));
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
