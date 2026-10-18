@@ -566,20 +566,33 @@ function stageTerminalTransition(job, apply, acknowledge) {
     completedAt: target.completedAt, progress: target.progress, statusMsg: target.statusMsg, videoFailure: target.videoFailure };
   pendingTransitions.set(job, acknowledge);
 }
+// A momentarily locked destination (concurrent reader, AV scan) clears within
+// milliseconds, so one retry after a short pause can land. ENOSPC, EACCES and
+// a blocked writer cannot, so they surface on the first attempt (#12026).
+const TERMINAL_PERSIST_RETRY_MS = 250;
+const isTransientPersistError = (error) => error?.code === 'EBUSY' || error?.code === 'EAGAIN'
+  || (process.platform === 'win32' && error?.code === 'EPERM');
 async function persistTerminalTransition(job) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await persist();
-      return;
-    } catch (_error) {
-      job.persistenceError = true;
-      mediaJobEvents.emit('changed', {});
-      if (attempt === 2) {
-        throw new ServerError('Media outcome is awaiting storage recovery; restore writable storage and flush the queue', {
-          status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
-        });
-      }
-    }
+  const noteFailure = () => {
+    job.persistenceError = true;
+    mediaJobEvents.emit('changed', {});
+  };
+  const storageRecovery = () => new ServerError('Media outcome is awaiting storage recovery; restore writable storage and flush the queue', {
+    status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
+  });
+  try {
+    await persist();
+    return;
+  } catch (error) {
+    noteFailure();
+    if (!isTransientPersistError(error)) throw storageRecovery();
+  }
+  await sleep(TERMINAL_PERSIST_RETRY_MS);
+  try {
+    await persist();
+  } catch (_error) {
+    noteFailure();
+    throw storageRecovery();
   }
 }
 // Set when the boot read of JOBS_FILE was untrustworthy (#4115). Every persist()

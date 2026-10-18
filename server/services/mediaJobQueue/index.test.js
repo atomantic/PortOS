@@ -3093,6 +3093,55 @@ describe('durable remote source-audio settlement', () => {
     }
   });
 
+  // Terminal persist retry policy (#12026): a transient lock earns one retry
+  // after a short pause; a non-transient failure surfaces on the first attempt.
+  const failSettlementTerminalWrites = (job, code, failures) => {
+    const write = atomicWriteSpy.getMockImplementation();
+    // Attempts up to and including the first terminal write that lands; the
+    // archive snapshot that follows publication is not a retry.
+    const attempts = [];
+    let landed = false;
+    atomicWriteSpy.mockImplementation((path, data) => {
+      if (!landed && data?.jobs?.some(entry => entry.id === job.jobId && entry.status === 'completed')) {
+        attempts.push(Date.now());
+        if (attempts.length <= failures) return Promise.reject(Object.assign(new Error(`fixture ${code}`), { code }));
+        landed = true;
+      }
+      return write(path, data);
+    });
+    return { attempts, restore: () => atomicWriteSpy.mockImplementation(write) };
+  };
+
+  it('surfaces a non-transient terminal persist failure after a single attempt', async () => {
+    const job = await startAudioJob();
+    const { attempts, restore } = failSettlementTerminalWrites(job, 'ENOSPC', Infinity);
+    try {
+      videoGenEvents.emit('completed', { generationId: job.jobId, remoteInputsDisposable: true });
+      await waitFor(() => mediaJobQueue.getJob(job.jobId).persistenceError === true);
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(attempts).toHaveLength(1);
+      expect(persistedJobs().find(entry => entry.id === job.jobId).status).toBe('running');
+    } finally {
+      restore();
+      await mediaJobQueue.flushMediaJobQueue();
+    }
+  });
+
+  it('retries a transient EBUSY terminal persist once after the backoff', async () => {
+    const job = await startAudioJob();
+    const { attempts, restore } = failSettlementTerminalWrites(job, 'EBUSY', 1);
+    try {
+      videoGenEvents.emit('completed', { generationId: job.jobId, remoteInputsDisposable: true });
+      await waitFor(() => persistedJobs().find(entry => entry.id === job.jobId)?.status === 'completed');
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1] - attempts[0]).toBeGreaterThanOrEqual(200);
+      await waitFor(() => mediaJobQueue.getJob(job.jobId).persistenceError === undefined);
+    } finally {
+      restore();
+      await mediaJobQueue.flushMediaJobQueue();
+    }
+  });
+
   it('preserves replay bytes across a failed terminal write and releases them on storage recovery', async () => {
     const job = await startAudioJob();
     const write = atomicWriteSpy.getMockImplementation();
@@ -3555,13 +3604,15 @@ describe('backup snapshot admission for media completion', () => {
     writeFileSync(join(tempDataDir, 'videos', `${jobId}.mp4`), 'synthetic clip');
     videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4` });
   };
-  const failTerminalWrites = (times) => {
+  // A terminal write fails `times` times with `code`: ENOSPC surfaces on the
+  // first attempt, EBUSY earns one retry after the backoff (#12026).
+  const failTerminalWrites = (times, code = 'ENOSPC') => {
     const failures = { remaining: times, count: 0 };
     atomicWriteSpy.mockImplementation(async (path, data) => {
       if (failures.remaining > 0 && data?.jobs?.some((j) => j.status === 'completed')) {
         failures.remaining -= 1;
         failures.count += 1;
-        throw new Error('disk full');
+        throw Object.assign(new Error(code === 'ENOSPC' ? 'disk full' : 'destination busy'), { code });
       }
       return storageWrite(path, data);
     });
@@ -3629,7 +3680,7 @@ describe('backup snapshot admission for media completion', () => {
 
   it('retries a failed terminal write inside the same admission and releases it after final failure', async () => {
     const retried = await startJob();
-    failTerminalWrites(1);
+    failTerminalWrites(1, 'EBUSY');
     renderFinishes(retried);
     await waitFor(() => rows.has(retried));
     expect(capture(retried).queueStatus).toBe('completed');
@@ -3638,11 +3689,11 @@ describe('backup snapshot admission for media completion', () => {
 
   it('releases admission after a terminal write fails for good, leaving no half-published outcome', async () => {
     const failed = await startJob();
-    const failures = failTerminalWrites(3);
+    const failures = failTerminalWrites(1);
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderFinishes(failed);
     try {
-      await waitFor(() => failures.count === 3);
+      await waitFor(() => failures.count === 1);
       await settle();
       expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(`media-job [${failed.slice(0, 8)}] terminal handler failed:`));
       // The abandoned publication holds nothing: a cut opens at once and sees no half-written outcome.
@@ -3656,9 +3707,9 @@ describe('backup snapshot admission for media completion', () => {
 
   it('recovers an abandoned completion only under admission, never from a write landing mid-cut', async () => {
     const recovered = await startJob();
-    const failures = failTerminalWrites(3);
+    const failures = failTerminalWrites(1);
     renderFinishes(recovered);
-    await waitFor(() => failures.count === 3);
+    await waitFor(() => failures.count === 1);
     await settle();
     const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
     // Storage is writable again and an unrelated queue write lands during the cut.
@@ -3674,9 +3725,9 @@ describe('backup snapshot admission for media completion', () => {
   });
   it('shutdown flush waits on a recovery commit held behind an open cut and reports its failure on timeout', async () => {
     const recovered = await startJob();
-    const failures = failTerminalWrites(3);
+    const failures = failTerminalWrites(1);
     renderFinishes(recovered);
-    await waitFor(() => failures.count === 3);
+    await waitFor(() => failures.count === 1);
     await settle();
     const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
     await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'unrelated' } });
