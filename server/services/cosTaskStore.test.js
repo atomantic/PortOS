@@ -30,6 +30,7 @@ const mock = vi.hoisted(() => ({
   parseCalls: 0,
   // When set, atomicWrite rejects with it (a write that dies before the rename).
   atomicFailure: null,
+  afterWrite: null,
   state: null,
   events: [],
   // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
@@ -61,6 +62,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
       if (mock.atomicFailure) throw mock.atomicFailure;
       mock.files.set(p, content);
       mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+      // Lets a test mutate the file between two reaper flips (snapshot race).
+      if (mock.afterWrite && mock.afterWrite(p)) mock.afterWrite = null;
     })
   };
 });
@@ -162,6 +165,7 @@ const baseState = () => ({
 
 beforeEach(() => {
   mock.atomicFailure = null;
+  mock.afterWrite = null;
   mock.files = new Map();
   mock.mtimes = new Map();
   mock.parseCalls = 0;
@@ -2323,6 +2327,11 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(isReapableInvestigation(investigation(), new Map())).toBe(true);
     });
 
+    it('never reaps an in-progress investigation, even when its origins are all completed', () => {
+      const byId = new Map([['task-a', { id: 'task-a', status: 'completed' }]]);
+      expect(isReapableInvestigation(investigation({ status: 'in_progress' }), byId)).toBe(false);
+    });
+
     it('does not reap while any originating task is still live', () => {
       const byId = new Map([['task-a', { id: 'task-a', status: 'blocked' }]]);
       expect(isReapableInvestigation(investigation(), byId)).toBe(false);
@@ -2419,6 +2428,44 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(res.reaped).toBe(0);
       const after = await getCosTasks();
       expect(after.tasks.find(t => t.id === 'sys-inv2').status).toBe('pending');
+    });
+
+    it('leaves an in-progress investigation running even after its origin completes', async () => {
+      await addTask({ description: 'origin fixed by hand', id: 'task-origin3', priority: 'HIGH' }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [fp]: running',
+        id: 'sys-running',
+        isInvestigation: true,
+        affectedTasks: ['task-origin3']
+      }, 'internal', { now: NOW });
+      await updateTask('sys-running', { status: 'in_progress' }, 'internal', { now: NOW });
+      await updateTask('task-origin3', { status: 'completed' }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      const after = await getCosTasks();
+      expect(after.tasks.find(t => t.id === 'sys-running').status).toBe('in_progress');
+    });
+
+    it('does not auto-expire a target that was revived between the snapshot and its flip', async () => {
+      await addTask({ description: 'stale one', id: 'task-race1', priority: 'HIGH' }, 'user', { now: NOW });
+      await addTask({ description: 'stale two', id: 'task-race2', priority: 'HIGH' }, 'user', { now: NOW });
+      for (const id of ['task-race1', 'task-race2']) {
+        await updateTask(id, { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) } }, 'user', { now: NOW });
+      }
+      // After the first flip lands, the user revives the second target (Resume
+      // → in_progress). Its flip was planned from the pre-revive snapshot.
+      mock.afterWrite = (p) => {
+        if (p !== USER_FILE) return false;
+        // Revive whichever target the sweep has not flipped yet.
+        mock.files.set(p, mock.files.get(p).replace(/^(- )\[!\](.*#task-race)/m, '$1[~]$2'));
+        mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+        return true;
+      };
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res).toMatchObject({ reaped: 1, staleBlocks: 1 });
+      const after = await getUserTasks();
+      const statuses = after.tasks.filter(t => t.id.startsWith('task-race')).map(t => t.status).sort();
+      expect(statuses).toEqual(['completed', 'in_progress']);
     });
 
     it('bounds the number of flips per sweep to the limit', async () => {
