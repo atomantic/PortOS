@@ -66,6 +66,28 @@ describe('test process ownership boundaries', () => {
     expect(testProcessRoot({ args: ['chrome', `--user-data-dir=${root}/profile`] }, parent, 'pvt-')).toBe(root);
   });
 
+  it('reports only fixed process categories for successfully stopped owned children', () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-diagnostics-'));
+    const root = join(host, 'pvt-owned');
+    mkdirSync(root);
+    writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+    const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
+    const child = { pid: 900001, ppid: process.pid, start: 'original',
+      args: ['/example/node', '/example/vitest/dist/workers/forks.js', '--secret=fixture-secret'],
+      env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+    const onKilled = vi.fn();
+    const kill = vi.fn();
+    try {
+      expect(killTestProcessesUnder(root, { read: () => [...ancestors, child], probe: () => false, kill, onKilled })).toBe(1);
+      expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, 'SIGKILL');
+      expect(onKilled).toHaveBeenCalledExactlyOnceWith({ kind: 'vitest', parent: 'runner' });
+      kill.mockImplementation(() => { throw Error('already gone'); });
+      onKilled.mockClear();
+      expect(killTestProcessesUnder(root, { read: () => [...ancestors, child], probe: () => false, kill, onKilled })).toBe(0);
+      expect(onKilled).not.toHaveBeenCalled();
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
   it('refuses reused identities, caller ancestors and ownership changes before delayed escalation', () => {
     vi.useFakeTimers();
     const host = mkdtempSync(join(tmpdir(), 'recovery-race-'));

@@ -8,7 +8,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot } from '../server/lib/mockPathsD
 import { describeStageFixtureRoot, observeOwnedBrowsers, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { teardown } from './vitestTempRootSetup.js';
+import { cleanupRunTempRoot, setup } from './vitestTempRootSetup.js';
 
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal();
@@ -31,11 +31,25 @@ describe('vitestTempRootSetup teardown', () => {
     populate(root);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.exitCode = undefined;
-    teardown();
+    cleanupRunTempRoot();
     const result = { warnings: warn.mock.calls.map((c) => c[0]), exitCode: process.exitCode, removed: !existsSync(root) };
     rmSync(root, { recursive: true, force: true });
     return result;
   }
+
+  it('defers root cleanup until Vitest closes its pool and retains the setup root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pvt-close-test-'));
+    const onClose = vi.fn();
+    try {
+      process.env.PORTOS_TEST_TEMP_ROOT = root;
+      expect(setup({ vitest: { onClose } })).toBeUndefined();
+      expect(existsSync(root)).toBe(true);
+      expect(onClose).toHaveBeenCalledTimes(1);
+      process.env.PORTOS_TEST_TEMP_ROOT = originalRoot;
+      onClose.mock.calls[0][0]();
+      expect(existsSync(root)).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 
   it('ignores browser-owned Chrome scratch directories but still fails on a leaked fixture beside them', () => {
     const browserOnly = runTeardown((root) => {
@@ -307,7 +321,7 @@ describe('vitestTempRootSetup teardown', () => {
       symlinkSync(outside, join(root, 'outside-link'), directoryLink);
       symlinkSync(join(sandbox, 'missing'), join(root, 'dangling-link'), directoryLink);
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
-        `import { teardown } from ${JSON.stringify(new URL('./vitestTempRootSetup.js', import.meta.url).href)}; teardown();`], {
+        `import { cleanupRunTempRoot } from ${JSON.stringify(new URL('./vitestTempRootSetup.js', import.meta.url).href)}; cleanupRunTempRoot();`], {
         env: { ...process.env, PORTOS_TEST_TEMP_ROOT: root },
         encoding: 'utf8', timeout: 5000,
       });
