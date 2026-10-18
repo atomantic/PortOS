@@ -112,7 +112,8 @@ describe('startBackupScheduler', () => {
         enabled: true,
         destPath: '/dest-fresh',
         excludePaths: ['fresh/'],
-        disabledDefaultExcludes: ['/loras/*.safetensors']
+        disabledDefaultExcludes: ['/loras/*.safetensors'],
+        retentionCount: 14
       }
     });
 
@@ -123,8 +124,26 @@ describe('startBackupScheduler', () => {
     expect(runBackup).toHaveBeenCalledWith(
       '/dest-fresh',
       null,
-      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: null }
+      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: 14 }
     );
+  });
+
+  it('does not pass an invalid retention count to the backup run', async () => {
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: true, destPath: '/dest', retentionCount: 0 }
+    });
+    await startBackupScheduler();
+
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: true, destPath: '/dest', retentionCount: 0 }
+    });
+
+    const handler = schedule.mock.calls[0][0].handler;
+    await handler();
+
+    expect(runBackup).toHaveBeenCalledWith('/dest', null, {
+      excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
+    });
   });
 
   it('rejects unreadable run-time settings and recovers on the next scheduled invocation', async () => {
