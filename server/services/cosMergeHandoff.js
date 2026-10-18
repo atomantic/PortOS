@@ -54,17 +54,29 @@ async function checkoutAtHead(workspace, branch, head, repository, repositoryKey
   return ref?.stdout?.trim() === branch && sha?.stdout?.trim().toLowerCase() === head;
 }
 
-// The worktree-private status the review phase writes. null = no file (no
-// local reviewers ran); 'unreadable' covers an unreadable or empty file.
-async function readReviewStatus(workspace) {
+// The worktree-private status the review phase writes: `REVIEW_STATUS=<verdict>`
+// plus `REVIEW_HEAD=<sha>`, the commit its final round reviewed. status null =
+// no file (no local reviewers ran); 'unreadable' covers an unreadable or empty file.
+async function readReviewEvidence(workspace) {
   const gitPath = await execGit(['rev-parse', '--git-path', 'portos-review-status'], workspace).catch(() => null);
   const relative = gitPath?.stdout?.trim();
-  if (!relative) return 'unreadable';
+  if (!relative) return { status: 'unreadable', head: null };
   const content = await readFile(resolve(workspace, relative), 'utf-8').catch((err) => (err.code === 'ENOENT' ? null : undefined));
-  if (content === null) return null;
-  const statuses = [...String(content ?? '').matchAll(/^REVIEW_STATUS=(\S+)\s*$/gm)].map((m) => m[1]);
-  if (statuses.length === 0) return 'unreadable';
-  return statuses.find((status) => status !== 'clean') ?? 'clean';
+  if (content === null) return { status: null, head: null };
+  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1]);
+  const statuses = values(/^REVIEW_STATUS=(\S+)\s*$/gm);
+  const heads = values(/^REVIEW_HEAD=(\S+)\s*$/gm);
+  return {
+    status: statuses.length === 0 ? 'unreadable' : statuses.find((status) => status !== 'clean') ?? 'clean',
+    head: heads.length === 1 ? heads[0].toLowerCase() : null,
+  };
+}
+
+// A clean verdict counts only for the head it reviewed; merge-on-green runs no
+// reviewers, so there only a recorded block or unreadable status refuses.
+function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy) {
+  if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return status === null || status === 'clean';
+  return status === 'clean' && reviewedHead === head;
 }
 
 async function followUpRoster(task, policy) {
@@ -125,10 +137,8 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   if (!workspace || !await checkoutAtHead(workspace, view.headRefName, head, repository, repositoryKey)) {
     return refuse('checkout-head-unverified');
   }
-  const reviewStatus = await readReviewStatus(workspace);
-  if (!(reviewStatus === 'clean' || (reviewStatus === null && policy === PR_COMPLETIONS.MERGE_ON_GREEN))) {
-    return refuse('review-evidence-incomplete');
-  }
+  const review = await readReviewEvidence(workspace);
+  if (!reviewEvidenceAccepted(review, head, policy)) return refuse('review-evidence-incomplete');
 
   const receipt = {
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
@@ -148,7 +158,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     },
     handoff: {
       receiptId: receipt.id, agentId, startedAt: agent.startedAt, taskId: agent.taskId, repository,
-      headSha: head, prCompletion: policy, reviewStatus: reviewStatus ?? 'not-configured', acceptedAt: receipt.queuedAt,
+      headSha: head, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
     },
     followUp: await followUpRoster(task, policy),
   }).catch((err) => {

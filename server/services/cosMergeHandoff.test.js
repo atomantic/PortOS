@@ -90,7 +90,7 @@ beforeEach(async () => {
     isCrossRepository: false, headRefName: 'claim/issue-1', headRefOid: HEAD,
     mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }],
   };
-  await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
+  await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=clean\nREVIEW_HEAD=${HEAD}\n`);
   execGhMock.mockReset().mockImplementation(async (args) => {
     if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify(f.pr);
     if (args[0] === 'pr' && args[1] === 'diff') return 'diff --git a/example.js b/example.js\n+const ok = true;';
@@ -139,6 +139,7 @@ describe('pending-merge handoff', () => {
     ['a leave-open policy', () => { f.tasks['task-agent-1'].metadata.prCompletion = 'leave-open'; }, 'completion-policy-leaves-open'],
     ['a JIRA human handoff', () => { f.tasks['task-agent-1'].metadata.jiraTicketId = 'EX-1'; }, 'completion-policy-leaves-open'],
     ['blocked review evidence', () => writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=review-blocked\n'), 'review-evidence-incomplete'],
+    ['a clean verdict for an earlier head', () => writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`), 'review-evidence-incomplete'],
     ['missing required review evidence', () => rm(join(workspace, 'portos-review-status')), 'review-evidence-incomplete'],
   ])('refuses %s and queues nothing', async (_name, arrange, reason) => {
     const overrides = await arrange();
@@ -173,6 +174,14 @@ describe('pending-merge handoff', () => {
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 0 });
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toEqual([expect.objectContaining({ ticks: 1, handoff: expect.objectContaining({ headSha: HEAD }) })]);
+  });
+
+  it('keeps the head binding when an unbound duplicate is queued for the same PR', async () => {
+    await handoff();
+    const { queuePendingMerge } = await import('./prWatcher.js');
+    const { handoff: _binding, followUp: _roster, ...unbound } = pending()[0];
+    expect(await queuePendingMerge('app1', unbound)).toBe(true);
+    expect(pending()[0].handoff).toMatchObject({ headSha: HEAD });
   });
 
   it('never merges an unreadable binding and hands it to the operator', async () => {

@@ -274,6 +274,9 @@ export async function queuePendingMerge(appId, pending) {
     const key = pendingMergeKey(normalized);
     const index = existing.findIndex((entry) => pendingMergeKey(entry) === key);
     if (index === -1) return [...existing, normalized];
+    // Only a newly verified handoff replaces a head binding: an unbound
+    // duplicate would otherwise reopen the legacy merge-current-head path.
+    if (existing[index].handoff && !normalized.handoff) return existing;
     const next = [...existing];
     // Preserve the existing tick count so a duplicated completion callback
     // cannot reset an already-wedged PR's bounded-watch budget. A handoff of a

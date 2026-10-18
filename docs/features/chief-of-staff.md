@@ -93,9 +93,11 @@ repository from the run's registration, the PR branch it must own (a bound
 claim branch, `reviewLoopMergeTarget` or `prDeliveryTarget`), a same-repository
 open non-draft PR whose live head equals the SHA, a checkout of this repository
 on that branch at that SHA, a merging completion policy (not leave-open, a JIRA
-handoff or read-only), and the worktree's `portos-review-status` (`clean`;
-absence is accepted only for merge-on-green). Fork targets are refused. The
-binding is persisted on the app's `pendingMergePrs` entry and the response
+handoff or read-only), and the worktree's `portos-review-status`:
+`REVIEW_STATUS=clean` with `REVIEW_HEAD=<sha>` naming that same head for a
+review-then-merge run; merge-on-green accepts no file or a clean one. Fork
+targets are refused. The binding is persisted on the app's `pendingMergePrs`
+entry, an unbound duplicate queue write never replaces it, and the response
 carries a receipt.
 
 The pr-watcher pending-merge sweep then merges only the recorded head, under
