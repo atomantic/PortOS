@@ -4,6 +4,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { existsSync } from 'fs';
+import { isRepo, notGitRepoMessage } from '../services/git.js';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
@@ -101,6 +103,18 @@ async function assertAssignableInstance(instanceId) {
   const assignable = await getAssignableInstances();
   if (assignable.some(i => i.instanceId === instanceId)) return;
   throw new ServerError('Unknown instance — pick one of this install\'s federated instances', { status: 400, code: 'UNKNOWN_INSTANCE' });
+}
+
+// Worktree/PR delivery needs a git checkout; refuse at creation rather than
+// letting the task block at spawn. A missing directory is left to the spawn-time
+// workspace validation, which has its own message.
+async function assertWorktreeCapableApp(taskData) {
+  if (!taskData.app || !(taskData.useWorktree || taskData.openPR)) return;
+  const app = await getAppById(taskData.app);
+  if (!app?.repoPath || !existsSync(app.repoPath)) return;
+  if (!(await isRepo(app.repoPath))) {
+    throw new ServerError(notGitRepoMessage(app.name || taskData.app), { status: 400, code: 'NOT_A_GIT_REPO' });
+  }
 }
 
 const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
@@ -474,6 +488,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const { type, isInvestigation, ...taskData } = parsed.data;
   if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
+  await assertWorktreeCapableApp(taskData);
   const preparedTask = await preparePlanOnlyTask(taskData);
   // A UI-queued investigation (#6043) goes through the SAME producer as an
   // auto-filed one, so it lands with the markers the shared machinery reads —

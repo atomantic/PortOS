@@ -174,6 +174,11 @@ export async function isRepo(dir) {
   return result?.stdout.trim() === 'true';
 }
 
+/** Actionable refusal text shared by task creation and spawn-time worktree prep. */
+export function notGitRepoMessage(appName) {
+  return `${appName} is not a git repository — run \`git init\` in its directory (and add a remote if PRs are needed), or disable worktree/PR for this task`;
+}
+
 /**
  * Get remote info
  */

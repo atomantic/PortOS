@@ -23,6 +23,8 @@ vi.mock('./cos.js', () => ({
 vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue(null) }));
 vi.mock('./git.js', () => ({
   ensureLatest: vi.fn(),
+  isRepo: vi.fn().mockResolvedValue(true),
+  notGitRepoMessage: (name) => `${name} is not a git repository — run \`git init\``,
   fetchOrigin: vi.fn(),
   getRepoBranches: vi.fn().mockResolvedValue({ baseBranch: 'main' }),
   checkout: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResol
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask, getAgents } from './cos.js';
-import { ensureLatest } from './git.js';
+import { ensureLatest, isRepo, fetchOrigin } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
@@ -258,6 +260,23 @@ describe('prepareAgentWorkspace', () => {
     expect(r.outcome).toBe('blocked');
     expect(r.reason).toContain('isolation was required');
     expect(updateTask).toHaveBeenCalledWith('t-ro-blocked', expect.objectContaining({
+      status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'worktree-failed' }),
+    }), 'internal');
+  });
+
+  it('blocks a worktree task for a non-git app up front, without attempting a fetch', async () => {
+    isRepo.mockResolvedValueOnce(false);
+    getAppWorkspace.mockResolvedValue(process.cwd());
+    const task = { id: 't-nogit', taskType: 'internal', metadata: { readOnly: true, useWorktree: true, app: 'Example App' } };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-nogit', task });
+
+    expect(r.outcome).toBe('blocked');
+    expect(r.reason).toContain('Example App is not a git repository');
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(fetchOrigin).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith('t-nogit', expect.objectContaining({
       status: 'blocked',
       metadata: expect.objectContaining({ blockedCategory: 'worktree-failed' }),
     }), 'internal');
