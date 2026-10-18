@@ -51,6 +51,7 @@ export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIM
 
   const onUpgrade = (_req, socket) => {
     if (socket.portosUpgradeClaimed) return;
+    const initialBytes = socket.bytesWritten;
 
     let timer = null;
     const cleanup = () => {
@@ -67,7 +68,7 @@ export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIM
       socket.off('error', cleanup);
       if (socket.portosUpgradeClaimed) return;
       if (!socket.writable || socket.destroyed) return;
-      if (socket.bytesWritten > 0) return;
+      if (socket.bytesWritten > initialBytes) return;
       socket.on('error', () => {});
       socket.end();
       const destroyTimer = setTimeout(() => {
@@ -81,7 +82,7 @@ export function installUpgradeFallback(server, { timeoutMs = DEFAULT_UPGRADE_TIM
     timer.unref?.();
   };
 
-  server.on('upgrade', onUpgrade);
+  server.prependListener('upgrade', onUpgrade);
 
   return () => {
     mountedUpgradeFallbackServers.delete(server);

@@ -140,6 +140,30 @@ describe('upgradeFallback', () => {
     expect(serverSocket.destroyed).toBe(false);
   });
 
+  it('ends an unclaimed upgrade even on a keep-alive socket with previous bytesWritten', async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'Content-Length': '4', Connection: 'keep-alive' });
+      res.end('pong');
+    });
+    installUpgradeFallback(server, { timeoutMs: 50 });
+    const port = await listen(server);
+
+    const { createConnection } = await import('node:net');
+    const socket = createConnection({ host: '127.0.0.1', port });
+    sockets.push(socket);
+    await once(socket, 'connect');
+
+    // First, complete an ordinary HTTP request over the connection
+    socket.write('GET /probe HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n');
+    await once(socket, 'data');
+
+    // Next, send an unclaimed upgrade over the same keep-alive socket
+    socket.write('GET /unclaimed HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
+
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(socket.destroyed).toBe(true);
+  });
+
   it('prevents duplicate installation and cleans up properly', async () => {
     const server = createServer();
     const cleanup1 = installUpgradeFallback(server);
