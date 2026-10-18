@@ -41,7 +41,7 @@ import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiv
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
 import { createTuiExitHandler } from './tuiExit.js';
-import { bodyErrorMessage, btwBodySchema, pauseBodySchema, spawnBodySchema, spawnTuiBodySchema } from './requestSchemas.js';
+import { bodyErrorMessage, btwBodySchema, pauseBodySchema, spawnBodySchema, spawnTuiBodySchema, terminateBodySchema } from './requestSchemas.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
@@ -790,6 +790,8 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
  * Terminate an agent (graceful with SIGTERM, then SIGKILL after timeout)
  */
 app.post('/terminate/:agentId', async (req, res) => {
+  const body = terminateBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
   const { agentId } = req.params;
   const agent = activeAgents.get(agentId);
 
@@ -797,7 +799,7 @@ app.post('/terminate/:agentId', async (req, res) => {
     return res.status(404).json({ error: 'Agent not found or not running' });
   }
 
-  if (req.body?.onlyIfPromptUnsubmitted === true) {
+  if (body.data.onlyIfPromptUnsubmitted === true) {
     if (agent.kind !== 'tui' || agent.promptSubmitted !== false) {
       return res.json({ success: true, agentId, terminated: false });
     }

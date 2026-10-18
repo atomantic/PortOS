@@ -56,6 +56,7 @@ export const spawnBodySchema = z.object({
 });
 
 export const pauseBodySchema = z.object({ reason: optionalString });
+export const terminateBodySchema = z.object({ onlyIfPromptUnsubmitted: z.boolean().optional() });
 
 export const btwBodySchema = z.object({ message: z.string().min(1, 'message is required') });
 
