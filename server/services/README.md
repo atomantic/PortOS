@@ -6,6 +6,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `branchReconcileCompletion.js` | Runs ownership-checked merged and superseded cleanup on coordinator completion, independent of perpetual scheduling. |
 | `branchCompletionPolicy.js` | Retains explicit registered PR completion policy through agent archives. `readBranchCompletionHold` gates reconciliation by exact repository/branch/PR identity; human handoffs and configured review stay held, explicit releases require a fresh matching forge head, and verified merged retirement is a separate action. |
 | `databaseCutoverHandshake.js` | Narrow fenced-boot path for the ordinary server: at `verifying`/`verified` prove this process's own pool reaches the recorded target, publish a per-pid proof, and wait for admission release before the app graph loads. |
 | `databaseMaintenanceCutover.js` | Internal cutover worker body (transfer → forward-only `.env` mode commit → server restart with target proof → release → CoS restart) and `recoverDatabaseCutover(id)` same-operation recovery for the CLI/API. |
