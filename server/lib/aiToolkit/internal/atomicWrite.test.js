@@ -89,7 +89,9 @@ describe('AI Toolkit atomicWrite crash durability (#12025, mirrors fileCore)', (
 
     await atomicWrite(target, { durable: true });
 
-    expect(calls).toEqual([['writeFile', true], ['rename'], ['dirSync', tmpRoot]]);
+    // Windows cannot open a directory for fsync, so syncDirectory skips it there.
+    const expectedCalls = [['writeFile', true], ['rename'], ...(process.platform === 'win32' ? [] : [['dirSync', tmpRoot]])];
+    expect(calls).toEqual(expectedCalls);
     expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ durable: true });
   });
 
