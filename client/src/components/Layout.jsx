@@ -45,6 +45,7 @@ import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import UpdateBanners from './UpdateBanners';
 import SetupBanner from './SetupBanner';
 import PasswordRiskWarning from './PasswordRiskWarning.jsx';
+import SocketReconnectingPill from './SocketReconnectingPill.jsx';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
@@ -1108,6 +1109,8 @@ export default function Layout() {
       <CmdKSearch />
       {/* Keyboard shortcuts help — press ? to toggle */}
       <KeyboardHelp />
+      {/* The one shared "your live views are frozen" signal — see #12027 */}
+      <SocketReconnectingPill />
       {/* Push-to-talk voice widget — self-hides when voice.enabled is false */}
       <VoiceWidget />
       </div>

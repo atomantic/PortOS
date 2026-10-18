@@ -9,22 +9,37 @@ import toast from '../components/ui/Toast';
 // The connection will use the same host the page was loaded from
 const isHostedAudienceRoute = typeof window !== 'undefined' &&
   isPublicGuestRoute(window.location.pathname);
+// The server is the user's own machine, so there is no "give up" case: a
+// capped attempt count (#12027) left every push-driven view silently frozen
+// after a laptop sleep outlasted the retries, because nothing re-arms the
+// manager once it emits `reconnect_failed`. Retry forever, with the backoff
+// capped so recovery after a long outage never waits more than 10 s.
 const socket = io({
   path: '/socket.io',
   transports: ['websocket', 'polling'],
   autoConnect: !isHostedAudienceRoute,
   reconnection: true,
-  reconnectionAttempts: 10,
-  reconnectionDelay: 1000
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 10000
 });
 
-socket.on('connect', () => {
-  // Connection established
-});
+// Belt and braces for the backoff: the browser knows the moment the network
+// is back (`online`) and the moment the user is looking again (tab visible),
+// so reconnect right then instead of waiting out the current backoff. A
+// hosted-audience route never opens this socket (`autoConnect` above), and
+// `connect()` is a no-op while the manager already has a reconnect in flight.
+const reconnectIfDisconnected = () => {
+  if (isHostedAudienceRoute || socket.connected) return;
+  socket.connect();
+};
 
-socket.on('disconnect', () => {
-  // Connection lost - Socket.IO will attempt reconnection automatically
-});
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', reconnectIfDisconnected);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnectIfDisconnected();
+  });
+}
 
 socket.on('connect_error', (err) => {
   // Auth gate rejected the handshake (server: services/authGate.js socketAuthGate).
