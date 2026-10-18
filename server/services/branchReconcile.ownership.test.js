@@ -54,7 +54,7 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
   readVerdictLedger: async () => [],
 }));
 
-const { reconcile, cleanupMerged, reapSupersededBranches, describeIdleReconcilePark } = await import('./branchReconcile.js');
+const { reconcile, gatherBranchState, classifyBranches, cleanupMerged, reapSupersededBranches, describeIdleReconcilePark } = await import('./branchReconcile.js');
 const { clearAgentDispatching, getActiveAgentIds, markAgentDispatching } = await import('./agentState.js');
 const { deleteMergedBranches } = await import('./git.js');
 
@@ -266,6 +266,27 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(result.cleaned).toEqual([]);
     expect(result.skipped).toEqual([{ branch, reason: 'claim-owner-active' }]);
     expect(await branches()).toContain(branch);
+  });
+
+  it('holds a branch queued for the pending-merge coordinator instead of dispatching its open PR, and fails closed when the queue is unreadable', async () => {
+    const branch = 'claim/issue-1';
+    await execGit(['checkout', '-q', '-b', branch], repo);
+    await writeFile(join(repo, 'queued.txt'), 'queued work\n');
+    await execGit(['add', 'queued.txt'], repo);
+    await execGit(['commit', '-m', 'feat: queued work'], repo);
+    await execGit(['checkout', '-q', 'main'], repo);
+    const base = { defaultBranch: 'main', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } };
+    // No origin means no forge read, so the PR the coordinator owns is supplied
+    // on the gathered entry the way the forge listing would.
+    const stateFor = async (pendingMergeBranches) => {
+      const entry = (await gatherBranchState(repo, { ...base, pendingMergeBranches })).find(i => i.branch === branch);
+      return classifyBranches([{ ...entry, hasOrigin: true, openPr: { number: 1, mergeable: 'MERGEABLE' } }])[0];
+    };
+
+    expect(await stateFor(undefined)).toMatchObject({ state: 'IN_REVIEW' });
+    expect(await stateFor(new Set())).toMatchObject({ state: 'IN_REVIEW' });
+    expect(await stateFor(new Set([branch]))).toMatchObject({ state: 'WIP', liveOwnerReason: 'pending-merge-queued' });
+    expect(await stateFor(null)).toMatchObject({ state: 'WIP', liveOwnerReason: 'pending-merge-unavailable' });
   });
 
   it('refreshes a completion handoff before direct retirement and after a Git refusal', async () => {
