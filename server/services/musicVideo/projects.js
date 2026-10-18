@@ -518,19 +518,21 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * write tail / PG row lock). `transform(project)` returns `{ project, ...result }`;
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
+ * `options.source` marks an automation write for preserveAutomatedShotLocks;
+ * `options.runId` names the autonomous run behind an `orchestrator` write.
  */
 export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
-async function mutateProjectRecordAdmitted(id, transform, { source = null } = {}, mutate = null) {
+async function mutateProjectRecordAdmitted(id, transform, { source = null, runId = null } = {}, mutate = null) {
   const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   let dropped = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const outcome = await write(id, async (current) => {
     const outcome = transform(current);
     if (source) {
-      const guarded = preserveAutomatedShotLocks(current, outcome.project, source);
+      const guarded = preserveAutomatedShotLocks(current, outcome.project, source, { runId });
       outcome.project = guarded.project;
       if (guarded.rejected) {
         outcome.rejected = true;

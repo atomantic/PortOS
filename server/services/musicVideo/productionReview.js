@@ -231,8 +231,13 @@ export function assertClipUnlocked(project, sceneId, patch = null) {
   throw new ServerError('This shot\'s video is locked. Unlock the video to change it.', { status: 409, code: 'MUSIC_VIDEO_SHOT_LOCKED', context: { sceneId } });
 }
 
-/** Apply an automation proposal under the store lock; locked render inputs stay intact. */
-export function preserveAutomatedShotLocks(before, after, source) {
+/**
+ * Apply an automation proposal under the store lock; locked render inputs stay intact.
+ * `runId` names the autonomous run writing as `source: 'orchestrator'`: on a shot
+ * that run's own approval locked, its repair (clear the still, set
+ * `stillFixes`/`clipFixes`) lands and the lock re-binds to the repaired shot.
+ */
+export function preserveAutomatedShotLocks(before, after, source, { runId = null } = {}) {
   const locks = shotLocks(before) || {};
   const locked = (before.scenes || []).filter(scene => locks[scene.sceneId] === 'locked');
   if (!locked.length) return { project: after, rejected: false };
@@ -251,12 +256,24 @@ export function preserveAutomatedShotLocks(before, after, source) {
     const synthetic = { ...scene, referenceImageId: proposed.referenceImageId, endImageId: proposed.endImageId };
     return shotApprovalBasis(before, synthetic) === shotApprovalBasis(after, proposed);
   };
+  // Repair notes feed generation too, but stay outside the persisted approval
+  // hash so existing shot locks keep their cross-version meaning.
+  const repairBasis = shot => hash({ stillFixes: shot.stillFixes, clipFixes: shot.clipFixes });
+  const lockOf = scene => before.productionReview?.shotApprovals?.[scene.sceneId] || before.productionReview?.approvals?.storyboard;
+  const isAllowedRunRepair = (scene, proposed) => {
+    if (source !== 'orchestrator' || !runId || !proposed || clipLocked(before, scene.sceneId)) return false;
+    if (lockOf(scene)?.reviewer?.runId !== runId) return false;
+    const refBefore = textId(scene.referenceImageId);
+    const refAfter = textId(proposed.referenceImageId);
+    if (refAfter && refAfter !== refBefore) return false;
+    if (refAfter === refBefore && repairBasis(scene) === repairBasis(proposed)) return false;
+    const synthetic = { ...scene, referenceImageId: proposed.referenceImageId };
+    return shotApprovalBasis(before, synthetic) === shotApprovalBasis(after, proposed);
+  };
   const rejected = locked.filter(scene => {
     const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
-    // Repair notes feed generation too, but stay outside the persisted approval
-    // hash so existing shot locks keep their cross-version meaning.
-    const repairBasis = shot => hash({ stillFixes: shot.stillFixes, clipFixes: shot.clipFixes });
     if (!proposed) return true;
+    if (isAllowedRunRepair(scene, proposed)) return false;
     if (repairBasis(scene) !== repairBasis(proposed)) return true;
     if (clipLocked(before, scene.sceneId) && proposed.videoHistoryId !== scene.videoHistoryId) return true;
     if (shotApprovalBasis(before, scene) === shotApprovalBasis(after, proposed)) return false;
@@ -264,8 +281,8 @@ export function preserveAutomatedShotLocks(before, after, source) {
   });
   // Materialize legacy whole-board locks before an open shot's edit can stale
   // that approval. No new approval is granted: these shots were already locked.
-  // When a generated still fills an empty slot on a locked shot, re-bind that
-  // shot's lock to the new basis so it stays locked.
+  // When a generated still fills an empty slot on a locked shot, or the run that
+  // locked it repairs it, re-bind that shot's lock to the new basis so it stays locked.
   const shotApprovals = { ...after.productionReview?.shotApprovals };
   for (const scene of locked) {
     const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
@@ -273,6 +290,8 @@ export function preserveAutomatedShotLocks(before, after, source) {
       || { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true };
     if (!rejected.length && proposed && isAllowedStillFill(scene, proposed)) {
       shotApprovals[scene.sceneId] = stillLock(after, proposed, priorApproval);
+    } else if (!rejected.length && isAllowedRunRepair(scene, proposed)) {
+      shotApprovals[scene.sceneId] = stillLock(after, proposed, { ...priorApproval, relockedAt: new Date().toISOString() });
     } else {
       shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
         || stillLock(before, scene, priorApproval);

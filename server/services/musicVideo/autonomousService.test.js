@@ -36,19 +36,29 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const store = new Map();
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
-vi.mock('./projects.js', () => ({
-  getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
-  mutateProjectRecord: (id, transform) => {
-    const run = writeTail.then(() => {
-      if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
-      const out = transform(clone(store.get(id)));
-      store.set(id, clone(out.project));
-      return { ...out, project: clone(out.project) };
-    });
-    writeTail = run.catch(() => {});
-    return run;
-  },
-}));
+vi.mock('./projects.js', async () => {
+  const { preserveAutomatedShotLocks } = await vi.importActual('./productionReview.js');
+  return {
+    getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
+    // Like the real store, an automation write passes the shot-lock guard.
+    mutateProjectRecord: (id, transform, { source = null, runId = null } = {}) => {
+      const run = writeTail.then(() => {
+        if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
+        const current = clone(store.get(id));
+        const out = transform(current);
+        if (source) {
+          const guarded = preserveAutomatedShotLocks(current, out.project, source, { runId });
+          out.project = guarded.project;
+          if (guarded.rejected) out.rejected = true;
+        }
+        store.set(id, clone(out.project));
+        return { ...out, project: clone(out.project) };
+      });
+      writeTail = run.catch(() => {});
+      return run;
+    },
+  };
+});
 
 const { musicVideoEvents } = await import('./events.js');
 const service = await import('./autonomousService.js');
@@ -1627,6 +1637,52 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
+  // Uniquely catches the run's still repairs being discarded by the locks its own storyboard approval set (#12065),
+  // and a repair a director's lock refused being logged as a regeneration.
+  it('lands still repairs on shots its own storyboard approval locked, but parks on a director\'s lock', async () => {
+    const actual = await vi.importActual('./productionReview.js');
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    const runId = runOf().id;
+    Object.assign(store.get('mv-auto'), {
+      audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+      scenes: [{ sceneId: 'mvs-a', label: 'Intro', startSec: 0, endSec: 10, framePrompt: 'a skater at dusk', referenceImageId: 'a1.png' },
+        { sceneId: 'mvs-b', label: 'Verse', startSec: 10, endSec: 20, framePrompt: 'a boardroom', referenceImageId: 'b1.png' }],
+      devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+      productionReview: { draft: { cast: 'A skater', environments: 'Skate park', visualLanguage: 'Ink', motionLanguage: 'Glide', guideArtifactId: 'guide',
+        lyricsMode: 'instrumental', timingNotes: '', storyboard: [
+        { sceneId: 'mvs-a', lyricCueIds: [], action: 'Skater rolls in', staging: 'Wide', camera: 'Track', transition: 'Cut' },
+        { sceneId: 'mvs-b', lyricCueIds: [], action: 'Board meets', staging: 'Medium', camera: 'Static', transition: 'Cut' }] } },
+    });
+    for (const stage of ['art', 'storyboard']) {
+      store.set('mv-auto', clone(actual.approveProductionStage(clone(store.get('mv-auto')), { stage, basis: actual.productionReadiness(store.get('mv-auto')).basis[stage],
+        approvedBy: 'orchestrator', reviewer: { kind: 'orchestrator', runId, providerId: 'orch', model: 'judge' } })));
+    }
+    expect(actual.shotLocks(store.get('mv-auto'))).toEqual({ 'mvs-a': 'locked', 'mvs-b': 'locked' });
+
+    answers.stills = [{ verdict: 'revise', score: 5, notes: 'One extra hand.', issues: [{ sceneId: 'mvs-b', text: 'The chair has three hands on it.' }] }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: null, stillFixes: { text: 'The chair has three hands on it.' } });
+    expect(actual.shotLocks(store.get('mv-auto'))).toEqual({ 'mvs-a': 'locked', 'mvs-b': 'locked' });
+    expect(store.get('mv-auto').productionReview.feedback || []).toEqual([]);
+    expect(runOf().orchestration.reviews.at(-1).notes).toContain('Regenerating 1 still');
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, stopBefore: 'clips' });
+
+    // The director locks the shots themselves: the run's next repair is refused, and it says so instead of regenerating.
+    store.get('mv-auto').scenes[1].referenceImageId = 'b2.png';
+    store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a', 'mvs-b'], locked: true, approvedBy: 'director' })));
+    doubles.resumeProduction.mockClear();
+    answers.stills = [{ verdict: 'revise', score: 5, notes: 'Wrong sky.', issues: [{ sceneId: 'mvs-a', text: 'The sky is noon, not dusk.' }] }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
+    expect(store.get('mv-auto').scenes[0].stillFixes).toBeUndefined();
+    const last = runOf().orchestration.reviews.at(-1);
+    expect(last).toMatchObject({ checkpoint: 'stills', verdict: 'revise', notes: expect.stringContaining('Shot 1 locked by an approval this run did not give') });
+    expect(last.notes).not.toContain('Regenerating');
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
+  });
+
   // Uniquely catches a 69-shot run parking at the default 40 generations before every shot has a still.
   it('grows a default generation limit to the shots left, but parks at a limit the director chose', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
@@ -1693,6 +1749,31 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(reviews().filter((r) => r.startsWith('pilot'))).toEqual(['pilot:revise', 'pilot:approve']);
       expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
       expect(runOf().status).toBe('running');
+    });
+
+    // Uniquely catches a pilot repair discarded by the run's own shot lock, or one a director's lock refused logged as made again (#12065).
+    it('lands a pilot repair on a shot the run locked, and parks without regenerating on a director\'s lock', async () => {
+      const actual = await vi.importActual('./productionReview.js');
+      await pilotFixture();
+      const lock = (fields) => store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a'], locked: true, ...fields })));
+      lock({ approvedBy: 'orchestrator', reviewer: { kind: 'orchestrator', runId: runOf().id } });
+      reviewPilot('rev-1', { verdict: 'revise', reason: 'The skater floats above the ramp.' });
+      await blocked();
+      expect(store.get('mv-auto').scenes[0].clipFixes).toMatchObject({ text: 'The skater floats above the ramp.' });
+      expect(actual.shotLocks(store.get('mv-auto'))['mvs-a']).toBe('locked');
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+
+      lock({ approvedBy: 'director' });
+      store.get('mv-auto').scenes[0].videoHistoryId = 'clip-2';
+      reviewPilot('rev-2', { verdict: 'revise', reason: 'The landing is soft.' });
+      doubles.resumeProduction.mockClear();
+      await blocked();
+      expect(store.get('mv-auto').scenes[0].clipFixes).toMatchObject({ text: 'The skater floats above the ramp.' });
+      const last = runOf().orchestration.reviews.at(-1);
+      expect(last).toMatchObject({ checkpoint: 'pilot', verdict: 'revise', notes: expect.stringContaining('repair not applied') });
+      expect(last.notes).not.toContain('generated again');
+      expect(doubles.resumeProduction).not.toHaveBeenCalled();
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
     });
 
     // Uniquely catches an orchestrated run parking on the proof gate after its pilot passed.
