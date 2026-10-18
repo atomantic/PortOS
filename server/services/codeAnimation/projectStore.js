@@ -118,17 +118,18 @@ const RUN_ACTIVE = 'running';
 
 /**
  * Insert a running stage run. Rows left `running` by a previous process (not in
- * `activeIds`) are marked interrupted first, so a restart never blocks the
- * project and never silently resumes. Another live run is a conflict.
+ * `getActiveIds()`) are marked interrupted first, so a restart never blocks the
+ * project and never silently resumes. Another live run is a conflict. Resolve
+ * live IDs under the project lock; a queued snapshot can omit a newer run.
  */
-export async function startStageRun(id, projectId, data, activeIds) {
+export async function startStageRun(id, projectId, data, getActiveIds) {
   return withTransaction(async client => {
     const project = await client.query('SELECT data FROM code_animation_projects WHERE id = $1 FOR UPDATE', [projectId]);
     if (!project.rows[0]) throw missing();
     await client.query(`UPDATE code_animation_project_runs SET status = 'interrupted',
       data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
       WHERE project_id = $1 AND status = $2 AND data->>'kind' = 'production-stages' AND NOT (id = ANY($3::text[]))`,
-    [projectId, RUN_ACTIVE, activeIds]);
+    [projectId, RUN_ACTIVE, getActiveIds()]);
     const live = await client.query(`SELECT id FROM code_animation_project_runs
       WHERE project_id = $1 AND status = $2 AND data->>'kind' = 'production-stages' LIMIT 1`, [projectId, RUN_ACTIVE]);
     if (live.rows[0]) {
@@ -178,10 +179,13 @@ export async function commitRepairRevision(projectId, revision) {
   });
 }
 
-export async function interruptStageRuns(projectId, activeIds) {
-  await query(`UPDATE code_animation_project_runs SET status = 'interrupted',
-    data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
-    WHERE project_id = $1 AND status = 'running' AND data->>'kind' = 'production-stages' AND NOT (id = ANY($2::text[]))`, [projectId, activeIds]);
+export async function interruptStageRuns(projectId, getActiveIds) {
+  await withTransaction(async client => {
+    await client.query('SELECT id FROM code_animation_projects WHERE id = $1 FOR UPDATE', [projectId]);
+    await client.query(`UPDATE code_animation_project_runs SET status = 'interrupted',
+      data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
+      WHERE project_id = $1 AND status = 'running' AND data->>'kind' = 'production-stages' AND NOT (id = ANY($2::text[]))`, [projectId, getActiveIds()]);
+  });
 }
 
 // ---- Accepted output (#9392): a frozen record beside, never inside, the run history ----
