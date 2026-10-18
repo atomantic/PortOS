@@ -1250,6 +1250,10 @@ const STAGES = {
     });
     // A stop during preparation had no child id to stop; cancel the fresh child before handing it off.
     if (!ownsRunningRun(projectAutonomousRun(await getProject(project.id)), run)) {
+      // Persist the child before cancellation: a failed stop must leave it discoverable for recovery.
+      await patchRun(project.id, (current) => current.id === run.id && current.output.productionRunId === run.output.productionRunId
+        ? { output: { productionRunId: started.run.id } } : {})
+        .catch((err) => console.error(`❌ Autonomous music video ${short(run.id)} could not retain late production ${started.run.id}: ${err.message}`));
       await settleChildStop([], project.id, run, 'cancel production', started.run.id, () => deps.cancelProduction(project.id, started.run.id));
       throw runError(409, 'RUN_STOPPED', 'The run stopped while production was preparing');
     }
@@ -1372,10 +1376,14 @@ async function reviewOrPark(projectId, run, productionRunId) {
 
 const isLoginRequired = (err) => err?.code === 'PUBLISH_LOGIN_REQUIRED';
 
+function logParkedRun(run, status, error) {
+  const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
+  log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Autonomous music video ${short(run.id)} ${status}${error ? `: ${error}` : ''}`);
+}
+
 async function park(projectId, status, patch) {
   const out = await patchRun(projectId, () => ({ status, ...patch }));
-  const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
-  log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Autonomous music video ${short(out.run.id)} ${status}${patch.error ? `: ${patch.error}` : ''}`);
+  logParkedRun(out.run, status, patch.error);
   return out;
 }
 
@@ -1399,11 +1407,17 @@ async function advance(projectId) {
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
       } catch (err) {
-        // A stop/cancel mid-stage (it cancels the song operation) must not become a failure.
-        const latest = projectAutonomousRun(await getProject(projectId));
-        if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
-        await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }));
-        await park(projectId, isLoginRequired(err) || err.code === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
+        // Recheck ownership inside the failure write, so an already queued stop/cancel wins.
+        let failed = false;
+        const out = await patchRun(projectId, (r) => {
+          failed = ownsRunningRun(r, run);
+          return failed ? {
+            ...stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }),
+            status: isLoginRequired(err) || err.code === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'needs-human' : 'failed',
+            error: trimTo(err.message, 500), errorCode: err.code || null,
+          } : {};
+        });
+        if (failed) logParkedRun(out.run, out.run.status, out.run.error);
         return;
       }
       const finishedAt = new Date().toISOString();
