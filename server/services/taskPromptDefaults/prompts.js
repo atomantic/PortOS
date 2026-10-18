@@ -712,6 +712,10 @@ who finds nothing.
   a destructive side effect, an ordering requirement, an upgrade step.
 - **Stale references** — links to moved or deleted files, examples using retired
   APIs, screenshots of interfaces that no longer exist.
+- **Instruction and prompt files that name things that do not exist** — a file,
+  function, flag, tool, or command named in AGENTS.md, nested instruction
+  files, skills, or the shipped task prompts that is absent from the tree.
+  Verify each by search; one finding per file with the list.
 - **Missing "why" on non-obvious decisions** — a constraint, workaround, or
   deliberate trade-off that reads as arbitrary and invites someone to "fix" it.
 - **Comments that lie** — an inline comment describing behavior the function no
