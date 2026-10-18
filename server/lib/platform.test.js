@@ -74,6 +74,22 @@ describe('platform module', () => {
       await expect(findAvailablePorts(6000, 6003, 2, options)).resolves.toEqual([6001, 6003])
     })
 
+    it('never returns a browser-blocked port even when it is free', async () => {
+      const options = {
+        platform: 'linux',
+        exec: vi.fn().mockResolvedValue({ stdout: 'State Header' }),
+      }
+      await expect(findAvailablePorts(5998, 6002, 4, options)).resolves.toEqual([5998, 5999, 6001, 6002])
+    })
+
+    it('skips ports reserved by registered apps', async () => {
+      const options = {
+        platform: 'linux',
+        exec: vi.fn().mockResolvedValue({ stdout: 'State Header' }),
+      }
+      await expect(findAvailablePorts(5570, 5573, 2, options, [5570, 5572])).resolves.toEqual([5571, 5573])
+    })
+
     it('should return empty array when range is exhausted', async () => {
       // Range of 0 ports
       const ports = await findAvailablePorts(49400, 49399, 1, {

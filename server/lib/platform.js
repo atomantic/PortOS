@@ -1,5 +1,6 @@
 import { exec, execSync } from './childProcess.js';
 import { promisify } from 'util';
+import { isBrowserUnsafePort } from './browserUnsafePorts.js';
 
 // Keep promisification lazy so pure platform consumers can be imported from
 // tests that intentionally mock only the child-process methods they exercise.
@@ -117,19 +118,22 @@ export async function isPortInUse(port, probeOptions) {
 }
 
 /**
- * Find available ports in a range
+ * Find available ports in a range. Never returns a browser-blocked port
+ * (`isBrowserUnsafePort`), since an app on one cannot be opened from the UI.
  * @param {number} start Start of range
  * @param {number} end End of range
  * @param {number} count Number of ports to find
+ * @param {object} [probeOptions] Listener-discovery overrides
+ * @param {number[]} [reservedPorts] Ports held by registered apps that are not listening right now
  * @returns {Promise<number[]>} Available ports
  */
-export async function findAvailablePorts(start, end, count = 1, probeOptions) {
+export async function findAvailablePorts(start, end, count = 1, probeOptions, reservedPorts = []) {
   if (start > end || count <= 0) return [];
-  const usedPorts = new Set(await getListeningPorts(probeOptions));
+  const usedPorts = new Set([...await getListeningPorts(probeOptions), ...reservedPorts]);
   const available = [];
 
   for (let port = start; port <= end && available.length < count; port++) {
-    if (!usedPorts.has(port)) {
+    if (!usedPorts.has(port) && !isBrowserUnsafePort(port)) {
       available.push(port);
     }
   }

@@ -632,6 +632,7 @@ export * from './backupConfig.js';
 export * from './backupSnapshotBoundary.js';
 export * from './systemIdle.js';
 export * from './browserConfig.js';
+export * from './browserUnsafePorts.js';
 export * from './buildId.js';
 export * from './buildIdentity.js';
 export * from './condaEnv.js';
