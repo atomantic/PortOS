@@ -42,7 +42,10 @@
  * records the plan, each stage's outcome and duration, the skipped suites, the
  * base and HEAD commits, and the hash of the exact working tree validated —
  * untracked and uncommitted files included — so a later attestation can match
- * it to the commit that ships.
+ * it to the commit that ships. Attesting is deliberately NOT a flag here:
+ * pregate runs before the commit and the push, and a commit status can only
+ * be posted on a pushed commit, so `node scripts/pregate-attest.js` is its
+ * own step after `git push` (docs/GITHUB_ACTIONS.md "Pregate attestation").
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -662,6 +665,7 @@ async function main() {
     treeAfterRun,
     stages: results,
     skipped: uncovered,
+    downgraded,
     runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers: pregateWorkerEnv(process.env).PORTOS_PREGATE_MAX_WORKERS },
     startedAt,
     finishedAt: new Date().toISOString(),

@@ -153,7 +153,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -684,7 +684,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
@@ -940,7 +940,8 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(1);
+    expect(report.version).toBe(2);
+    expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);
     expect(report.stages).toEqual([
@@ -961,6 +962,9 @@ describe('buildPregateReport', () => {
     });
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(true);
+    expect(buildPregateReport({
+      plan: planWith(), options: {}, base: {}, head: {}, tree: 't', stages: [], skipped: [], runtime: {}, startedAt: 's', finishedAt: 'f', downgraded: true,
+    }).plan.downgraded).toBe(true);
   });
 });
 

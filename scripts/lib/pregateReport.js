@@ -19,7 +19,12 @@ import { dirname, join, resolve } from 'node:path';
 /** Repo-relative location of the receipt; gitignored under `/.cache/`. */
 export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
 
-export const PREGATE_REPORT_VERSION = 1;
+/**
+ * Version 2 added `plan.downgraded`: whether a full plan was replaced by the
+ * always-run guards. `scripts/pregate-attest.js` refuses a receipt without it,
+ * because a downgraded server stage passing is not CI's server selection passing.
+ */
+export const PREGATE_REPORT_VERSION = 2;
 
 /**
  * Hash the exact working tree as it stands: tracked, modified, deleted and
@@ -66,6 +71,7 @@ export function buildPregateReport({
   runtime,
   startedAt,
   finishedAt,
+  downgraded = false,
 }) {
   const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null }) => ({
     name, suite, command, status, durationMs, exitCode, signal,
@@ -85,6 +91,9 @@ export function buildPregateReport({
     options,
     plan: {
       full: plan.full,
+      // True when a full plan ran only the always-run guards (no `--full`):
+      // the server and client stages below then prove less than CI's selection.
+      downgraded: Boolean(downgraded),
       reason: plan.reason,
       server: { mode: plan.server.mode, files: plan.server.files, sources: plan.server.sources },
       client: { mode: plan.client.mode, files: plan.client.files, sources: plan.client.sources },
