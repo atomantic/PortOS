@@ -31,7 +31,9 @@
  * plan flagged so they are a decision rather than a surprise.
  */
 
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import { writeSync } from 'fs';
+import { constants } from 'os';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -247,7 +249,48 @@ export function parseArgs(argv) {
   return options;
 }
 
-function main() {
+/** Wait asynchronously so owner signals can be attributed during a stage. */
+function runStage(stage) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(REPO_ROOT, 'scripts', stage.script), ...stage.args], {
+      cwd: REPO_ROOT,
+      stdio: 'inherit',
+      env: { ...pregateWorkerEnv(process.env), ...stage.env },
+      // A separate group lets cancellation reach only this stage's descendants.
+      detached: process.platform !== 'win32',
+    });
+    const handlers = new Map();
+    const cleanup = () => {
+      for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+    };
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      const handler = () => {
+        // Flush before restoring the signal's default termination behavior.
+        writeSync(2, `❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${child.pid ?? 'unavailable'} received_signal=${signal}.\n`);
+        cleanup();
+        try {
+          if (process.platform === 'win32') child.kill(signal);
+          else if (child.pid) process.kill(-child.pid, signal);
+        } catch (error) {
+          if (error.code !== 'ESRCH') writeSync(2, `❌ Stage cancellation failed: ${error.code ?? 'unknown'}.\n`);
+        }
+        process.kill(process.pid, signal);
+      };
+      handlers.set(signal, handler);
+      process.once(signal, handler);
+    }
+    child.once('error', (error) => {
+      cleanup();
+      resolve({ error });
+    });
+    child.once('close', (status, signal) => {
+      cleanup();
+      resolve({ status, signal, pid: child.pid });
+    });
+  });
+}
+
+async function main() {
   let options;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -345,14 +388,14 @@ function main() {
 
   for (const stage of stages) {
     console.log(`▶️ ${stage.name}`);
-    const result = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', stage.script), ...stage.args], {
-      cwd: REPO_ROOT,
-      stdio: 'inherit',
-      env: { ...pregateWorkerEnv(process.env), ...stage.env },
-    });
+    const result = await runStage(stage);
     if (result.error) {
       console.error(`❌ ${stage.name} could not start: ${result.error.message}`);
       process.exit(1);
+    }
+    if (result.signal) {
+      console.error(`❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${result.pid} child_signal=${result.signal}.`);
+      process.exit(constants.signals[result.signal] ? 128 + constants.signals[result.signal] : 1);
     }
     if (result.status !== 0) {
       console.error(`❌ ${stage.name} failed — fix it before pushing (CI would fail the same way).`);
@@ -364,4 +407,9 @@ function main() {
   console.log(`✅ Pregate passed: ${stages.map((stage) => stage.name).join(', ')}${caveat}.`);
 }
 
-if (isDirectlyInvoked(import.meta.url)) main();
+if (isDirectlyInvoked(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`❌ Pregate incomplete: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
