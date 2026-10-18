@@ -338,17 +338,15 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     updates.processes = processes;
     updates.pm2ProcessNames = processes.map(p => p.name);
 
-    // Derive ports from parsed process labels (same logic as streamDetection)
-    const apiProc = processes.find(p => p.ports?.api);
-    if (apiProc) updates.apiPort = apiProc.ports.api;
+    // The config is the source of truth: a port it no longer declares is
+    // cleared (null) rather than left behind on the record.
+    const apiPort = processes.find(p => p.ports?.api)?.ports.api ?? null;
+    const devUiPort = processes.find(p => p.ports?.devUi)?.ports.devUi ?? null;
+    const uiPort = processes.find(p => p.ports?.ui)?.ports.ui ?? null;
 
-    const uiProc = processes.find(p => p.ports?.ui);
-    if (uiProc) updates.uiPort = uiProc.ports.ui;
-
-    const devUiProc = processes.find(p => p.ports?.devUi);
-    if (devUiProc) updates.devUiPort = devUiProc.ports.devUi;
-
-    updates.uiPort = deriveUiPort(updates.uiPort, updates.apiPort, updates.devUiPort || app.devUiPort);
+    updates.apiPort = apiPort;
+    updates.devUiPort = devUiPort;
+    updates.uiPort = deriveUiPort(uiPort, apiPort, devUiPort) ?? null;
   }
 
   // Same containment rule as the icon route: a stored path outside the repo

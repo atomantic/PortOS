@@ -56,10 +56,10 @@ describe('reassignCollidingPorts', () => {
     ];
     const reassigned = reassignCollidingPorts(processes, [5173, 5174]);
 
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
-    expect(processes[1].args).toBe('vite --host --port 6001');
-    expect(reassigned).toEqual([[5173, 6000], [5174, 6001]]);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
+    expect(processes[1].args).toBe('vite --host --port 5571');
+    expect(reassigned).toEqual([[5173, 5570], [5174, 5571]]);
   });
 
   it('keeps the same new value when an old port appears in multiple places of one process', () => {
@@ -67,9 +67,9 @@ describe('reassignCollidingPorts', () => {
       { name: 'client', args: 'vite --host --port 5173', env: { PORT: 5173, VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[0].env.VITE_PORT).toBe(6000);
-    expect(processes[0].args).toBe('vite --host --port 6000');
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[0].env.VITE_PORT).toBe(5570);
+    expect(processes[0].args).toBe('vite --host --port 5570');
   });
 
   it('leaves non-colliding ports untouched', () => {
@@ -86,20 +86,20 @@ describe('reassignCollidingPorts', () => {
     ];
     const reassigned = reassignCollidingPorts(processes, []);
     expect(processes[0].env.PORT).toBe(3000); // first keeps the free port
-    expect(processes[1].env.PORT).toBe(6000); // duplicate bumped to a distinct one
-    expect(reassigned).toEqual([[3000, 6000]]);
+    expect(processes[1].env.PORT).toBe(5570); // duplicate bumped to a distinct one
+    expect(reassigned).toEqual([[3000, 5570]]);
   });
 
   it('does not bump a later process off its valid port to satisfy an earlier collision', () => {
     // server (listed first) is on a taken port; client already holds a valid
-    // 6000. The replacement for server must skip 6000 rather than steal it.
+    // 5570. The replacement for server must skip 5570 rather than steal it.
     const processes = [
       { name: 'server', env: { PORT: 5173 } },
-      { name: 'client', env: { VITE_PORT: 6000 } }
+      { name: 'client', env: { VITE_PORT: 5570 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[1].env.VITE_PORT).toBe(6000); // untouched
-    expect(processes[0].env.PORT).toBe(6001); // skipped 6000
+    expect(processes[1].env.VITE_PORT).toBe(5570); // untouched
+    expect(processes[0].env.PORT).toBe(5571); // skipped 5570
   });
 
   it('gives distinct ports to two processes that both reference the same taken port', () => {
@@ -110,38 +110,61 @@ describe('reassignCollidingPorts', () => {
       { name: 'cli', args: 'vite --host --port 5173', env: { VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
-    expect(processes[1].args).toBe('vite --host --port 6001');
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
+    expect(processes[1].args).toBe('vite --host --port 5571');
     expect(processes[0].env.PORT).not.toBe(processes[1].env.VITE_PORT);
   });
 
   it('never reassigns a colliding port onto a port another process legitimately kept', () => {
-    // server keeps 6000 (free); client's 5173 is taken and must NOT be bumped to 6000.
+    // server keeps 5570 (free); client's 5173 is taken and must NOT be bumped to 5570.
     const processes = [
-      { name: 'server', env: { PORT: 6000 } },
+      { name: 'server', env: { PORT: 5570 } },
       { name: 'client', env: { VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
   });
 
   it('skips already-assigned ports when picking a free replacement', () => {
-    // 6000 is taken, so the first reassignment lands on 6001, the next on 6002.
+    // 5570 is taken, so the first reassignment lands on 5571, the next on 5572.
     const processes = [
       { name: 'a', env: { PORT: 5173 } },
       { name: 'b', env: { PORT: 5174 } }
     ];
-    reassignCollidingPorts(processes, [5173, 5174, 6000]);
+    reassignCollidingPorts(processes, [5173, 5174, 5570]);
+    expect(processes[0].env.PORT).toBe(5571);
+    expect(processes[1].env.PORT).toBe(5572);
+  });
+
+  it('moves a process off a browser-blocked port even when nothing else holds it', () => {
+    const processes = [{ name: 'site', env: { PORT: 6000 } }];
+    const reassigned = reassignCollidingPorts(processes, []);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(reassigned).toEqual([[6000, 5570]]);
+  });
+
+  it('never picks a browser-blocked replacement when the managed band is exhausted', () => {
+    // 5570–5999 all taken, so the next free candidate is 6000 — which browsers refuse.
+    const taken = [5173];
+    for (let p = 5570; p < 6000; p++) taken.push(p);
+    const processes = [{ name: 'srv', env: { PORT: 5173 } }];
+    reassignCollidingPorts(processes, taken);
     expect(processes[0].env.PORT).toBe(6001);
-    expect(processes[1].env.PORT).toBe(6002);
+  });
+
+  it('remaps the ports label map together with env.PORT', () => {
+    const processes = [{ name: 'site', ports: { ui: 5173 }, env: { PORT: 5173 } }];
+    reassignCollidingPorts(processes, [5173]);
+    expect(processes[0].ports).toEqual({ ui: 5570 });
+    expect(processes[0].env.PORT).toBe(5570);
   });
 
   it('only treats *_PORT / PORT env keys as ports', () => {
     const processes = [{ name: 'a', env: { PORT: 5173, RETRIES: 5173 } }];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
+    expect(processes[0].env.PORT).toBe(5570);
     expect(processes[0].env.RETRIES).toBe(5173); // not a port key
   });
 });
