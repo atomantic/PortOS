@@ -4,56 +4,44 @@
  * toggle so other machines can use this PortOS as their image/video backend.
  * Codex appears as a backend tile only after the user enables it; the toggle
  * lives in the always-visible Codex CLI Imagegen section.
+ *
+ * This component owns the one `useSettingsForm` every field lives in, the
+ * load and the field-by-field save; the sections are three sibling
+ * components reading the same form: ImageGenBackendSections (Backend,
+ * Defaults), ImageGenProviderSections (External, Local, Codex, Grok, Agy,
+ * fal.ai) and ImageGenServiceSections (Tokens, Expose, Test).
  */
 
-import { useState, useEffect, useCallback, useId } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
-  Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal, Bot, FlaskConical
+  Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe,
+  Sparkles, Terminal, Key, SlidersHorizontal, Bot, FlaskConical,
 } from 'lucide-react';
 import toast from '../ui/Toast';
-import FormField from '../ui/FormField';
 import TabPills from '../ui/TabPills';
 import BrailleSpinner from '../BrailleSpinner';
-import LocalSetupPanel from './LocalSetupPanel';
-import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
-import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import { isLoopbackHost } from '../../lib/loopbackHost.js';
-import { PORTS } from '../../lib/ports.js';
-import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+import useSettingsForm from '../../hooks/useSettingsForm';
 import {
-  getSettings, patchSettingsSlice, getImageGenStatus, getVideoGenModelContext, generateImage,
+  getSettings, patchSettingsSlice, getImageGenStatus,
   registerTool, updateTool, getToolsList,
-  saveHfToken, clearHfToken,
-  getCredentialInventory, saveCredential, getProviders,
+  getCredentialInventory, saveCredential,
 } from '../../services/api';
-import FalModelSelect from '../imageGen/FalModelSelect';
-import { deriveAvailableBackends, isLocalImageConfigured, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import {
+  isLocalImageConfigured, imageGenReadiness, IMAGE_GEN_MODE, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, normalizeRenderPinValue,
+} from '../../lib/imageGenBackends';
+import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
-import { withUnlistedOption } from '../../lib/withUnlistedOption';
-import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
-import { useAgyModels } from '../../hooks/useAgyModels';
-import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
-import useLocalImageModels from '../../hooks/useLocalImageModels';
-import { effortLevelsForProvider, isCodexSubscriptionProvider, providerModelList } from '../../utils/providers';
-import { formatCount } from '../../utils/formatters';
+import ImageGenBackendSections from './ImageGenBackendSections';
+import ImageGenProviderSections, { PARALLEL_FALLBACK, clampParallel } from './ImageGenProviderSections';
+import ImageGenServiceSections from './ImageGenServiceSections';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
 const GROK_TOOL_ID = 'grok-imagegen';
 const AGY_TOOL_ID = 'agy-imagegen';
-// Mirror of server/services/imageGen/modes.js — shown as placeholder/default
-// hints so the user sees what a blank Model / Effort field will actually use.
-const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
-
-// Fallback bounds used until /api/settings has been fetched once. The server
-// is the source of truth (returns `imageGen.codex.parallelLimitBounds` with
-// the real min/max/default), so these only matter for the first paint.
-const PARALLEL_FALLBACK = { min: 1, max: Number.MAX_SAFE_INTEGER, default: 1 };
-const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
-  Math.max(bounds.min, Math.min(bounds.max, Math.floor(Number(n) || bounds.default)));
 
 // Sub-navigation for this settings surface. Rendered as internal TabPills
 // (pills variant + mobile <select>) rather than a tabbed <Drawer>, so the same
@@ -84,6 +72,99 @@ export const MEDIA_TABS = [
 ];
 const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
 
+// Every settings field the drawer edits, in the shape the form holds. Adding a
+// field is one entry here plus its load line in `mediaFormFromSettings` and
+// its slice in `sliceFieldsOf` — the dirty check and payload are generic.
+const EMPTY_MEDIA_FORM = Object.freeze({
+  mode: IMAGE_GEN_MODE.EXTERNAL,
+  sdapiUrl: '',
+  pythonPath: '',
+  // Install-wide default local image model (`settings.imageGen.local.modelId`).
+  // '' = no pin, which the server resolves to LOCAL_IMAGEGEN_DEFAULT_MODEL.
+  localModelId: '',
+  exposeA1111: false,
+  // Codex CLI provider config — gated by `codexEnabled` so users without a
+  // paid Codex plan that includes image_gen can hide the option entirely.
+  // Empty model/effort = the shipped defaults.
+  codexEnabled: false,
+  codexPath: '',
+  codexModel: '',
+  codexEffort: '',
+  codexParallelLimit: 1,
+  // Grok Build CLI provider config — gated like Codex (renders spend the
+  // user's Grok quota). Empty aspect ratio = let the caller's size decide.
+  grokEnabled: false,
+  grokPath: '',
+  grokAspectRatio: '',
+  agyEnabled: false,
+  agyPath: '',
+  agyModel: '',
+  // fal.ai image backend — a metered API, gated by its own toggle like the
+  // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
+  // the video backend already owns (the Defaults tab's key row).
+  falEnabled: false,
+  // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
+  falModel: '',
+  // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
+  cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false },
+  denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false },
+  // Per-surface render defaults (#3231) — `{ [target]: { imageMode, imageModel, videoMode } }`.
+  renderDefaults: {},
+  // Install-wide video backend pin (`settings.videoGen.mode`, #3231 Phase 4). '' = no pin (local).
+  videoGenMode: '',
+  localVideoModelId: '',
+  videoGenDisplaySleep: false,
+});
+
+// The form values a settings GET loads into, plus the server-authoritative
+// bounds for the parallel-limit input.
+const mediaFormFromSettings = (s) => {
+  const ig = s?.imageGen || {};
+  const cx = ig.codex || {};
+  const gk = ig.grok || {};
+  const ay = ig.agy || {};
+  const fl = ig.fal || {};
+  const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
+  const bounds = cx.parallelLimitBounds && Number.isFinite(cx.parallelLimitBounds.max)
+    ? cx.parallelLimitBounds
+    : PARALLEL_FALLBACK;
+  // Per-mode cleaner reads via the shared helper (mirrored from server/lib/imageClean.js).
+  const cleaners = Object.fromEntries([
+    [IMAGE_GEN_MODE.EXTERNAL, ig.external], [IMAGE_GEN_MODE.LOCAL, ig.local], [IMAGE_GEN_MODE.CODEX, cx],
+    [IMAGE_GEN_MODE.GROK, gk], [IMAGE_GEN_MODE.AGY, ay], [IMAGE_GEN_MODE.FAL, fl],
+  ].map(([m, config]) => [m, resolveCleanersFromConfig(config, m)]));
+  const values = {
+    mode: ig.mode || IMAGE_GEN_MODE.EXTERNAL,
+    sdapiUrl: normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl),
+    pythonPath: ig.local?.pythonPath || '',
+    localModelId: ig.local?.modelId || '',
+    exposeA1111: ig.expose?.a1111 === true,
+    codexEnabled: cx.enabled === true,
+    codexPath: cx.codexPath || '',
+    codexModel: cx.model || '',
+    codexEffort: cx.effort || '',
+    codexParallelLimit: clampParallel(cx.parallelLimit, bounds),
+    grokEnabled: gk.enabled === true,
+    grokPath: gk.grokPath || '',
+    grokAspectRatio: gk.aspectRatio || '',
+    agyEnabled: ay.enabled === true,
+    agyPath: ay.agyPath || '',
+    agyModel: ay.model || '',
+    falEnabled: fl.enabled === true,
+    falModel: fl.model || '',
+    cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
+    denoiseByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.denoise])),
+    // Load every target entry whole (including videoModel keys this tab
+    // doesn't edit) — an entry is saved as one unit when it changes.
+    renderDefaults: (s?.renderDefaults && typeof s.renderDefaults === 'object') ? s.renderDefaults : {},
+    // Video pin: normalize the mode ('auto'/blank → '', i.e. no pin) for the select.
+    videoGenMode: normalizeRenderPinValue(vg.mode) || '',
+    localVideoModelId: vg.defaultModelId || '',
+    videoGenDisplaySleep: vg.displaySleep === true,
+  };
+  return { values, bounds };
+};
+
 // Per-surface render defaults (#3231). Entries with no effective pin are
 // dropped so settings.json doesn't accumulate `{ imageMode: 'auto' }` no-ops
 // for every surface the user merely glanced at.
@@ -92,6 +173,23 @@ const pruneRenderDefaults = (rd) => Object.fromEntries(
     (v) => typeof v === 'string' && v.trim() && v !== RENDER_TARGET_BACKEND_AUTO,
   )),
 );
+
+// What the server will hold after a save: the form, normalized the way the
+// inputs are reflected back afterwards (trimmed paths/models, clamped
+// parallel limit, pruned render defaults).
+const normalizeMediaForm = (f, parallelBounds) => ({
+  ...f,
+  sdapiUrl: normalizeUrl(f.sdapiUrl),
+  codexPath: f.codexPath.trim(),
+  codexModel: f.codexModel.trim(),
+  codexEffort: f.codexEffort.trim(),
+  codexParallelLimit: clampParallel(f.codexParallelLimit, parallelBounds),
+  grokPath: f.grokPath.trim(),
+  grokAspectRatio: f.grokAspectRatio.trim(),
+  agyPath: f.agyPath.trim(),
+  agyModel: f.agyModel.trim(),
+  renderDefaults: pruneRenderDefaults(f.renderDefaults),
+});
 
 // Every settings field this drawer owns, grouped by the slice PATCH that
 // persists it (server: settingsSlicePartialSchemas). The server merges per
@@ -153,159 +251,12 @@ export function ImageGenTab() {
   // stale/hand-edited value degrades to 'backend'.
   const [mediaTab, setMediaTab] = useDrawerTab('mediaTab', 'backend', MEDIA_TAB_IDS);
 
-  // The Local tab hosts LocalSetupPanel, which owns a long-running pip-install
-  // EventSource (`useInstallStream`) — a torch upgrade can run 10+ minutes.
-  // The other tabs unmount when inactive, but unmounting the installer mid-run
-  // closes its stream and the server treats `req.close` as cancellation,
-  // killing pip. So the Local tab is lazily mounted on first visit (to avoid a
-  // cold python-env probe before the user ever opens it) and then kept mounted,
-  // hidden via CSS when inactive, so a tab switch never aborts an install.
-  const [localMounted, setLocalMounted] = useState(false);
-  useEffect(() => {
-    if (mediaTab === 'local') setLocalMounted(true);
-  }, [mediaTab]);
-
-  // Mode + per-mode config
-  const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
-  // Per-surface render defaults (#3231) — `{ [target]: { imageMode, imageModel } }`.
-  // Only pinned entries are kept; an absent target means "auto".
-  const [renderDefaults, setRenderDefaults] = useState({});
-  // Install-wide video backend pin (`settings.videoGen.mode`, #3231 Phase 4).
-  // '' = no pin (local).
-  const [videoGenMode, setVideoGenMode] = useState('');
-  const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(false);
-  const [sdapiUrl, setSdapiUrl] = useState('');
-  const [pythonPath, setPythonPath] = useState('');
-  // Install-wide default local image model (`settings.imageGen.local.modelId`).
-  // '' = no pin, which the server resolves to LOCAL_IMAGEGEN_DEFAULT_MODEL.
-  // Server render callers and client forms use this pin unless a surface has
-  // a saved model choice of its own.
-  const [localModelId, setLocalModelId] = useState('');
-  const localConfigured = isLocalImageConfigured({ pythonPath, modelId: localModelId });
-  // Catalog for the picker, probed once the Local tab is mounted — the same
-  // "don't probe a tab nobody looked at" rule as the Agy list below.
-  // Hardware-incompatible entries are filtered out by the hook's fetch: a
-  // default this machine's runner refuses is a render error waiting to happen,
-  // and `checkLocalConnection` already reports it as unavailable.
-  const { models: localModels } = useLocalImageModels(localMounted);
-  const [videoModelContext, setVideoModelContext] = useState(null);
-  const [videoModelContextFailed, setVideoModelContextFailed] = useState(false);
-  const [localVideoModelId, setLocalVideoModelId] = useState('');
-  useEffect(() => {
-    if (!localMounted) return undefined;
-    let active = true;
-    setVideoModelContextFailed(false);
-    getVideoGenModelContext({ silent: true })
-      .then((context) => { if (active) setVideoModelContext(context); })
-      .catch(() => { if (active) setVideoModelContextFailed(true); });
-    return () => { active = false; };
-  }, [localMounted]);
-  const [exposeA1111, setExposeA1111] = useState(false);
-  // Codex CLI provider config — gated by `codexEnabled` so users without
-  // a paid Codex plan that includes image_gen can hide the option entirely.
-  const [codexEnabled, setCodexEnabled] = useState(false);
-  const [codexPath, setCodexPath] = useState('');
-  const [codexModel, setCodexModel] = useState('');
-  // Empty = use the shipped default effort (CODEX_IMAGEGEN_DEFAULT_EFFORT).
-  const [codexEffort, setCodexEffort] = useState('');
-  // Codex's effort ladder is MODEL-gated, so the options track the model field
-  // above rather than a fixed constant: the gpt-6 family has no `minimal` rung
-  // and rejects it with an HTTP 400, failing the render.
-  const codexEffortLevels = effortLevelsForProvider(
-    { id: 'codex', command: 'codex' },
-    codexModel.trim() || CODEX_IMAGEGEN_DEFAULT_MODEL,
-  );
-  // Model picker options: the configured Codex provider's model list (the
-  // signed-in account's catalog when fetched, else the shipped presets), read
-  // only once the Codex section is enabled. `null` = not loaded yet; the
-  // shipped default is always offered so the picker is never empty.
-  const [codexProviderModels, setCodexProviderModels] = useState(null);
-  useEffect(() => {
-    if (!codexEnabled) return undefined;
-    let active = true;
-    getProviders({ silent: true })
-      .then((data) => {
-        if (!active) return;
-        const providers = Array.isArray(data?.providers) ? data.providers : [];
-        const provider = providers.find((p) => p?.id === 'codex' && isCodexSubscriptionProvider(p))
-          || providers.find(isCodexSubscriptionProvider);
-        const ids = provider ? providerModelList(provider)
-          .map((m) => (typeof m === 'string' ? m : m?.id))
-          .filter((id) => typeof id === 'string' && id !== '') : [];
-        setCodexProviderModels(ids);
-      })
-      .catch(() => { if (active) setCodexProviderModels([]); });
-    return () => { active = false; };
-  }, [codexEnabled]);
-  const codexModelOptions = withUnlistedOption(
-    [...new Set([CODEX_IMAGEGEN_DEFAULT_MODEL, ...(codexProviderModels || [])])].map((id) => ({ id })),
-    codexModel.trim(),
-    (id) => ({ id }),
-  );
-  const [codexParallelLimit, setCodexParallelLimit] = useState(1);
-  // Grok Build CLI provider config — gated by `grokEnabled` the same way as
-  // Codex (renders spend the user's Grok quota). No model/effort fields:
-  // grok's image tools run on xAI's fixed image backend.
-  const [grokEnabled, setGrokEnabled] = useState(false);
-  const [grokPath, setGrokPath] = useState('');
-  // Empty = let the caller's width/height (or the tool default) decide.
-  const [grokAspectRatio, setGrokAspectRatio] = useState('');
-  const [agyEnabled, setAgyEnabled] = useState(false);
-  const [agyPath, setAgyPath] = useState('');
-  const [agyModel, setAgyModel] = useState('');
-  // fal.ai image backend — a metered API, gated by its own toggle like the
-  // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
-  // the video backend already owns (the Defaults tab's key row).
-  const [falEnabled, setFalEnabled] = useState(false);
-  // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
-  const [falModel, setFalModel] = useState('');
-  // Per-provider cleaner toggles. Both run after the PNG lands and before
-  // the SSE complete event so subscribers see the cleaned bytes. SynthID
-  // (the gpt-image / Imagen / Gemini pixel-level watermark) is unaffected
-  // by either of these — a future "Clean SynthID" diffusion option will
-  // address it separately.
-  //   - cleanC2PA (default ON): byte-level strip of the gpt-image `caBX`
-  //     provenance chunk. Lossless — pixels untouched.
-  //   - denoise   (default OFF): median(3) + sharpen pass for AI-artifact
-  //     reduction. LOSSY: blurs annotation text and small details.
-  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true, grok: false, agy: false, fal: false });
-  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false, grok: false, agy: false, fal: false });
-  const setCleanC2PAFor = (m) => (v) => setCleanC2PAByMode((p) => ({ ...p, [m]: v }));
-  const setDenoiseFor = (m) => (v) => setDenoiseByMode((p) => ({ ...p, [m]: v }));
-  // Raw string held while the user is typing in the parallel-limit input.
-  // Clamping is deferred to onBlur so multi-digit entry isn't blocked.
-  const [parallelLimitDraft, setParallelLimitDraft] = useState('1');
+  const form = useSettingsForm(EMPTY_MEDIA_FORM);
+  const { values, saved, isDirty } = form;
   // Server-authoritative bounds for the parallel-limit input. Populated from
   // /api/settings's `imageGen.codex.parallelLimitBounds`; falls back to local
   // constants until the first fetch resolves.
   const [parallelBounds, setParallelBounds] = useState(PARALLEL_FALLBACK);
-
-  // Stable ids for label/input associations
-  const codexPathId = useId();
-  const codexModelId = useId();
-  const codexEffortId = useId();
-  const codexParallelId = useId();
-  const grokPathId = useId();
-  const grokRatioId = useId();
-  const agyPathId = useId();
-  const agyModelId = useId();
-  const agyModelsListId = useId();
-  const falModelId = useId();
-
-  // Snapshot of saved values so we can show the "dirty" state
-  const [saved, setSaved] = useState({
-    mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', localModelId: '', exposeA1111: false,
-    codexEnabled: false, codexPath: '', codexModel: '', codexEffort: '', codexParallelLimit: 1,
-    grokEnabled: false, grokPath: '', grokAspectRatio: '',
-    agyEnabled: false, agyPath: '', agyModel: '',
-    falEnabled: false, falModel: '',
-    cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false },
-    denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false },
-    renderDefaults: {},
-    videoGenMode: '',
-    localVideoModelId: '',
-    videoGenDisplaySleep: false,
-  });
 
   const [status, setStatus] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -314,63 +265,14 @@ export function ImageGenTab() {
   const [grokToolRegistered, setGrokToolRegistered] = useState(false);
   const [agyToolRegistered, setAgyToolRegistered] = useState(false);
 
-  const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
-  // Backend the Test Render panel should render through. '' is the sentinel for
-  // "follow the saved default" — NOT a picked backend — so the panel tracks a
-  // default the user changes on the Backend tab instead of pinning whatever was
-  // saved the first time this tab painted (#4128).
-  const [testMode, setTestMode] = useState('');
-  const testModeId = useId();
-  const [rendering, setRendering] = useState(false);
-  const [renderResult, setRenderResult] = useState(null);
-  // Shared media-run owner — same hook ImageGen/VideoGen use to await an async
-  // render's terminal frame after the kickoff POST returns a jobId. It also
-  // detaches the stream and drops the pending kickoff when the tab unmounts.
-  const { start: startRenderRun } = useMediaJobSse('image');
-
-  // HuggingFace token state — separate from the main settings save flow because
-  // it has its own validated endpoints (POST /setup/hf-token + DELETE) and
-  // applies to local Flux models regardless of which backend is active.
-  // `source` is 'stored' | 'env' | 'cli' | 'none'; only 'stored' tokens can be
-  // cleared from the UI (env/CLI come from outside settings.json).
-  const { present: hfTokenPresent, source: hfTokenSource, refresh: refreshHfTokenStatus } = useHfTokenStatus();
-  const [hfTokenInput, setHfTokenInput] = useState('');
-  // One busy flag covers both save and clear since they're mutually exclusive
-  // (both disable the form + buttons). `busy` is the in-flight verb so the
-  // Clear button can still show a Trash icon while the spinner is on Save.
-  const [hfTokenBusy, setHfTokenBusy] = useState(null); // null | 'saving' | 'clearing'
-
-  const handleSaveHfToken = async () => {
-    const trimmed = hfTokenInput.trim();
-    if (!trimmed) return;
-    setHfTokenBusy('saving');
-    const result = await saveHfToken(trimmed).catch(() => null);
-    setHfTokenBusy(null);
-    if (!result?.ok) return;
-    setHfTokenInput('');
-    refreshHfTokenStatus();
-    toast.success('HuggingFace token saved');
-  };
-
-  const handleClearHfToken = async () => {
-    setHfTokenBusy('clearing');
-    const result = await clearHfToken().catch(() => null);
-    setHfTokenBusy(null);
-    if (!result?.ok) return;
-    refreshHfTokenStatus();
-    toast.success(result.hfTokenPresent ? 'Stored token cleared (env / CLI token still active)' : 'HuggingFace token cleared');
-  };
-
   // fal.ai / reactor.inc video keys (#6213/#6214) — write-only since #8997:
   // the raw key never appears in a settings GET (privateKeyStore.js hydrates
   // it server-side, but redactExternalTokens strips it back out). The client
   // reads only presence + source from the shared credential inventory
   // (GET /api/settings/credentials, same one CredentialsTab renders) and
   // saves/clears through the write-only PUT /api/settings/credentials/:id
-  // setter — never through the general settings PUT this tab otherwise uses.
+  // setter — never through the slice PATCHes this tab otherwise uses.
   const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null });
-  const [falKeyInput, setFalKeyInput] = useState('');
-  const [reactorKeyInput, setReactorKeyInput] = useState('');
   // One busy flag for both keys since only one save/clear can be in flight
   // from this panel at a time; the value names which button is spinning.
   const [videoCredentialBusy, setVideoCredentialBusy] = useState(null);
@@ -389,19 +291,20 @@ export function ImageGenTab() {
 
   useEffect(() => { refreshCredentialRows(); }, [refreshCredentialRows]);
 
-  const handleSaveVideoCredential = async (id, value, setInput) => {
+  // Resolves true when the key was stored — the row clears its own input then.
+  const saveVideoCredential = async (id, value) => {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
     setVideoCredentialBusy(`${id}-saving`);
     const row = await saveCredential(id, trimmed, { silent: true }).catch(() => null);
     setVideoCredentialBusy(null);
-    if (!row) { toast.error('Failed to save key'); return; }
+    if (!row) { toast.error('Failed to save key'); return false; }
     setCredentialRows((previous) => ({ ...previous, [id]: row }));
-    setInput('');
     toast.success('Key saved privately.');
+    return true;
   };
 
-  const handleClearVideoCredential = async (id) => {
+  const clearVideoCredential = async (id) => {
     setVideoCredentialBusy(`${id}-clearing`);
     const row = await saveCredential(id, '', { silent: true }).catch(() => null);
     setVideoCredentialBusy(null);
@@ -410,129 +313,24 @@ export function ImageGenTab() {
     toast.success('Saved key cleared. External credentials may still apply.');
   };
 
+  const { load } = form;
   useEffect(() => {
+    let active = true;
     Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
       .then(([s, tools]) => {
-        const ig = s?.imageGen || {};
-        // Load every target entry whole (including videoModel keys this tab
-        // doesn't edit) — an entry is saved as one unit when it changes.
-        const rd = (s?.renderDefaults && typeof s.renderDefaults === 'object') ? s.renderDefaults : {};
-        // Video pin: normalize the mode ('auto'/blank → '', i.e. no pin) for
-        // the select.
-        const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
-        const vgMode = normalizeRenderPinValue(vg.mode) || '';
-        const vgModelId = vg.defaultModelId || '';
-        const vgDisplaySleep = vg.displaySleep === true;
-        const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
-        const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
-        const py = ig.local?.pythonPath || '';
-        const localModel = ig.local?.modelId || '';
-        const expose = ig.expose?.a1111 === true;
-        const cx = ig.codex || {};
-        const cxEnabled = cx.enabled === true;
-        const cxPath = cx.codexPath || '';
-        const cxModel = cx.model || '';
-        const cxEffort = cx.effort || '';
-        const bounds = cx.parallelLimitBounds && Number.isFinite(cx.parallelLimitBounds.max)
-          ? cx.parallelLimitBounds
-          : PARALLEL_FALLBACK;
-        setParallelBounds(bounds);
-        const cxParallel = clampParallel(cx.parallelLimit, bounds);
-        const gk = ig.grok || {};
-        const gkEnabled = gk.enabled === true;
-        const gkPath = gk.grokPath || '';
-        const gkRatio = gk.aspectRatio || '';
-        const ay = ig.agy || {};
-        const ayEnabled = ay.enabled === true;
-        const ayPath = ay.agyPath || '';
-        const ayModel = ay.model || '';
-        const fl = ig.fal || {};
-        const flEnabled = fl.enabled === true;
-        const flModel = fl.model || '';
-        // Per-mode cleaner reads via the shared helper (mirrored from
-        // server/lib/imageClean.js).
-        const codexClean = resolveCleanersFromConfig(cx, IMAGE_GEN_MODE.CODEX);
-        const grokClean = resolveCleanersFromConfig(gk, IMAGE_GEN_MODE.GROK);
-        const agyClean = resolveCleanersFromConfig(ay, IMAGE_GEN_MODE.AGY);
-        const falClean = resolveCleanersFromConfig(fl, IMAGE_GEN_MODE.FAL);
-        const localClean = resolveCleanersFromConfig(ig.local, IMAGE_GEN_MODE.LOCAL);
-        const externalClean = resolveCleanersFromConfig(ig.external, IMAGE_GEN_MODE.EXTERNAL);
-        const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, agy: agyClean.cleanC2PA, fal: falClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
-        const dn = { codex: codexClean.denoise, grok: grokClean.denoise, agy: agyClean.denoise, fal: falClean.denoise, local: localClean.denoise, external: externalClean.denoise };
-        setMode(m);
-        setRenderDefaults(rd);
-        setVideoGenMode(vgMode);
-        setLocalVideoModelId(vgModelId);
-        setVideoGenDisplaySleep(vgDisplaySleep);
-        setSdapiUrl(url);
-        setPythonPath(py);
-        setLocalModelId(localModel);
-        setExposeA1111(expose);
-        setCodexEnabled(cxEnabled);
-        setCodexPath(cxPath);
-        setCodexModel(cxModel);
-        setCodexEffort(cxEffort);
-        setCodexParallelLimit(cxParallel);
-        setParallelLimitDraft(String(cxParallel));
-        setGrokEnabled(gkEnabled);
-        setGrokPath(gkPath);
-        setGrokAspectRatio(gkRatio);
-        setAgyEnabled(ayEnabled);
-        setAgyPath(ayPath);
-        setAgyModel(ayModel);
-        setFalEnabled(flEnabled);
-        setFalModel(flModel);
-        setCleanC2PAByMode(c2);
-        setDenoiseByMode(dn);
-        setSaved({
-          mode: m, sdapiUrl: url, pythonPath: py, localModelId: localModel, exposeA1111: expose,
-          codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel, codexEffort: cxEffort,
-          codexParallelLimit: cxParallel,
-          grokEnabled: gkEnabled, grokPath: gkPath, grokAspectRatio: gkRatio,
-          agyEnabled: ayEnabled, agyPath: ayPath, agyModel: ayModel,
-          falEnabled: flEnabled, falModel: flModel,
-          cleanC2PAByMode: c2, denoiseByMode: dn,
-          renderDefaults: rd,
-          videoGenMode: vgMode,
-          localVideoModelId: vgModelId,
-          videoGenDisplaySleep: vgDisplaySleep,
-        });
+        if (!active) return;
+        const loaded = mediaFormFromSettings(s);
+        setParallelBounds(loaded.bounds);
+        load(loaded.values);
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
         setGrokToolRegistered(tools.some((t) => t.id === GROK_TOOL_ID));
         setAgyToolRegistered(tools.some((t) => t.id === AGY_TOOL_ID));
       })
-      .catch(() => toast.error('Failed to load image gen settings'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  // Shared with the per-record local-model picker (RecordRenderPinRow), which
-  // needs the same orphaned-pin handling: a pin the live catalog no longer
-  // lists still has to render as the selected option, or the select paints
-  // blank, reads as "install default", and a save silently drops a pin the
-  // server is still honouring.
-  const { options: localModelOptions, fallbackLabel: localDefaultLabel } = localModelSelectOptions(
-    localModels, localModelId,
-  );
-  const localVideoModels = videoModelContext?.models ?? null;
-  const localVideoModelOptions = localVideoModels === null ? [] : (
-    localVideoModelId && !localVideoModels.some((model) => model.id === localVideoModelId)
-      ? [{ id: localVideoModelId, name: `${localVideoModelId} (unavailable on this machine)` }, ...localVideoModels]
-      : localVideoModels
-  );
-  const localVideoDefaultId = videoModelContext?.defaultModel || '';
-  const localVideoDefaultLabel = localVideoModels?.length === 0
-    ? 'no compatible local model'
-    : localVideoModels?.find((model) => model.id === localVideoDefaultId)?.name || localVideoDefaultId || 'no compatible local model';
-
-  // Probe only while the Agy tab is actually open — the list spawns `agy models`
-  // server-side, so an unopened tab must not pay for a child process.
-  const {
-    models: agyModels,
-    error: agyModelsError,
-    loading: agyModelsLoading,
-    refresh: refreshAgyModels,
-  } = useAgyModels(mediaTab === 'agy' && agyEnabled);
+      .catch(() => { if (active) toast.error('Failed to load image gen settings'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [load]);
 
   // Probe the provider whose tab is open (undefined → the saved default
   // backend). Every result is tagged with the tab that asked for it and only
@@ -552,120 +350,13 @@ export function ImageGenTab() {
   const statusReady = statusReadiness === 'ready';
   const statusUnknown = statusReadiness === 'unknown';
   // The Local tab's own verdict, for the model IT has pinned — independent of
-  // `status`, which follows whichever backend tab is active.
-  const localRuntime = useLocalImageRuntime(localModelId || LOCAL_IMAGEGEN_DEFAULT_MODEL);
-  // A pip install into the mflux interpreter flips the verdict for an mflux
-  // model, and neither probe can observe that on its own.
-  const onLocalPackagesChanged = useCallback(() => {
-    localRuntime.refresh();
-    checkStatus();
-  }, [localRuntime, checkStatus]);
-
-  // Backends the Test Render picker may offer — derived from the SAVED slice,
-  // not the live form, because a test render runs against what the server has
-  // persisted (the same reason handleRenderTest reads `saved.mode`). The
-  // settings-shaped argument is what `deriveAvailableBackends` (the client
-  // mirror of the server's usability gate) consumes, so enabling a backend is
-  // still one edit in one place.
-  const savedBackends = deriveAvailableBackends({
-    imageGen: {
-      local: { pythonPath: saved.pythonPath, modelId: saved.localModelId },
-      codex: { enabled: saved.codexEnabled },
-      grok: { enabled: saved.grokEnabled },
-      agy: { enabled: saved.agyEnabled },
-      fal: { enabled: saved.falEnabled },
-      external: { sdapiUrl: saved.sdapiUrl },
-    },
-  });
-
-  // The saved default always stays selectable even when it isn't "usable" by
-  // the derivation above (e.g. external with a blank URL) — the server would
-  // still route the render there, so hiding it would make the select disagree
-  // with what the button actually does.
-  const testModeOptions = withUnlistedOption(
-    savedBackends,
-    saved.mode,
-    (id) => ({ id, label: modeLabel(id) }),
-  );
-  // A pick that a later save disabled falls back to the saved default rather
-  // than queueing a render that can only 400.
-  const effectiveTestMode = testModeOptions.some((b) => b.id === testMode) ? testMode : saved.mode;
-
-  const isDirty = mode !== saved.mode
-    || normalizeUrl(sdapiUrl) !== saved.sdapiUrl
-    || pythonPath !== saved.pythonPath
-    || localModelId !== saved.localModelId
-    || exposeA1111 !== saved.exposeA1111
-    || codexEnabled !== saved.codexEnabled
-    || codexPath !== saved.codexPath
-    || codexModel !== saved.codexModel
-    || codexEffort !== saved.codexEffort
-    || codexParallelLimit !== saved.codexParallelLimit
-    || grokEnabled !== saved.grokEnabled
-    || grokPath !== saved.grokPath
-    || grokAspectRatio !== saved.grokAspectRatio
-    || agyEnabled !== saved.agyEnabled
-    || agyPath !== saved.agyPath
-    || agyModel !== saved.agyModel
-    || falEnabled !== saved.falEnabled
-    || falModel !== saved.falModel
-    || cleanC2PAByMode.fal !== saved.cleanC2PAByMode.fal
-    || denoiseByMode.fal !== saved.denoiseByMode.fal
-    || cleanC2PAByMode.agy !== saved.cleanC2PAByMode.agy
-    || denoiseByMode.agy !== saved.denoiseByMode.agy
-    || cleanC2PAByMode.grok !== saved.cleanC2PAByMode.grok
-    || denoiseByMode.grok !== saved.denoiseByMode.grok
-    || cleanC2PAByMode.codex !== saved.cleanC2PAByMode.codex
-    || cleanC2PAByMode.local !== saved.cleanC2PAByMode.local
-    || cleanC2PAByMode.external !== saved.cleanC2PAByMode.external
-    || denoiseByMode.codex !== saved.denoiseByMode.codex
-    || denoiseByMode.local !== saved.denoiseByMode.local
-    || denoiseByMode.external !== saved.denoiseByMode.external
-    || JSON.stringify(renderDefaults) !== JSON.stringify(saved.renderDefaults)
-    || videoGenMode !== saved.videoGenMode
-    || localVideoModelId !== saved.localVideoModelId
-    || videoGenDisplaySleep !== saved.videoGenDisplaySleep;
+  // `status`, which follows whichever backend tab is active. Probed from the
+  // drawer's first render so the verdict is ready when the Local tab opens.
+  const localRuntime = useLocalImageRuntime(values.localModelId || LOCAL_IMAGEGEN_DEFAULT_MODEL);
 
   const handleSave = async () => {
     setSaving(true);
-    // What the server will hold after this save: the form, normalized the way
-    // the inputs are reflected back below (trimmed paths/models, clamped
-    // parallel limit, pruned render defaults).
-    const next = {
-      mode,
-      sdapiUrl: normalizeUrl(sdapiUrl),
-      pythonPath,
-      localModelId,
-      exposeA1111,
-      codexEnabled,
-      codexPath: codexPath?.trim() || '',
-      codexModel: codexModel?.trim() || '',
-      codexEffort: codexEffort?.trim() || '',
-      codexParallelLimit: clampParallel(codexParallelLimit, parallelBounds),
-      grokEnabled,
-      grokPath: grokPath?.trim() || '',
-      grokAspectRatio: grokAspectRatio?.trim() || '',
-      agyEnabled,
-      agyPath: agyPath?.trim() || '',
-      agyModel: agyModel?.trim() || '',
-      falEnabled,
-      falModel,
-      cleanC2PAByMode,
-      denoiseByMode,
-      renderDefaults: pruneRenderDefaults(renderDefaults),
-      videoGenMode,
-      localVideoModelId,
-      videoGenDisplaySleep,
-    };
-    const url = next.sdapiUrl || undefined;
-    const cxPath = next.codexPath || undefined;
-    const cxModel = next.codexModel || undefined;
-    const cxEffort = next.codexEffort || undefined;
-    const cxParallel = next.codexParallelLimit;
-    const gkPath = next.grokPath || undefined;
-    const gkRatio = next.grokAspectRatio || undefined;
-    const ayPath = next.agyPath || undefined;
-    const ayModel = next.agyModel || undefined;
+    const next = normalizeMediaForm(values, parallelBounds);
     try {
       // One request per changed slice, in order, so the server's write queue
       // merges each against the freshest persisted settings. A failure part
@@ -674,25 +365,10 @@ export function ImageGenTab() {
       for (const [slicePath, partial] of diffSlicePatches(next, saved)) {
         await patchSettingsSlice(slicePath, partial, { silent: true });
       }
-      // `saved` holds the normalized values — otherwise trailing whitespace in
-      // the inputs leaves isDirty stuck true after a successful save.
-      setSaved(next);
-      // Reflect the pruned no-op entries back into the editor state so the
-      // dirty check compares like against like after a save.
-      setRenderDefaults(next.renderDefaults);
-      if (cxParallel !== codexParallelLimit) {
-        setCodexParallelLimit(cxParallel);
-        setParallelLimitDraft(String(cxParallel));
-      }
-      // Reflect the normalization back into the inputs so what the user
-      // sees matches what was saved.
-      if (next.codexPath !== codexPath) setCodexPath(next.codexPath);
-      if (next.codexModel !== codexModel) setCodexModel(next.codexModel);
-      if (next.codexEffort !== codexEffort) setCodexEffort(next.codexEffort);
-      if (next.grokPath !== grokPath) setGrokPath(next.grokPath);
-      if (next.grokAspectRatio !== grokAspectRatio) setGrokAspectRatio(next.grokAspectRatio);
-      if (next.agyPath !== agyPath) setAgyPath(next.agyPath);
-      if (next.agyModel !== agyModel) setAgyModel(next.agyModel);
+      // The normalized values become both the inputs and the saved snapshot,
+      // so what the user sees matches what was persisted and trailing
+      // whitespace cannot leave the form dirty after a successful save.
+      form.markSaved(next);
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -702,9 +378,12 @@ export function ImageGenTab() {
 
     // Both tool entries are independent — sync them in parallel so a
     // tailnet save doesn't pay two sequential HTTP round-trips.
-    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url : (mode === IMAGE_GEN_MODE.LOCAL ? localConfigured : false);
+    const { mode, pythonPath, codexEnabled, grokEnabled, agyEnabled } = next;
+    const url = next.sdapiUrl || undefined;
+    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url
+      : (mode === IMAGE_GEN_MODE.LOCAL ? isLocalImageConfigured({ pythonPath, modelId: next.localModelId }) : false);
     const sdToolData = {
-      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Image Generation (Local)' : 'Stable Diffusion'),
+      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
       enabled: sdEnabled,
@@ -716,7 +395,7 @@ export function ImageGenTab() {
       category: 'image-generation',
       description: 'Generate images via the Grok Build CLI built-in image_gen tool. Requires a Grok plan that includes image generation.',
       enabled: grokEnabled,
-      config: { grokPath: gkPath, aspectRatio: gkRatio },
+      config: { grokPath: next.grokPath || undefined, aspectRatio: next.grokAspectRatio || undefined },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "grok" } — or call the image_generate voice tool with provider: "grok".',
     };
     const codexToolData = {
@@ -724,7 +403,7 @@ export function ImageGenTab() {
       category: 'image-generation',
       description: 'Generate images via the Codex CLI built-in image_gen tool ($imagegen prompt prefix). Requires a Codex plan that includes image_gen.',
       enabled: codexEnabled,
-      config: { codexPath: cxPath, model: cxModel, effort: cxEffort },
+      config: { codexPath: next.codexPath || undefined, model: next.codexModel || undefined, effort: next.codexEffort || undefined },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "codex" } — or call the image_generate voice tool with provider: "codex".',
     };
     const agyToolData = {
@@ -732,7 +411,7 @@ export function ImageGenTab() {
       category: 'image-generation',
       description: 'Generate text-to-image renders through the Antigravity CLI generate_image tool.',
       enabled: agyEnabled,
-      config: { agyPath: ayPath, model: ayModel },
+      config: { agyPath: next.agyPath || undefined, model: next.agyModel || undefined },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "agy" } — or call image_generate with provider: "agy". Image editing is not supported.',
     };
 
@@ -776,62 +455,7 @@ export function ImageGenTab() {
     setSaving(false);
   };
 
-  const handleRenderTest = async () => {
-    if (!testPrompt.trim() || rendering) return;
-    setRendering(true);
-    setRenderResult(null);
-    try {
-      // `effectiveTestMode` is the panel's own picker, defaulting to saved.mode
-      // (not the live `mode` state) so an unchanged picker still reflects what's
-      // actually persisted server-side. The disabled={isDirty} guard already
-      // prevents this branch from running with unsaved changes, but resolving
-      // through `saved` makes the contract explicit. Codex is async like local
-      // (returns a job descriptor immediately) so the SSE branch handles it.
-      // Local + Codex modes return immediately after spawning the child —
-      // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
-      // mark the render complete on the `complete` event (or fail on
-      // `error`). External mode awaits internally and the file is on disk
-      // by the time generateImage resolves, so it completes synchronously
-      // (no job id to follow).
-      const result = await startRenderRun(
-        () => generateImage({ prompt: testPrompt.trim(), mode: effectiveTestMode }, { silent: true }),
-        (ack) => ({
-          onError: (msg) => new Error(msg.error || 'Generation failed'),
-          onComplete: (msg) => ({ ...ack, ...msg.result }),
-        }),
-        {
-          jobIdOf: (ack) => ((ack?.mode === IMAGE_GEN_MODE.LOCAL || isCloudCliMode(ack?.mode)) ? ack.generationId : null),
-        },
-      );
-      setRenderResult(result);
-      toast.success('Test render complete');
-    } catch (err) {
-      // A detached run (tab unmounted mid-render) has nothing left to report to.
-      if (!isMediaRunEnded(err)) toast.error(err.message || 'Test render failed');
-    } finally {
-      setRendering(false);
-    }
-  };
-
   if (loading) return <BrailleSpinner text="Loading image gen settings" />;
-
-  // The advertised A1111 URL must be the canonical user-facing endpoint
-  // (`<tailscale-host>.<tailnet>.ts.net:PORTS.API` / `<tailscale-ip>:PORTS.API`),
-  // not the loopback HTTP mirror on PORTS.API_LOCAL or a localhost dev URL —
-  // those aren't
-  // reachable from other tailnet machines.
-  const advertisedA1111Url = (() => {
-    if (typeof window === 'undefined') return null;
-    const h = window.location.hostname;
-    // Local dev / loopback mirror — we can't infer the tailnet hostname
-    // from the browser; tell the user to look it up.
-    if (isLoopbackHost(h)) return null;
-    // Real tailnet host — use the canonical user-facing API port and
-    // match the currently-active scheme so the hint works in both HTTPS-on
-    // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
-    const scheme = window.location.protocol === 'http:' ? 'http' : 'https';
-    return `${scheme}://${h}:${PORTS.API}`;
-  })();
 
   return (
     <div className="space-y-4">
@@ -854,987 +478,21 @@ export function ImageGenTab() {
         aria-labelledby={`tab-${mediaTab}`}
         className="space-y-5"
       >
-      {/* Mode picker */}
-      {mediaTab === 'backend' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <ImageIcon size={18} />
-          <h2 className="text-lg font-semibold">Backend</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          PortOS can either talk to a remote AUTOMATIC1111 / Forge server or run image
-          generation with local Python runtimes, including mflux and diffusers. You can also
-          expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
-        </p>
-        <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled || agyEnabled || falEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
-          <button
-            type="button"
-            onClick={() => setMode(IMAGE_GEN_MODE.EXTERNAL)}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.EXTERNAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-          >
-            <div className="flex items-center gap-2">
-              <Cloud className="w-4 h-4" />
-              <span className="font-medium text-sm">External SD API</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">Forward to a remote AUTOMATIC1111 / Forge server (e.g. another tailnet box).</p>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode(IMAGE_GEN_MODE.LOCAL)}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.LOCAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-          >
-            <div className="flex items-center gap-2">
-              <Cpu className="w-4 h-4" />
-              <span className="font-medium text-sm">Local models</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">Run image and video models on this machine. Apple Silicon enables MLX models such as FastMetal.</p>
-          </button>
-          {codexEnabled && (
-            <button
-              type="button"
-              onClick={() => setMode(IMAGE_GEN_MODE.CODEX)}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.CODEX ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-            >
-              <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4" />
-                <span className="font-medium text-sm">Codex CLI</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">Route through the Codex CLI built-in image_gen tool. Counts against your Codex plan.</p>
-            </button>
-          )}
-          {grokEnabled && (
-            <button
-              type="button"
-              onClick={() => setMode(IMAGE_GEN_MODE.GROK)}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.GROK ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4" />
-                <span className="font-medium text-sm">Grok CLI</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">Route through the Grok Build CLI built-in image_gen tool. Counts against your Grok plan.</p>
-            </button>
-          )}
-          {agyEnabled && (
-            <button
-              type="button"
-              onClick={() => setMode(IMAGE_GEN_MODE.AGY)}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.AGY ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-            >
-              <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4" />
-                <span className="font-medium text-sm">Agy CLI</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">Text-to-image through Antigravity's generate_image tool and your selected model.</p>
-            </button>
-          )}
-          {falEnabled && (
-            <button
-              type="button"
-              onClick={() => setMode(IMAGE_GEN_MODE.FAL)}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.FAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4" />
-                <span className="font-medium text-sm">fal.ai</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">Hosted image and reference-edit models through fal.ai's API. Billed per image to your fal.ai account.</p>
-            </button>
-          )}
-        </div>
-      </div>
-      )}
-
-      {/* Per-surface render defaults (#3231) — pin a backend (and, for the
-          model-override-capable cloud CLIs, a model) per creative surface,
-          without touching the install-wide default above. */}
-      {mediaTab === 'defaults' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <SlidersHorizontal size={18} />
-          <h2 className="text-lg font-semibold">Render defaults</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Each surface below follows the install default backend unless pinned here. A pinned
-          backend that is disabled (or unconfigured) falls back to whatever that surface would
-          have used anyway — enable the backend on its own tab to make a pin take effect. A
-          model can be pinned for backends that accept one (Codex, Agy, fal.ai); Grok and Local pick
-          their models elsewhere. Surfaces that also render video get a video backend pin.
-          The default local video model is set on the Local tab, and a render's explicit model
-          choice takes precedence.
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 sm:items-center border border-port-border rounded-lg px-3 py-2 bg-port-bg/40">
-          <FormField
-            label={<>Default video backend<span className="block text-xs text-gray-500 mt-0.5">Used when a video render names no backend and its surface has no pin. Grok clips render at 6, 10 or 15 seconds on xAI&rsquo;s fixed video backend.</span></>}
-            labelClassName="text-sm text-gray-300"
-            className="contents"
-          >
-            <select
-              id="video-default-mode"
-              value={videoGenMode}
-              onChange={(e) => setVideoGenMode(e.target.value)}
-              className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
-            >
-              <option value="">Auto (Local)</option>
-              {VIDEO_RENDER_MODES.map((m) => (
-                <option key={m} value={m}>{modeLabel(m)}</option>
-              ))}
-            </select>
-          </FormField>
-        </div>
-        <label className="flex items-start gap-3 border border-port-border rounded-lg px-3 py-3 text-sm text-gray-300 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={videoGenDisplaySleep}
-            onChange={(e) => setVideoGenDisplaySleep(e.target.checked)}
-            className="mt-0.5 accent-port-accent"
-          />
-          <span>
-            <span className="block font-medium text-white">Sleep display during local MLX video renders</span>
-            <span className="block text-xs text-gray-500 mt-0.5">Off by default. Keeps the system awake while putting the screen to sleep, which reduces WindowServer GPU contention on affected Apple silicon. Turn on only if you hit the GPU-watchdog crash during a render — this is also settable per-render on the Video Gen page.</span>
-          </span>
-        </label>
-        {/* fal.ai / reactor.inc keys are write-only (#8997): presence + source
-            only, read from the shared credential inventory, saved/cleared
-            through their own PUT — never part of the Media save above. */}
-        {[
-          {
-            id: 'fal', label: 'fal.ai API key', input: falKeyInput, setInput: setFalKeyInput,
-            placeholder: 'fal-key-...', envLabel: 'FAL_KEY',
-            hint: 'Enables the fal.ai queue video backend on the Video Gen page and in FableLoom, and the fal.ai image backend (fal.ai tab). Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.',
-            missing: 'No fal.ai key configured — the fal.ai video and image backends will be unavailable.',
-          },
-          {
-            id: 'reactor', label: 'reactor.inc API key', input: reactorKeyInput, setInput: setReactorKeyInput,
-            placeholder: 'reactor-key-...', envLabel: 'REACTOR_API_KEY',
-            hint: 'Enables the reactor.inc fast-h3 video backend on the Video Gen page and in FableLoom, or set the REACTOR_API_KEY environment variable instead.',
-            missing: 'No reactor.inc key configured — the reactor.inc video backend will be unavailable.',
-          },
-        ].map(({ id, label, input, setInput, placeholder, envLabel, hint, missing }) => {
-          const row = credentialRows[id];
-          return (
-            <div key={id} className="space-y-2 border border-port-border rounded-lg p-3">
-              <div className="text-sm text-gray-300">
-                {label}
-                <span className="block text-xs text-gray-500 mt-0.5">{hint}</span>
-              </div>
-              {row == null ? (
-                <div className="text-xs text-gray-500"><BrailleSpinner text="Checking key status" /></div>
-              ) : row.configured ? (
-                <div className="flex items-center gap-2 text-xs text-port-success">
-                  <Check size={14} />
-                  <span>
-                    Key configured
-                    {row.source === 'env' && ` (from ${envLabel} environment variable)`}
-                    {row.source === 'settings' && ' (stored privately on this install)'}
-                  </span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 text-xs text-port-warning">
-                  <AlertTriangle size={14} />
-                  <span>{missing}</span>
-                </div>
-              )}
-              <div className="flex flex-col sm:flex-row gap-2 items-end">
-                <FormField label={row?.source === 'settings' ? 'Replace stored key' : 'Paste a key'} labelClassName="block text-xs font-medium text-gray-400 mb-1" className="flex-1 w-full">
-                  <input
-                    id={`${id}-api-key`}
-                    type="password"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveVideoCredential(id, input, setInput); }}
-                    disabled={videoCredentialBusy !== null}
-                    placeholder={placeholder}
-                    autoComplete="off"
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  />
-                </FormField>
-                <button
-                  type="button"
-                  onClick={() => handleSaveVideoCredential(id, input, setInput)}
-                  disabled={videoCredentialBusy !== null || !input.trim()}
-                  className="whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-port-accent text-white text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]"
-                >
-                  {videoCredentialBusy === `${id}-saving` ? <BrailleSpinner /> : <Save size={14} />}
-                  Save key
-                </button>
-              </div>
-              {row?.source === 'settings' && (
-                <button
-                  type="button"
-                  onClick={() => handleClearVideoCredential(id)}
-                  disabled={videoCredentialBusy !== null}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
-                >
-                  {videoCredentialBusy === `${id}-clearing` ? <BrailleSpinner /> : <Trash2 size={12} />}
-                  Clear stored key
-                </button>
-              )}
-            </div>
-          );
-        })}
-        <div className="space-y-3">
-          {RENDER_TARGET_OPTIONS.map(({ id, label, video }) => {
-            const entry = renderDefaults[id] || {};
-            const pinnedMode = entry.imageMode && entry.imageMode !== RENDER_TARGET_BACKEND_AUTO ? entry.imageMode : '';
-            const pinnedVideoMode = normalizeRenderPinValue(entry.videoMode) || '';
-            const modeSelectId = `render-default-mode-${id}`;
-            const modelInputId = `render-default-model-${id}`;
-            const videoSelectId = `render-default-video-${id}`;
-            const setPin = (key, value) => setRenderDefaults((rd) => {
-              const nextEntry = { ...(rd[id] || {}) };
-              if (value) nextEntry[key] = value; else delete nextEntry[key];
-              const next = { ...rd };
-              if (Object.keys(nextEntry).length) next[id] = nextEntry; else delete next[id];
-              return next;
-            });
-            return (
-              <div key={id} className={`grid grid-cols-1 ${video ? 'sm:grid-cols-[1fr_auto_auto_auto]' : 'sm:grid-cols-[1fr_auto_auto]'} gap-2 sm:items-center border border-port-border rounded-lg px-3 py-2`}>
-                <FormField label={label} labelClassName="text-sm text-gray-300" className="contents">
-                  <select
-                    id={modeSelectId}
-                    value={pinnedMode}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setPin('imageMode', v || null);
-                      // ANY backend change invalidates the pinned model — model ids
-                      // are namespaced per provider, and a codex→agy switch that
-                      // kept the gpt-* id would save a pin agy errors on. The
-                      // server's leak guard can't catch this case (mode and model
-                      // are pinned together), so the clear must happen here.
-                      setPin('imageModel', null);
-                    }}
-                    className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
-                  >
-                    <option value="">Auto (install default)</option>
-                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL].map((m) => (
-                      <option key={m} value={m}>{modeLabel(m)}</option>
-                    ))}
-                  </select>
-                </FormField>
-                {pinnedMode === IMAGE_GEN_MODE.FAL ? (
-                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
-                    <FalModelSelect
-                      id={modelInputId}
-                      value={entry.imageModel || ''}
-                      onChange={(v) => setPin('imageModel', v)}
-                      defaultLabel="Model: fal.ai default"
-                      className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-52"
-                    />
-                  </FormField>
-                ) : supportsCloudModelOverride(pinnedMode) ? (
-                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
-                    <input
-                      id={modelInputId}
-                      type="text"
-                      value={entry.imageModel || ''}
-                      onChange={(e) => setPin('imageModel', e.target.value.trim() || null)}
-                      placeholder="Model (optional)"
-                      aria-label={`${label} model`}
-                      className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-52"
-                    />
-                  </FormField>
-                ) : <span className="hidden sm:block sm:w-52" />}
-                {video && (
-                  <FormField label={`${label} video backend`} labelClassName="sr-only" className="contents">
-                    <select
-                      id={videoSelectId}
-                      value={pinnedVideoMode}
-                      onChange={(e) => setPin('videoMode', e.target.value || null)}
-                      aria-label={`${label} video backend`}
-                      title="Video backend for this surface — no model choice (Grok video has none; local video models are picked on the surface)"
-                      className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
-                    >
-                      <option value="">Video: Auto</option>
-                      {VIDEO_RENDER_MODES.map((m) => (
-                        <option key={m} value={m}>Video: {modeLabel(m)}</option>
-                      ))}
-                    </select>
-                  </FormField>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      )}
-
-      {mediaTab === 'external' && (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-          <FormField label="External AUTOMATIC1111 / Forge URL" labelClassName="text-sm font-medium text-gray-300">
-            <input
-              id="sdapi-url"
-              type="text"
-              value={sdapiUrl}
-              onChange={(e) => setSdapiUrl(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              placeholder="http://localhost:7860"
-            />
-            <p className="text-xs text-gray-500">Base URL for the SD WebUI server PortOS should send generation requests to.</p>
-          </FormField>
-          <CleanersToggles
-            cleanC2PA={cleanC2PAByMode.external}
-            denoise={denoiseByMode.external}
-            onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.EXTERNAL)}
-            onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.EXTERNAL)}
-          />
-        </div>
-      )}
-
-      {localMounted && (
-        <div className={`bg-port-card border border-port-border rounded-xl p-6 space-y-4 ${mediaTab === 'local' ? '' : 'hidden'}`}>
-          <h3 className="text-sm font-medium text-gray-300">Local runtimes (image + video)</h3>
-          <p className="text-xs text-gray-500">
-            Pick a Python 3.10+ interpreter — PortOS auto-detects the configured local runtimes and can install
-            missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
-            and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
-          </p>
-          {/* The verdict first, then the interpreter detail below it. The
-              packages panel only ever probes the mflux interpreter, so on its
-              own it reported "All required packages installed" for a machine
-              whose pinned model renders through the SHARED torch venv and could
-              not run at all. This is the same diagnosis the Image Gen status
-              pill and the renderer's pre-flight refusal use — settingsLink is
-              off because this IS the settings form. */}
-          <LocalRuntimeStatus
-            runtime={localRuntime.runtime}
-            loading={localRuntime.loading}
-            onRefresh={localRuntime.refresh}
-            settingsLink={false}
-          />
-          <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} onPackagesChanged={onLocalPackagesChanged} />
-          <p className="text-xs text-gray-500">
-            MOSS Image SFT uses a separate Swift/MLX runtime. Select it below to install on native Apple Silicon,
-            macOS 26+, with Swift 6.3 and the Metal compiler. Allow 10 GB for building and 27.2 GB for weights;
-            48 GB unified memory is the eligibility floor. Validated on M5 Max with 128 GB. Text-to-image,
-            bf16 only, 256–1024 pixels per side. Weight download is explicit.
-          </p>
-          <FormField
-            label="Default model"
-            labelClassName="block text-xs font-medium text-gray-400 mb-1"
-          >
-            <select
-              value={localModelId}
-              onChange={(e) => setLocalModelId(e.target.value)}
-              disabled={localModels === null}
-              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-            >
-              <option value="">
-                {localModels === null ? 'Loading models…' : `Install default (${localDefaultLabel})`}
-              </option>
-              {localModelOptions.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-            </select>
-          </FormField>
-          {/* Deliberately does NOT point at the Defaults tab: its per-surface
-              model pin is gated on supportsCloudModelOverride and hidden for
-              Local, and renderDefaults[target].imageModel only ever reaches
-              resolveCloudProviderConfig — so for local renders it is inert.
-              What actually outranks this pin is a per-record/per-render model
-              choice, which is what the sentence names. */}
-          <p className="text-xs text-gray-500">
-            Used by every local render that doesn&apos;t choose its own model — the Image Gen
-            form, deck cards, sprite references, pipeline visuals, character sheets and
-            FableLoom. A model picked on one of those surfaces still wins for that render.
-            Most models download weights on first use; MOSS requires its separate download action. Check what&apos;s already cached in{' '}
-            <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
-          </p>
-          {localModels?.length === 0 && (
-            <p role="status" className="text-xs text-port-warning">
-              No local image models are compatible with this machine.
-            </p>
-          )}
-          <div className="border-t border-port-border pt-4 space-y-3">
-            <h3 className="text-sm font-medium text-gray-300">Local video model</h3>
-            <FormField
-              label="Default local video model"
-              labelClassName="block text-xs font-medium text-gray-400 mb-1"
-            >
-              <select
-                value={localVideoModelId}
-                onChange={(e) => setLocalVideoModelId(e.target.value)}
-                disabled={localVideoModels === null || videoModelContextFailed}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              >
-                <option value="">
-                  {localVideoModels === null
-                    ? videoModelContextFailed ? 'Video models unavailable' : 'Loading models…'
-                    : `Install default (${localVideoDefaultLabel})`}
-                </option>
-                {localVideoModelOptions.map((model) => (
-                  <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                ))}
-              </select>
-            </FormField>
-            <p className="text-xs text-gray-500">
-              Used by local video renders that do not choose a model. A model selected for a
-              render still wins. Weights download on first use; check the{' '}
-              <a href="/models/media" className="text-port-accent hover:underline">
-                {getNavPageForPath('/models/media')?.breadcrumb || 'media models page'}
-              </a>{' '}for cached models.
-            </p>
-            {videoModelContextFailed && (
-              <p role="status" className="text-xs text-port-warning">Could not load local video models.</p>
-            )}
-            {localVideoModels?.length === 0 && !videoModelContextFailed && (
-              <p role="status" className="text-xs text-port-warning">
-                No local video models are compatible with this machine.
-              </p>
-            )}
-          </div>
-          <CleanersToggles
-            cleanC2PA={cleanC2PAByMode.local}
-            denoise={denoiseByMode.local}
-            onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.LOCAL)}
-            onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.LOCAL)}
-          />
-        </div>
-      )}
-
-      {/* Codex CLI config — the toggle that enables the option lives here.
-          Codex appears as a backend tile only after the user flips this on. */}
-      {mediaTab === 'codex' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Terminal size={18} />
-          <h2 className="text-lg font-semibold">Codex CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route image generation through the Codex CLI's built-in
-          <code className="text-gray-400"> image_gen </code> tool — invoked headlessly with a
-          <code className="text-gray-400"> $imagegen </code> prompt. Uses your logged-in Codex session, no
-          OPENAI_API_KEY required. Not every Codex plan exposes
-          <code className="text-gray-400"> image_gen </code>; if yours doesn't, leave this off.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={codexEnabled}
-            onChange={(e) => {
-              const v = e.target.checked;
-              setCodexEnabled(v);
-              // Disabling Codex while it's the active backend would leave
-              // the saved mode pointing at a disabled provider. Pick the
-              // best fallback: prefer local if Python is configured, else
-              // external if a URL is set, else external as a last resort
-              // (so the user lands on a non-broken default rather than
-              // sticking with codex or hopping to an unconfigured backend).
-              if (!v && mode === IMAGE_GEN_MODE.CODEX) {
-                const hasLocal = localConfigured;
-                setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
-              }
-            }}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable Codex Imagegen</span>
-        </label>
-        {codexEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Codex binary path (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                id={codexPathId}
-                type="text"
-                value={codexPath}
-                onChange={(e) => setCodexPath(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder="codex (uses $PATH)"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
-            </FormField>
-            <FormField label="Model override (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <select
-                id={codexModelId}
-                value={codexModel.trim()}
-                onChange={(e) => setCodexModel(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              >
-                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_MODEL})</option>
-                {codexModelOptions.map(({ id }) => (
-                  <option key={id} value={id}>{id}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave on Default for the cheap shipped model (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>). Models come from your Codex provider.</p>
-            </FormField>
-            <FormField label="Reasoning effort (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <select
-                id={codexEffortId}
-                value={codexEffort}
-                onChange={(e) => setCodexEffort(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              >
-                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
-                {codexEffortLevels.map((lvl) => (
-                  <option key={lvl} value={lvl}>{lvl}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>){codexEffortLevels[0] !== CODEX_IMAGEGEN_DEFAULT_EFFORT ? <> or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders</> : null}. The levels offered depend on the model above.</p>
-            </FormField>
-            <FormField label="Parallel render limit" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                id={codexParallelId}
-                type="number"
-                min={parallelBounds.min}
-                max={parallelBounds.max}
-                step={1}
-                value={parallelLimitDraft}
-                onChange={(e) => setParallelLimitDraft(e.target.value)}
-                onBlur={() => {
-                  const clamped = clampParallel(parallelLimitDraft, parallelBounds);
-                  setCodexParallelLimit(clamped);
-                  setParallelLimitDraft(String(clamped));
-                }}
-                className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                How many Codex renders the queue runs in parallel. Default <code>{formatCount(parallelBounds.default)}</code>.
-                Higher values let large batches finish faster, subject to your provider&apos;s rate limits, and increase simultaneous usage.
-                {codexParallelLimit > 5 && (
-                  <span className="block mt-1 text-port-warning">
-                    ⚠️ {formatCount(codexParallelLimit)} concurrent renders can burn credits quickly during a long batch. Watch usage.
-                  </span>
-                )}
-              </p>
-            </FormField>
-            <CleanersToggles
-              cleanC2PA={cleanC2PAByMode.codex}
-              denoise={denoiseByMode.codex}
-              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.CODEX)}
-              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.CODEX)}
-            />
-          </div>
-        )}
-      </div>
-      )}
-
-      {/* Grok Build CLI config — mirrors the Codex section's enable-gate
-          pattern. Grok appears as a backend tile only after the user flips
-          this on. Simpler than the Codex form: grok's image tools expose no
-          model/effort knobs, so it's just the binary path + a default aspect
-          ratio + the cleaner toggles. */}
-      {mediaTab === 'grok' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">Grok CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route image generation through the Grok Build CLI's built-in
-          <code className="text-gray-400"> image_gen </code> tool (and
-          <code className="text-gray-400"> image_edit </code> for image-to-image) — invoked headlessly.
-          Uses your logged-in Grok session, no XAI_API_KEY required. Not every Grok plan includes
-          image generation; if yours doesn't, leave this off.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={grokEnabled}
-            onChange={(e) => {
-              const v = e.target.checked;
-              setGrokEnabled(v);
-              // Disabling Grok while it's the active backend would leave the
-              // saved mode pointing at a disabled provider — same fallback
-              // order as the Codex toggle: local if configured, else external.
-              if (!v && mode === IMAGE_GEN_MODE.GROK) {
-                const hasLocal = localConfigured;
-                setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
-              }
-            }}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable Grok Imagegen</span>
-        </label>
-        {grokEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Grok binary path (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                id={grokPathId}
-                type="text"
-                value={grokPath}
-                onChange={(e) => setGrokPath(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder="grok (uses $PATH)"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>grok</code> from $PATH.</p>
-            </FormField>
-            <FormField label="Default aspect ratio (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <select
-                id={grokRatioId}
-                value={grokAspectRatio}
-                onChange={(e) => setGrokAspectRatio(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              >
-                <option value="">Auto (from requested size)</option>
-                {GROK_ASPECT_RATIOS.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                Applied when a render doesn't specify dimensions. A render's width/height maps to the nearest supported ratio automatically.
-              </p>
-            </FormField>
-            <CleanersToggles
-              cleanC2PA={cleanC2PAByMode.grok}
-              denoise={denoiseByMode.grok}
-              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.GROK)}
-              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.GROK)}
-            />
-          </div>
-        )}
-      </div>
-      )}
-
-      {mediaTab === 'agy' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Terminal size={18} />
-          <h2 className="text-lg font-semibold">Agy CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route text-to-image generation through Antigravity's built-in
-          <code className="text-gray-400"> generate_image </code> tool. Agy runs in an isolated scratch
-          directory and PortOS imports only the directed image output. Image editing is not supported.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={agyEnabled}
-            onChange={(e) => {
-              const enabled = e.target.checked;
-              setAgyEnabled(enabled);
-              if (!enabled && mode === IMAGE_GEN_MODE.AGY) {
-                setMode(localConfigured ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
-              }
-            }}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable Agy Imagegen</span>
-        </label>
-        {agyEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Agy binary path (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                id={agyPathId}
-                type="text"
-                value={agyPath}
-                onChange={(e) => setAgyPath(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder="agy (uses $PATH)"
-              />
-            </FormField>
-            <div className="flex items-end justify-between gap-3 mb-1">
-              <FormField label="Agent model (drives the session — not the image model)" labelClassName="block text-xs font-medium text-gray-400" className="flex-1">
-                <input
-                  id={agyModelId}
-                  list={agyModelsListId}
-                  type="text"
-                  value={agyModel}
-                  onChange={(e) => setAgyModel(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                  placeholder={`${AGY_IMAGEGEN_DEFAULT_MODEL} (default)`}
-                />
-              </FormField>
-              <button
-                type="button"
-                onClick={refreshAgyModels}
-                disabled={agyModelsLoading}
-                className="text-xs text-port-accent hover:underline disabled:opacity-50"
-              >
-                {agyModelsLoading ? <BrailleSpinner text="Loading…" /> : 'Refresh models'}
-              </button>
-            </div>
-            <div>
-              <datalist id={agyModelsListId}>
-                {agyModels.map((modelId) => <option key={modelId} value={modelId} />)}
-              </datalist>
-              {agyModelsError && <p role="status" className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
-              {/* This is the model `agy --model` runs the SESSION on — the agent that
-                  calls the built-in generate_image tool. Agy exposes no knob for the
-                  underlying image model (generate_image takes Prompt / ImageName /
-                  AspectRatio / ImagePaths and nothing else — schema re-dumped from a
-                  live session 2026-07-30, agy 1.1.8), so there is no imagen-* option to
-                  pick here — the image model is fixed server-side (see the read-only
-                  row below and AGY_IMAGEGEN_IMAGE_MODEL). An id outside `agy models`
-                  makes agy exit non-zero before generating, which is why the list is a
-                  live probe. */}
-              {!agyModelsError && (
-                <p className="text-xs text-gray-500 mt-1">
-                  The agent model Agy runs the session on — it drives the built-in{' '}
-                  <code className="text-gray-400">generate_image</code> tool. Leave empty to
-                  use the cheap default (<code className="text-gray-400">{AGY_IMAGEGEN_DEFAULT_MODEL}</code>).
-                  Renders can pin a different agent model per queue item on the Image Gen page.
-                </p>
-              )}
-            </div>
-            <div>
-              <span className="block text-xs font-medium text-gray-400 mb-1">Image model</span>
-              <p className="text-sm text-gray-300">
-                <code className="text-gray-300">{AGY_IMAGEGEN_IMAGE_MODEL}</code>{' '}
-                <span className="text-xs text-gray-500">
-                  — chosen by Antigravity server-side; not selectable through the CLI
-                  (no tool parameter, no <code>--model</code> id, prompt requests are ignored —
-                  agy will claim it honored one, but the pixels come out identical).
-                </span>
-              </p>
-            </div>
-            <CleanersToggles
-              cleanC2PA={cleanC2PAByMode.agy}
-              denoise={denoiseByMode.agy}
-              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.AGY)}
-              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.AGY)}
-            />
-          </div>
-        )}
-      </div>
-      )}
-
-      {mediaTab === 'fal' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">fal.ai Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Render through fal.ai&rsquo;s hosted image models. Renders with reference or source images
-          go to the chosen model&rsquo;s edit endpoint, so mood-board references condition the result.
-          Every render is billed to your fal.ai account; the gallery records each image&rsquo;s estimated cost.
-        </p>
-        {/* Key presence comes from the shared credential inventory — the key
-            itself is write-only and lives on the Defaults tab with the fal.ai
-            video key it is shared with. */}
-        {credentialRows.fal == null ? (
-          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking fal.ai key" /></div>
-        ) : credentialRows.fal.configured ? (
-          <div className="flex items-center gap-2 text-xs text-port-success">
-            <Check size={14} />
-            <span>fal.ai API key configured (shared with the fal.ai video backend)</span>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
-            <AlertTriangle size={14} />
-            <span>No fal.ai API key — set it under the Defaults tab (fal.ai API key, shared with Video Gen) first.</span>
-            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
-              Open Defaults
-            </button>
-          </div>
-        )}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={falEnabled}
-            onChange={(e) => {
-              const enabled = e.target.checked;
-              setFalEnabled(enabled);
-              if (!enabled && mode === IMAGE_GEN_MODE.FAL) {
-                setMode(localConfigured ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
-              }
-            }}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable fal.ai Imagegen</span>
-        </label>
-        {falEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Default model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <FalModelSelect
-                id={falModelId}
-                value={falModel}
-                onChange={(v) => setFalModel(v || '')}
-                defaultLabel={`${falImageFamily(FAL_IMAGE_DEFAULT_MODEL)?.label} (default)`}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              />
-            </FormField>
-            <p className="text-xs text-gray-500">
-              Prices are fal.ai&rsquo;s published per-image rates (Nano Banana charges more at 4K; FLUX.2 bills
-              output plus reference megapixels). Renders can pick a different model per queue item on the
-              Image Gen page, and each surface can pin one under Defaults.
-            </p>
-            <CleanersToggles
-              cleanC2PA={cleanC2PAByMode.fal}
-              denoise={denoiseByMode.fal}
-              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.FAL)}
-              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.FAL)}
-            />
-          </div>
-        )}
-      </div>
-      )}
-
-      {/* HuggingFace token — used by local Flux models (FLUX.1-dev, FLUX.2-klein).
-          Independent of the mode picker because the token persists in settings
-          and applies whenever local image gen runs. */}
-      {mediaTab === 'tokens' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Key size={18} />
-          <h2 className="text-lg font-semibold">HuggingFace Token</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Used for gated local models and model downloads — including <code className="text-gray-400">FLUX.1-dev</code>, the{' '}
-          <code className="text-gray-400">FLUX.2-klein</code> family, and gated video sources. Accept each model's license on HuggingFace, then create a read token at{' '}
-          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="text-port-accent hover:underline">
-            huggingface.co/settings/tokens
-          </a>{' '}and paste it below. PortOS reads stored tokens first, then falls back to the{' '}
-          <code className="text-gray-400">HF_TOKEN</code> env var or <code className="text-gray-400">~/.cache/huggingface/token</code>.
-        </p>
-
-        {hfTokenPresent === null ? (
-          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking token status" /></div>
-        ) : hfTokenPresent ? (
-          <div className="flex items-center gap-2 text-xs text-port-success">
-            <Check size={14} />
-            <span>
-              Token configured
-              {hfTokenSource === 'env' && ' (from HF_TOKEN environment variable)'}
-              {hfTokenSource === 'cli' && ' (from ~/.cache/huggingface/token — set via `hf auth login`)'}
-              {hfTokenSource === 'stored' && ' (stored in settings.json)'}
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-xs text-port-warning">
-            <AlertTriangle size={14} />
-            <span>No HuggingFace token configured — gated models will fail to download.</span>
-          </div>
-        )}
-
-        <div className="flex flex-col sm:flex-row gap-2 items-end">
-          <FormField label={hfTokenSource === 'stored' ? 'Replace stored token' : 'Paste a token'} labelClassName="block text-xs font-medium text-gray-400 mb-1" className="flex-1 w-full">
-            <input
-              id="hf-token-input"
-              type="password"
-              value={hfTokenInput}
-              onChange={(e) => setHfTokenInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveHfToken(); }}
-              disabled={hfTokenBusy !== null}
-              placeholder="hf_…"
-              autoComplete="off"
-              spellCheck={false}
-              className="w-full flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-            />
-          </FormField>
-          <button
-            type="button"
-            onClick={handleSaveHfToken}
-            disabled={hfTokenBusy !== null || !hfTokenInput.trim()}
-            className="whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-port-accent text-white text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]"
-          >
-            {hfTokenBusy === 'saving' ? <BrailleSpinner /> : <Save size={14} />}
-            Save token
-          </button>
-        </div>
-
-        {hfTokenSource === 'stored' && (
-          <button
-            type="button"
-            onClick={handleClearHfToken}
-            disabled={hfTokenBusy !== null}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
-          >
-            {hfTokenBusy === 'clearing' ? <BrailleSpinner /> : <Trash2 size={12} />}
-            Clear stored token
-          </button>
-        )}
-      </div>
-      )}
-
-      {mediaTab === 'expose' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Globe size={18} />
-          <h2 className="text-lg font-semibold">Expose as A1111 API on the Tailnet</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          When enabled, PortOS mounts an AUTOMATIC1111-compatible surface at
-          <code className="text-gray-400"> /sdapi/v1/* </code> so other machines on your tailnet can point any A1111 client at this box and use whichever backend you picked above. Off by default — flip on only when you actually want to share this server.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={exposeA1111}
-            onChange={(e) => setExposeA1111(e.target.checked)}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable <code className="text-gray-400">/sdapi/v1/*</code></span>
-        </label>
-        {exposeA1111 && (
-          <div className="text-xs space-y-1 bg-port-bg border border-port-border rounded-lg p-3">
-            <div className="flex items-center gap-1 text-port-warning">
-              <AlertTriangle className="w-3 h-3" /> Anyone with tailnet access to this host can hit the API. PortOS does not authenticate.
-            </div>
-            <div className="text-gray-400">
-              {advertisedA1111Url ? (
-                <>Other machines should set their SD API URL to <code className="text-gray-300">{advertisedA1111Url}</code></>
-              ) : (
-                <>Other machines should set their SD API URL to <code className="text-gray-300">https://&lt;your-tailscale-host&gt;:{PORTS.API}</code> (run <code className="text-gray-300">tailscale status</code> on this machine to see the hostname).</>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-      )}
-
-      {mediaTab === 'test' && (
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">Test Render</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Send a prompt through {modeLabel(effectiveTestMode)} to verify end-to-end. For richer controls, visit the
-          <a href="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</a> page.
-        </p>
-        <FormField label="Backend" labelClassName="block text-sm text-gray-300 mb-1">
-          <select
-            id={testModeId}
-            value={effectiveTestMode}
-            onChange={(e) => setTestMode(e.target.value)}
-            disabled={rendering}
-            className="w-full sm:w-64 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-          >
-            {testModeOptions.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.label}{b.id === saved.mode ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-gray-500 mt-1">
-            Only enabled backends are listed — smoke-test one without making it your default.
-          </p>
-        </FormField>
-        <FormField label="Test prompt" labelClassName="sr-only">
-          <textarea
-            id="test-render-prompt"
-            value={testPrompt}
-            onChange={(e) => setTestPrompt(e.target.value)}
-            rows={2}
-            disabled={rendering}
-            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
-            placeholder="Describe the image you want..."
-          />
-        </FormField>
-        <button
-          type="button"
-          onClick={handleRenderTest}
-          disabled={rendering || isDirty || !testPrompt.trim()}
-          className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
-          title={isDirty ? 'Save settings first' : `Generate a test image with ${modeLabel(effectiveTestMode)}`}
-        >
-          {rendering ? <BrailleSpinner /> : <Sparkles size={14} />}
-          {rendering ? 'Rendering...' : 'Render Test Image'}
-        </button>
-        {renderResult && (
-          <div className="border border-port-border rounded-lg overflow-hidden bg-port-bg">
-            <img
-              src={renderResult.path}
-              alt="Test render"
-              className="w-full max-w-md mx-auto object-contain"
-            />
-            <div className="px-3 py-2 text-xs text-gray-400 flex items-center justify-between border-t border-port-border">
-              <span className="truncate">Saved: {renderResult.filename}</span>
-              <a href={renderResult.path} download className="text-port-accent hover:underline ml-2 shrink-0">Download</a>
-            </div>
-          </div>
-        )}
-      </div>
-      )}
+        <ImageGenBackendSections
+          mediaTab={mediaTab}
+          form={form}
+          credentials={{ rows: credentialRows, busy: videoCredentialBusy, save: saveVideoCredential, clear: clearVideoCredential }}
+        />
+        <ImageGenProviderSections
+          mediaTab={mediaTab}
+          setMediaTab={setMediaTab}
+          form={form}
+          parallelBounds={parallelBounds}
+          falCredential={credentialRows.fal}
+          localRuntime={localRuntime}
+          onStatusRecheck={checkStatus}
+        />
+        <ImageGenServiceSections mediaTab={mediaTab} form={form} />
       </div>
 
       {/* Persistent global save + status bar — applies across every tab since
@@ -1882,48 +540,6 @@ export function ImageGenTab() {
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-// Per-provider post-render cleaner toggles. Both must run before the SSE
-// complete event fires so subscribers see the cleaned bytes on first fetch —
-// enforced by the provider success paths, not here. A future "Clean SynthID"
-// diffusion option will join this group when ready.
-function CleanersToggles({ cleanC2PA, denoise, onCleanC2PAChange, onDenoiseChange }) {
-  return (
-    <div className="space-y-2 pt-1">
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={cleanC2PA}
-          onChange={(e) => onCleanC2PAChange(e.target.checked)}
-          className="rounded mt-0.5"
-        />
-        <span className="text-sm text-gray-300">
-          Clean C2PA
-          <span className="block text-xs text-gray-500 mt-0.5">
-            Strip the gpt-image <code>caBX</code> provenance chunk. Lossless — pixels untouched, only metadata removed. Safe to leave on; recommended for renders you'll share publicly.
-          </span>
-        </span>
-      </label>
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={denoise}
-          onChange={(e) => onDenoiseChange(e.target.checked)}
-          className="rounded mt-0.5"
-        />
-        <span className="text-sm text-gray-300">
-          Denoise (median + sharpen)
-          <span className="block text-xs text-gray-500 mt-0.5">
-            Smooths AI-generation artifacts with a median filter + sharpen pass. <span className="text-port-warning">Warning: lossy — blurs annotation text, small labels, and fine detail.</span> Implicitly also strips C2PA. Skip this for renders with text (concept sheets, infographics, comic panels).
-          </span>
-        </span>
-      </label>
-      <p className="text-[11px] text-gray-500 italic mt-1">
-        Neither option defeats SynthID — gpt-image / Imagen renders stay detectable by their vendor watermark checkers. A "Clean SynthID" diffusion option is planned separately.
-      </p>
     </div>
   );
 }
