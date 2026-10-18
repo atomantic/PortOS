@@ -350,3 +350,19 @@ describe('direct dependency pinning (#5699)', () => {
     expect(EXACT_VERSION.test('1.2.0-beta.15')).toBe(true);
   });
 });
+
+// Biome is installed twice: client/ owns the CI lint job (`scripts/run-ci-lint.js`
+// lints BOTH trees with the client binary) and server/ owns `npm run lint --prefix
+// server` (#12051). A Dependabot bump that lands in one workspace and not the other
+// would lint the server with two rule sets — green locally, red in CI, or the
+// reverse. Shared tooling is pinned identically or not at all.
+describe('shared lint tooling (#12051)', () => {
+  it('pins @biomejs/biome to one version across client/ and server/', () => {
+    const pins = ['client/package.json', 'server/package.json'].map((rel) => {
+      const version = readDirectDeps(rel).find(({ name }) => name === '@biomejs/biome')?.range;
+      return `${rel}=${version}`;
+    });
+    expect(pins.map((pin) => pin.split('=')[1])).not.toContain('undefined');
+    expect(new Set(pins.map((pin) => pin.split('=')[1])).size, pins.join(', ')).toBe(1);
+  });
+});
