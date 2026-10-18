@@ -16,6 +16,7 @@ import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile
  */
 
 import { Router } from 'express';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { readJSONFile } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
@@ -28,10 +29,19 @@ import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
 import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
+import { isRepo } from '../../services/git.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
 
 const router = Router();
+
+// Lets the task form disable worktree/PR for a non-git app before submit (the
+// create route refuses it with NOT_A_GIT_REPO). Left undefined — i.e. unknown,
+// not "not a repo" — when the directory is missing, mirroring that route.
+async function withGitRepoFlag(app) {
+  if (!app.repoPath || !existsSync(app.repoPath)) return app;
+  return { ...app, isGitRepo: await isRepo(app.repoPath) };
+}
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
@@ -56,7 +66,7 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
-  const apps = await enrichAppsWithPm2Status(rawApps);
+  const apps = await Promise.all((await enrichAppsWithPm2Status(rawApps)).map(withGitRepoFlag));
   if (view === 'probe') {
     res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type }) => ({
       id, name, icon, overallStatus, uiPort, apiPort, type,

@@ -408,6 +408,7 @@ function TaskCompletionFields({ form }) {
     reviewerModelOptions,
     handlePlanOnlyChange,
   } = form;
+  const notGitRepo = selectedApp?.isGitRepo === false;
   const reviewDefaults = state.reviewDefaults;
   const reviewOverrides = state.reviewOverrides;
   const reviewerCliInstalled = state.reviewerCliInstalled;
@@ -472,17 +473,21 @@ function TaskCompletionFields({ form }) {
               <input
                 type="checkbox"
                 checked={state.useWorktree}
+                disabled={notGitRepo}
                 onChange={(event) => {
                   setField('useWorktree', event.target.checked);
                   setField('openPR', event.target.checked);
                 }}
-                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
               />
               <span className="flex items-center gap-1.5 text-sm text-gray-400" title="Work in an isolated git worktree on a feature branch. If unchecked, commits directly to the default branch.">
                 <GitBranch size={14} className="text-emerald-400" />
                 Worktree
               </span>
             </label>
+            {notGitRepo && (
+              <p className="basis-full text-xs text-gray-500">{selectedApp.name} is not a git repository — worktree and PR are unavailable. Run <code>git init</code> in its directory (and add a remote if PRs are needed) to enable them.</p>
+            )}
             {!state.useWorktree && (
               <label htmlFor="task-when-done" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
                 <span className="text-sm text-gray-400">When done</span>
@@ -496,7 +501,7 @@ function TaskCompletionFields({ form }) {
               <input
                 type="checkbox"
                 checked={state.openPR}
-                disabled={!state.useWorktree}
+                disabled={!state.useWorktree || notGitRepo}
                 onChange={(event) => setField('openPR', event.target.checked)}
                 className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
               />
