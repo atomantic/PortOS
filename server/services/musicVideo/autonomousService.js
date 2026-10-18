@@ -1349,7 +1349,8 @@ async function ownsStillsReview(projectId, productionRunId) {
 async function reviewOrPark(projectId, run, productionRunId) {
   if (isOrchestratedRun(run)) {
     const regenerate = await reviewStills(projectId, run, productionRunId);
-    if (!regenerate) return;
+    // A stop or cancel can also land while the repair and its review entry are written.
+    if (!regenerate || !await ownsStillsReview(projectId, productionRunId)) return;
     if (regenerate.length) {
       await deps.resumeProduction(projectId, productionRunId, { acceptBasis: true, stopBefore: 'clips' });
       return;
