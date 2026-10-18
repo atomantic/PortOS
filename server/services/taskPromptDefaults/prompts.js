@@ -2292,6 +2292,82 @@ flag, or a setting nothing reads is proven by reading the code; it does not need
 a live reproduction. Never quote a user's records when describing what is
 offered.`,
 
+  'upgrade-rehearsal': `[Improvement: {appName}] Upgrade and restore rehearsal
+
+Execute {appName}'s upgrade path and its backup restore against scratch
+installs, and file what breaks. Every command in this run targets a scratch
+directory you create: never the live \`data/\`, never the real Postgres, with
+\`MEMORY_BACKEND=file\` and \`NODE_ENV=test\` in the environment and a free
+loopback port chosen inside the project's documented port band (\`docs/PORTS.md\`)
+and checked free first, never the running server's. A command whose working
+directory, data root, database name, or port is the live install's is out of
+bounds even when it only reads.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Reading a migration shows what it intends; running it against an older shape
+shows what it does. The failures that reach installs — a seed landing before
+the migration that derives from it, a non-atomic write under a crash, two
+runners sharing one ledger, a migration importing a live service — are
+executed-path failures that no static read of one file surfaces.
+
+## Rehearse
+
+1. **Build a synthetic older install.** Create a disposable root the way
+   \`scripts/smoke-boot.js\` (\`createSmokeRoot\`) does — marker file, private
+   HOME and TMPDIR, a copy of \`data.reference/\` — then overlay two or three
+   past record shapes taken from the fixtures in \`scripts/migrations/*.test.js\`:
+   the oldest shape still carried, a mid-history shape, and the shape the
+   newest derive-style migration reads. Seed \`data/\` from the reference copy
+   (\`scripts/lib/seedDataDir.js\`, the step \`scripts/setup-data.js\` performs),
+   run \`scripts/run-migrations.js\` (\`runMigrations({ rootDir })\`) against that
+   root, then boot the server with \`PORTOS_DATA_ROOT\` pinned to it on your port
+   and wait for \`/api/system/health\` before stopping it.
+2. **Restore a backup.** Produce a snapshot from the scratch data with
+   \`services/backup.js\` (\`runBackup\`, which writes the manifest), or use the
+   newest snapshot already readable to you, and restore it into a second
+   scratch root with \`restoreSnapshot\` — dry run first, then execute — and
+   verify the manifest: every recorded file present with its recorded hash,
+   nothing extra, nothing the current code refuses to read.
+3. **Boot the restored root** the same way and confirm its health endpoint.
+
+A repository with a different runner substitutes its documented equivalents;
+one with no migration runner and no backup path reports not-applicable and
+stops. Record every command with its data root so the run can be repeated.
+
+## Hunt for
+
+- **A migration that fails or no-ops on a real older shape** — a crash, a
+  derive skipped because its output was seeded first, a result that differs
+  from what the migration's own test asserts.
+- **A ledger or lock that misbehaves under a second runner** — start the
+  runner twice against one root and compare the applied list.
+- **A write that leaves a torn file** — stop the runner mid-migration and
+  check what the next run finds.
+- **A restore that does not round-trip** — a file the manifest records but
+  the restore skips, a hash mismatch, a restored record the booted server
+  rejects.
+- **A boot step the rehearsal could not reach** — one that runs only against
+  the real database stays unexercised; report it as uncovered, never as
+  passing.
+
+## Not yours
+
+Reading migrations and schemas for missing safety nets belongs to the
+data-safety work; runtime correctness of writes to the data-integrity work; a
+restore endpoint's own error handling to the failure-path work. Name the
+overlap when the rehearsal exposes it.
+
+## The bar
+
+Every finding names the step that broke (the migration file or restore
+function, \`file:LINE\`), the fixture shape it ran against, the exact scratch
+command, and what the next boot sees. One issue per root cause, not per
+symptom; a rehearsal in which nothing breaks files nothing and says so, with
+the shapes it covered.`,
+
   'workflow-recovery': `[Improvement: {appName}] Workflow completion and recovery audit
 
 Find the multi-step workflows in {appName} that can stop halfway and leave the

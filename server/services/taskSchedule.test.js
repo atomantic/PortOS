@@ -1982,6 +1982,7 @@ describe('taskSchedule', () => {
       ['simplify', OPEN_ISSUES_ONLY],
       ['ui-lifecycle', OPEN_ISSUES_ONLY],
       ['module-hygiene', DEDUP_PRELOAD],
+      ['upgrade-rehearsal', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
       ...[...AUDIT_TASK_TYPES]
         .filter((taskType) => taskType.startsWith('better-'))

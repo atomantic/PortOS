@@ -60,6 +60,7 @@
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
+    "upgrade-rehearsal": "ef9d54fa653d6639abd4707b4f392d8d",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
     "ux": "14d790bd65e540d00786ecb4e787a61e",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
@@ -120,6 +121,7 @@
     "typing": 3,
     "ui-bugs": 4,
     "ui-lifecycle": 3,
+    "upgrade-rehearsal": 1,
     "user-action-review": 2,
     "ux": 8,
     "workflow-recovery": 1

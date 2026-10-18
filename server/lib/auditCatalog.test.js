@@ -106,6 +106,15 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(auditCapabilityRequirement('better-test-quality')).toBe('tests');
   });
 
+  // The executed rehearsal shares data-safety's category and follows it in the
+  // advisory order; its metric label keeps the two sets of findings apart.
+  it('registers upgrade-rehearsal as data-safety\'s executed, ungated successor', () => {
+    expect(AUDIT_SUGGESTED_AFTER['upgrade-rehearsal']).toEqual(['data-safety']);
+    expect(AUDIT_DEFINITIONS['upgrade-rehearsal'].filing).toMatchObject({ issueLabel: 'data-safety', extraLabels: ['upgrade-rehearsal'] });
+    expect(auditCapabilityRequirement('upgrade-rehearsal')).toBeNull();
+    expect(defaultFileIssuesFor('upgrade-rehearsal')).toBe(true);
+  });
+
   it('enumerates the audits in catalog order without a second vocabulary', () => {
     expect(AUDIT_TASK_TYPE_LIST).toEqual([...AUDIT_TASK_TYPES]);
     expect(AUDIT_TASK_TYPE_LIST.every(isAuditTaskType)).toBe(true);
