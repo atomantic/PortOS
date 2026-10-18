@@ -711,10 +711,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
   const code = tokens.map((t) => (t.t === 's' ? `'${t.v}'` : t.t === 'tpl' ? `\`${t.quasis.join('${}')}\`` : t.t === 'id' || t.t === 'p' ? t.v : '0')).join(' ');
   if (GIT_SPAWN.test(code)) facts.git = true;
   if (/\bimport \. meta \. glob\b/.test(code)) facts.unresolvedEdges.push('import.meta.glob');
-  // The browser suites resolve Chrome through CHROME_PATH or playwright-core;
-  // the python sidecar tests through PORTOS_TEST_PYTHON.
+  // The browser suites resolve Chrome through CHROME_PATH or playwright-core.
   if (/\bCHROME_PATH\b/.test(code) || facts.edges.some((edge) => packageNameOf(edge.spec) === 'playwright-core')) facts.tools.add('chrome');
-  if (/\bPORTOS_TEST_PYTHON\b/.test(code)) facts.tools.add('python');
 
   const literalArg = (open) => {
     const first = tokens[open + 1];
@@ -801,6 +799,10 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       } else if (arg.kind === 'expr') {
         const { value } = evaluate(tokens, match, arg.index, ctx);
         if (value.k === 'path') record(value, { walk: true, consumer: token.v });
+        // `spawn(process.env.PORTOS_TEST_PYTHON || 'python3', …)`: the program expression names python.
+        for (let j = arg.index; j < match[open] && !(tokens[j].t === 'p' && tokens[j].v === ','); j += 1) {
+          if ((tokens[j].t === 'id' && tokens[j].v === 'PORTOS_TEST_PYTHON') || (tokens[j].t === 's' && /^python3?$/.test(tokens[j].v))) facts.tools.add('python');
+        }
       }
       const close = match[open];
       for (let j = open + 1; j < close; j += 1) {
