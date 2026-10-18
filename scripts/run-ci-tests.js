@@ -13,6 +13,11 @@ import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
+import {
+  currentCommit, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, passedTestFiles, planTestMemo,
+  readVitestDependencies, recordTestMemo, writeSelectionFile,
+} from './lib/testMemoRunner.js';
+import { resolveMemoDir } from './lib/testMemoStore.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -110,10 +115,6 @@ export function toRunnerPath(scope, path) {
   return `../${path}`;
 }
 
-export function relatedInputs(sourceFiles, selectedFiles) {
-  return [...new Set([...sourceFiles, ...selectedFiles])];
-}
-
 /**
  * Vitest selector flags for this runner's slice of the selected suite. `CI_SHARD` is
  * `<index>/<count>` from the job matrix (ci.yml). A single shard passes nothing,
@@ -209,12 +210,14 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
   let cleanupUnverified = false;
   try {
     writeOwnerFile(reportDir);
-    const result = await runNpmWithReport(scope, script, extraArgs, reportPath, env, signal, cancellationTimeoutMs);
-    cleanupUnverified = result.cleanupUnverified === true;
+    const launched = await runNpmWithReport(scope, script, extraArgs, reportPath, env, signal, cancellationTimeoutMs);
+    cleanupUnverified = launched.cleanupUnverified === true;
     if (cleanupUnverified) {
       console.error(`Test launcher cleanup unverified; diagnostics retained at ${reportDir}`);
-      return { ...result, diagnosticsPath: reportDir };
+      return { ...launched, diagnosticsPath: reportDir };
     }
+    // Per-file outcomes feed the test memo; an interrupted run proves nothing.
+    const result = { ...launched, fileResults: launched.interrupted ? [] : fileResultsFromReport(reportPath) };
     const profile = env.PORTOS_BROWSER_TEST_PROFILE;
     if (profile !== undefined && result.status === 0) {
       try {
@@ -328,7 +331,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
 }
 
 export async function spawnNpm(scope, script, extraArgs, label, {
-  run = runNpm, diagnose = reportWindowsCrashDiagnostics,
+  run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {},
 } = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
@@ -336,6 +339,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
     ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
   const result = await run(scope, script, [...extraArgs, ...profileArgs]);
   recordVitestDuration(scope, label, startedAt);
+  onResult(result);
   if (result.error) {
     console.error(result.error.message);
     return 1;
@@ -360,6 +364,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   const retryStartedAt = Date.now();
   const retry = await run(scope, script, [selector, ...profileArgs]);
   recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
+  onResult(retry);
   if (!retry.error && retry.status === 0) {
     if (hasOtherTestFailures(result.output)) {
       // The crash retry only clears the crash itself — a real assertion
@@ -396,7 +401,6 @@ async function main() {
     ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(scope, path));
-  const sourceFiles = repoSources.map((path) => toRunnerPath(scope, path));
 
   if (!['full', 'files', 'related'].includes(mode)) {
     console.error(`Unsupported CI test mode: ${mode}`);
@@ -408,50 +412,72 @@ async function main() {
     process.exit(2);
   }
 
-  if (mode === 'full') {
-    const shard = shardArgs(process.env.CI_SHARD);
-    const label = shard.length ? `full suite shard ${process.env.CI_SHARD}` : 'full suite';
-    // process.exitCode, not process.exit(): the runner now streams the
-    // child's output through this process's own stdout/stderr, and
-    // process.exit() can terminate before those writes (and this function's
-    // own diagnostic lines) finish flushing. Setting exitCode lets Node drain
-    // normally once main() returns.
+  if (mode === 'files' && selectedFiles.length === 0) {
+    const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
+    const deferredOnly = profile === 'smoke' && inputFiles.length > 0
+      && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
+    if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
+    console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
+    process.exitCode = 0;
+    return;
+  }
+
+  const shard = shardArgs(process.env.CI_SHARD);
+  const label = mode === 'full' ? (shard.length ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
+    : mode === 'files' ? 'selected tests' : 'related and contract tests';
+  // process.exitCode, not process.exit(): the runner streams the child's
+  // output through this process's own stdout/stderr, and process.exit() can
+  // terminate before those writes (and this function's own diagnostic lines)
+  // finish flushing. Setting exitCode lets Node drain normally once main()
+  // returns.
+  const memoDir = resolveMemoDir();
+  if (mode === 'full' && !memoDir) {
     process.exitCode = await spawnNpm(scope, 'test:ci', shard, label);
     return;
   }
 
-  if (mode === 'files') {
-    if (selectedFiles.length === 0) {
-      const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
-      const deferredOnly = profile === 'smoke' && inputFiles.length > 0
-        && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
-      if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
-      console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
-      process.exitCode = 0;
-      return;
+  // The selection is closure-based (scripts/lib/testMemo.js): in related
+  // mode a test runs when a changed source is in its module closure or when
+  // its edges cannot all be resolved, plus the planner's explicit files.
+  // Vitest used to resolve `related` itself from CI_TEST_SOURCES; computing
+  // the set here is what lets the memo subtract the files a trusted green
+  // run already verified, and the list reaches Vitest as a file because a
+  // related set can exceed the Windows command-line limit.
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot });
+  if (memoDir) {
+    console.log(memoSummaryLine(plan));
+    if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
+      for (const { test, via } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key)`);
     }
-    // The planner fans an exact-file plan out only when it selects more files
-    // than the shard count (ci-test-plan.js fansOut), so the slice is never empty.
-    process.exitCode = await spawnNpm(scope, 'test:ci', [...selectedFiles, ...shardArgs(process.env.CI_SHARD)], 'selected tests');
+  }
+  if (plan.run.length === 0) {
+    console.log(`No ${scope} tests left to run.`);
+    process.exitCode = 0;
     return;
   }
-
-  // Feed Vitest the actual changed source files instead of asking `list
-  // --changed` to print every individual test name into a buffered subprocess.
-  // The old discovery pass took 282 seconds on PR #5296, overflowed Node's
-  // spawnSync buffer, discarded its work, then reran the same graph. `related`
-  // builds that graph once and immediately executes it.
-  // A test file passed to `vitest related` is itself selected, so changed tests
-  // and structural guards can share the source graph's one Vitest invocation.
-  // Running them in a second exact-file process repeated any changed test that
-  // already imported the source; on PR #5299 that rebuilt the atlas twice and
-  // added 27.5 seconds after the related run had already passed it.
-  process.exitCode = await spawnNpm(
-    scope,
-    'test:ci:related',
-    [...relatedInputs(sourceFiles, selectedFiles), ...shardArgs(process.env.CI_SHARD)],
-    'related and contract tests',
-  );
+  const skipped = plan.skipped.map(({ test }) => test);
+  const selection = writeSelectionFile({ scope, include: mode === 'full' ? null : plan.run, exclude: mode === 'full' ? skipped : [] });
+  process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+  // A memo-trimmed selection can leave one shard of the matrix empty, which
+  // Vitest otherwise reports as a failure.
+  const extraArgs = [...shard, ...(skipped.length ? ['--passWithNoTests'] : []), ...(memoDir ? ['--experimental.recordDependencies'] : [])];
+  const passed = [];
+  try {
+    process.exitCode = await spawnNpm(scope, 'test:ci', extraArgs, label, {
+      onResult: (result) => passed.push(...passedTestFiles(result.fileResults ?? [], {
+        repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined,
+      })),
+    });
+  } finally {
+    rmSync(selection.dir, { recursive: true, force: true });
+  }
+  if (!memoDir || passed.length === 0) return;
+  const written = recordTestMemo({
+    scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
+    dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
+    source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
+  });
+  console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) await main();
