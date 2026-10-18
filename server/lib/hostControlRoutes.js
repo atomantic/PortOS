@@ -453,9 +453,6 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/digital-twin/import/spotify/browser/import',
   'POST /api/digital-twin/twin-evidence/interpret',
 
-  'POST /api/tools',
-  'PUT /api/tools/:id',
-
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
