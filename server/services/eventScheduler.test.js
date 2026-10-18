@@ -409,6 +409,32 @@ describe('schedule() lifecycle with fake timers', () => {
     expect(await triggerNow('does-not-exist')).toBe(false);
   });
 
+  it('triggerNow() mid-run joins the in-flight timer run instead of starting a second handler (#12022)', async () => {
+    let release;
+    const handler = vi.fn(() => new Promise(resolve => { release = resolve; }));
+    schedule({ id: 'trigger-join', type: 'interval', intervalMs: 60000, handler });
+
+    // The timer starts the run; "Run now" lands while it is still executing.
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const manual = triggerNow('trigger-join');
+    const secondManual = triggerNow('trigger-join');
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    release();
+    expect(await manual).toEqual({ joined: true });
+    expect(await secondManual).toEqual({ joined: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(getEvent('trigger-join').runCount).toBe(1);
+    expect(getHistory({ eventId: 'trigger-join' })).toHaveLength(1);
+
+    // The latch releases with the run: the next trigger executes again.
+    handler.mockResolvedValue(undefined);
+    expect(await triggerNow('trigger-join')).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
   it('records a failed handler in history without deactivating a recurring event', async () => {
     const handler = vi.fn().mockRejectedValue(new Error('boom'));
     schedule({ id: 'fail-1', type: 'interval', intervalMs: 5000, handler });

@@ -394,7 +394,11 @@ function schedule(config) {
     active: true,
     lastRunSucceeded: null,
     lastError: null,
-    consecutiveFailures: 0
+    consecutiveFailures: 0,
+    // The promise of the run in progress, or null. One run per event at a
+    // time: a trigger that lands mid-run joins it instead of starting a
+    // second handler over the same state (#12022).
+    inFlight: null
   }
 
   // Calculate next run time
@@ -553,10 +557,26 @@ function recordEventHistory(event, { startTime, success, error }) {
 }
 
 /**
- * Run an event
+ * Run an event, or join the run already in flight for it. Only `runBackup`
+ * guards itself; every other handler relies on this latch to never execute
+ * twice concurrently.
+ * @param {Object} event - Event object
+ * @returns {Promise<void>}
+ */
+function runEvent(event) {
+  if (event.inFlight) return event.inFlight
+  event.inFlight = executeEvent(event).finally(() => {
+    event.inFlight = null
+  })
+  return event.inFlight
+}
+
+/**
+ * Execute an event's handler once and record the outcome. Callers go through
+ * `runEvent`, which owns the in-flight latch.
  * @param {Object} event - Event object
  */
-async function runEvent(event) {
+async function executeEvent(event) {
   const startTime = Date.now()
 
   event.lastRunAt = startTime
@@ -776,13 +796,22 @@ function cancelAll() {
 }
 
 /**
- * Trigger an event immediately (for testing or manual runs)
+ * Trigger an event immediately (for testing or manual runs). A trigger that
+ * lands while the event's timer run is still in flight joins that run rather
+ * than starting a second one, and resolves once it finishes.
  * @param {string} id - Event identifier
- * @returns {Promise<boolean>} - True if event was found and triggered
+ * @returns {Promise<boolean|{ joined: true }>} - `false` for an unknown id,
+ *   `true` when this call ran the handler, `{ joined: true }` when it waited
+ *   on a run already in progress.
  */
 async function triggerNow(id) {
   const event = scheduledEvents.get(id)
   if (!event) return false
+
+  if (event.inFlight) {
+    await event.inFlight
+    return { joined: true }
+  }
 
   // Disarm before running: a long manual run must not have its own pending
   // deadline elapse underneath it and start a second, concurrent run.
