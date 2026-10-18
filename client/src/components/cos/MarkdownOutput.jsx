@@ -23,15 +23,24 @@ function renderText(text, linkifyText, key) {
   // no-reference path costs exactly what it did before the resolver existed.
   if (!segments || (segments.length === 1 && typeof segments[0] === 'string')) return [text];
   return segments.map((seg, i) => {
-    // `safeSrc` for the same reason a markdown link's href gets it: the
-    // resolver is supplied by the caller, and a `javascript:`/`data:`
-    // destination must not become an anchor just because it arrived through a
-    // different door. A rejected destination degrades to the literal text.
-    const href = seg?.url ? safeSrc(seg.url) : null;
-    if (!seg?.url) return seg;
-    return href
-      ? <a key={`${key}-${i}`} href={href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{seg.ref}</a>
-      : seg.ref;
+    if (typeof seg === 'string') return seg;
+    const segKey = `${key}-${i}`;
+    if (seg.url) {
+      // `safeSrc` for the same reason a markdown link's href gets it: the
+      // resolver is supplied by the caller, and a `javascript:`/`data:`
+      // destination must not become an anchor just because it arrived through
+      // a different door. A rejected destination degrades to the literal text.
+      const href = safeSrc(seg.url);
+      return href
+        ? <a key={segKey} href={href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{seg.ref}</a>
+        : seg.ref;
+    }
+    // An in-app destination (a vault wikilink) has no href at all — it is a
+    // button the caller handles, so there is no URL to vet.
+    if (seg.onClick) {
+      return <button key={segKey} type="button" onClick={seg.onClick} className="text-port-accent hover:text-white hover:underline">{seg.ref}</button>;
+    }
+    return seg.className ? <span key={segKey} className={seg.className}>{seg.ref}</span> : seg.ref;
   });
 }
 
@@ -126,11 +135,22 @@ function parseBlocks(md, baseLevel, linkifyText, preserveLineBreaks) {
       continue;
     }
 
-    // Unordered list
+    // Unordered list. A GFM task item (`- [ ] todo` / `- [x] done`) renders
+    // its box as a glyph instead of a bullet; a checked one is struck through.
     if (/^[-*+] /.test(line)) {
       const items = [];
       while (i < lines.length && /^[-*+] /.test(lines[i])) { items.push(lines[i].replace(/^[-*+] /, '')); i++; }
-      blocks.push(<ul key={`ul${i}`} className="my-0.5 pl-4 space-y-0.5">{items.map((it, j) => <li key={j} className="text-xs text-gray-300 list-disc">{parseInline(it, linkifyText)}</li>)}</ul>);
+      blocks.push(<ul key={`ul${i}`} className="my-0.5 pl-4 space-y-0.5">{items.map((it, j) => {
+        const task = it.match(/^\[([ xX])\]\s+(.*)$/);
+        if (!task) return <li key={j} className="text-xs text-gray-300 list-disc">{parseInline(it, linkifyText)}</li>;
+        const checked = task[1] !== ' ';
+        return (
+          <li key={j} className={`text-xs list-none -ml-4 flex items-start gap-2 ${checked ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
+            <span aria-hidden="true">{checked ? '☑' : '☐'}</span>
+            <span>{parseInline(task[2], linkifyText)}</span>
+          </li>
+        );
+      })}</ul>);
       continue;
     }
 
@@ -183,10 +203,12 @@ function parseBlocks(md, baseLevel, linkifyText, preserveLineBreaks) {
   return blocks;
 }
 
-// `linkifyText(text) => Array<string | { ref, url }>` optionally turns spans of
-// literal text into links — how a CoS run card resolves the bare `#7640` an
-// agent wrote in its summary against that run's own tracker. Omit it and the
-// text renders exactly as before.
+// `linkifyText(text) => Array<string | { ref, url } | { ref, onClick } | { ref, className }>`
+// optionally turns spans of literal text into links — how a CoS run card
+// resolves the bare `#7640` an agent wrote in its summary against that run's
+// own tracker, and how a vault note turns `[[wikilinks]]` into in-app buttons
+// and `#tags` into tinted spans. Omit it and the text renders exactly as
+// before.
 export default function MarkdownOutput({ content, baseLevel = 3, linkifyText = null, preserveLineBreaks = false }) {
   return (
     <div className="markdown-output min-w-0 overflow-hidden break-words">

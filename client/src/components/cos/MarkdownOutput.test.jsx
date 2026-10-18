@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import MarkdownOutput from './MarkdownOutput';
 
@@ -129,5 +129,36 @@ describe('preserveLineBreaks', () => {
     const { container } = render(<MarkdownOutput content={src} preserveLineBreaks />);
     expect(container.querySelectorAll('br')).toHaveLength(1);
     expect(container.querySelector('p').textContent).toBe('first linesecond line');
+  });
+});
+
+describe('task list items', () => {
+  it('renders GFM checkboxes as glyphs and strikes through the checked ones', () => {
+    render(<MarkdownOutput content={'- [ ] open\n- [x] done\n- plain'} />);
+    const open = screen.getByText('open').closest('li');
+    const done = screen.getByText('done').closest('li');
+    expect(open).toHaveTextContent('☐open');
+    expect(open.className).not.toContain('line-through');
+    expect(done).toHaveTextContent('☑done');
+    expect(done.className).toContain('line-through');
+    expect(screen.getByText('plain').className).toContain('list-disc');
+  });
+});
+
+describe('resolver segments without a URL', () => {
+  it('renders an onClick segment as a button and a className segment as a styled span', () => {
+    const onClick = vi.fn();
+    const linkifyText = (text) => text.split(/(\[\[[^\]]+\]\]|#\w+)/).filter(Boolean).map(seg => {
+      if (seg.startsWith('[[')) return { ref: seg.slice(2, -2), onClick };
+      if (seg.startsWith('#')) return { ref: seg, className: 'text-port-accent/70' };
+      return seg;
+    });
+    render(<MarkdownOutput content="open [[Other Note]] #tag" linkifyText={linkifyText} />);
+    const button = screen.getByRole('button', { name: 'Other Note' });
+    expect(button).toHaveAttribute('type', 'button');
+    button.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText('#tag').className).toContain('text-port-accent/70');
   });
 });
