@@ -2,13 +2,14 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+import { CLIENT_TEST_EXCLUDE, CLIENT_TEST_INCLUDE } from '../scripts/lib/workspaceTests.js';
 
-import { vitestCiPool } from '../scripts/vitestCiPool.js';
+import { applyRunnerSelection, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { TEST_TIMEOUT_MS } from './src/test/timeouts.js';
 
 const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
-export default defineConfig({
+const config = defineConfig({
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   plugins: [react()],
@@ -26,6 +27,9 @@ export default defineConfig({
       // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
       npm_config_logs_max: '0',
       NODE_DISABLE_COMPILE_CACHE: '1',
+      // The runner's selection is for THIS Vitest process only: a suite that
+      // spawns a nested Vitest on a fixture must not inherit it.
+      PORTOS_CI_TEST_SELECTION: '',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public
     // runner before ChiefOfStaff's config panel settled. Keep the proven
@@ -52,6 +56,15 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.js'],
     css: false,
-    include: ['src/**/*.{test,spec}.{js,jsx}'],
+    // Shared with the CI runner, which enumerates the same set before Vitest
+    // starts (scripts/lib/workspaceTests.js). The exclude is Vitest's own
+    // default, spelled out so a runner selection can extend it.
+    include: [...CLIENT_TEST_INCLUDE],
+    exclude: [...CLIENT_TEST_EXCLUDE],
   },
 });
+
+// The CI runner's explicit selection (closure-related files, minus the ones
+// the test memo already verified) arrives as a file, not as CLI selectors.
+config.test = applyRunnerSelection(config.test, vitestRunnerSelection());
+export default config;

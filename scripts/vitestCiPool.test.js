@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { vitestCiPool } from './vitestCiPool.js';
+import { EXCLUSIVE_CAPTURE_TESTS, applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from './vitestCiPool.js';
 
 describe('vitestCiPool', () => {
   const original = process.env.CI;
@@ -157,3 +157,39 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     rmSync(scratch, { recursive: true, force: true });
   }
 }, 35000);
+
+describe('vitestRunnerSelection', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+
+  it('keeps the config globs without a selection and applies a file selection on top of them', () => {
+    expect(vitestRunnerSelection({})).toEqual({ include: null, exclude: [] });
+    dir = mkdtempSync(join(tmpdir(), 'portos-selection-'));
+    const path = join(dir, 'selection.json');
+    writeFileSync(path, JSON.stringify({ include: ['lib/a.test.js', '../scripts/b.test.js'], exclude: ['lib/c.test.js'] }));
+    const selection = vitestRunnerSelection({ PORTOS_CI_TEST_SELECTION: path });
+    expect(applyRunnerSelection({ include: ['**/*.test.js'], exclude: ['**/node_modules/**'] }, selection))
+      .toEqual({ include: ['lib/a.test.js', '../scripts/b.test.js'], exclude: ['**/node_modules/**', 'lib/c.test.js'] });
+    // An exclude-only selection (a memo-trimmed full run) keeps the globs; an absent exclude stays absent.
+    writeFileSync(path, JSON.stringify({ include: null, exclude: ['lib/c.test.js'] }));
+    expect(applyRunnerSelection({ include: ['**/*.test.js'] }, vitestRunnerSelection({ PORTOS_CI_TEST_SELECTION: path })))
+      .toEqual({ include: ['**/*.test.js'], exclude: ['lib/c.test.js'] });
+    expect(applyRunnerSelection({ include: ['x'] }, { include: null, exclude: [] })).toEqual({ include: ['x'] });
+    // The capture project narrows to the selection too, instead of running every exclusive suite.
+    const [parallel, capture] = vitestCaptureProjects({ include: ['lib/a.test.js', EXCLUSIVE_CAPTURE_TESTS[0]], exclude: [] },
+      { selection: { include: ['lib/a.test.js', EXCLUSIVE_CAPTURE_TESTS[0]], exclude: [] } });
+    expect(capture.test.include).toEqual([EXCLUSIVE_CAPTURE_TESTS[0]]);
+    expect(parallel.test.exclude).toContain(EXCLUSIVE_CAPTURE_TESTS[0]);
+    expect(vitestCaptureProjects({ include: ['**/*.test.js'], exclude: [] })[1].test.include.length).toBeGreaterThan(1);
+  });
+
+  it('refuses a selection it cannot read rather than widening to the whole suite', () => {
+    dir = mkdtempSync(join(tmpdir(), 'portos-selection-'));
+    const path = join(dir, 'selection.json');
+    writeFileSync(path, '{ not json');
+    expect(() => vitestRunnerSelection({ PORTOS_CI_TEST_SELECTION: path })).toThrow();
+    writeFileSync(path, JSON.stringify({ include: ['ok', 42] }));
+    expect(() => vitestRunnerSelection({ PORTOS_CI_TEST_SELECTION: path })).toThrow(/include/);
+    expect(() => vitestRunnerSelection({ PORTOS_CI_TEST_SELECTION: join(dir, 'missing.json') })).toThrow();
+  });
+});

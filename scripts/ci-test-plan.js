@@ -523,9 +523,12 @@ const DOCUMENTATION_RULES = [
 // Text snapshots are executable test inputs, but their extension is deliberately
 // outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
 // `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
-const FIXTURE_OWNERS = [
+// `dir` names the directory the pattern covers so the test memo
+// (scripts/lib/testMemo.js) can hash every fixture an owning test reads.
+export const FIXTURE_OWNERS = [
   {
     re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
+    dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
 ];
@@ -721,7 +724,7 @@ const featureDirectory = (path) => {
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-  'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+  'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
   'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
 ]);
