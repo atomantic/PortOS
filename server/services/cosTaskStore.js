@@ -20,6 +20,7 @@ import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWo
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, stat } from 'fs/promises';
 import { atomicWrite } from '../lib/fileUtils.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
@@ -168,15 +169,18 @@ function isContentEdit(updates, existingMetadata = {}) {
 // Cache the parsed array per file so an unchanged file costs one `stat` plus a
 // structured clone instead of a read + full parse.
 //
-// One server process, one user (AGENTS.md trust model) — no locking, no atomic
-// write dance. Correctness rests on two independent invalidation signals:
+// Concurrent API/daemon readers share the complete stat/read/parse operation.
+// Otherwise a cold cache multiplies whole-file strings and parsed task arrays
+// by the number of readers (#12225). Correctness rests on two signals:
 //
 //   1. The stamp (`mtimeMs` + `size`) catches writes this module did NOT make —
 //      a user editing `TASKS.md` in an editor, a restore, a peer's direct write.
-//   2. Every write through `writeTaskFile` DROPS the entry outright. mtime can
+//   2. Every write through `writeTaskFile` DROPS the entry before AND after the
+//      write, including reads started while the rename was pending. mtime can
 //      be as coarse as one second on some filesystems, so a write-then-read in
 //      the same tick must not depend on the stamp having moved.
-const parsedTaskCache = new Map(); // filePath -> { stamp, tasks, byId? }
+const parsedTaskCache = new Map(); // filePath -> generation { snapshot? }
+const taskSnapshotReads = createSingleFlight();
 
 // `null` = could not stat (missing/unreadable) → do not cache, distinct from a
 // legitimately empty file, which stamps normally and caches its empty parse.
@@ -188,14 +192,24 @@ const taskFileStamp = async (filePath) => {
 // Private snapshots never leave this module: list readers clone the array,
 // while ID lookups clone only the matching task. Both share invalidation.
 async function readTaskSnapshot(filePath) {
-  const stamp = await taskFileStamp(filePath);
-  const cached = parsedTaskCache.get(filePath);
-  if (stamp && cached?.stamp === stamp) return cached;
+  let generation = parsedTaskCache.get(filePath);
+  if (!generation) {
+    generation = {};
+    parsedTaskCache.set(filePath, generation);
+  }
+  // The entry identity is the flight key: invalidation detaches older reads
+  // without letting them repopulate the cache or capture post-write callers.
+  return taskSnapshotReads.run(generation, async () => {
+    const stamp = await taskFileStamp(filePath);
+    if (stamp && generation.snapshot?.stamp === stamp) return generation.snapshot;
 
-  const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
-  if (stamp) parsedTaskCache.set(filePath, snapshot);
-  else parsedTaskCache.delete(filePath);
-  return snapshot;
+    const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
+    if (parsedTaskCache.get(filePath) === generation) {
+      if (stamp) generation.snapshot = snapshot;
+      else parsedTaskCache.delete(filePath);
+    }
+    return snapshot;
+  });
 }
 
 async function readTaskFile(filePath) {
@@ -226,7 +240,7 @@ async function writeTaskFile(filePath, markdown) {
   // task list, and a plain writeFile killed mid-write (PM2 restart, crash, full
   // disk) leaves it empty or half-written — which parses as "no tasks" and is
   // then persisted by the next write.
-  await atomicWrite(filePath, markdown);
+  await atomicWrite(filePath, markdown).finally(() => parsedTaskCache.delete(filePath));
 }
 
 /** Test hook: forget every cached parse. */
