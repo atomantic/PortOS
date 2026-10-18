@@ -113,6 +113,11 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
 export const getCatalogIngredientDetails = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/details`, options);
 
+export const listCatalogRelatedImages = (id, { limit = 24, offset = 0, ...options } = {}) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request(`/catalog/ingredients/${enc(id)}/related-images?${params}`, options);
+};
+
 // --- Tags (canonical taxonomy) ------------------------------------------
 
 // Autocomplete over the canonical catalog_tags table. `q` is an optional
@@ -217,3 +222,16 @@ export const rerunCatalogMigration = ({ force, ...options } = {}) =>
 export const previewMusicVideoCastImport = (options) => request('/catalog/import/music-videos', options);
 export const commitMusicVideoCastImport = (selections, options) =>
   request('/catalog/import/music-videos', { method: 'POST', body: JSON.stringify({ selections }), ...options });
+
+export const previewCatalogMerge = (body, options) =>
+  request('/catalog/ingredients/merge', { method: 'POST', body: JSON.stringify({ ...body, dryRun: true }), ...options });
+export const applyCatalogMerge = (body, options) =>
+  request('/catalog/ingredients/merge', { method: 'POST', body: JSON.stringify({ ...body, dryRun: false }), ...options });
+export const listCatalogMergeHistory = (id, { limit = 10, offset = 0, ...options } = {}) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request(`/catalog/ingredients/${enc(id)}/merge-history?${params}`, options);
+};
+export const getCatalogMergeReceipt = (id, options) =>
+  request(`/catalog/ingredient-merges/${enc(id)}`, options);
+export const recoverCatalogMerge = (id, options) =>
+  request(`/catalog/ingredient-merges/${enc(id)}/recover`, { method: 'POST', body: '{}', ...options });

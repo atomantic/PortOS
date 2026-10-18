@@ -50,6 +50,23 @@ const executionProvenance = (value) => {
   };
 };
 
+// A history row must retain usable reference evidence without exposing worker paths.
+// Missing old inputs mean unknown provenance, not a confirmed text-only render.
+const referenceInputs = (params, routed) => {
+  const inputs = routed
+    ? (Array.isArray(params?.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets : [])
+    : [
+      ...(params?.initImagePath ? [{ role: 'initImage', path: params.initImagePath }] : []),
+      ...(Array.isArray(params?.referenceImagePaths) ? params.referenceImagePaths.map(path => ({ role: 'referenceImages', path })) : []),
+    ];
+  return inputs.flatMap(input => {
+    if (!['initImage', 'referenceImages'].includes(input?.role) || typeof input?.path !== 'string') return [];
+    const filename = input.path.split(/[\\/]/).pop();
+    if (!filename || !/^[^\x00-\x1f?#]+\.(?:png|jpe?g|webp|gif)$/i.test(filename)) return [];
+    return [{ role: input.role, filename }];
+  });
+};
+
 export function sanitizeJob(job) {
   if (!job) return job;
   if (job.durabilityPending) {
@@ -89,7 +106,9 @@ export function sanitizeJob(job) {
     if (remotePrompt) safeParams.prompt = remotePrompt;
     if (typeof remoteModelId === 'string' && remoteModelId) safeParams.modelId = remoteModelId;
   }
+  const requestedInputImages = job.kind === 'image' ? referenceInputs(job.params, routed) : [];
   return {
+    ...(requestedInputImages.length ? { requestedInputImages } : {}),
     id: job.id,
     kind: job.kind,
     // Where this job renders. Job metadata, not a render input, so it rides on

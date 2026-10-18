@@ -30,7 +30,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
 import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, isAbsolute, resolve, sep } from 'path';
+import { basename, join, isAbsolute, resolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { codexHomeDir } from '../../lib/codexUserConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
@@ -324,6 +324,9 @@ export async function generateImage({
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
+    inputProvenance: 'provider-inputs',
+    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
+    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentRecord,
     createdAt: new Date().toISOString(),

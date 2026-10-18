@@ -61,7 +61,7 @@ describe('projectToCatalog batching', () => {
 
     expect(catalogDB.getIngredient).not.toHaveBeenCalled();
     expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledTimes(1);
-    expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledWith(['ing-c1', 'ing-c2', 'ing-p1', 'ing-o1']);
+    expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledWith(['ing-c1', 'ing-c2', 'ing-p1', 'ing-o1'], { excludeAliases: true });
     expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(4);
     expect(stats).toEqual({ written: 4, skipped: 0 });
   });
@@ -116,7 +116,7 @@ describe('projectToCatalog batching', () => {
       characters: [entry('ing-guarded'), entry('ing-other')],
     }, { guardToken: 'ing-guarded' });
 
-    expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledWith(['ing-other']);
+    expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledWith(['ing-other'], { excludeAliases: true });
     expect(stats).toEqual({ written: 1, skipped: 1 });
   });
 

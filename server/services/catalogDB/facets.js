@@ -61,15 +61,15 @@ export async function listScrapsForIngredients(ingredientIds) {
  * (see `[catalog-ingredient-relations]`); when they land, extend this helper.
  */
 export async function exportSliceForRef(refKind, refId) {
-  const rows = await listIngredientsForRef(refKind, refId);
+  const rows = await listIngredientsForRef(refKind, refId, { preserveIdentity: true });
   // Hydrate scraps + refs + media for the WHOLE slice in three batched queries
   // (#3940) — a per-ingredient round-trip made this 3N queries, which pinned the
   // connection pool on a large universe. Four queries total, regardless of N.
   const ingredientIds = rows.map(({ ingredient }) => ingredient.id);
   const [scrapsById, refsById, mediaById] = await Promise.all([
     listScrapsForIngredients(ingredientIds),
-    listRefsForIngredients(ingredientIds),
-    listMediaForIngredients(ingredientIds),
+    listRefsForIngredients(ingredientIds, { preserveIdentity: true }),
+    listMediaForIngredients(ingredientIds, { preserveIdentity: true }),
   ]);
   const ingredients = rows.map(({ ingredient, role }) => {
     const { embedding: _embedding, ...rest } = ingredient;
@@ -134,11 +134,11 @@ export async function getCatalogBundleForRef(refKind, refId) {
 
 export async function getCatalogStats() {
   const [byTypeResult, scrapResult, withEmb] = await Promise.all([
-    query(`SELECT type, COUNT(*) AS count FROM catalog_ingredients WHERE deleted = false GROUP BY type`),
+    query(`SELECT type, COUNT(*) AS count FROM catalog_ingredients WHERE deleted = false AND id = catalog_resolve_ingredient_id(id) GROUP BY type`),
     // Count only parent/standalone scraps — child chunk rows are an internal
     // extraction detail and would inflate the user-facing scrap count.
     query(`SELECT COUNT(*) AS count FROM catalog_scraps WHERE deleted = false AND parent_scrap_id IS NULL`),
-    query(`SELECT COUNT(*) AS count FROM catalog_ingredients WHERE deleted = false AND embedding IS NOT NULL`),
+    query(`SELECT COUNT(*) AS count FROM catalog_ingredients WHERE deleted = false AND id = catalog_resolve_ingredient_id(id) AND embedding IS NOT NULL`),
   ]);
   const byType = {};
   let total = 0;
@@ -164,7 +164,7 @@ export async function getCatalogStats() {
 export async function getCatalogFacets() {
   const [typeRows, uniRows, serRows, tagRows, bucketRows] = await Promise.all([
     query(`SELECT type, COUNT(*)::int AS count
-             FROM catalog_ingredients WHERE deleted = false
+             FROM catalog_ingredients WHERE deleted = false AND id = catalog_resolve_ingredient_id(id)
             GROUP BY type ORDER BY count DESC, type`),
     // Universe membership rolls up its series' members (decision #1), so the
     // album header count matches what the universe album/filter actually lists:
@@ -175,17 +175,17 @@ export async function getCatalogFacets() {
                   (r.ref_kind = 'universe' AND r.ref_id = u.id)
                   OR (r.ref_kind = 'series' AND r.ref_id IN (
                         SELECT s.id FROM pipeline_series s WHERE s.universe_id = u.id AND s.deleted = false)))
-             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false
+             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false AND i.id = catalog_resolve_ingredient_id(i.id)
             WHERE u.deleted = false
             GROUP BY u.id, u.name ORDER BY count DESC, u.name`),
     query(`SELECT s.id AS ref_id, s.name, s.universe_id, COUNT(DISTINCT r.ingredient_id)::int AS count
              FROM catalog_ingredient_refs r
-             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false
+             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false AND i.id = catalog_resolve_ingredient_id(i.id)
              JOIN pipeline_series s ON s.id = r.ref_id AND s.deleted = false
             WHERE r.deleted = false AND r.ref_kind = 'series'
             GROUP BY s.id, s.name, s.universe_id ORDER BY count DESC, s.name`),
     query(`SELECT tag, COUNT(*)::int AS count
-             FROM (SELECT unnest(tags) AS tag FROM catalog_ingredients WHERE deleted = false) t
+             FROM (SELECT unnest(tags) AS tag FROM catalog_ingredients WHERE deleted = false AND id = catalog_resolve_ingredient_id(id)) t
             GROUP BY tag ORDER BY count DESC, tag`),
     // Per-ingredient bucket classification. ref_count = live homing ref ROWS
     // (universe/series/creative-director); live_count = those whose target still
@@ -204,7 +204,7 @@ export async function getCatalogFacets() {
               FROM catalog_ingredients i
               LEFT JOIN catalog_ingredient_refs r
                 ON r.ingredient_id = i.id AND r.deleted = false AND r.ref_kind IN (${HOMING_REF_KINDS_SQL})
-              WHERE i.deleted = false
+              WHERE i.deleted = false AND i.id = catalog_resolve_ingredient_id(i.id)
               GROUP BY i.id
             ) sub`),
   ]);

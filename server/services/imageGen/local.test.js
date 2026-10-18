@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import os, { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
 
 const admissionFault = vi.hoisted(() => ({ error: null }));
@@ -478,6 +478,16 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-path') + 1]).toBe('/data/templates/character-reference-sheet.png');
     expect(args).toContain('--image-strength');
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
+  });
+
+  it('reports no supplied images for the Windows runner that omits image arguments', () => {
+    const { args, providerInputs } = buildArgs({ ...baseInput, platform: 'win32',
+      model: { id: 'dev', steps: 20, guidance: 3.5 },
+      initImagePath: '/example/source.png', referenceImagePaths: ['/example/ref.png'],
+    });
+    expect(args).not.toContain('--image-path');
+    expect(args).not.toContain('--reference-images');
+    expect(providerInputs).toEqual({ initImagePath: null, referenceImagePaths: [] });
   });
 
   it.skipIf(process.platform === 'win32')('falls back to mflux dispatch for non-flux2 models on macOS', () => {
@@ -1304,6 +1314,48 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
   });
 });
 
+
+it('persists omitted reference evidence when the LoRA runner drops inputs', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const priorLoras = PATHS.loras;
+  PATHS.loras = join(tmpRegistryDir, 'loras');
+  mkdirSync(PATHS.loras, { recursive: true });
+  writeFileSync(join(PATHS.loras, 'example.safetensors'), 'example');
+  writeFileSync(join(PATHS.images, 'reference.png'), 'example');
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  // Pin host memory, not the registry's hardware verdict: CI may have less
+  // than this model's 32 GiB floor, even though the render child is mocked.
+  const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(8 * 1024 ** 3);
+  try {
+    const request = { modelId: 'flux2-klein-9b', prompt: '--reference-images',
+      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] };
+    const spawnCount = mockSpawn.mock.calls.length;
+    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MODEL_HARDWARE_UNAVAILABLE' });
+    expect(mockSpawn).toHaveBeenCalledTimes(spawnCount);
+    totalmem.mockReturnValue(64 * 1024 ** 3);
+    const job = await generateImage(request);
+    expect(mockSpawn.mock.calls.at(-1)[1]).toContain('--reference-images');
+    expect(mockSpawn.mock.calls.at(-1)[1]).not.toContain(join(PATHS.images, 'reference.png'));
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await completed;
+    const meta = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(meta.inputProvenance).toBe('provider-inputs');
+    expect(meta.referenceImageFilenames).toEqual([]);
+    expect(meta.referenceImageStrengths).toEqual([]);
+    expect(meta.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png' }]);
+    expect(meta.omittedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png', reason: 'unsupported-render-path' }]);
+  } finally {
+    totalmem.mockRestore();
+    PATHS.loras = priorLoras;
+  }
+});
 
 it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
   mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');

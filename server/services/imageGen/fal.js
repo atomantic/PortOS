@@ -30,7 +30,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import sharp from 'sharp';
 import { atomicWrite, detectImageFormat, ensureDir, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -275,6 +275,9 @@ export async function generateImage({
     // user chose — a gallery reader should not have to re-derive either.
     model: endpointId,
     modelFamily: family.id,
+    inputProvenance: 'provider-inputs',
+    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
+    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentRecord,

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { federatedMediaAssetId } from '../../lib/federatedMediaWire.js';
 
 let tempImageDir;
@@ -25,7 +25,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     // containment behavior is fileUtils' own suite's job; what matters here is
     // that the executor resolves before uploading, and refuses when it cannot.
     resolveImageInputPath: (raw) => {
-      const candidate = join(tempImageDir, raw.split('/').pop());
+      const candidate = join(tempImageDir, basename(raw));
       return existsSync(candidate) ? candidate : null;
     },
   };
@@ -145,7 +145,7 @@ afterEach(() => {
 
 describe('federated image consumer adapter', () => {
   it('imports a verified PNG and writes the gallery sidecar the local renderer would have', async () => {
-    const png = Buffer.from('\x89PNG-example-bytes');
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('example-bytes')]);
     const digest = sha256(png);
     const metadata = {
       available: true,
@@ -158,6 +158,11 @@ describe('federated image consumer adapter', () => {
       durationSec: null,
     };
     transport.fetch.mockImplementation(async (url, options) => {
+      if (url.includes('/assets/')) return jsonResponse({ code: 'MEDIA_PROVIDER_ASSET_NOT_FOUND' }, 404);
+      if (url.endsWith('/assets') && options.method === 'POST') return jsonResponse({
+        wireVersion: 1, assetId: federatedMediaAssetId('consumer-instance', digest), sha256: digest,
+        sizeBytes: png.length, mimeType: 'image/png', expiresAt: '2099-08-22T18:00:00.000Z',
+      }, 201);
       if (url.endsWith('/jobs') && options.method === 'POST') return jsonResponse(providerJob('queued'), 202);
       if (url.endsWith(`/jobs/${REMOTE_JOB_ID}`)) return jsonResponse(providerJob('completed', { result: metadata }));
       if (url.endsWith(`/jobs/${REMOTE_JOB_ID}/result`)) {
@@ -173,7 +178,12 @@ describe('federated image consumer adapter', () => {
     });
 
     const terminal = captureTerminal(LOCAL_JOB_ID);
-    await generateImage(params());
+    const base = params();
+    writeFileSync(join(tempImageDir, 'reference.png'), png);
+    await generateImage({ ...base, remoteMedia: { ...base.remoteMedia, inputAssets: [
+      { role: 'initImage', path: join(tempImageDir, 'reference.png') },
+      { role: 'referenceImages', path: join(tempImageDir, 'reference.png') },
+    ] } });
     const outcome = await terminal;
 
     expect(outcome).toMatchObject({
@@ -202,6 +212,10 @@ describe('federated image consumer adapter', () => {
       filename: `${LOCAL_JOB_ID}.png`,
       federatedPeerId: PEER_ID,
       federatedJobId: REMOTE_JOB_ID,
+      requestedInputImages: [
+        { role: 'initImage', filename: 'reference.png' },
+        { role: 'referenceImages', filename: 'reference.png' },
+      ],
     });
     // Render timing (#5878) — for a federated render the span this install can
     // honestly report is its OWN: submission, the peer's queue wait and render,
@@ -221,7 +235,10 @@ describe('federated image consumer adapter', () => {
       width: 512,
       height: 512,
       seed: 42,
+      initImage: { assetId: federatedMediaAssetId('consumer-instance', digest) },
+      referenceImages: [{ assetId: federatedMediaAssetId('consumer-instance', digest) }],
     });
+    expect(submission[1].body).not.toContain(tempImageDir);
     expect(submission[1].headers['Idempotency-Key']).toBe(LOCAL_JOB_ID);
   });
 

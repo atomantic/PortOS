@@ -70,9 +70,11 @@ const NONCE = Date.now();
 const createdIngredientIds = new Set();
 const createdScrapIds = new Set();
 const receiptKeys = new Set();
+const relatedImageKeys = new Set();
 
 afterAll(async () => {
   if (!dbReady) return;
+  await query('DELETE FROM media_assets WHERE media_key = ANY($1::text[])', [[...relatedImageKeys]]);
   await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
   for (const id of createdIngredientIds) {
     await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
@@ -81,6 +83,87 @@ afterAll(async () => {
     await catalogDB.deleteScrap(id, { hard: true }).catch(() => {});
   }
   await close();
+});
+
+describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () => {
+  it('pages only direct image provenance, excluding displayed, hidden, malformed and unrelated assets', async () => {
+    const prefix = `related-${NONCE}-`;
+    const primary = `${prefix}cover.png`;
+    const attached = `${prefix}attached.png`;
+    const ing = await catalogDB.createIngredient({ type: 'place', name: 'Example room', payload: { primaryImageRef: primary, imageRefs: [primary], locked: true } });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.attachMedia(ing.id, attached, 'reference');
+    const rows = [
+      ['a', { referenceImageFilenames: [primary], inputProvenance: 'provider-inputs', prompt: 'private prompt' }],
+      ['b', { cleanedFrom: attached }],
+      ['c', { initImageFilename: primary }],
+      ['d', { inputProvenance: 'provider-inputs', referenceImageFilenames: ['other-input.png'],
+        visualConditioning: { assets: [{ filename: primary }], status: 'degraded' } }],
+      ['e', { requestedInputImages: [{ role: 'referenceImages', filename: primary }] }],
+      ['f', { inputProvenance: 'provider-inputs', requestedInputImages: [{ filename: primary }], omittedInputImages: [{ filename: primary }] }],
+      ['omitted', { visualConditioning: { assets: [], omitted: [{ filename: primary }] } }],
+      ['bad-compiled', { visualConditioning: { assets: { filename: primary } } }],
+      ['hidden', { referenceImageFilenames: [primary], hidden: true }],
+      ['unrelated', { prompt: primary, universeId: 'shared-example-universe' }],
+      ['malformed', { referenceImageFilenames: { [primary]: true } }],
+      ['nested-only', { referenceImageFilenames: [`${prefix}a.png`] }],
+      ['cover', { referenceImageFilenames: [attached] }],
+      ['attached', { upscaledFrom: primary }],
+    ];
+    for (const [suffix, data] of rows) {
+      const filename = `${prefix}${suffix}.png`;
+      const key = `image:${filename}`;
+      relatedImageKeys.add(key);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
+        [key, 'image', filename, JSON.stringify({ filename, createdAt: '2026-01-01T00:00:00.000Z', ...data }), '2026-01-01T00:00:00.000Z']);
+    }
+    const url = `/api/catalog/ingredients/${ing.id}/related-images`;
+    const first = await request(makeApp()).get(`${url}?limit=2`);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ total: 6, limit: 2, offset: 0 });
+    expect(first.body.items.map(item => [item.filename, item.association])).toEqual([
+      [`${prefix}a.png`, 'reference-input'], [`${prefix}b.png`, 'derived-image'],
+    ]);
+    expect(first.body.items[0]).not.toHaveProperty('prompt');
+    expect(first.body.items[0].provenanceStatus).toBe('recorded');
+    // A stale index entry retains its recorded association but is explicit
+    // about absent bytes; the response must not silently claim a valid asset.
+    expect(first.body.items[0].missing).toBe(true);
+    const next = await request(makeApp()).get(`${url}?limit=2&offset=2`);
+    expect(next.body.items.map(item => item.filename)).toEqual([`${prefix}c.png`, `${prefix}d.png`]);
+    expect(next.body.items[0].provenanceStatus).toBe('legacy-unverified');
+    // A marker for OTHER supplied inputs must not upgrade this compiled-only
+    // association to confirmed provider input.
+    expect(next.body.items[1]).toMatchObject({ association: 'compiled-reference', provenanceStatus: 'provider-use-unverified' });
+    const requested = await request(makeApp()).get(`${url}?limit=2&offset=4`);
+    expect(requested.body.items.map(item => [item.association, item.provenanceStatus])).toEqual([
+      ['requested-reference', 'provider-use-unverified'], ['requested-reference', 'not-supplied'],
+    ]);
+    expect((await request(makeApp()).get(`${url}?offset=20`)).body).toMatchObject({ items: [], total: 6 });
+    expect((await request(makeApp()).get(`${url}?limit=101`)).status).toBe(400);
+    expect((await request(makeApp()).get(`${url}?offset=-1`)).status).toBe(400);
+    expect((await request(makeApp()).get('/api/catalog/ingredients/nonexistent/related-images')).status).toBe(404);
+    expect((await catalogDB.getIngredient(ing.id)).payload).toEqual(ing.payload);
+  });
+
+  it('finds renders conditioned by legacy and variant sheets even without a portrait', async () => {
+    const prefix = `related-sheet-${NONCE}-`;
+    const ing = await catalogDB.createIngredient({ type: 'character', name: 'Example sheet character', payload: {
+      referenceSheetImageRef: `${prefix}legacy.png`, referenceSheets: { profile: `${prefix}profile.png` }, locked: true,
+    } });
+    createdIngredientIds.add(ing.id);
+    for (const suffix of ['legacy', 'profile']) {
+      const filename = `${prefix}${suffix}-render.png`;
+      const key = `image:${filename}`;
+      relatedImageKeys.add(key);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
+        [key, 'image', filename, JSON.stringify({ referenceImageFilenames: [`${prefix}${suffix}.png`] }), '2026-01-01T00:00:00.000Z']);
+    }
+    const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
+    expect(result.status).toBe(200);
+    expect(result.body.total).toBe(2);
+    expect(result.body.items.map(item => item.filename)).toEqual([`${prefix}legacy-render.png`, `${prefix}profile-render.png`]);
+  });
 });
 
 describe.skipIf(!runDb)('POST /api/catalog/bulk-import — scrap persistence', () => {

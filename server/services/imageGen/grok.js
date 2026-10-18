@@ -33,7 +33,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
-import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
+import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -291,6 +291,9 @@ export async function generateImage({
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.GROK,
+    inputProvenance: 'provider-inputs',
+    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
+    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentRecord,
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),

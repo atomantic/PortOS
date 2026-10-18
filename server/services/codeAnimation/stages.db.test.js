@@ -7,7 +7,7 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/paths.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('code-animation-stages-') }));
 // Inject faults into the selected owned staging tree; all other storage stays real.
-const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false, beforeStart: null }));
+const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false, beforeStart: null, beforeHistory: null }));
 vi.mock('fs/promises', async importOriginal => {
   const real = await importOriginal();
   return {
@@ -42,8 +42,16 @@ vi.mock('./projectStore.js', async importOriginal => {
   return {
     ...real,
     startStageRun: async (...args) => {
-      await stagingFaults.beforeStart?.();
-      return real.startStageRun(...args);
+      const afterStart = await stagingFaults.beforeStart?.();
+      try {
+        return await real.startStageRun(...args);
+      } finally {
+        afterStart?.();
+      }
+    },
+    interruptStageRuns: async (...args) => {
+      await stagingFaults.beforeHistory?.();
+      return real.interruptStageRuns(...args);
     },
     commitRepairRevision: async (...args) => {
       if (stagingFaults.publication) {
@@ -86,7 +94,7 @@ if (ready) await ensureSchema();
 const ids = [];
 afterEach(() => {
   vi.useRealTimers(); stopRun.mockReset(); runPromptThroughProvider.mockReset();
-  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false });
+  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false, beforeStart: null, beforeHistory: null });
 });
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM code_animation_projects WHERE id = ANY($1::text[])', [ids]);
@@ -458,13 +466,16 @@ describe.skipIf(!ready)('Production stage runs', () => {
       await gate;
       return sample(directory, options);
     });
-    // Hold each insert until both requests have captured their live-run list, so neither sees the other registered by chance.
+    // Force the later registration to commit first: the earlier caller must
+    // not use its pre-lock active-ID snapshot to interrupt that live winner.
     let entered = 0;
-    let bothEntered;
-    const barrier = new Promise(resolve => { bothEntered = resolve; });
+    const laterInserted = Promise.withResolvers();
     stagingFaults.beforeStart = async () => {
-      if (++entered === 2) bothEntered();
-      await barrier;
+      if (++entered === 1) {
+        await laterInserted.promise;
+        return;
+      }
+      return laterInserted.resolve;
     };
     const results = await Promise.allSettled([
       startProductionStageRun(id, {}, { sample: blocking, repair: unfreeze, render }),
@@ -472,14 +483,48 @@ describe.skipIf(!ready)('Production stage runs', () => {
     ]).finally(() => { stagingFaults.beforeStart = null; });
     const won = results.filter(result => result.status === 'fulfilled');
     const lost = results.filter(result => result.status === 'rejected');
-    expect(won).toHaveLength(1);
-    expect(lost).toHaveLength(1);
-    expect(lost[0].reason).toMatchObject({ code: 'CODE_ANIMATION_RUN_ACTIVE' });
-    expect(activeStageRunIds()).toEqual([won[0].value.run.id]);
-    const { items } = await getProductionHistory(id, { limit: 10, offset: 0 });
-    expect(items.map(item => item.status)).not.toContain('interrupted');
-    release();
-    await won[0].value.done;
+    try {
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      expect(lost[0].reason).toMatchObject({ code: 'CODE_ANIMATION_RUN_ACTIVE' });
+      expect(activeStageRunIds()).toEqual([won[0].value.run.id]);
+      const { items } = await getProductionHistory(id, { limit: 10, offset: 0 });
+      expect(items.map(item => item.status)).not.toContain('interrupted');
+    } finally {
+      release();
+      await Promise.all(won.map(result => result.value.done));
+    }
+  });
+
+  it('does not interrupt a newly admitted run when an older history request resumes', async () => {
+    const { id } = await project();
+    const historyEntered = Promise.withResolvers();
+    const historyGate = Promise.withResolvers();
+    const executionGate = Promise.withResolvers();
+    stagingFaults.beforeHistory = async () => {
+      historyEntered.resolve();
+      await historyGate.promise;
+    };
+    const history = getProductionHistory(id, { limit: 10, offset: 0 });
+    await historyEntered.promise;
+    let first;
+    try {
+      first = await startProductionStageRun(id, {}, {
+        sample: async (directory, options) => {
+          if (options.times.length) await executionGate.promise;
+          return sample(directory, options);
+        },
+        repair: unfreeze, render,
+      });
+      historyGate.resolve();
+      expect((await history).items.find(item => item.id === first.run.id)).toMatchObject({ status: 'running' });
+      expect(activeStageRunIds()).toEqual([first.run.id]);
+    } finally {
+      stagingFaults.beforeHistory = null;
+      historyGate.resolve();
+      executionGate.resolve();
+      await Promise.allSettled([history, first?.done]);
+    }
   });
 
   it('leaves no live run registered when the start insert fails', async () => {

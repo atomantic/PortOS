@@ -20,7 +20,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
-import { getIngredient, listLiveRefsForIngredient } from './catalogDB.js';
+import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient } from './catalogDB.js';
 import { getUniverse } from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import {
@@ -134,9 +134,12 @@ async function resolveSheetTarget(id, options) {
     const universe = await getUniverse(ref.refId).catch(() => null);
     if (universe) universes.push(universe);
   }
-  if (ingredient.type === 'character' && !isLook) {
+  // A local consolidation retains embedded source variants. Render its
+  // authoritative merged payload instead of delegating to a stale canon copy.
+  const identityIds = await getIngredientIdentityIds(ingredient.id);
+  if (ingredient.type === 'character' && !isLook && identityIds.length === 1) {
     for (const universe of universes) {
-      const entry = (universe.characters || []).find((c) => c.ingredientId === id);
+      const entry = (universe.characters || []).find((c) => c.ingredientId === ingredient.id);
       if (entry) return { ingredient, payload, variant, delegate: { universeId: universe.id, entryId: entry.id } };
     }
   }

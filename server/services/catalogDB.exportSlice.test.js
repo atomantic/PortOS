@@ -78,8 +78,8 @@ vi.mock('../lib/db.js', () => ({
     calls.push({ sql: flat, params });
     if (flat.includes('FROM catalog_ingredients i')) return { rows: sliceIsEmpty.value ? [] : INGREDIENT_ROWS };
     if (flat.includes('FROM catalog_scraps s')) return { rows: SCRAP_ROWS };
-    if (flat.includes('FROM catalog_ingredient_refs')) return { rows: REF_ROWS };
-    if (flat.includes('FROM catalog_ingredient_media')) return { rows: MEDIA_ROWS };
+    if ((flat.includes('FROM catalog_ingredient_refs') || flat.includes('JOIN catalog_ingredient_refs r ON r.ingredient_id = catalog_resolve_ingredient_id'))) return { rows: REF_ROWS };
+    if ((flat.includes('FROM catalog_ingredient_media') || flat.includes('JOIN catalog_ingredient_media m ON m.ingredient_id = catalog_resolve_ingredient_id'))) return { rows: MEDIA_ROWS };
     return { rows: [] };
   }),
   withTransaction: vi.fn(),
@@ -102,7 +102,7 @@ describe('exportSliceForRef batching (#3940)', () => {
     await catalogDB.exportSliceForRef('universe', 'uni-1');
     expect(calls).toHaveLength(4);
     // Three of them are the batched ANY($1) hydration queries.
-    const batched = calls.filter((c) => c.sql.includes('= ANY($1)'));
+    const batched = calls.filter((c) => c.sql.includes('= ANY($1)') || c.sql.includes('unnest($1::text[])'));
     expect(batched).toHaveLength(3);
     for (const c of batched) expect(c.params[0]).toEqual(['i1', 'i2']);
   });

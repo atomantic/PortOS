@@ -99,7 +99,7 @@ describe('detachMedia', () => {
 describe('setPortraitMedia', () => {
   it('demotes other live portraits then attaches the new one', async () => {
     await catalogDB.setPortraitMedia('i1', 'new.png', { caption: 'now' });
-    expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = \$1 FOR UPDATE/);
+    expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id\(\$1\) FOR UPDATE/);
     // Demote only after locking the owning ingredient.
     expect(calls[0].sql).toMatch(/UPDATE catalog_ingredient_media SET deleted = true/i);
     expect(calls[0].sql).toMatch(/kind = 'portrait'/i);

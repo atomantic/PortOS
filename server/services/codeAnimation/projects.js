@@ -34,7 +34,7 @@ export const listProductionProjects = page => store.pageProjectRecords(page);
 export async function getProductionHistory(id, page) {
   await getProductionProject(id);
   await store.interruptImports(id, [...activeImports]);
-  await store.interruptStageRuns(id, activeStageRunIds());
+  await store.interruptStageRuns(id, activeStageRunIds);
   return store.pageProjectHistory(id, page);
 }
 

@@ -300,6 +300,7 @@ export async function upsertIngredientFromPeer(ing) {
        deleted = EXCLUDED.deleted,
        deleted_at = EXCLUDED.deleted_at
      WHERE EXCLUDED.updated_at > catalog_ingredients.updated_at
+       AND NOT EXISTS (SELECT 1 FROM catalog_ingredient_merges WHERE source_id = EXCLUDED.id AND restored_at IS NULL)
      RETURNING (xmax = 0) AS is_insert`,
     [
       ing.id,

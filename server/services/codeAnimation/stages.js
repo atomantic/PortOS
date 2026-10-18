@@ -533,7 +533,7 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
   // Registered before the insert so a concurrent start sees this run as live and cannot mark its fresh row interrupted.
   activeRuns.set(runId, { controller: ctx.controller, projectId });
   try {
-    await store.startStageRun(runId, projectId, snapshot(ctx), activeStageRunIds());
+    await store.startStageRun(runId, projectId, snapshot(ctx), activeStageRunIds);
   } catch (error) {
     activeRuns.delete(runId);
     throw error;

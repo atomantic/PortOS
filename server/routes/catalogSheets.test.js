@@ -20,6 +20,7 @@ vi.mock('../lib/imageCleanDefaults.js', () => ({
 }));
 vi.mock('../services/catalogDB.js', () => ({
   getIngredient: (...args) => mocks.getIngredient(...args),
+  getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
 }));
 vi.mock('../services/universeBuilder.js', () => ({
