@@ -41,6 +41,7 @@ import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
+import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -385,6 +386,19 @@ async function main() {
     });
     process.exit(0);
   }
+
+  const dependencyProblems = dependencyConsistencyProblems(REPO_ROOT);
+  if (dependencyProblems.length > 0) {
+    console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
+    for (const { label, linked, owner, issues } of dependencyProblems) {
+      console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
+      console.error(linked
+        ? `    Reconcile dependencies in the owning source checkout (${owner}), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+        : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci in the owning workspace), then rerun pregate.`);
+    }
+    process.exit(1);
+  }
+  console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
 
   for (const stage of stages) {
     console.log(`▶️ ${stage.name}`);

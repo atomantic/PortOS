@@ -3,13 +3,14 @@
  * Repairs missing or stale dependencies only in workspaces that own their tree.
  * Handles ENOTEMPTY npm bug by retrying with clean node_modules.
  */
-import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from 'fs';
+import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { rebuildTrusted, patchInstalledDependencies } from './trusted-rebuilds.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { dependencyWorkspaces, hasLinkedDependencies } from './lib/workspaceDependencies.js';
 // Node refuses to spawn npm's `.cmd` shim under `shell:false` (CVE-2024-27980),
 // so every npm spawn goes through this wrap. Safe to import before `npm install`
 // has ever run — bufferedSpawn's whole import graph is Node builtins only.
@@ -33,12 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // `git pull` + `npm start` path, which has no pull context to diff against.
 const HASH_FILE = join(ROOT, 'data', 'deps-hashes.json');
 
-export const WORKSPACES = [
-  { dir: ROOT, label: 'root' },
-  { dir: join(ROOT, 'client'), label: 'client' },
-  { dir: join(ROOT, 'server'), label: 'server' },
-  { dir: join(ROOT, 'autofixer'), label: 'autofixer' }
-];
+export const WORKSPACES = dependencyWorkspaces(ROOT);
 
 function dependencyHash(dir) {
   const pkgPath = join(dir, 'package.json');
@@ -143,7 +139,7 @@ function main() {
   // checking inside the repair loop could already mutate an earlier workspace.
   // lstat also catches dangling links and Windows directory junctions.
   for (const { dir, label } of WORKSPACES) {
-    if (lstatSync(join(dir, 'node_modules'), { throwIfNoEntry: false })?.isSymbolicLink()) {
+    if (hasLinkedDependencies(dir)) {
       console.error(`⛔ Refusing dependency repair: ${label}/node_modules is linked. Run startup in the source checkout; use its workspace binaries for worktree tests.`);
       process.exitCode = 1;
       return;
