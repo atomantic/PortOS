@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../services/apiCore.js', async importOriginal => ({ ...await importOriginal(), request }));
 import MediaBatchImport from './MediaBatchImport';
@@ -26,7 +26,8 @@ describe('shared gallery batch import', () => {
     pick([image, video, new File(['x'], 'unsafe.svg'), image]);
     await waitFor(() => expect(imported).toHaveBeenCalledTimes(2));
     expect(screen.getByText('2 of 4 imported')).toBeInTheDocument();
-    expect(screen.getByText(/Unsupported type/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Imports needing attention' })).getByText(/Unsupported type/)).toBeInTheDocument();
     expect(screen.getByText(/Image decoder rejected the bytes/)).toBeInTheDocument();
     expect(request.mock.calls.map(([path]) => path)).toEqual(['/image-gen/upload', '/video-gen/upload', '/image-gen/upload']);
     for (const [, options] of request.mock.calls) {
@@ -50,6 +51,8 @@ describe('shared gallery batch import', () => {
     failAssignment = false;
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed / cancelled' }));
     await screen.findByText('1 of 1 imported');
+    expect(screen.queryByRole('region', { name: 'Imports needing attention' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
     expect(request.mock.calls.filter(([path]) => path === '/image-gen/upload')).toHaveLength(1);
     const assignments = request.mock.calls.filter(([path]) => path === '/media/collections/collection-a/items/bulk');
     expect(assignments).toHaveLength(2);
@@ -65,7 +68,10 @@ describe('shared gallery batch import', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel remaining' }));
     await act(async () => finish(savedImage));
     expect(request).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('1 of 2 imported')).toBeInTheDocument();
+    expect(screen.getByText('1 of 2 imported')).toHaveClass('sr-only');
+    expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+    expect(screen.queryByText('portrait.png')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Imports needing attention' })).getByText('clip.mp4')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed / cancelled' }));
     await screen.findByText('2 of 2 imported');
     expect(request).toHaveBeenCalledTimes(2);
@@ -95,4 +101,60 @@ it('uses the current view callback when filters change during upload', async () 
   await act(async () => finish(savedImage));
   expect(oldView).not.toHaveBeenCalled();
   expect(newView).toHaveBeenCalledTimes(1);
+});
+
+it.each([undefined, 'collection-a'])('clears completed rows while later files remain queued or in progress (collection: %s)', async collectionId => {
+  let finishImage;
+  let finishVideo;
+  let finishAssignment;
+  request.mockImplementation(path => {
+    if (path === '/image-gen/upload') return new Promise(resolve => { finishImage = resolve; });
+    if (path === '/video-gen/upload') return new Promise(resolve => { finishVideo = resolve; });
+    if (!finishAssignment) return new Promise(resolve => { finishAssignment = resolve; });
+    return Promise.resolve({ collection: { id: collectionId, items: [] } });
+  });
+  render(<MediaBatchImport collectionId={collectionId} />);
+  pick([image, video]);
+  expect(within(screen.getByRole('list', { name: 'Import queue' })).getAllByRole('listitem')).toHaveLength(2);
+  expect(screen.getByText(/: queued/)).toBeInTheDocument();
+  await act(async () => finishImage(savedImage));
+  if (collectionId) {
+    expect(screen.getByText(/: assigning/)).toBeInTheDocument();
+    expect(screen.getByText('portrait.png')).toBeInTheDocument();
+    await act(async () => finishAssignment({ collection: { id: collectionId, items: [] } }));
+  }
+  expect(screen.queryByText('portrait.png')).not.toBeInTheDocument();
+  expect(within(screen.getByRole('list', { name: 'Import queue' })).getAllByRole('listitem')).toHaveLength(1);
+  expect(screen.getByRole('status')).toHaveTextContent('1 of 2 imported');
+  await act(async () => finishVideo(savedVideo));
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+  expect(screen.queryByText('clip.mp4')).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveClass('sr-only');
+  expect(screen.getByRole('status')).toHaveTextContent('2 of 2 imported');
+});
+
+it('keeps failed imports retryable when another batch is selected without retrying them implicitly', async () => {
+  request.mockRejectedValueOnce(new Error('Image decoder rejected the bytes'));
+  render(<MediaBatchImport />);
+  pick([image]);
+  await screen.findByText(/Image decoder rejected the bytes/);
+  pick([video]);
+  await screen.findByText('1 of 2 imported');
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('region', { name: 'Imports needing attention' })).toHaveTextContent('portrait.png');
+  expect(screen.queryByText('clip.mp4')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry failed / cancelled' }));
+  await screen.findByText('2 of 2 imported');
+  expect(request.mock.calls.map(([path]) => path)).toEqual(['/image-gen/upload', '/video-gen/upload', '/image-gen/upload']);
+  expect(screen.queryByRole('region', { name: 'Imports needing attention' })).not.toBeInTheDocument();
+});
+
+it('keeps inspection warnings separate from the completed upload queue', async () => {
+  request.mockResolvedValueOnce({ ...savedVideo, importWarnings: ['Embedded metadata could not be inspected.'] });
+  render(<MediaBatchImport />);
+  pick([video]);
+  await screen.findByText('1 of 1 imported');
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Import warnings' })).toHaveTextContent('clip.mp4: Embedded metadata could not be inspected.');
+  expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
 });

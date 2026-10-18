@@ -26,7 +26,7 @@ export default function MediaBatchImport({ collectionId, onImported }) {
     setStopping(false);
     const publish = () => { if (mounted.current) setRows(batch.map(row => ({ ...row }))); };
     for (const row of batch) {
-      if (row.status === 'done') continue;
+      if (row.status !== 'queued') continue;
       if (cancelled.current) { row.status = 'cancelled'; continue; }
       row.error = null;
       row.status = row.saved ? 'assigning' : 'uploading';
@@ -60,12 +60,20 @@ export default function MediaBatchImport({ collectionId, onImported }) {
   };
 
   const completed = rows.filter(row => row.status === 'done').length;
-  const retryable = rows.some(row => ['failed', 'cancelled'].includes(row.status));
+  // Keep results for retry/accounting, but completed files leave the visible queue.
+  const pending = rows.filter(row => ['queued', 'uploading', 'assigning'].includes(row.status));
+  const retryable = rows.filter(row => ['failed', 'cancelled'].includes(row.status));
+  const warnings = rows.filter(row => row.status === 'done' && row.saved.data.importWarnings?.length);
+  const retry = () => run(rows.map(row => ['failed', 'cancelled'].includes(row.status)
+    ? { ...row, status: 'queued', error: null } : row));
   return (
     <section aria-label="Import media" className="min-w-0 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <FilePickerButton multiple accept={ACCEPT} disabled={busy}
-          onChange={event => run(Array.from(event.target.files || []).map(file => ({ file, status: 'queued' })))}
+          onChange={event => {
+            const files = Array.from(event.target.files || []);
+            if (files.length) run([...rows, ...files.map(file => ({ file, status: 'queued' }))]);
+          }}
           className="inline-flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-port-accent hover:bg-port-border/50">
           <Upload className="h-4 w-4" aria-hidden="true" /> Upload / import
         </FilePickerButton>
@@ -74,18 +82,27 @@ export default function MediaBatchImport({ collectionId, onImported }) {
           onClick={() => { cancelled.current = true; setStopping(true); }}>
           {stopping ? 'Finishing current file…' : 'Cancel remaining'}
         </button>}
-        {!busy && retryable && <button type="button" onClick={() => run(rows)} className="min-h-[44px] px-3 text-sm text-port-accent">Retry failed / cancelled</button>}
       </div>
-      {rows.length > 0 && <>
-        <p role="status" className="text-xs text-gray-400">{formatCount(completed)} of {formatCount(rows.length)} imported{busy ? ' — working…' : ''}</p>
-        <ul className="max-h-56 overflow-y-auto space-y-1 text-xs" aria-label="Import results">
-          {rows.map((row, index) => <li key={index} className="break-words rounded border border-port-border px-2 py-1">
-            <span className="font-medium">{row.file.name}</span>: {row.status === 'done' ? 'Imported' : row.status}
-            {row.status === 'done' && <span> — {row.saved.data.importWarnings?.length ? row.saved.data.importWarnings.join(' ') : row.saved.data.prompt ? 'Embedded prompt imported' : 'No supported embedded prompt found'}</span>}
-            {row.error && <p role="alert" className="text-port-error">{row.error}</p>}
+      <p role="status" aria-atomic="true" className={busy ? 'text-xs text-gray-400' : 'sr-only'}>
+        {rows.length > 0 && `${formatCount(completed)} of ${formatCount(rows.length)} imported${busy ? ' — working…' : ''}`}
+      </p>
+      {pending.length > 0 && <ul className="max-h-56 overflow-y-auto space-y-1 text-xs" aria-label="Import queue">
+        {pending.map((row, index) => <li key={index} className="break-words rounded border border-port-border px-2 py-1">
+          <span className="font-medium">{row.file.name}</span>: {row.status}
+        </li>)}
+      </ul>}
+      {retryable.length > 0 && <section aria-label="Imports needing attention" className="rounded border border-port-border p-2 text-xs">
+        <p className="font-medium">Some files still need attention</p>
+        <ul className="max-h-56 overflow-y-auto space-y-1">
+          {retryable.map((row, index) => <li key={index} role={row.error ? 'alert' : undefined} className="break-words text-port-error">
+            <span className="font-medium">{row.file.name}</span>: {row.error || 'Cancelled. Retry to resume.'}
           </li>)}
         </ul>
-      </>}
+        <button type="button" disabled={busy} onClick={retry} className="min-h-[44px] px-3 text-sm text-port-accent disabled:opacity-50">Retry failed / cancelled</button>
+      </section>}
+      {warnings.length > 0 && <section aria-label="Import warnings" className="text-xs text-port-warning">
+        {warnings.map((row, index) => <p key={index} role="status" className="break-words">{row.file.name}: {row.saved.data.importWarnings.join(' ')}</p>)}
+      </section>}
     </section>
   );
 }

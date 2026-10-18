@@ -518,7 +518,8 @@ it('uploads image and video files into the selected collection without replacing
   const input = await screen.findByLabelText('Upload / import');
   expect(input.multiple).toBe(true);
   fireEvent.change(input, { target: { files: [new File(['png'], 'new.png'), new File(['mp4'], 'new.mp4')] } });
-  await screen.findByText('2 of 2 imported');
+  expect(await screen.findByText('2 of 2 imported')).toHaveClass('sr-only');
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
   expect(batchApi.assignImportedMedia.mock.calls.map(call => call[0])).toEqual(['col-real', 'col-real']);
   expect(collection.items).toEqual([REAL_COLLECTION.items[0], { kind: 'image', ref: 'new.png' }, { kind: 'video', ref: 'new-video' }]);
 });
