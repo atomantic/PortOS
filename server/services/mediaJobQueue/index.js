@@ -1223,7 +1223,10 @@ function startLaneJob(job, { lane }) {
       }
     }
     await finalizeLane();
-    const settled = await flushMediaJobQueue();
+    // A shutdown deadline bounds its caller, not the lifetime of this write.
+    // Keep owning the reservation until the actual drain settles; timing out
+    // and abandoning it would strand a blocker after a later successful write.
+    const settled = await drainMediaJobQueue();
     recoveringJobs.delete(job.id);
     // Lifecycle evidence certifies recovery only together with this final flush.
     const release = decideOwnershipRelease({
@@ -2237,13 +2240,10 @@ export function attachSseClient(jobId, res) {
 
 export const MEDIA_QUEUE_FLUSH_TIMEOUT_MS = 2000;
 
-// Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
-// then write one fresh snapshot — it captures the latest in-memory progress,
-// so a debounced progress write still pending in runJob is not lost — and wait
-// for the whole persist chain behind it. Bounded so a stalled disk cannot eat
-// the shutdown budget; never rejects, reporting the outcome instead.
-export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
-  const drain = (async () => {
+// Join the actual persistence work. A live lane retains its maintenance permit
+// until this completes, even when a separate shutdown caller exhausts its budget.
+async function drainMediaJobQueue() {
+  return (async () => {
     await persist();
     while (terminalOperations.size > 0) {
       await Promise.allSettled([...terminalOperations]);
@@ -2256,6 +2256,15 @@ export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT
     await persistChain;
     return { ok: true };
   })().catch((err) => ({ ok: false, error: err.message }));
+}
+
+// Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
+// then write one fresh snapshot — it captures the latest in-memory progress,
+// so a debounced progress write still pending in runJob is not lost — and wait
+// for the whole persist chain behind it. Bounded so a stalled disk cannot eat
+// the shutdown budget; never rejects, reporting the outcome instead.
+export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
+  const drain = drainMediaJobQueue();
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }), timeoutMs);

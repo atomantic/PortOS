@@ -7,6 +7,8 @@ const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
 vi.mock('../services/maintenanceRun.js', () => maintenance);
+const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
+vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
@@ -40,6 +42,23 @@ describe('CoS Schedule Routes', () => {
     app.use(express.json());
     app.use('/api/cos', scheduleRoutes);
     vi.clearAllMocks();
+  });
+
+  it('validates and forwards separate retirement review evidence without including it in checkout identity', async () => {
+    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    const prepared = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/review').send({ appId: 'app-1', ...tuple, prUrl });
+    expect(prepared.status).toBe(200);
+    expect(recovery.prepareInventoriedCheckoutRetirement).toHaveBeenCalledWith({ appId: 'app-1', release: tuple, prUrl });
+    const review = { prUrl, digest: 'b'.repeat(64), acceptSuperseded: true };
+    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-review-changed' });
+    const kept = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, review });
+    expect(kept.status).toBe(409);
+    expect(recovery.retireInventoriedCheckout).toHaveBeenCalledWith({ appId: 'app-1', release: tuple, review });
+    recovery.retireInventoriedCheckout.mockClear();
+    expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, review: { ...review, digest: 'wrong' } })).status).toBe(400);
+    expect(recovery.retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   describe('GET /api/cos/schedule', () => {

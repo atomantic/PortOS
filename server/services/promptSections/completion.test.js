@@ -23,6 +23,7 @@ describe('review-enabled completion merge gate', () => {
     const section = render();
 
     expect(section).toContain('4. **Wait for CI to finish**');
+    expect(section).not.toContain('portos_check_merge_admission');
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
     expect(section).toContain('gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>');
@@ -76,7 +77,7 @@ describe('claim parent merge admission instructions', () => {
   it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
-    expect(prompt).toContain('"action":"check"');
+    expect(prompt).toContain('action:"check"');
     expect(prompt).toContain('"action":"release"');
     expect(prompt).toContain('Authorization: Bearer');
     expect(prompt).toContain('never a fan-out child');

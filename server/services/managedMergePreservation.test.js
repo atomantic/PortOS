@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { makeGitSandbox, destroyGitSandbox } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
@@ -67,17 +67,22 @@ describe.skipIf(process.platform === 'win32')('managed merge shell preservation 
     // Use a shell function rather than a PATH binary so the fake cannot leak
     // into another concurrent test or invoke the installed gh accidentally.
     const fakeGh = `
+      portos_check_merge_admission() { return 0; }
       gh() {
+        if [ "$1" = repo ]; then
+          case "$*" in *rebaseMergeAllowed*) printf true ;; *) printf false ;; esac
+          return
+        fi
+        if [ "$2" = checks ]; then return 0; fi
         if [ "$2" = view ]; then
           case "$*" in
             *--json\\ url*) printf '%s' 'https://github.com/example/repo/pull/42' ;;
-            *) cat "$MERGE_STATE" ;;
+            *) printf '{"state":"%s","headRefOid":"%s","mergeStateStatus":"CLEAN","isDraft":false,"reviewDecision":"APPROVED"}' "$(cat "$MERGE_STATE")" "$CI_VERIFIED_HEAD" ;;
           esac
           return
         fi
         printf '%s\\n' "$*" >> "$MERGE_CALLS"
         case "$*" in *--match-head-commit\\ "$CI_VERIFIED_HEAD"*) ;; *) return 99 ;; esac
-        case "$*" in *--rebase*) ;; *) return 1 ;; esac
         git --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$CI_VERIFIED_HEAD" || return
         case "$*" in
           *--delete-branch*)
@@ -88,13 +93,14 @@ describe.skipIf(process.platform === 'win32')('managed merge shell preservation 
       }
     `;
     const prompt = DEFAULT_TASK_PROMPTS['claim-issue'];
-    const mergeBlock = prompt.slice(prompt.indexOf('   # CI_VERIFIED_HEAD'), prompt.indexOf('   ```', prompt.indexOf('   # CI_VERIFIED_HEAD')));
-    execFileSync('bash', ['-eu', '-c', `${fakeGh}\n${mergeBlock}`], {
-      cwd: repo,
+    const mergeBlock = [...prompt.matchAll(/```bash\n([\s\S]*?)```/g)].find(([, body]) => body.includes('# CI_VERIFIED_HEAD'))[1];
+    const result = spawnSync('bash', ['-eu', '-c', `${fakeGh}\n${mergeBlock}`], {
+      cwd: checkout,
       env: { ...process.env, CI_VERIFIED_HEAD: verifiedHead, MERGE_STATE: state, MERGE_CALLS: calls, FAKE_ORIGIN: origin, CLAIM_CHECKOUT: checkout },
     });
-    expect(await readFile(state, 'utf8')).toBe('MERGED');
-    expect((await readFile(calls, 'utf8')).trim().split('\n')).toHaveLength(3);
+    expect(result.status).toBe(lateCommit ? 1 : 0);
+    expect(await readFile(state, 'utf8')).toBe(lateCommit ? 'OPEN' : 'MERGED');
+    if (!lateCommit) expect((await readFile(calls, 'utf8')).trim().split('\n')).toHaveLength(1);
     expect(await readFile(sentinel, 'utf8')).toBe('unique test evidence');
     expect((await execGit(['rev-parse', branch], repo)).stdout.trim()).toBe(localHead);
     await access(join(checkout, '.git'));

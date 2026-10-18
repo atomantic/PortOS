@@ -143,8 +143,52 @@ export function buildAutoMergeHandoffInstructions(prRef) {
 export const MANAGED_WORKTREE_CLEANUP_CONTRACT = `**Managed-worktree preservation and explicit cleanup:** Merge commands must preserve local checkouts and branches on every GitHub CLI version; do not ask gh to delete branches at merge time. Keep every merge-method attempt pinned to the CI-verified head. The parent owns merge admission for swarm children too. First verify remote state is exactly MERGED, then release any owned merge-admission lease and require released:true. Only afterwards begin cleanup.
 Recheck live claim/worktree ownership, the exact checkout path and holder branch, the exact local branch tip, and the exact remote head ref on its verified remote. Limit all mutations to this task's allowlisted branch and checkout; refuse the default branch. A late unpublished commit or any changed ownership/ref invalidates cleanup: keep the checkout and refs intact and leave a tracked handoff. A missing remote ref (including repository auto-deletion) proves neither local preservation nor archive completion; a failed lookup is not proof of absence.
 Inventory and preserve ALL unique tracked, untracked AND ignored content outside the checkout, including test results and scratch artifacts; do not follow dependency symlinks into shared installations. Verify the archive manifest and copied bytes before removal, and recheck ownership, local tip and inventory again after archiving. Archive failure or an ownership/ref/inventory change keeps the checkout and branch intact; record the owner, blocker and next step in the owning tracker. Never infer preservation from a clean git status.
-After those proofs, when this workflow owns remote cleanup, delete an existing remote head only with an exact-ref compare-and-delete: \`git push --force-with-lease=refs/heads/<branch>:<verified-head> <verified-remote> :refs/heads/<branch>\`. A lease rejection preserves the advanced ref and stops cleanup. Verify that exact remote ref is absent. Then remove only the authorized worktree and ancestry-gate the explicitly named local branch with \`git branch -d <branch>\`; never force local branch deletion. Do not checkout or pull the default branch. A refusal leaves the surviving checkout/ref for reconciliation. Managed review/completion agents that hand teardown to PortOS must leave the local checkout and branch intact for that owner to apply these same gates.`;
+After those proofs, when this workflow owns remote cleanup, delete an existing remote head only with an exact-ref compare-and-delete: \`git push --force-with-lease=refs/heads/<branch>:<verified-head> <verified-remote> :refs/heads/<branch>\`. A lease rejection preserves the advanced ref and stops cleanup. Verify that exact remote ref is absent. Fetch the verified remote’s intended default branch explicitly and require \`git merge-base --is-ancestor <exact-local-tip> <fetched-intended-default>\` before local removal; an upstream or a squash/rebase merge alone is not ancestry proof. If ancestry is unproven, preserve both checkout and branch for reconciliation. Then remove only the authorized worktree and delete the explicitly named local branch with \`git branch -d <branch>\`; never force local branch deletion. Do not checkout or pull the default branch. A refusal leaves the surviving checkout/ref for reconciliation. Managed review/completion agents that hand teardown to PortOS must leave the local checkout and branch intact for that owner to apply these same gates.`;
 
 
 /** Review/completion agents hand teardown to PortOS rather than removing it. */
 export const MANAGED_WORKTREE_COMPLETION_HANDOFF = '**Managed-worktree cleanup handoff:** Verify remote MERGED, release admission (released:true), then recheck ownership and exact local/remote refs. Verify preservation of all unique tracked, untracked and ignored bytes before cleanup. Archive failure or changed ownership/refs preserves the checkout and branch with a tracked handoff. Remote auto-deletion proves no archive. Leave local teardown to PortOS. Any authorized remote deletion must compare-and-delete only the exact ref at the CI-verified head; no default-branch checkout/pull or forced local deletion.';
+
+/** Executable GitHub claim merge phase; admission is supplied by its registered parent. */
+export function buildManagedGithubMergeScript() {
+  return [
+    '# CI_VERIFIED_HEAD is the exact head whose required checks and configured reviews passed.',
+    ': "${CI_VERIFIED_HEAD:?Missing CI-verified head}"',
+    '[ "$(git rev-parse HEAD)" = "$CI_VERIFIED_HEAD" ] || exit 1',
+    'PR_URL=$(gh pr view --json url -q .url) || exit 1',
+    'case "$PR_URL" in https://*/pull/[0-9]*) BASE_REPO_URL="${PR_URL%/pull/*}" ;; *) exit 1 ;; esac',
+    'portos_read_merge_state() {',
+    '  PR_SNAPSHOT=$(gh pr view "$PR_URL" --json state,headRefOid,mergeStateStatus,isDraft,reviewDecision) || return 1',
+    `  printf '%s' "$PR_SNAPSHOT" | node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync(0, "utf8")); if (p.headRefOid !== process.argv[1] || !["OPEN", "MERGED"].includes(p.state)) process.exit(1); if (p.state === "OPEN" && (p.isDraft !== false || !["CLEAN", "UNSTABLE", "HAS_HOOKS"].includes(p.mergeStateStatus) || ![null, "", "APPROVED"].includes(p.reviewDecision))) process.exit(1); process.stdout.write(p.state);' "$CI_VERIFIED_HEAD"`,
+    '}',
+    'STATE=$(portos_read_merge_state) || exit 1',
+    'if [ "$STATE" != "MERGED" ]; then',
+    '  for MERGE_METHOD in merge squash rebase; do',
+    '    case "$MERGE_METHOD" in',
+    '      merge) CAPABILITY=mergeCommitAllowed ;;',
+    '      squash) CAPABILITY=squashMergeAllowed ;;',
+    '      rebase) CAPABILITY=rebaseMergeAllowed ;;',
+    '    esac',
+    '    ALLOWED=$(gh repo view "$BASE_REPO_URL" --json "$CAPABILITY" -q ".$CAPABILITY") || exit 1',
+    '    [ "$ALLOWED" = "false" ] && continue',
+    '    [ "$ALLOWED" = "true" ] || exit 1',
+    '    [ "$(git rev-parse HEAD)" = "$CI_VERIFIED_HEAD" ] || exit 1',
+    '    STATE=$(portos_read_merge_state) || exit 1',
+    '    [ "$STATE" = "MERGED" ] && break',
+    '    gh pr checks "$PR_URL" --required || exit 1',
+    '    # Source the registered parent’s check function from Repository merge admission first.',
+    '    command -v portos_check_merge_admission >/dev/null || { echo "Missing registered merge-admission check" >&2; exit 1; }',
+    '    portos_check_merge_admission || exit 1',
+    '    STATE=$(portos_read_merge_state) || exit 1',
+    '    [ "$STATE" = "MERGED" ] && break',
+    '    if gh pr merge "$PR_URL" "--$MERGE_METHOD" --match-head-commit "$CI_VERIFIED_HEAD"; then MERGE_EXIT=0; else MERGE_EXIT=$?; fi',
+    '    STATE=$(portos_read_merge_state) || exit 1',
+    '    [ "$STATE" = "MERGED" ] && break',
+    '    # An attempted mutation has no verified success: never try another method.',
+    '    [ "$MERGE_EXIT" = "0" ] || exit "$MERGE_EXIT"',
+    '    echo "Expected MERGED, got $STATE" >&2; exit 1',
+    '  done',
+    'fi',
+    '[ "$STATE" = "MERGED" ] || { echo "No verified merge" >&2; exit 1; }',
+  ].join('\n');
+}

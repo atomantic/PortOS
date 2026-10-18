@@ -616,7 +616,8 @@ function buildPendingMergeHandoffLines(agentId) {
  */
 export function buildMergeAdmissionSection(agentId) {
   if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
-  const command = (action, extra = {}) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission',
+  const endpoint = { apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission' };
+  const command = (action, extra = {}) => agentApiCurl({ ...endpoint,
     payload: JSON.stringify({ agentId, action, ...extra }) });
   return [
     '## Repository merge admission',
@@ -628,7 +629,15 @@ export function buildMergeAdmissionSection(agentId) {
     'If an acquire/check refusal names lease-head-changed, release your token with outcome resync before acquiring again. If admitted:false with retryable:false, release any owned token with outcome leave-open, stop retrying, report the reason and message, and leave the PR/worktree intact. Otherwise, if admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR (and any claim) intact. A refusal is never a reason to merge without admission. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
     'Inside the lease, re-read the PR (head SHA, merge state, required check rollup; on GitHub `gh pr view --json headRefOid,mergeStateStatus,statusCheckRollup`):',
     '- If the head still equals the CI-verified head, every required check is green on it, and the forge reports the PR mergeable (`CLEAN`, or `UNSTABLE`/`HAS_HOOKS` with every required check green): check admission (replace TOKEN with the returned token; require admitted:true), then merge pinned to the CI-verified head — add `--match-head-commit <sha>` (GitLab: `--sha <sha>`) to every merge-method attempt your workflow lists; replace any verified-head placeholder with that SHA and retain the pin on every fallback. Managed GitHub merges must preserve local checkouts and branches; this overrides delegated merge instructions that request implicit branch deletion. A base that moved while the PR stays `CLEAN` does NOT require a resync or fresh CI: the forge’s own merge check is authoritative, and post-merge default-branch CI catches semantic conflicts between two individually green PRs.',
-    '```bash', command('check', { token: 'TOKEN' }), '```',
+    'Keep the acquired token in the private shell variable MERGE_ADMISSION_TOKEN. Before executing a generated GitHub claim merge block, define this parent-bound check in that same shell; every attempted mutation invokes it freshly. Missing registration, token, transport, readable JSON, or admitted:true stops the merge:',
+    '```bash',
+    'portos_check_merge_admission() {',
+    '  [ -n "${MERGE_ADMISSION_TOKEN:-}" ] || return 1',
+    `  ADMISSION_REQUEST=$(node -e 'process.stdout.write(JSON.stringify({agentId:process.argv[2],action:"check",token:process.argv[1]}))' "$MERGE_ADMISSION_TOKEN" ${shellQuote(agentId)}) || return 1`,
+    `  ADMISSION_RESPONSE=$(${agentApiCurl(endpoint)} --fail --data-binary "$ADMISSION_REQUEST") || return 1`,
+    `  printf '%s' "$ADMISSION_RESPONSE" | node -e 'const fs = require("node:fs"); const response = JSON.parse(fs.readFileSync(0,"utf8")); process.exit(response.admitted === true ? 0 : 1);'`,
+    '}',
+    '```',
     '- Otherwise (head changed, a required check is not green, or the PR is `DIRTY`/conflicting, `BEHIND` where branch rules require an up-to-date head, `BLOCKED`, or still `UNKNOWN` after a few re-reads): release with outcome resync. Then, OUTSIDE the lease, sync onto the latest default branch, rerun pregate and the affected required reviews, push, wait for required CI on the new head, and acquire again. After three resync rounds without a merge, record leave-open instead.',
     'Verify the remote state is exactly MERGED, then release with outcome merged before worktree cleanup. On a recorded failure or leave-open handoff, release with outcome leave-open. Require released:true; report a failed release without deleting or overwriting ownership state:',
     '```bash', command('release', { token: 'TOKEN', outcome: 'merged' }), '```',

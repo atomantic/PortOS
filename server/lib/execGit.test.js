@@ -32,10 +32,21 @@ describe('execGit', () => {
     const promise = execGit(['status'], '/repo');
     child.emit('close', 0);
     await promise;
-    expect(spawn).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({
+    expect(spawn).toHaveBeenCalledWith('git', ['status'], {
       cwd: '/repo',
       shell: false
-    }));
+    });
+  });
+
+  it('forwards an explicit credential environment without merging ambient variables', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const env = { GH_TOKEN: 'selected-fixture-token', GIT_TERMINAL_PROMPT: '0' };
+    const promise = execGit(['push'], '/repo', { env });
+    child.emit('close', 0);
+    await promise;
+    expect(spawn).toHaveBeenCalledWith('git', ['push'], { cwd: '/repo', shell: false, env });
+    expect(spawn.mock.calls[0][2].env).toBe(env);
   });
 
   it('resolves with stdout/stderr/exitCode on successful exit', async () => {

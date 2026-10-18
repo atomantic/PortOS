@@ -23,15 +23,15 @@ const unavailableBecause = cause => new Error(unavailable, { cause });
  * rejection into the same per-branch reason. Any other failure is wrapped as
  * the unavailable reason with that failure as its cause.
  */
-export async function readBranchCompletionPolicies() {
-  return readPolicies().catch(error => {
+export async function readBranchCompletionPolicies({ repairIndex = true } = {}) {
+  return readPolicies(repairIndex).catch(error => {
     const cause = error.cause ?? error;
     console.warn(`⚠️ Branch completion policy unavailable: ${cause.code ? `${cause.code} ` : ''}${cause.message}`);
     throw error.message === unavailable ? error : unavailableBecause(error);
   });
 }
 
-async function readPolicies() {
+async function readPolicies(repairIndex) {
   const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
   const snapshot = await readAgentsStateForSafetyCheck();
   if (!snapshot.trusted || !isPlainObject(snapshot.agents)) throw unavailableBecause(new Error('live agent state is untrusted'));
@@ -67,7 +67,7 @@ async function readPolicies() {
       agents.set(id, agent);
     }));
   }
-  if (dangling.length) dropDanglingIndexRows(dangling);
+  if (repairIndex && dangling.length) dropDanglingIndexRows(dangling);
   return [...agents.values()];
 }
 
@@ -115,13 +115,31 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
   policies.sort((a, b) => b.time - a.time);
   const handoff = policies.find(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN);
   const obligation = policies.find(policy => [PR_COMPLETIONS.LEAVE_OPEN, PR_COMPLETIONS.REVIEW_THEN_MERGE].includes(policy.completion));
-  if (!obligation) return { reason: null };
+  if (!obligation) return { reason: null, policies };
   const release = policies.find(policy => policy.time > obligation.time
     && policy.agent.status === 'completed' && policy.agent.result?.success === true
     && policy.completion === PR_COMPLETIONS.MERGE_ON_GREEN
     && policy.prUrl && policy.prUrl === obligation.prUrl && (!prUrl || policy.prUrl === prUrl)
     && policy.tip && policy.tip === tip);
-  return { release, obligation, reason: handoff ? held : 'pr-completion-review-required' };
+  return { release, obligation, policies, reason: handoff ? held : 'pr-completion-review-required' };
+}
+
+/** A new operator review may settle completed legacy review obligations only.
+ * This is evidence for the scoped retirement caller, never unattended consent.
+ */
+export function reviewedRetirementPolicy(input) {
+  const decision = completionDecision(input);
+  if (decision.reason === unavailable || decision.reason === held) return { reason: decision.reason };
+  const policies = decision.policies || [];
+  if (policies.some(p => p.agent.status !== 'completed' || p.agent.result?.success !== true
+    || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || p.prUrl)) {
+    return { reason: 'retirement-policy-not-legacy-completed' };
+  }
+  return { reason: null, policies: policies.map(p => ({
+    id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
+    completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
+    branch: p.branch, completion: p.completion,
+  })).sort((a, b) => String(a.id).localeCompare(String(b.id))) };
 }
 
 export async function readBranchCompletionHold(input, deps = {}) {

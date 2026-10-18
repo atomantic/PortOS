@@ -26,12 +26,17 @@ export async function settleBranchReconcileRun(agent) {
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },
     forgeAccount: app.forgeAccount || null
   });
+  const inFlightBranches = new Set((result.inFlight || []).map(branch => branch.branch));
   const holds = describeIdleReconcilePark(result.skipped || [], [], {
     wip: result.wip, detachedWorktrees: result.detachedWorktrees,
-    superseded: result.superseded, claimMarkersHeld: result.claimMarkersHeld
+    superseded: result.superseded, claimMarkersHeld: result.claimMarkersHeld,
+    // Actionable branches are counted separately; the helper deduplicates all
+    // remaining checkout projections and includes retained claim reservations.
+    worktreeInventory: result.worktreeInventory?.filter(tree => !inFlightBranches.has(tree.branch)) ?? null,
   });
-  const uncertain = result.forgeUnavailable || result.prStateUnavailable;
-  const remaining = (result.inFlight?.length || 0) + (holds.counts?.heldBranches || 0) + (holds.counts?.heldDetached || 0);
+  const uncertain = result.forgeUnavailable || result.prStateUnavailable
+    || result.worktreeInventory == null || result.orphanRemotes?.remoteUnavailable;
+  const remaining = inFlightBranches.size + holds.remaining.length;
   emitLog(uncertain || remaining ? 'warn' : 'info',
     `Branch reconciliation completion: cleaned ${result.cleaned.length}, superseded ${result.reapedSuperseded?.length || 0}, remaining ${remaining}${uncertain ? '; scan incomplete' : ''}`,
     { appId: app.id, analysisType: type, counts: holds.counts, skipCauses: holds.skipCauses });

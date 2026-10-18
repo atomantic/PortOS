@@ -2841,7 +2841,13 @@ export const heldCheckoutRetireBodySchema = z.object({
   branch: z.string().min(1).nullable(),
   locked: z.boolean(),
   lockReason: z.string().nullable(),
+  review: z.object({
+    prUrl: z.string().url(),
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+    acceptSuperseded: z.boolean(),
+  }).optional(),
 });
+export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url() });
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

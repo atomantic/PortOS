@@ -48,8 +48,8 @@ describe('bounded forge mutations', () => {
 
   it.each([
     ['createPR', ['pr', 'create'], () => createPR('/repo', { title: 'Title', body: 'Body', base: 'main', head: 'topic' })],
-    ['mergePR', ['pr', 'merge', '42', '--merge', '--delete-branch'], () => mergePR('/repo', 42)],
-    ['head-pinned mergePR', ['pr', 'merge', '42', '--merge', '--delete-branch', '--match-head-commit', 'a'.repeat(40)], () => mergePR('/repo', 42, { expectedHeadSha: 'a'.repeat(40) })],
+    ['mergePR', ['pr', 'merge', '42', '--merge'], () => mergePR('/repo', 42)],
+    ['head-pinned mergePR', ['pr', 'merge', '42', '--merge', '--match-head-commit', 'a'.repeat(40)], () => mergePR('/repo', 42, { expectedHeadSha: 'a'.repeat(40) })],
     ['requestCopilotReview', ['api', 'repos/example-owner/repo/pulls/42/requested_reviewers'], () => requestCopilotReview('/repo', 'https://github.com/example-owner/repo/pull/42')],
   ])('kills a stalled gh process and returns a structured timeout from %s', async (_name, expectedArgs, invoke) => {
     const child = hungChild();
@@ -58,6 +58,8 @@ describe('bounded forge mutations', () => {
     const pending = invoke();
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(60000);
+    // A failed merge is read back once: a timeout is not proof it did not land.
+    if (_name.includes('mergePR')) await vi.advanceTimersByTimeAsync(60000);
 
     await expect(pending).resolves.toMatchObject({
       success: false,
@@ -69,6 +71,7 @@ describe('bounded forge mutations', () => {
       expect.arrayContaining(expectedArgs),
       expect.objectContaining({ cwd: '/repo', env: expect.objectContaining({ GH_TOKEN: 'test-owner-token', PWD: '/repo' }) }),
     );
+    if (_name.includes('mergePR')) expect(mocks.spawn.mock.calls[0][1]).not.toContain('--delete-branch');
   });
 
   it.each(['gh', 'glab'])('creates drafts through %s without enabling merging', async cli => {

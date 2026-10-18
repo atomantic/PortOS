@@ -12,7 +12,7 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "90acf7a56c0de2147cf7463ba338a099",
-    "claim-issue": "2ca300b6dc35b8e73bc2d0908e87168e",
+    "claim-issue": "2b5bbc559ecec8eafc7c01372540de15",
     "claim-issue-gitlab": "29f025187d20a8583292bb53bb974c06",
     "claim-issue-jira": "d0df766dd9ef326c8578efe2953af13e",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
@@ -41,8 +41,8 @@
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
     "performance": "4f8ddada54d7c6f31b7fb35aeb0f29db",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
-    "plan-task": "2f3de862cf9962e684202b9312b78292",
-    "plan-task-claim": "796baac684589dec9a170c42e6df951a",
+    "plan-task": "256a254c3e0624d21604e5c7404886ad",
+    "plan-task-claim": "c139d86a9c67559dc07dac18058c4bf2",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
     "pr-reviewer-review": "511b26a376439cc6cb268a736897fefd",
@@ -77,7 +77,7 @@
     "better-structural-drift": 2,
     "better-test-quality": 2,
     "branch-reconcile": 8,
-    "claim-issue": 42,
+    "claim-issue": 43,
     "claim-issue-gitlab": 37,
     "claim-issue-jira": 24,
     "code-quality": 6,
@@ -106,7 +106,7 @@
     "observability": 2,
     "performance": 6,
     "plan-feature": 6,
-    "plan-task": 22,
+    "plan-task": 23,
     "pr-reviewer": 5,
     "pr-watcher": 2,
     "privacy": 2,
@@ -220,7 +220,8 @@
       "2663933c28056e0e23caf42acb1b41d0",
       "9e51f8f382774585728c2c642e88539b",
       "34557a99689bd2e089b0e1e634ce1ff3",
-      "cea12f4209a3f20ebe1a5ad8cc7b38b5"
+      "cea12f4209a3f20ebe1a5ad8cc7b38b5",
+      "2ca300b6dc35b8e73bc2d0908e87168e"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -423,7 +424,8 @@
       "910802d67f3b5a785f068f4d90178543",
       "b85fe92999aa4ee4a8910320457c4242",
       "8a53a518714cc4029d751fdad92f9b05",
-      "5dd527c47e736094949c4605cfb2d973"
+      "5dd527c47e736094949c4605cfb2d973",
+      "2f3de862cf9962e684202b9312b78292"
     ],
     "pr-reviewer": [
       "679680b3b382aeb6786df01c4d1a90c6",
