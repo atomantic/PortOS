@@ -804,6 +804,54 @@ describe('cancel while the final render is preparing (#11768)', () => {
 });
 
 describe('stage completion after ownership is released (#12064)', () => {
+  // A stop admitted ahead of failure persistence must win even while both writes wait for the store.
+  it.each([
+    ['cancel', 'canceled', null],
+    ['stop', 'stopped', 'MUSIC_VIDEO_APPROVAL_REQUIRED'],
+  ])('preserves %s when a stage failure queues behind its status write', async (action, status, code) => {
+    const projects = await import('./projects.js');
+    const lyrics = Promise.withResolvers();
+    doubles.writeLyrics.mockImplementationOnce(() => lyrics.promise);
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'] });
+    await vi.waitFor(() => expect(doubles.writeLyrics).toHaveBeenCalledOnce());
+    const barrier = Promise.withResolvers();
+    writeTail = writeTail.then(() => barrier.promise);
+    const writes = vi.spyOn(projects, 'mutateProjectRecord');
+    let release;
+    try {
+      release = service[`${action}AutonomousVideo`]('mv-auto');
+      lyrics.reject(Object.assign(new Error('late stage failure'), { code }));
+      await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
+    } finally {
+      barrier.resolve();
+      await release;
+      await service.__testing.settleBackground();
+      writes.mockRestore();
+    }
+    expect(runOf()).toMatchObject({ status, stage: 'lyrics', error: null, errorCode: null });
+    expect(doubles.createMoodBoard).not.toHaveBeenCalled();
+  });
+
+  // A failed cancellation must leave the newly created child discoverable on its released parent.
+  it('retains late production linkage when child cancellation fails', async () => {
+    const production = Promise.withResolvers();
+    doubles.startProduction.mockImplementationOnce(() => production.promise);
+    doubles.cancelProduction.mockRejectedValueOnce(new Error('production store unavailable'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await service.startAutonomousVideo({ prompt: 'p' });
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      await service.cancelAutonomousVideo('mv-auto');
+      production.resolve({ run: { id: 'mvpr-late-failed-cancel' } });
+      await service.__testing.settleBackground();
+      expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-late-failed-cancel');
+      expect(runOf()).toMatchObject({ status: 'canceled', stage: 'produce', output: { productionRunId: 'mvpr-late-failed-cancel' } });
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('could not cancel production mvpr-late-failed-cancel'));
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   // Uniquely catches a successful late stage restoring approval/continuation after cancel, stop, or a process handoff.
   it.each(['cancel', 'stop', 'handoff'])('keeps a checkpoint released by %s terminal and preserves its finished output', async (action) => {
     const lyrics = Promise.withResolvers();
@@ -819,6 +867,41 @@ describe('stage completion after ownership is released (#12064)', () => {
       output: { lyrics: 'finished words' }, stages: { lyrics: { status: 'done' } } });
     expect(doubles.createMoodBoard).not.toHaveBeenCalled();
     expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
+
+  it('still cancels late production when saving its recovery linkage fails', async () => {
+    const projects = await import('./projects.js');
+    const production = Promise.withResolvers();
+    doubles.startProduction.mockImplementationOnce(() => production.promise);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let write;
+    try {
+      await service.startAutonomousVideo({ prompt: 'p' });
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      await service.cancelAutonomousVideo('mv-auto');
+      write = vi.spyOn(projects, 'mutateProjectRecord').mockRejectedValueOnce(new Error('link store unavailable'));
+      production.resolve({ run: { id: 'mvpr-late-unlinked' } });
+      await service.__testing.settleBackground();
+      expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-late-unlinked');
+      expect(runOf().status).toBe('canceled');
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('link store unavailable'));
+    } finally {
+      write?.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+
+  it('preserves a replacement child when late production returns after a process handoff', async () => {
+    const production = Promise.withResolvers();
+    doubles.startProduction.mockImplementationOnce(() => production.promise);
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    runOf().processId = 'proc-other';
+    runOf().output.productionRunId = 'mvpr-replacement';
+    production.resolve({ run: { id: 'mvpr-obsolete' } });
+    await service.__testing.settleBackground();
+    expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-obsolete');
+    expect(runOf()).toMatchObject({ status: 'running', processId: 'proc-other', output: { productionRunId: 'mvpr-replacement' } });
   });
 
   // Uniquely catches production being dispatched after a cancel during the preceding preparation/review.
@@ -848,7 +931,7 @@ describe('stage completion after ownership is released (#12064)', () => {
     await service.__testing.settleBackground();
     expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-late');
     expect(runOf()).toMatchObject({ status: released.status, stage: 'produce', processId: released.processId, errorCode: null });
-    expect(runOf().output.productionRunId).toBeUndefined();
+    expect(runOf().output.productionRunId).toBe('mvpr-late');
   });
 
   // Uniquely catches cancellation winning the handoff write after the executor's last ownership read.
