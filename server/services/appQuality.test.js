@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { recordAuditQuality, enrichAppsWithQuality } from './appQuality.js';
+import { recordAuditQuality, enrichAppsWithQuality, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
-import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, QUALITY_WINDOW_RUNS } from '../lib/auditQuality.js';
+import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS } from '../lib/auditQuality.js';
 
 const report = (overrides = {}) => ({ version: 1, category: 'better-complexity', score: 35, worstSeverity: 8,
   coverage: 'broad', confidence: 'high', summary: 'The checkout has a major branching hotspot in the job dispatcher.', scannedFiles: 100, totalFiles: 100, ...overrides });
@@ -31,7 +31,7 @@ describe('scheduled audit measurement workflow', () => {
     await expect(recordAuditQuality({ task, taskType: 'better-complexity', agentId: 'agent-1', workspacePath: '/repo', success: true, assessedAt }, {
       readFile: vi.fn().mockResolvedValue(JSON.stringify({ summary: sentinel(report()), payload: null })), query, ensureSchema,
     })).resolves.toBe(true);
-    expect(query.mock.calls[0][1]).toEqual(['portos-default', 'better-complexity', 'agent-1', assessedAt, JSON.stringify(report())]);
+    expect(query.mock.calls[0][1]).toEqual(['portos-default', 'better-complexity', 'agent-1', assessedAt, JSON.stringify(report()), null]);
 
   });
 
@@ -45,7 +45,7 @@ describe('scheduled audit measurement workflow', () => {
     })).resolves.toBe(true);
     expect(query.mock.calls[0][1]).toEqual([
       'portos-default', 'ui-lifecycle', 'agent-legacy', assessedAt,
-      JSON.stringify({ ...legacyReport, category: 'ui-lifecycle' }),
+      JSON.stringify({ ...legacyReport, category: 'ui-lifecycle' }), null,
     ]);
   });
 
@@ -114,6 +114,27 @@ describe('scheduled audit measurement workflow', () => {
     const unqualified = summarizeAppQuality([run(3, 90, { confidence: 'low' }), run(40, 0)], now);
     expect(unqualified).toMatchObject({ score: null, ratedCategories: 0 });
     expect(unqualified.categories.find(c => c.id === 'security')).toMatchObject({ score: 90, runScore: 90, window: { runs: 0, worstSeverity: null } });
+  });
+
+  // #12090: the AUDIT_SLICE line is the lane's rotation record. A summary
+  // without it still records the report (slice null, or the v2 report's slice).
+  it('stores the AUDIT_SLICE line beside the report and reads the lane\'s recent slices back', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const run = { task, taskType: 'better-complexity', agentId: 'agent-1', workspacePath: '/repo', success: true, assessedAt };
+    const withLine = `Reviewed the dispatcher.\nAUDIT_SLICE:  server/services, server/lib/dispatch  \n${sentinel(report())}`;
+    expect(await recordAuditQuality(run, { readFile: async () => withLine, query, ensureSchema: vi.fn() })).toBe(true);
+    expect(query.mock.calls[0][0]).toMatch(/INSERT INTO app_quality_measurements \(app_id, category, agent_id, assessed_at, report, slice\)/);
+    expect(query.mock.calls[0][1][5]).toBe('server/services, server/lib/dispatch');
+    expect(await recordAuditQuality(run, { readFile: async () => sentinel(sliceReport()), query, ensureSchema: vi.fn() })).toBe(true);
+    expect(query.mock.calls[1][1][5]).toBe('server/services');
+    expect(parseAuditSlice('AUDIT_SLICE:   \nAUDIT_SLICE: late')).toBeNull();
+    expect(parseAuditSlice(`AUDIT_SLICE: ${'x'.repeat(600)}`)).toHaveLength(500);
+    expect(parseAuditSlice(null)).toBeNull();
+
+    const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services' }] });
+    expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services' }]);
+    expect(read.mock.calls[0][0]).toMatch(/slice IS NOT NULL/);
+    expect(read.mock.calls[0][1]).toEqual(['portos-default', 'ui-lifecycle', AUDIT_SLICE_HISTORY_RUNS]);
   });
 
   // The same run reaches the window as the local row and again through the

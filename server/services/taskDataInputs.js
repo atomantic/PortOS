@@ -14,6 +14,8 @@ import { scrubSecretTokens } from '../lib/secretText.js';
 import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
 import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { classifyGhProbe, execGh, ghRemedy } from './github.js';
 import { execGlabJson } from './gitlab.js';
@@ -288,6 +290,18 @@ const INPUT_LOADERS = {
       ? renderForgeItems(result.items, { emptyMessage: 'No open pull requests.' })
       : forgeUnavailable('Open pull requests', forge, result);
   },
+  // The slice rotation record (#12090): what this lane deep-reviewed lately,
+  // so the agent prefers other areas. A self-directed PortOS task carries no
+  // app id; its measurements are stored under PortOS's own.
+  'audit-slice-history': async ({ app, deps, taskType }) => {
+    if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no slice history applies to this task.';
+    const runs = await deps.listAuditSlices(app?.id || PORTOS_APP_ID, taskType)
+      .catch(() => null);
+    if (runs === null) return unavailableMessage('Recent audit slices', 'measurement store unavailable');
+    if (!runs.length) return 'No slice recorded for this lane on this app yet; choose the slice by evidence and name it in AUDIT_SLICE.';
+    const lines = runs.map(({ assessedAt, slice }) => `- ${assessedAt.slice(0, 10)}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`);
+    return truncateWithNotice(`Recently audited by this lane (prefer other areas unless evidence points here):\n${lines.join('\n')}`, MAX_INPUT_CHARS);
+  },
   'closed-unmerged-pull-requests': async ({ app, deps, forge }) => {
     if (!forge) return unavailableMessage('Closed unmerged pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'closed-unmerged' });
@@ -312,6 +326,10 @@ export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, 
       return listConfiguredForgeIssues(...args);
     },
     listPullRequests: listForgePullRequests,
+    listAuditSlices: async (...args) => {
+      const { readRecentAuditSlices } = await import('./appQuality.js');
+      return readRecentAuditSlices(...args);
+    },
     environment: process.env,
     ...dependencies,
   };

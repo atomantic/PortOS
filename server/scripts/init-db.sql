@@ -2271,6 +2271,9 @@ CREATE TABLE IF NOT EXISTS app_quality_measurements (
 
 CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC);
 
+-- The AUDIT_SLICE line of the run's completion summary (#12090); null for runs that predate it.
+ALTER TABLE app_quality_measurements ADD COLUMN IF NOT EXISTS slice TEXT;
+
 -- Machine-local Mind recipe library (#7194).
 CREATE TABLE IF NOT EXISTS mind_tool_recipes (
     id UUID PRIMARY KEY,
