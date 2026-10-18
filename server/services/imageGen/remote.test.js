@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { federatedMediaAssetId } from '../../lib/federatedMediaWire.js';
 
 let tempImageDir;
@@ -25,7 +25,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     // containment behavior is fileUtils' own suite's job; what matters here is
     // that the executor resolves before uploading, and refuses when it cannot.
     resolveImageInputPath: (raw) => {
-      const candidate = join(tempImageDir, raw.split('/').pop());
+      const candidate = join(tempImageDir, basename(raw));
       return existsSync(candidate) ? candidate : null;
     },
   };
