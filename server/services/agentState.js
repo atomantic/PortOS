@@ -123,7 +123,7 @@ export const setUseRunner = (val) => { useRunner = val; };
 // at the default branch's HEAD, so a reaper reads it as clean and merged. Listing
 // the id in `getActiveAgentIds()` hands every reaper that already consults it the
 // protection, without reordering branch-reconcile's MERGED-before-owner check.
-const dispatchingAgentIds = new Set();
+export const dispatchingAgentIds = new Set();
 export const markAgentDispatching = (agentId) => { dispatchingAgentIds.add(agentId); };
 export const clearAgentDispatching = (agentId) => { dispatchingAgentIds.delete(agentId); };
 
