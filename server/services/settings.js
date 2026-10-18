@@ -2,7 +2,7 @@ import { hydratePrivateKeys, persistPrivateKeys } from './privateKeyStore.js';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createFileWriteQueue, drainDetachedWrites, trackDetachedWrite } from '../lib/fileWriteQueue.js';
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 // `./userActions.js` is imported lazily at its single call site below, NOT here.
 // It reaches the DB schema/query layer, and settings.js is imported by nearly
@@ -301,20 +301,20 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {},
   return cleaned;
 };
 
-// Ledger writes in flight, so `flushSettingsLedger` can await them.
-const pendingLedgerWrites = new Set();
-
 // Record a settings change in the operator-action ledger (#5594) as detached
 // bookkeeping: the row is a Postgres write, and awaiting it inside the queued
 // save turn made a DB outage stall every later settings write for the pool
 // connect timeout and then reject a save whose file was already on disk — which
 // in turn skipped setPassword's session revocation (#12018). The ledger is an
 // audit trail, not part of the save's success contract, so the chain is not
-// awaited by the caller and owns its own rejection.
+// awaited by the caller and owns its own rejection. It is tracked so a drain
+// point (`flushSettingsLedger`, the test runner's per-test teardown) can wait
+// for it: a suite that removes its temp data root under an in-flight row would
+// otherwise see the row recreate the directory and leak it.
 const recordSettingsChange = (actor, change) => {
   const happenedAt = new Date().toISOString();
   const changedKeys = change.keysChanged.join(',');
-  const write = import('./userActions.js')
+  trackDetachedWrite(import('./userActions.js')
     .then(({ recordUserAction }) => recordUserAction({
       type: 'settings.update',
       actor,
@@ -331,15 +331,13 @@ const recordSettingsChange = (actor, change) => {
     }))
     .catch((error) => {
       console.error(`❌ Settings ledger write failed for keys ${changedKeys}: ${error.message}`);
-    })
-    .finally(() => pendingLedgerWrites.delete(write));
-  pendingLedgerWrites.add(write);
+    }));
 };
 
 // Await every ledger write scheduled so far. The writes are detached from the
 // save that scheduled them, so a caller that must observe the row (a test, a
 // shutdown drain) waits here rather than on the save's promise.
-export const flushSettingsLedger = () => Promise.all([...pendingLedgerWrites]).then(() => undefined);
+export const flushSettingsLedger = () => drainDetachedWrites();
 
 /**
  * `getSettings`, but reporting whether the snapshot came from a CORRUPT read.

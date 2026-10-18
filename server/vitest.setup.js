@@ -50,9 +50,10 @@
  *   suites (Option B) for working examples.
  */
 
-import { vi, afterAll } from 'vitest';
+import { vi, afterAll, afterEach } from 'vitest';
 import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
+import { drainDetachedWrites } from './lib/fileWriteQueue.js';
 import './test/admissionSetup.js';
 
 // A per-file environment override must not silently bypass registry isolation.
@@ -80,6 +81,12 @@ vi.mock('./services/instances.js', async (importOriginal) => {
   const actual = await importOriginal();
   return mockNoPeers(actual);
 });
+
+// A settings save schedules its operator-action ledger row off the queued
+// turn (#12018); this runs after each test's own afterEach and before the
+// suite's afterAll, so a teardown that removes the temp data root never races
+// an in-flight row that would recreate the directory as a `test temp leak`.
+afterEach(() => drainDetachedWrites());
 
 // Wipe the shared git fixture templates (`lib/gitTestRepo.js`) after each
 // test file (#9000). Vitest isolates the module graph per file, so every file
