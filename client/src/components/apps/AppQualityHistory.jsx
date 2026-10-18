@@ -39,7 +39,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
         <h4 className="flex items-center gap-1.5 text-sm font-medium">
           Quality over time
           <InfoTooltip label="About quality history" placement="below" align="start" width={288}>
-            Daily snapshots (UTC), higher is healthier. Scores carry forward for up to 30 days; gaps mean no fresh evidence. Coverage changes can move the overall mean. Category views include provisional assessments.
+            Daily snapshots (UTC), higher is healthier. Each category value is the rolling mean of its recent qualifying runs as of that day; runs carry forward for up to 30 days, and gaps mean no fresh evidence. Coverage changes can move the overall mean. Category views include provisional assessments.
             {state.data?.federation && ` Includes ${state.data.federation.available ?? 0} available full-sync peers; peer availability can change historical coverage.`}
           </InfoTooltip>
         </h4>

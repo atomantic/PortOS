@@ -35,14 +35,27 @@ material finding verified). An issue being filed, or one fix being made, is not
 an automatic score improvement. Scores express an auditor's judgment supported
 by the scan and inspection, not a certification or an exhaustive proof.
 
-The overall score is the rounded, equal-weight average of the latest eligible
-category assessments: **broad** discovery coverage, medium/high confidence, and
-at most 30 days old. Broad means the signal scan covered the entire declared
-eligible inventory; deep investigation still stays bounded. Partial, stale,
-low-confidence, unavailable and inapplicable assessments remain visible but do
-not contribute. Missing categories do not count as 100. The contributing category
-count is shown beside the score so a single good category cannot imply complete
-coverage. Its denominator is the number of categories that **apply** to the
+Each run rates only the **slice** it deep-reviewed (report `version: 2`:
+`slice` names the top-level paths or area, `sliceScore` is its 0–100 rating).
+A bounded run cannot honestly rate the whole category, and when it was asked to
+(`version: 1`, a category-wide `score`) the dashboard moved with whichever
+slice the agent picked — a 20-point swing between consecutive runs was normal.
+Stored v1 reports stay readable; their `score` is read as that run's score.
+
+A category's score is derived server-side: the confidence-weighted mean (high
+1, medium 0.5) of its newest five eligible runs — **broad** discovery coverage,
+medium/high confidence, scored, and at most 30 days old — one run per UTC day.
+The breakdown shows how many runs fed the figure and the worst severity any of
+them found; the row's coverage, confidence, date, slice and summary describe the
+newest run. A newer partial run does not erase a fresh scored one. With no
+eligible run the row shows the newest run's own score beside its stale, partial
+or low-confidence label and does not contribute. The overall score is the
+rounded, equal-weight average of the contributing category scores. Broad means
+the signal scan covered the entire declared eligible inventory; deep
+investigation still stays bounded. Partial, stale, low-confidence, unavailable
+and inapplicable assessments remain visible but do not contribute. Missing
+categories do not count as 100. The contributing category count is shown beside
+the score so a single good category cannot imply complete coverage. Its denominator is the number of categories that **apply** to the
 repository (`applicableCategories`): a category is inapplicable when the
 repository scan says so (see "Which checks" below — the app detail read runs it)
 or its own fresh assessment reported `not-applicable`, unless a fresh rated
@@ -58,9 +71,12 @@ markers and malformed JSON. Missing/invalid output never invents a score or
 replaces a previous valid measurement; the prior measurement keeps its original
 date and expires normally. Assessment collection does not relax commit/PR gates.
 The run's recorded start time orders measurements so delayed recovery cannot
-replace newer evidence. PostgreSQL retains each run measurement and projects the latest per app/category,
-locally and within the ordinary database backup; no old runs are guessed into
-scores and no extra audit batch is enabled automatically.
+replace newer evidence. PostgreSQL retains each run measurement and projects the
+recent runs per app/category into the rolling score, locally and within the
+ordinary database backup; no old runs are guessed into scores and no extra
+audit batch is enabled automatically. Peers and the `.quality.json` snapshot
+receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
+an older install keeps reading it; the slice text never leaves the machine.
 
 ## Coverage review
 
@@ -121,8 +137,9 @@ ranges and an overall/category selector. Both selections are shareable URL
 parameters. The expandable history table provides dates, values and coverage
 without relying on color or hover. Refresh history reloads measurements.
 
-Daily snapshots use the latest assessment available on that date, carrying it
-forward for at most 30 days. Missing or expired evidence creates a gap. The
+Daily snapshots apply the same rolling derivation to the runs known on that
+date, carrying each run forward for at most 30 days. Missing or expired evidence
+creates a gap. The
 current day ends at the request time. Category charts include provisional
 partial/low-confidence scores; the overall chart applies the same eligibility
 rules as today's score. Coverage is shown with each value because adding or
