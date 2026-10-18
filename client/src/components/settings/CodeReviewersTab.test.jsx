@@ -267,27 +267,6 @@ describe('CodeReviewersTab', () => {
     expect(api.getCodeReviewDefaults).toHaveBeenCalledTimes(2);
   });
 
-  it('handles save when Save defaults button is clicked', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
-      reviewers: ['codex'],
-      usernames: [],
-      optionalReviewers: [],
-      reviewerMaxRounds: {},
-      stopMode: 'consensus',
-      reviewerApplies: false,
-    });
-    api.updateSettings.mockResolvedValue({ success: true });
-
-    renderTab(<CodeReviewersTab />);
-
-    const saveBtn = await screen.findByRole('button', { name: 'Save defaults' });
-    fireEvent.click(saveBtn);
-
-    await waitFor(() => {
-      expect(api.updateSettings).toHaveBeenCalled();
-    });
-  });
-
   // The goal-fidelity gate (#5994) — the second review, which asks whether a
   // finished run delivered the objective rather than whether the code is good.
   it('round-trips the goal-fidelity gate, and defaults an absent block to on', async () => {

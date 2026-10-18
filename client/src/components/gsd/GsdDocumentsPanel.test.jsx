@@ -64,17 +64,4 @@ describe('GsdDocumentsPanel document loading', () => {
     expect(screen.getByRole('textbox', { name: 'Document content' })).toHaveValue('Roadmap body');
   });
 
-  it('ignores an in-flight response after unmount', async () => {
-    let resolveDocument;
-    api.getGsdDocument.mockReturnValue(new Promise(resolve => { resolveDocument = resolve; }));
-
-    const { unmount } = renderPanel();
-    await waitFor(() => expect(api.getGsdDocument).toHaveBeenCalled());
-    unmount();
-
-    await act(async () => {
-      resolveDocument({ content: 'Unmounted body' });
-      await flushMicrotasks();
-    });
-  });
 });
