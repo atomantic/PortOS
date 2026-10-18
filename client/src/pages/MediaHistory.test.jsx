@@ -137,7 +137,8 @@ it('imports a mixed batch from History and inserts both returned records', async
   const input = screen.getByLabelText('Upload / import');
   expect(input.multiple).toBe(true);
   fireEvent.change(input, { target: { files: [new File(['png'], 'new.png'), new File(['mp4'], 'new.mp4')] } });
-  await screen.findByText('2 of 2 imported');
+  expect(await screen.findByText('2 of 2 imported')).toHaveClass('sr-only');
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
   expect(await screen.findByText('Imported image prompt')).toBeInTheDocument();
   expect(await screen.findByText('Imported video prompt')).toBeInTheDocument();
   expect(batchApi.assignImportedMedia).not.toHaveBeenCalled();
