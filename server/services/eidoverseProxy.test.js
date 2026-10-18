@@ -3,6 +3,9 @@ import { createServer, request as httpRequest } from 'node:http';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
+import { Server as SocketIoServer } from 'socket.io';
+import { io as SocketIoClient } from 'socket.io-client';
+import { installUpgradeFallback } from '../lib/upgradeFallback.js';
 import {
   createEidoverseExpressMiddleware,
   embedParentOrigin,
@@ -25,6 +28,7 @@ vi.mock('./eidoverseWorld.js', () => ({
 const servers = [];
 const webSocketServers = [];
 const webSocketClients = [];
+const ioServers = [];
 
 const listen = async (server) => {
   server.listen(0, '127.0.0.1');
@@ -34,6 +38,10 @@ const listen = async (server) => {
 };
 
 const closeServer = (server) => new Promise((resolve, reject) => {
+  if (!server.listening) {
+    resolve();
+    return;
+  }
   server.close((error) => (error ? reject(error) : resolve()));
 });
 
@@ -51,6 +59,12 @@ const rawGet = (port, path, hostHeader) => new Promise((settle, reject) => {
 afterEach(async () => {
   webSocketClients.splice(0).forEach((client) => client.terminate());
   await Promise.all(webSocketServers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+  while (ioServers.length > 0) {
+    const io = ioServers.pop();
+    try {
+      io?.close();
+    } catch {}
+  }
   await Promise.all(servers.splice(0).map(closeServer));
 });
 
@@ -217,5 +231,106 @@ describe('main-server eidoverse reverse-proxy', () => {
     expect(data).toEqual({ ok: true, echo: payload });
     expect(receivedBody).toBe(JSON.stringify(payload));
     expect(Number(receivedHeaders['content-length'])).toBe(Buffer.byteLength(JSON.stringify(payload)));
+  });
+
+  it('completes a /ws upgrade whose upstream answers after 1.5 s when Socket.IO is attached with destroyUpgrade: false', async () => {
+    const upstream = createServer();
+    const upstreamWss = new WebSocketServer({ noServer: true });
+    webSocketServers.push(upstreamWss);
+    upstream.on('upgrade', (req, socket, head) => {
+      const timer = setTimeout(() => {
+        upstreamWss.handleUpgrade(req, socket, head, (ws) => {
+          ws.send('slow-ready');
+        });
+      }, 1500);
+      timer.unref?.();
+    });
+    const upstreamPort = await listen(upstream);
+
+    const app = express();
+    app.use(createEidoverseExpressMiddleware({
+      isActive: () => true,
+      targetHost: '127.0.0.1',
+      targetPort: upstreamPort,
+      getProtocol: () => 'http',
+    }));
+    const server = createServer(app);
+    const io = new SocketIoServer(server, {
+      destroyUpgrade: false,
+      path: '/socket.io',
+    });
+    ioServers.push(io);
+    mountEidoverseWebSocket(server, {
+      isActive: () => true,
+      targetHost: '127.0.0.1',
+      targetPort: upstreamPort,
+      getProtocol: () => 'http',
+    });
+    installUpgradeFallback(server);
+    const port = await listen(server);
+
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    webSocketClients.push(client);
+    const first = once(client, 'message');
+    await once(client, 'open');
+    expect(String((await first)[0])).toBe('slow-ready');
+    client.close();
+    await once(client, 'close');
+    webSocketClients.pop();
+  });
+
+  it('ends an upgrade request for an unclaimed path after a bounded timeout', async () => {
+    const app = express();
+    const server = createServer(app);
+    const io = new SocketIoServer(server, {
+      destroyUpgrade: false,
+      path: '/socket.io',
+    });
+    ioServers.push(io);
+    mountEidoverseWebSocket(server, {
+      isActive: () => true,
+      targetHost: '127.0.0.1',
+      targetPort: 5556,
+      getProtocol: () => 'http',
+    });
+    installUpgradeFallback(server, { timeoutMs: 100 });
+    const port = await listen(server);
+
+    const client = new WebSocket(`ws://127.0.0.1:${port}/unclaimed-upgrade-path`);
+    webSocketClients.push(client);
+    const closed = await new Promise((resolve) => {
+      client.on('close', () => resolve(true));
+      client.on('error', () => resolve(true));
+    });
+    expect(closed).toBe(true);
+    expect(client.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
+    webSocketClients.pop();
+  });
+
+  it('preserves Socket.IO upgrades on the same server when destroyUpgrade: false is set', async () => {
+    const app = express();
+    const server = createServer(app);
+    const io = new SocketIoServer(server, {
+      destroyUpgrade: false,
+      path: '/socket.io',
+    });
+    ioServers.push(io);
+    mountEidoverseWebSocket(server, {
+      isActive: () => true,
+      targetHost: '127.0.0.1',
+      targetPort: 5556,
+      getProtocol: () => 'http',
+    });
+    installUpgradeFallback(server);
+    const port = await listen(server);
+
+    const client = SocketIoClient(`http://127.0.0.1:${port}`, {
+      path: '/socket.io',
+      transports: ['websocket'],
+    });
+    await once(client, 'connect');
+    expect(client.connected).toBe(true);
+    client.disconnect();
+  });
   });
 });

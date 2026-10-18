@@ -108,6 +108,7 @@ export const createRemoteDesktopBroker = ({
 
     httpServer.on('upgrade', (request, socket, head) => {
       if (request.url?.split('?', 1)[0] !== '/remote-desktop/ws') return;
+      socket.portosUpgradeClaimed = true;
       let url;
       try {
         url = new URL(request.url, 'http://portos.invalid');

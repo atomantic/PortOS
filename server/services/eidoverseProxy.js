@@ -184,6 +184,7 @@ export const proxyUpgradeToEidoverse = ({
   pathOverride,
   trackSocket = (socket) => socket,
 }) => {
+  clientSocket.portosUpgradeClaimed = true;
   trackSocket(clientSocket);
   const upstreamSocket = trackSocket(createConnection({ host: targetHost, port: targetPort }));
   let connected = false;
@@ -311,6 +312,7 @@ export function mountEidoverseWebSocket(httpServer, {
       pathOverride = req.url;
     }
 
+    clientSocket.portosUpgradeClaimed = true;
     const protocol = typeof getProtocol === 'function' ? getProtocol(req) : getProtocol;
     proxyUpgradeToEidoverse({
       req,
