@@ -89,9 +89,12 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
   const updateUniverse = deps.updateUniverse || (await import('./universeBuilder.js')).updateUniverse;
   if (!ingredientId || !updatedIngredient) return { universes: 0, written: 0, skipped: 0 };
 
+  ingredientId = updatedIngredient.id || ingredientId;
+  const identityIds = new Set(await catalogDB.getIngredientIdentityIds(ingredientId));
+
   // Guard the originating ingredient so the updateUniverse → projectToCatalog
   // echo inside this call can't write the catalog row a second time.
-  inFlight.add(ingredientId);
+  for (const id of identityIds) inFlight.add(id);
   const stats = { universes: 0, written: 0, skipped: 0 };
   try {
     const refs = await catalogDB.listRefsForIngredient(ingredientId);
@@ -120,9 +123,9 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
         const patch = {};
         for (const arrayKey of CANON_ARRAY_KEYS) {
           const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
-          if (!list.some((e) => e?.ingredientId === ingredientId)) continue;
+          if (!list.some((e) => identityIds.has(e?.ingredientId))) continue;
           patch[arrayKey] = list.map((e) => {
-            if (e?.ingredientId !== ingredientId) return e;
+            if (!identityIds.has(e?.ingredientId)) return e;
             touched = true;
             const controlFields = Object.fromEntries(
               NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
@@ -140,7 +143,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
     }
     return stats;
   } finally {
-    inFlight.delete(ingredientId);
+    for (const id of identityIds) inFlight.delete(id);
   }
 }
 
@@ -190,6 +193,9 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
   // contract the per-entry catch below keeps.
   const timestamps = await catalogDB.getIngredientTimestamps(
     candidates.map((c) => c.ingredientId),
+    // A retained source cache is an archived contextual copy, not a fresh
+    // authoritative edit. Only a catalog projection may refresh its identity.
+    { excludeAliases: true },
   ).catch((err) => {
     console.error(`🔁 projectToCatalog: batched lookup of ${candidates.length} ingredients failed: ${err.message}`);
     return null;

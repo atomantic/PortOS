@@ -315,6 +315,34 @@ router.get('/ingredients/:id/related-images', asyncHandler(async (req, res) => {
   res.json(await listRelatedImages(ingredient, media, pagination));
 }));
 
+// Merge is preview-first and never unlocks either record.
+router.post('/ingredients/merge', asyncHandler(async (req, res) => {
+  const { catalogMergeSchema } = await import('../lib/catalogValidation.js');
+  const body = validateRequest(catalogMergeSchema, req.body);
+  const { mergeIngredients } = await import('../services/catalogDB/merge.js');
+  res.json(await mergeIngredients(body));
+}));
+
+router.get('/ingredients/:id/merge-history', asyncHandler(async (req, res) => {
+  const { catalogMergeHistoryQuerySchema } = await import('../lib/catalogValidation.js');
+  const params = validateRequest(catalogMergeHistoryQuerySchema, req.query);
+  const { getIngredientMergeHistory } = await import('../services/catalogDB/merge.js');
+  res.json(await getIngredientMergeHistory(req.params.id, params));
+}));
+
+router.get('/ingredient-merges/:id', asyncHandler(async (req, res) => {
+  const { getIngredientMergeReceipt } = await import('../services/catalogDB/merge.js');
+  res.json(await getIngredientMergeReceipt(req.params.id));
+}));
+
+router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
+  const { catalogMergeRecoverSchema } = await import('../lib/catalogValidation.js');
+  validateRequest(catalogMergeRecoverSchema, req.body ?? {});
+  const { recoverIngredientMerge } = await import('../services/catalogDB/merge.js');
+  res.json(await recoverIngredientMerge(req.params.id));
+
+}));
+
 router.post('/ingredients', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientCreateSchema, req.body);
   const ing = await catalogDB.createIngredient({
@@ -384,7 +412,8 @@ router.get('/ingredients/:id/revisions', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogRevisionRestoreSchema, req.body || {});
   const revision = await catalogDB.getIngredientRevision(req.params.revisionId);
-  if (!revision || revision.ingredientId !== req.params.id) {
+  const identityIds = await catalogDB.getIngredientIdentityIds(req.params.id);
+  if (!revision || !identityIds.includes(revision.ingredientId)) {
     throw new ServerError('Revision not found', { status: 404 });
   }
   // Restore the revision's payload verbatim, INCLUDING its captured

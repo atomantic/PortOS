@@ -2448,3 +2448,36 @@ CREATE TABLE IF NOT EXISTS brain_memory_links (
   bridge_key TEXT PRIMARY KEY,
   memory_id UUID NOT NULL
 );
+
+-- Local, recoverable catalog identity merges.
+CREATE TABLE IF NOT EXISTS catalog_ingredient_merges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+      survivor_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+      before_state JSONB NOT NULL,
+      after_fingerprint TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      restored_at TIMESTAMPTZ,
+      CHECK (source_id <> survivor_id)
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_merge_source_active
+       ON catalog_ingredient_merges (source_id) WHERE restored_at IS NULL;
+CREATE OR REPLACE FUNCTION catalog_resolve_ingredient_id(requested_id TEXT)
+       RETURNS TEXT LANGUAGE SQL STABLE AS $$
+         SELECT COALESCE((SELECT survivor_id FROM catalog_ingredient_merges
+           WHERE source_id = requested_id AND restored_at IS NULL), requested_id)
+       $$;
+CREATE OR REPLACE FUNCTION guard_catalog_merged_ingredient()
+       RETURNS TRIGGER LANGUAGE plpgsql AS $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM catalog_ingredient_merges WHERE restored_at IS NULL
+             AND (source_id = OLD.id OR (survivor_id = OLD.id AND
+               (TG_OP = 'DELETE' OR NEW.deleted = true)))) THEN
+           RAISE EXCEPTION 'Merged ingredient is protected; recover its merge first';
+         END IF;
+         IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+         RETURN NEW;
+       END $$;
+DROP TRIGGER IF EXISTS trg_catalog_merged_ingredient ON catalog_ingredients;
+CREATE TRIGGER trg_catalog_merged_ingredient BEFORE UPDATE OR DELETE ON catalog_ingredients
+       FOR EACH ROW EXECUTE FUNCTION guard_catalog_merged_ingredient();

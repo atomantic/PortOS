@@ -21,7 +21,7 @@ export async function linkIngredientToSource(ingredientId, scrapId, span = null,
   const exec = client ? client.query.bind(client) : query;
   await exec(
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span)
-     VALUES ($1, $2, $3::jsonb)
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3::jsonb)
      ON CONFLICT (ingredient_id, scrap_id) ${preserveExisting ? 'DO NOTHING' : 'DO UPDATE SET span = EXCLUDED.span'}`,
     [ingredientId, scrapId, span ? JSON.stringify(span) : null],
   );
@@ -36,7 +36,7 @@ export async function listSourcesForIngredient(ingredientId) {
     `SELECT s.*, sc.title AS scrap_title
        FROM catalog_ingredient_sources s
        LEFT JOIN catalog_scraps sc ON sc.id = s.scrap_id
-      WHERE s.ingredient_id = $1`,
+      WHERE catalog_resolve_ingredient_id(s.ingredient_id) = catalog_resolve_ingredient_id($1)`,
     [ingredientId],
   );
   return result.rows.map((row) => ({ ...rowToSource(row), scrapTitle: row.scrap_title ?? null }));
@@ -60,10 +60,10 @@ export async function listSiblingIngredientsBySource(ingredientId, scrapIds) {
   const ids = [...new Set(scrapIds)].filter(Boolean);
   if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT s.scrap_id, i.id, i.name, i.type
+    `SELECT DISTINCT s.scrap_id, i.id, i.name, i.type
        FROM catalog_ingredient_sources s
-       JOIN catalog_ingredients i ON i.id = s.ingredient_id
-      WHERE s.scrap_id = ANY($1) AND s.ingredient_id != $2 AND i.deleted = false
+       JOIN catalog_ingredients i ON i.id = catalog_resolve_ingredient_id(s.ingredient_id)
+      WHERE s.scrap_id = ANY($1) AND i.id != catalog_resolve_ingredient_id($2) AND i.deleted = false
       ORDER BY i.name ASC`,
     [ids, ingredientId],
   );
@@ -85,7 +85,7 @@ export async function linkIngredientToRef(ingredientId, refKind, refId, role, { 
   const exec = client ? client.query.bind(client) : query;
   await exec(
     `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
-     VALUES ($1, $2, $3, $4)
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4)
      ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
        SET deleted = false, deleted_at = NULL`,
     [ingredientId, refKind, refId, role],
@@ -172,7 +172,7 @@ export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role
   await query(
     `UPDATE catalog_ingredient_refs
         SET deleted = true, deleted_at = NOW()
-      WHERE ingredient_id = $1 AND ref_kind = $2 AND ref_id = $3 AND role = $4
+      WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND ref_kind = $2 AND ref_id = $3 AND role = $4
         AND deleted = false`,
     [ingredientId, refKind, refId, role],
   );
@@ -189,16 +189,18 @@ export async function listRefsForIngredient(ingredientId) {
 // Batched `listRefsForIngredient` for bulk hydration paths (#3940) — ONE query
 // for N ingredients instead of N, with the same `deleted = false` live filter.
 // Returns `Map<ingredientId, refs[]>` with an entry (possibly `[]`) for every id.
-export async function listRefsForIngredients(ingredientIds) {
+export async function listRefsForIngredients(ingredientIds, { preserveIdentity = false } = {}) {
   const ids = [...new Set(ingredientIds)];
   if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT * FROM catalog_ingredient_refs
-      WHERE ingredient_id = ANY($1) AND deleted = false
+    preserveIdentity ? `SELECT * FROM catalog_ingredient_refs
+      WHERE ingredient_id = ANY($1) AND deleted = false ORDER BY ingredient_id` : `SELECT r.*, requested.id AS requested_id FROM unnest($1::text[]) requested(id)
+      JOIN catalog_ingredient_refs r ON r.ingredient_id = catalog_resolve_ingredient_id(requested.id)
+      WHERE r.deleted = false
       ORDER BY ingredient_id`,
     [ids],
   );
-  return groupRowsByIngredient(ids, result.rows, rowToRef);
+  return groupRowsByIngredient(ids, result.rows.map(row => ({ ...row, ingredient_id: row.requested_id ?? row.ingredient_id })), rowToRef);
 }
 
 // Like listRefsForIngredient, but drops refs whose TARGET no longer resolves to
@@ -216,13 +218,13 @@ export async function listLiveRefsForIngredient(ingredientId) {
   return refs.filter((_, i) => resolved[i]?.resolved === true);
 }
 
-export async function listIngredientsForRef(refKind, refId) {
+export async function listIngredientsForRef(refKind, refId, { preserveIdentity = false } = {}) {
   const result = await query(
     `SELECT i.*, r.role, r.created_at AS ref_created_at
        FROM catalog_ingredients i
        JOIN catalog_ingredient_refs r ON r.ingredient_id = i.id
        WHERE r.ref_kind = $1 AND r.ref_id = $2
-         AND r.deleted = false AND i.deleted = false`,
+         AND r.deleted = false AND i.deleted = false${preserveIdentity ? '' : ' AND i.id = catalog_resolve_ingredient_id(i.id)'}`,
     [refKind, refId],
   );
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), role: row.role }));
@@ -241,13 +243,15 @@ export async function listIngredientsForRef(refKind, refId) {
 export async function linkIngredientRelation(fromId, toId, kind, { client } = {}) {
   if (fromId === toId) throw new Error('cannot relate an ingredient to itself');
   const exec = client ? client.query.bind(client) : query;
-  await exec(
+  const result = await exec(
     `INSERT INTO catalog_ingredient_relations (from_id, to_id, kind)
-     VALUES ($1, $2, $3)
+     SELECT catalog_resolve_ingredient_id($1), catalog_resolve_ingredient_id($2), $3
+      WHERE catalog_resolve_ingredient_id($1) <> catalog_resolve_ingredient_id($2)
      ON CONFLICT (from_id, to_id, kind) DO UPDATE
-       SET deleted = false, deleted_at = NULL`,
+       SET deleted = false, deleted_at = NULL RETURNING from_id`,
     [fromId, toId, kind],
   );
+  if (result.rowCount === 0) throw new Error('cannot relate an ingredient identity to itself');
 }
 
 export async function unlinkIngredientRelation(fromId, toId, kind) {
@@ -257,7 +261,7 @@ export async function unlinkIngredientRelation(fromId, toId, kind) {
   await query(
     `UPDATE catalog_ingredient_relations
         SET deleted = true, deleted_at = NOW()
-      WHERE from_id = $1 AND to_id = $2 AND kind = $3
+      WHERE from_id = catalog_resolve_ingredient_id($1) AND to_id = catalog_resolve_ingredient_id($2) AND kind = $3
         AND deleted = false`,
     [fromId, toId, kind],
   );
@@ -275,7 +279,7 @@ export async function listRelationsForIngredient(id) {
               i.name AS other_name, i.type AS other_type
          FROM catalog_ingredient_relations r
          JOIN catalog_ingredients i ON i.id = r.to_id
-        WHERE r.from_id = $1 AND r.deleted = false AND i.deleted = false
+        WHERE r.from_id = catalog_resolve_ingredient_id($1) AND r.deleted = false AND i.deleted = false AND i.id = catalog_resolve_ingredient_id(i.id)
         ORDER BY r.created_at ASC`,
       [id],
     ),
@@ -284,7 +288,7 @@ export async function listRelationsForIngredient(id) {
               i.name AS other_name, i.type AS other_type
          FROM catalog_ingredient_relations r
          JOIN catalog_ingredients i ON i.id = r.from_id
-        WHERE r.to_id = $1 AND r.deleted = false AND i.deleted = false
+        WHERE r.to_id = catalog_resolve_ingredient_id($1) AND r.deleted = false AND i.deleted = false AND i.id = catalog_resolve_ingredient_id(i.id)
         ORDER BY r.created_at ASC`,
       [id],
     ),

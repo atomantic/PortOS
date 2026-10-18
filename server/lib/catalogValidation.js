@@ -809,3 +809,17 @@ export const catalogSyncEnvelopeSchema = z.object({
   catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
   portosMeta,
 }).passthrough();
+
+export const catalogMergeSchema = z.object({
+  sourceId: z.string().min(1).max(200),
+  survivorId: z.string().min(1).max(200),
+  dryRun: z.boolean().default(true),
+  previewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  fieldChoices: z.record(z.string(), z.enum(['source', 'survivor'])).default({}),
+}).strict();
+export const catalogMergeRecoverSchema = z.object({}).strict();
+
+export const catalogMergeHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();

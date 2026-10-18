@@ -928,6 +928,19 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/images/chosen.png')).toHaveLength(1);
   });
 
+  it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...HERO, payload: {}, thumbnailKey: null }),
+      media: [{ kind: 'reference', mediaKey: 'archived-source.png', role: 'archive:portrait', caption: 'Archived source image' }],
+    });
+    const profile = await renderPage('/casting/cat-chr-hero/profile');
+    expect(screen.queryByAltText('Example Hero cover')).not.toBeInTheDocument();
+    profile.unmount();
+    await renderPage('/casting/cat-chr-hero/references');
+    expect(screen.getByAltText('Archived source image')).toHaveAttribute('src', '/data/images/archived-source.png');
+    expect(screen.getByRole('button', { name: 'Enlarge Archived source image' })).toBeInTheDocument();
+  });
+
   it('loads related renders only on the media tab, deduplicates known images and retries a failed next page', async () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: { imageRefs: ['known.png'] } }));
     const profile = await renderPage('/casting/cat-chr-hero/profile');

@@ -59,6 +59,7 @@ import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
+import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
@@ -175,6 +176,8 @@ export default function CatalogIngredient() {
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
   const [record, setRecord] = useState(null);
+  const [mergeVersion, setMergeVersion] = useState(0);
+  const [mergeBusy, setMergeBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [tags, setTags] = useState([]);
@@ -242,7 +245,7 @@ export default function CatalogIngredient() {
         navigate(backPath);
       });
     return () => { cancelled = true; };
-  }, [id, navigate, backPath]);
+  }, [id, navigate, backPath, mergeVersion]);
 
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
@@ -610,7 +613,7 @@ export default function CatalogIngredient() {
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || record.thumbnailKey,
     payload,
-  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference')?.mediaKey });
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey });
   const renderBlockedReason = (subject) => (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving
@@ -627,7 +630,7 @@ export default function CatalogIngredient() {
         label={`Discard unsaved changes to ${record.name || 'this ingredient'}`}
         onDiscard={discardAndExit}
       />
-      <div className="w-full min-w-0 space-y-5">
+      <fieldset disabled={mergeBusy} className="w-full min-w-0 space-y-5">
         <header className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-start gap-3 min-w-0">
             <Sparkles className="w-6 h-6 text-port-accent mt-1 flex-shrink-0" aria-hidden="true" />
@@ -650,7 +653,7 @@ export default function CatalogIngredient() {
             <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -857,6 +860,12 @@ export default function CatalogIngredient() {
         )}
 
         {activeTab === 'profile' && (
+          <CatalogMergePanel record={record}
+            disabledReason={saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before consolidating.' : null}
+            onPendingChange={setMergeBusy} onChanged={() => setMergeVersion((version) => version + 1)} />
+        )}
+
+        {activeTab === 'profile' && (
           <RevisionsPanel
             revisions={revisions}
             current={record}
@@ -864,7 +873,7 @@ export default function CatalogIngredient() {
             onRestore={handleRestore}
           />
         )}
-      </div>
+      </fieldset>
     </section>
     </CatalogImagePreviewProvider>
   );

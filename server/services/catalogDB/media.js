@@ -34,7 +34,7 @@ async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const result = await runQuery(
     `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn})
-     VALUES ($1, $2, $3, $4, $5${metadataPlaceholder})
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
        SET deleted = false, deleted_at = NULL,
            role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}
@@ -54,7 +54,7 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
   await query(
     `UPDATE catalog_ingredient_media
         SET deleted = true, deleted_at = NOW()
-      WHERE ingredient_id = $1 AND media_key = $2 AND kind = $3
+      WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3
         AND deleted = false`,
     [ingredientId, mediaKey, kind],
   );
@@ -65,11 +65,11 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
 // and a failed replacement leaves the previous portrait intact.
 export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
   const replace = async (client) => {
-    await client.query('SELECT id FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [ingredientId]);
+    await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
     await client.query(
       `UPDATE catalog_ingredient_media
           SET deleted = true, deleted_at = NOW()
-        WHERE ingredient_id = $1 AND kind = 'portrait'
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND kind = 'portrait'
           AND media_key <> $2 AND deleted = false`,
       [ingredientId, mediaKey],
     );
@@ -90,16 +90,19 @@ export async function listMediaForIngredient(ingredientId) {
 // ordering (portraits first, then newest-first); the outer `ingredient_id` sort
 // key only groups the rows, it doesn't reorder within a group. Returns
 // `Map<ingredientId, media[]>` with an entry (possibly `[]`) for every id.
-export async function listMediaForIngredients(ingredientIds) {
+export async function listMediaForIngredients(ingredientIds, { preserveIdentity = false } = {}) {
   const ids = [...new Set(ingredientIds)];
   if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT * FROM catalog_ingredient_media
+    preserveIdentity ? `SELECT * FROM catalog_ingredient_media
       WHERE ingredient_id = ANY($1) AND deleted = false
+      ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC` : `SELECT m.*, requested.id AS requested_id FROM unnest($1::text[]) requested(id)
+      JOIN catalog_ingredient_media m ON m.ingredient_id = catalog_resolve_ingredient_id(requested.id)
+      WHERE m.deleted = false
       ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC`,
     [ids],
   );
-  return groupRowsByIngredient(ids, result.rows, rowToMedia);
+  return groupRowsByIngredient(ids, result.rows.map(row => ({ ...row, ingredient_id: row.requested_id ?? row.ingredient_id })), rowToMedia);
 }
 
 // The media kinds whose `media_key` resolves against the image library today.
