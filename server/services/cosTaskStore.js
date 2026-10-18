@@ -1233,12 +1233,37 @@ export async function sweepResolvedFailureTasks({
   let staleBlocks = 0;
   let investigations = 0;
   for (const { task, type, reason } of targets) {
-    // Guard the flip under the write lock: a Resume/Run or dequeue that landed
-    // after the snapshot must not be overwritten by a stale auto-expire (#12059).
-    const updated = await updateTask(task.id, {
-      status: 'completed',
-      metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-    }, type, { now, expectedStatus: task.status });
+    // Re-read BOTH queues and re-evaluate the reason under the same lock as the
+    // write. Status/metadata pins protect a target from its own stale snapshot,
+    // but an investigation also depends on its origins: one can be resumed after
+    // this sweep's snapshot while the investigation itself stays pending (#12059).
+    const updated = await withStateLock(async () => {
+      const current = await getAllTasks();
+      const currentTask = (type === 'user' ? current.user.tasks : current.cos.tasks)
+        .find((candidate) => candidate.id === task.id);
+      if (!currentTask) return { statusChanged: true };
+      const currentById = new Map([...current.user.tasks, ...current.cos.tasks].map((candidate) => [candidate.id, candidate]));
+      const currentReason = isReapableBlockedFailure(currentTask, { now, maxAgeMs })
+        ? 'stale-failure-block'
+        : (isReapableInvestigation(currentTask, currentById) ? 'investigation-resolved' : null);
+      if (currentReason !== reason) return { statusChanged: true, task: currentTask };
+
+      return writeTaskUpdateLocked(task.id, {
+        status: 'completed',
+        metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
+      }, type, {
+        now,
+        expectedStatus: task.status,
+        // A revived task can fail again before this write and return to blocked.
+        // Preserve the category and every age fallback that justified this sweep.
+        expectedMetadata: reason === 'stale-failure-block' ? {
+          blockedCategory: task.metadata?.blockedCategory,
+          blockedAt: task.metadata?.blockedAt,
+          lastFailureAt: task.metadata?.lastFailureAt,
+          updatedAt: task.metadata?.updatedAt,
+        } : null,
+      });
+    });
     if (updated?.error || updated?.statusChanged) continue;
     if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
   }
