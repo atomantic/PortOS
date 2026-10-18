@@ -140,6 +140,10 @@ const NARROWED = [
     'needs isStr / trimTo, which textUtils.js declares'],
   ['services/review.js', 'services/reviewActionAdapters.js',
     'owns source-owned completion policy without the queue action adapters'],
+  // A runner-only change selected ~1,100 suites through vitest related, which
+  // also walks peerExecutionAdapters' lazy import of installState.js.
+  ['services/installState.js', '../scripts/run-migrations.js',
+    'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -174,6 +178,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
+    expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
+    expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
   });
 
   it('keeps the process-type vocabulary dependency-free', () => {

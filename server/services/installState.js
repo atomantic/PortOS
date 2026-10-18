@@ -33,7 +33,7 @@ import { stat, readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { parseSubmoduleStatusLine } from '../lib/gitOutputParsers.js';
-import { listPendingMigrations } from '../../scripts/run-migrations.js';
+import { listPendingMigrations } from '../../scripts/lib/migrationLedger.js';
 import { isWorktreeRoot } from '../lib/dataRoot.js';
 
 // The commit the running process was launched at. Captured once at boot (see
