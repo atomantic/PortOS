@@ -297,8 +297,10 @@ describe('settings.js', () => {
       let current = {};
       tryReadFile.mockImplementation(async () => JSON.stringify(current));
       atomicWrite.mockImplementation(async (_path, content) => { current = JSON.parse(content); });
-      // A ledger write that never settles (Postgres pool waiting on a dead host).
-      recordUserAction.mockReturnValueOnce(new Promise(() => {}));
+      // A ledger write that does not settle (Postgres pool waiting on a dead
+      // host) until the test releases it, so the per-test drain can finish.
+      let release;
+      recordUserAction.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
 
       await updateSettings({ first: 1 }, { actor: 'user' });
       await expect(updateSettings({ second: 2 }, { actor: 'user' })).resolves.toEqual({ first: 1, second: 2 });
@@ -307,6 +309,7 @@ describe('settings.js', () => {
       // its resolved save); the first is still in flight.
       await new Promise((resolve) => setImmediate(resolve));
       expect(recordUserAction).toHaveBeenCalledTimes(2);
+      release();
     });
   });
 
