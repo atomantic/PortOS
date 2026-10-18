@@ -14,7 +14,7 @@ import { publishImageFiles } from './publication.js';
  * sidecar would land on disk and never appear in the gallery.
  */
 
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
@@ -69,7 +69,7 @@ const executor = createRemoteMediaExecutor({
   // gallery, the media index, and the provider-side result guard all agree.
   resolveDestination: ({ jobId }) => ({ dir: PATHS.images, filename: `${jobId}.png` }),
   publishResult: (work, { path, dir, jobId }) => withBackupAssetPublication(() => publishImageFiles([path, join(dir, `${jobId}.metadata.json`)], work)),
-  async finalize({ jobId, dir, filename, request, remoteJob, peerId, renderStartedAtMs }) {
+  async finalize({ jobId, dir, filename, request, remoteJob, peerId, renderStartedAtMs, inputAssets }) {
     // Honest sidecar: only fields this render actually had. Seed is the
     // requested one (wire-v1 results carry no rendered seed), so a render that
     // did not pin one records null rather than inventing a number the peer
@@ -92,6 +92,10 @@ const executor = createRemoteMediaExecutor({
       steps: request.steps ?? null,
       guidance: request.guidance ?? null,
       filename,
+      ...(Array.isArray(inputAssets) ? {
+        // The wire confirms submission, not which inputs the provider applied.
+        requestedInputImages: inputAssets.map(asset => ({ role: asset.role, filename: basename(asset.path) })),
+      } : {}),
       federatedPeerId: peerId,
       federatedJobId: remoteJob.id,
       createdAt,

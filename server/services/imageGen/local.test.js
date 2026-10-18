@@ -480,6 +480,16 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
   });
 
+  it('reports no supplied images for the Windows runner that omits image arguments', () => {
+    const { args, providerInputs } = buildArgs({ ...baseInput, platform: 'win32',
+      model: { id: 'dev', steps: 20, guidance: 3.5 },
+      initImagePath: '/example/source.png', referenceImagePaths: ['/example/ref.png'],
+    });
+    expect(args).not.toContain('--image-path');
+    expect(args).not.toContain('--reference-images');
+    expect(providerInputs).toEqual({ initImagePath: null, referenceImagePaths: [] });
+  });
+
   it.skipIf(process.platform === 'win32')('falls back to mflux dispatch for non-flux2 models on macOS', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);
@@ -1304,6 +1314,37 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
   });
 });
 
+
+it('persists omitted reference evidence when the LoRA runner drops inputs', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const priorLoras = PATHS.loras;
+  PATHS.loras = join(tmpRegistryDir, 'loras');
+  mkdirSync(PATHS.loras, { recursive: true });
+  writeFileSync(join(PATHS.loras, 'example.safetensors'), 'example');
+  writeFileSync(join(PATHS.images, 'reference.png'), 'example');
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  try {
+    const job = await generateImage({ modelId: 'flux2-klein-9b', prompt: '--reference-images',
+      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] });
+    expect(mockSpawn.mock.calls.at(-1)[1]).toContain('--reference-images');
+    expect(mockSpawn.mock.calls.at(-1)[1]).not.toContain(join(PATHS.images, 'reference.png'));
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await completed;
+    const meta = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(meta.inputProvenance).toBe('provider-inputs');
+    expect(meta.referenceImageFilenames).toEqual([]);
+    expect(meta.referenceImageStrengths).toEqual([]);
+    expect(meta.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png' }]);
+    expect(meta.omittedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png', reason: 'unsupported-render-path' }]);
+  } finally { PATHS.loras = priorLoras; }
+});
 
 it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
   mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');

@@ -40,7 +40,6 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../videoGen/generateVideoHelpers.js';
 
-const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
@@ -90,7 +89,7 @@ export const cancel = () => {
   return true;
 };
 
-export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [], referenceImageStrengths = [] }) => {
+export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [], referenceImageStrengths = [], platform = process.platform }) => {
   const modelId = model?.id;
   if (usesDiffusersRunner(model)) {
     const runnerLabel = isErnie(model) ? 'ERNIE' : isHiDream(model) ? 'HiDream' : isQwen(model) ? 'Qwen' : 'Z-Image';
@@ -151,7 +150,10 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (model.textEncoderRepo) args.push('--text-encoder-repo', String(model.textEncoderRepo));
     if (model.textEncoderClass) args.push('--text-encoder-class', String(model.textEncoderClass));
     if (model.tokenizerClass) args.push('--tokenizer-class', String(model.tokenizerClass));
-    return { bin: torchPython, args };
+    return { bin: torchPython, args, providerInputs: {
+      initImagePath: initImagePath || null,
+      referenceImagePaths: model.pipelineClass === 'QwenImage21Pipeline' ? referenceImagePaths : [],
+    } };
   }
   if (isFlux2(model)) {
     if (!model.repo) {
@@ -265,16 +267,17 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
     if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
     if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-    return { bin: flux2Python, args };
+    return { bin: flux2Python, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: refImagePaths } };
   }
 
-  if (IS_WIN) {
+  if (platform === 'win32') {
     // imagine_win.py does not implement i2i — silently drop the init-image
     // args here so the request still produces a normal txt2img result rather
     // than failing argparse with "unrecognized arguments".
     const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
     return {
       bin: pythonPath,
+      providerInputs: { initImagePath: null, referenceImagePaths: [] },
       args: [scriptPath, '--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata',
         ...(guidance > 0 ? ['--guidance', String(guidance)] : []),
         ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
@@ -295,7 +298,7 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   // stream the latest frame back to the client as `currentImage` for the
   // live-preview area.
   if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-  return { bin, args };
+  return { bin, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: [] } };
 };
 
 // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
@@ -738,7 +741,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     maintenance.markCurrentUnsettled();
     console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
   });
-  let bin, args;
+  let bin, args, providerInputs;
   let proc;
   let claimHandedOff = false;
   let takeEarlyExit = null;
@@ -746,7 +749,34 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
-    ({ bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    // Record only inputs the selected runner actually receives. Unsupported
+    // references and Windows mflux init images remain explicit request evidence.
+    const requestedInputs = [
+      ...(meta.initImageFilename ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+      ...meta.referenceImageFilenames.map(filename => ({ role: 'referenceImages', filename })),
+    ];
+    const omittedInputs = [
+      ...(validInitImagePath && !providerInputs.initImagePath ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+      ...validReferenceImagePaths.filter(path => !providerInputs.referenceImagePaths.includes(path))
+        .map(path => ({ role: 'referenceImages', filename: basename(path) })),
+    ];
+    if (omittedInputs.length) {
+      meta.requestedInputImages = requestedInputs;
+      meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
+    }
+    meta.inputProvenance = 'provider-inputs';
+    meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
+    meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
+    if (!providerInputs.initImagePath) {
+      meta.initImageFilename = null;
+      meta.initImageStrength = null;
+      for (const key of ['cleanedFrom', 'regenerated', 'regenMethod', 'regenStrength', 'regenSteps', 'regenModelId']) {
+        delete meta[key];
+        delete job[key];
+      }
+    }
+    Object.assign(job, meta);
     heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
     if (!heavyClaim.ok) {
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
@@ -767,7 +797,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
     }
 
-    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${validReferenceImagePaths.length}`);
+    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${meta.referenceImageFilenames.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
     startedEmitted = true;
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };

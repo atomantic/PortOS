@@ -16,7 +16,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
+import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
 import {
@@ -341,6 +341,9 @@ export async function generateImage({
     // renders on Antigravity's fixed server-side backend — record it so
     // provenance names the model that actually produced the pixels (#3231).
     imageModel: AGY_IMAGEGEN_IMAGE_MODEL,
+    inputProvenance: 'provider-inputs',
+    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
+    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentRecord,
     createdAt: new Date().toISOString(),

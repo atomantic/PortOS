@@ -162,7 +162,9 @@ describe('imageGen/fal — generateImage', () => {
     expect(body.prompt).toContain('visual references for style, characters, and subject matter');
     expect(body).not.toHaveProperty('num_images');
     const sidecar = JSON.parse(await readFile(join(FAKE_IMAGES_DIR, `${job.jobId}.metadata.json`), 'utf8'));
-    expect(sidecar).toMatchObject({ model: 'fal-ai/flux-2-pro/edit', inputImageCount: 9 });
+    expect(sidecar.inputProvenance).toBe('provider-inputs');
+    expect(sidecar).toMatchObject({ model: 'fal-ai/flux-2-pro/edit', inputImageCount: 9,
+      initImageFilename: null, referenceImageFilenames: refs.slice(0, 9) });
   });
 
   it('defaults to Nano Banana Pro and switches to its /edit endpoint when an init image is attached', async () => {
