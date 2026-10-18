@@ -49,8 +49,12 @@ const DURATION_PART = /(\d+)\s*([hms])/gi;
 /**
  * Parse a Go-style compound duration into milliseconds.
  * Returns null when the string carries no recognizable unit.
+ *
+ * Module-private: `parseQuotaDeferral` is the only caller, and it is the
+ * contract worth pinning — a duration is only ever meaningful here when it is
+ * anchored to reset wording.
  */
-export function parseGoDuration(text) {
+function parseGoDuration(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
   // Reject anything beyond digits and h/m/s so a bare number or a stray token
   // cannot be read as a duration.
