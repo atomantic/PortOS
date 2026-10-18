@@ -26,7 +26,7 @@
     "dependency-updates": "2d94021c979a86a349e125f5c15665d8",
     "do-release": "0ee9c504bad68f4a73be15f0b955a796",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
-    "documentation": "1a89cf4a93e57746b68a1ce496b73305",
+    "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
@@ -90,7 +90,7 @@
     "dependency-updates": 7,
     "do-release": 17,
     "do-replan": 2,
-    "documentation": 8,
+    "documentation": 9,
     "error-handling": 4,
     "feature-completeness": 1,
     "feature-ideas": 11,
@@ -337,7 +337,8 @@
       "74aa8433896647e7815f9d6d9e4a56c8",
       "b375f95ae2274f03d06ba5ceff5705d8",
       "246be4932c277fa0ec0ab365beb3baad",
-      "a30e3bfba8cd13369ccaf806a3534a79"
+      "a30e3bfba8cd13369ccaf806a3534a79",
+      "1a89cf4a93e57746b68a1ce496b73305"
     ],
     "error-handling": [
       "26225ac04f2f35feb61151b2e6474465",

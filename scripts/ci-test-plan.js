@@ -308,6 +308,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can add a `process.env` read, and
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
+  // Whole-tree scanner (#12093): any rename or deletion can strand a backticked
+  // file name in an AGENTS.md, which is documentation-only to the planner.
+  'server/instructionFileReferences.test.js',
   // Whole-tree scanners over the shared collectServerSources/collectClientSources
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
