@@ -367,7 +367,7 @@ describe('listWorktrees line endings', () => {
     'worktree /repo/.claude/worktrees/wt',
     'HEAD def456',
     'branch refs/heads/feature',
-    'locked',
+    'locked waiting for explicit owner handoff',
     'prunable',
     '',
     'worktree /repo/detached',
@@ -392,6 +392,7 @@ describe('listWorktrees line endings', () => {
       head: 'def456',
       branch: 'refs/heads/feature',
       locked: true,
+      lockReason: 'waiting for explicit owner handoff',
       prunable: true,
     });
     expect(worktrees[2]).toEqual({ path: '/repo/detached', head: 'fed789', detached: true });

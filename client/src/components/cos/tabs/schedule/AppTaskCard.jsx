@@ -8,6 +8,7 @@ import TaskModelQuickControls from './TaskModelQuickControls';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { isCronExpression } from '../../../../utils/cronHelpers';
 import Banner from '../../../ui/Banner';
+import BranchReconcileOutcome from './BranchReconcileOutcome';
 
 // One scheduled task rendered as a status-rich card. Browsing plus the common
 // "retarget the model and run it" loop happen here; the rest of the
@@ -95,6 +96,10 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           )}
         </div>}
       </button>
+
+      {taskType === 'branch-reconcile' && !appContext && (
+        <BranchReconcileOutcome outcomes={config.reconcileOutcomes} apps={apps} />
+      )}
 
       {config.enabled === false && (
         <Banner

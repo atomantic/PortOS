@@ -506,9 +506,11 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // A detached worktree has no branch to list anywhere else, so name it here too.
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   const allActionable = filterActionable(result.inFlight, actions);
+  const actionableNames = new Set(allActionable.map(branch => branch.branch));
   const idlePark = describeIdleReconcilePark(result.skipped || [], heldLive, {
     wip: result.wip, detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
+    worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
     gated: result.inFlight.filter(branch => !allActionable.includes(branch))
   });
   // This is a scan outcome, not the coordinator's success flag or a claim that

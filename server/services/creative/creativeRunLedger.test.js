@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { argsDigest, appendCreativeLedgerEntry, readCreativeLedger, MAX_LEDGER_ENTRIES } from './creativeRunLedger.js';
@@ -46,12 +46,17 @@ describe('creative run ledger store', () => {
   });
 
   it('caps at MAX_LEDGER_ENTRIES, keeping the most recent', async () => {
-    for (let i = 0; i < MAX_LEDGER_ENTRIES + 5; i += 1) {
-      await appendCreativeLedgerEntry('proj-1', { tool: `t.${i}`, outcome: 'executed' }, { dir });
-    }
+    // Exercise retention through the public append boundary with a persisted
+    // full ledger, without 505 durable setup writes timing out on Windows.
+    const existing = Array.from({ length: MAX_LEDGER_ENTRIES }, (_, i) => ({
+      at: '2026-01-01T00:00:00.000Z', tool: `t.${i}`, outcome: 'executed',
+    }));
+    await writeFile(join(dir, 'proj-1.json'), JSON.stringify(existing));
+    await appendCreativeLedgerEntry('proj-1', { tool: `t.${MAX_LEDGER_ENTRIES}`, outcome: 'executed' }, { dir });
     const list = await readCreativeLedger('proj-1', { dir });
     expect(list.length).toBe(MAX_LEDGER_ENTRIES);
-    expect(list[list.length - 1].tool).toBe(`t.${MAX_LEDGER_ENTRIES + 4}`);
+    expect(list[0]).toEqual(existing[1]);
+    expect(list[list.length - 1].tool).toBe(`t.${MAX_LEDGER_ENTRIES}`);
   });
 
   it('returns [] for an absent ledger', async () => {

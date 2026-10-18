@@ -1017,7 +1017,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
  * Persist counts and typed causes, with the earliest known hold expiry as the
  * next possible wake-up; raw cleanup diagnostics stay out of scheduler state.
  */
-export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [], detachedWorktrees = [], superseded = [], gated = [], claimMarkersHeld = [] } = {}) {
+export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [], detachedWorktrees = [], superseded = [], gated = [], claimMarkersHeld = [], worktreeInventory = [] } = {}) {
   // One entry per surviving branch/checkout, even when it appears in both the
   // skipped and detached/superseded projections. Never persist raw error text.
   const holds = new Map();
@@ -1041,6 +1041,16 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
   for (const entry of gated) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : 'action-disabled');
   // Marker cleanup is distinct from successful local branch retirement.
   for (const entry of claimMarkersHeld) add({ ...entry, claimMarker: true }, entry.reason || 'claim-marker-held', `claim-marker:${entry.issue ?? entry.branch}`);
+  // Include checkouts the branch classifier cannot see (protected branches,
+  // detached unmerged HEADs, stale registrations), and enrich existing holds.
+  // Inventory is evidence only: a lock's prose never grants release authority.
+  const holdKeysByPath = new Map([...holds].map(([key, entry]) => [entry.path || entry.worktreePath, key]));
+  for (const tree of worktreeInventory || []) {
+    const key = holdKeysByPath.get(tree.path) ?? tree.branch ?? tree.path;
+    const existing = holds.get(key);
+    add({ ...tree, ...existing }, existing?.cause || tree.reason, key);
+  }
+  if (worktreeInventory === null) add({}, 'worktree-inventory-unavailable', 'worktree-inventory-unavailable');
   const entries = [...holds.values()];
   const heldBackMerged = skipped.filter(s => !s.detached && s.reason?.startsWith('worktree-'));
   const skipCauses = {};
@@ -1061,6 +1071,10 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.branch && { branch: entry.branch }),
       ...((entry.path || entry.worktreePath) && { path: entry.path || entry.worktreePath }),
       ...(entry.issue && { issue: entry.issue }),
+      ...(entry.head && { head: entry.head }),
+      ...(entry.locked !== undefined && { locked: entry.locked, lockReason: entry.lockReason ?? null }),
+      ...(entry.detached && { detached: true }),
+      ...(entry.managed !== undefined && { managed: entry.managed }),
       reason: entry.cause,
     })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null
@@ -1414,6 +1428,27 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
     .then((r) => r?.exitCode === 0)
     .catch(() => false);
 
+// Read after cleanup so removed holders cannot survive in the recovery report.
+// No content or ownership inference: retirement still uses its existing gates.
+async function gatherRecoveryWorktrees(repoPath) {
+  const trees = await listWorktrees(repoPath).catch(() => null);
+  if (!trees?.length) return null;
+  return trees.slice(1).filter(tree => !tree.bare).map(tree => {
+    const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
+    return {
+      path: tree.path,
+      ...(tree.branch && { branch: tree.branch.replace(/^refs\/heads\//, '') }),
+      head: tree.head ?? null,
+      detached: !tree.branch,
+      locked: Boolean(tree.locked),
+      lockReason: tree.lockReason ?? null,
+      managed,
+      reason: tree.prunable ? 'worktree-prunable' : tree.locked ? 'worktree-locked'
+        : !managed ? 'worktree-unmanaged-location' : 'checkout-retained',
+    };
+  });
+}
+
 const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
   const onBranch = await execGit(['symbolic-ref', '-q', 'HEAD'], treePath, { ignoreExitCode: true })
     .then((r) => r?.exitCode === 0)
@@ -1669,6 +1704,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
     // Detached trees at merged commits that were NOT removed, managed or not.
     detachedWorktrees: detachedReap.held,
+    worktreeInventory: await gatherRecoveryWorktrees(repoPath),
     orphanRemotes,
     prStateUnavailable
   };
