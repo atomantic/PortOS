@@ -981,7 +981,7 @@ describe('sharing downloads retain verified descriptor ownership', () => {
     const response = await request(app).get(url);
     expect(response.status).toBe(200);
     expect(response.text).toBe('0123456789abcdef0123456789abcdef');
-    expect(response.headers['content-disposition']).toContain('attachment; filename="sharing.mp4"');
+    expect(response.headers['content-disposition']).toBe('attachment; filename=sharing.mp4');
     expect(response.headers['content-type']).toContain('video/mp4');
     expect(response.headers['cache-control']).toBe('private, no-store');
     await vi.waitFor(() => expect(file.fd).toBe(-1));

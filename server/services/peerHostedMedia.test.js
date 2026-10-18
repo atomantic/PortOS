@@ -116,7 +116,7 @@ describe('static-mount fallback', () => {
     streamRequest.mockResolvedValue(upstream('PART', 206, { 'content-type': 'video/mp4', 'content-range': 'bytes 0-3/100' }));
     const res = await request(app).get('/data/videos/clip.mp4?download=1').set('Range', 'bytes=0-3');
     expect(res.status).toBe(206);
-    expect(res.headers['content-disposition']).toBe('attachment; filename="clip.mp4"');
+    expect(res.headers['content-disposition']).toBe('attachment; filename=clip.mp4');
     expect(streamRequest.mock.calls[0][1].headers.Range).toBe('bytes=0-3');
   });
 
