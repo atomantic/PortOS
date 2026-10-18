@@ -8,7 +8,7 @@ import migration from './072-twin-image-identity-prompt.js';
 const STAGE = 'twin-image-identity-analyze';
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 
-describe('migration 070 — seed twin image-identity analysis prompt', () => {
+describe('migration 072 — seed twin image-identity analysis prompt', () => {
   let rootDir;
   let installedStagesDir;
   let installedConfigPath;
@@ -37,11 +37,11 @@ describe('migration 070 — seed twin image-identity analysis prompt', () => {
 
   it('merges into an existing stage-config without clobbering other stages', async () => {
     mkdirSync(installedStagesDir, { recursive: true });
-    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' } } }, null, 2) + '\n');
+    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' }, [STAGE]: { name: 'CUSTOM', model: 'my-model' } } }, null, 2) + '\n');
     await migration.up({ rootDir });
     const config = readJson(installedConfigPath);
-    expect(config.stages['pipeline-prose']).toBeTruthy();
-    expect(config.stages[STAGE]).toBeTruthy();
+    expect(config.stages['pipeline-prose']).toEqual({ name: 'Prose' });
+    expect(config.stages[STAGE]).toEqual({ name: 'CUSTOM', model: 'my-model' });
   });
 
   it('is idempotent and preserves a user-customized installed prompt', async () => {

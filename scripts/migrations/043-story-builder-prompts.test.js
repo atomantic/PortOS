@@ -48,11 +48,12 @@ describe('migration 043 — seed Story Builder prompts', () => {
 
   it('merges into an existing stage-config without clobbering other stages', async () => {
     mkdirSync(installedStagesDir, { recursive: true });
-    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' } } }, null, 2) + '\n');
+    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' }, [STAGES[0]]: { name: 'CUSTOM', model: 'my-model' } } }, null, 2) + '\n');
     await migration.up({ rootDir });
     const config = readJson(installedConfigPath);
-    expect(config.stages['pipeline-prose']).toBeTruthy();
-    for (const key of STAGES) {
+    expect(config.stages['pipeline-prose']).toEqual({ name: 'Prose' });
+    expect(config.stages[STAGES[0]]).toEqual({ name: 'CUSTOM', model: 'my-model' });
+    for (const key of STAGES.slice(1)) {
       expect(config.stages[key]).toBeTruthy();
     }
   });

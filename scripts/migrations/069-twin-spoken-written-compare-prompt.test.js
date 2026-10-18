@@ -37,11 +37,11 @@ describe('migration 069 — seed twin spoken-vs-written comparison prompt', () =
 
   it('merges into an existing stage-config without clobbering other stages', async () => {
     mkdirSync(installedStagesDir, { recursive: true });
-    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' } } }, null, 2) + '\n');
+    writeFileSync(installedConfigPath, JSON.stringify({ stages: { 'pipeline-prose': { name: 'Prose' }, [STAGE]: { name: 'CUSTOM', model: 'my-model' } } }, null, 2) + '\n');
     await migration.up({ rootDir });
     const config = readJson(installedConfigPath);
-    expect(config.stages['pipeline-prose']).toBeTruthy();
-    expect(config.stages[STAGE]).toBeTruthy();
+    expect(config.stages['pipeline-prose']).toEqual({ name: 'Prose' });
+    expect(config.stages[STAGE]).toEqual({ name: 'CUSTOM', model: 'my-model' });
   });
 
   it('is idempotent and preserves a user-customized installed prompt', async () => {
