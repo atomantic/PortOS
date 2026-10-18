@@ -186,6 +186,13 @@ const GIT_TAG_MUTATING_FLAGS = new Set(['-d', '--delete', '-a', '--annotate', '-
 const GIT_LIST_MODE_FLAGS = new Set(['-l', '--list', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged']);
 const GIT_REMOTE_READ_VERBS = new Set(['show', 'get-url']);
 
+// `--output[=<file>]` on log/show/diff (and any verb sharing diff-options)
+// writes the command's output to an arbitrary path — the same file-write
+// primitive `find -fprint*` is denied for below (#12020). Checked for every
+// verb rather than per verb so a newly allowlisted verb cannot inherit it.
+// `--output-indicator-*` only changes diff markers and is not matched.
+const GIT_OUTPUT_FLAG = '--output';
+
 // `find` action flags: `-delete` removes files and `-exec`/`-ok` family runs
 // arbitrary binaries, which would defeat the allowlist entirely. `-f*print*`
 // writes attacker-chosen files. Everything else (`-name`, `-type`, `-maxdepth`,
@@ -218,10 +225,20 @@ function isGitRefListing(sub, rest) {
 function validateUnattendedGit(args) {
   const sub = args[0];
   if (!sub) return deny("'git' needs a read-only subcommand on the unattended lane.");
+  // Global options (`-c key=val`, `--git-dir`, `--work-tree`, `--exec-path`,
+  // `--config-env`, `-C`) precede the verb and reconfigure what it runs
+  // against; the verb must be the first argument.
+  if (sub.startsWith('-')) {
+    return deny(`'git ${sub}' is not allowed on the unattended lane — global options before the subcommand are rejected; the first argument must be a read-only verb.`);
+  }
   if (!UNATTENDED_GIT_SUBCOMMANDS.has(sub)) {
     return deny(`'git ${sub}' is not allowed on the unattended lane — only read-only inspection subcommands are: ${[...UNATTENDED_GIT_SUBCOMMANDS].sort().join(', ')}.`);
   }
   const rest = args.slice(1);
+  const outputFlag = rest.find(a => a === GIT_OUTPUT_FLAG || a.startsWith(`${GIT_OUTPUT_FLAG}=`));
+  if (outputFlag) {
+    return deny(`'git ${sub} ${outputFlag}' is not allowed on the unattended lane — '--output' writes command output to a file.`);
+  }
   if (sub === 'config' && !rest.some(a => GIT_CONFIG_READ_FLAGS.has(a))) {
     return deny("'git config' is only allowed in its read form on the unattended lane (e.g. 'git config --get <key>').");
   }
