@@ -14,6 +14,7 @@ import {
   stripEidoverseHostPrefix,
 } from '../lib/eidoverseProxyRoutes.js';
 import { PORTS } from '../lib/ports.js';
+import { markUpgradeClaimed } from '../lib/upgradeFallback.js';
 import { EIDOVERSE_PORT } from './eidoverse.js';
 
 export { EIDOVERSE_HOST_PATH_PREFIX, isEidoverseRootProxyPath, stripEidoverseHostPrefix };
@@ -184,7 +185,7 @@ export const proxyUpgradeToEidoverse = ({
   pathOverride,
   trackSocket = (socket) => socket,
 }) => {
-  clientSocket.portosUpgradeClaimed = true;
+  markUpgradeClaimed(clientSocket);
   trackSocket(clientSocket);
   const upstreamSocket = trackSocket(createConnection({ host: targetHost, port: targetPort }));
   let connected = false;
@@ -312,7 +313,7 @@ export function mountEidoverseWebSocket(httpServer, {
       pathOverride = req.url;
     }
 
-    clientSocket.portosUpgradeClaimed = true;
+    markUpgradeClaimed(clientSocket);
     const protocol = typeof getProtocol === 'function' ? getProtocol(req) : getProtocol;
     proxyUpgradeToEidoverse({
       req,
