@@ -3704,6 +3704,10 @@ describe('backup snapshot admission for media completion', () => {
       expect(persistedJobs().find(j => j.id === jobId)).toMatchObject({ status: 'running', durabilityPending: pending });
       expect(completed).not.toHaveBeenCalled();
       expect(rows.size).toBe(0);
+      const { sanitizeJob } = await import('./sanitizeJob.js');
+      const publicJob = sanitizeJob(mediaJobQueue.getJob(jobId));
+      expect(publicJob.durabilityPending).toBeUndefined();
+      expect(publicJob.result).toBeUndefined();
 
       const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'next synthetic' } });
       await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(2));
@@ -3730,9 +3734,12 @@ describe('backup snapshot admission for media completion', () => {
     }
   });
 
-  it('restores a pending completion receipt without replaying its provider or publishing during a cut', async () => {
+  it.each([false, true])('restores a pending completion without replay or premature publication (uncertain ownership: %s)', async (uncertain) => {
     const jobId = '00000000-0000-4000-8000-000000000091';
     const result = { filename: `${jobId}.mp4` };
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const permit = maintenance.admit('media', jobId);
+    if (uncertain) permit.markUnsettled();
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
       id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic' },
       durabilityPending: { status: 'completed', result, progress: 1, statusMsg: 'Completed', completedAt: new Date().toISOString() },
@@ -3755,8 +3762,8 @@ describe('backup snapshot admission for media completion', () => {
     expect(persistedJobs()[0]).toMatchObject({ status: 'completed', result });
     expect(persistedJobs()[0].durabilityPending).toBeUndefined();
     expect(stubs.generateVideo).not.toHaveBeenCalled();
-    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
-    expect(maintenance.status().blockers).toEqual([]);
+    expect(maintenance.status().blockers).toEqual(uncertain
+      ? [expect.objectContaining({ resource: jobId, unsettled: true })] : []);
   });
 
   it('drains a completion already publishing its queue row and hook rows before the cut', async () => {
