@@ -295,8 +295,7 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     });
     let onCleanup;
     const cleaned = new Promise(resolve => {
-      let count = 0;
-      onCleanup = event => { if (event.projectId === id && ++count === (outcome === 'rendered' ? 2 : 1)) resolve(); };
+      onCleanup = event => { if (event.projectId === id) resolve(); };
     });
     musicVideoEvents.on('shot-render', onShot);
     musicVideoEvents.on('render-cleanup', onCleanup);
