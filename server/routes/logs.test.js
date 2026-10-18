@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { request } from '../../lib/testHelper.js';
+import { request } from '../lib/testHelper.js';
 
 const makeLogProcess = () => {
   const child = new EventEmitter();
