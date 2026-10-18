@@ -876,15 +876,12 @@ describe('stage completion after ownership is released (#12064)', () => {
 
   // Uniquely catches stop reading a child id before an already-admitted write stores it.
   it('stops children stored between the initial read and the serialized status change', async () => {
-    const lyrics = Promise.withResolvers();
-    doubles.writeLyrics.mockImplementationOnce(() => lyrics.promise);
     doubles.stopAutoReview = vi.fn(async () => ({}));
     service.__setAutonomousDepsForTests(doubles);
     await service.startAutonomousVideo({ prompt: 'p' });
-    await vi.waitFor(() => expect(doubles.writeLyrics).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
     writeTail = writeTail.then(() => { Object.assign(runOf().output, { productionRunId: 'mvpr-just-stored', finalAutoReviewId: 'mvar-just-stored' }); });
     await service.stopAutonomousVideo('mv-auto');
-    lyrics.resolve({ lyrics: 'finished words' });
     await service.__testing.settleBackground();
     expect(doubles.stopProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-just-stored');
     expect(doubles.stopAutoReview).toHaveBeenCalledWith('mv-auto', 'mvar-just-stored');
