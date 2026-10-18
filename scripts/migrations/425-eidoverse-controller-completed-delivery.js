@@ -7,6 +7,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './_lib.js';
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['eidoverse/controllers.json'];
+
 export default {
   async up({ rootDir }) {
     const file = join(rootDir, 'data', 'eidoverse', 'controllers.json');

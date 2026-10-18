@@ -2,6 +2,9 @@ import { join } from 'node:path';
 import { atomicWrite, readJSONFileStrict } from '../../server/lib/fileUtils.js';
 import { persistPrivateKeys } from '../../server/services/privateKeyStore.js';
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['private/api-keys.json'];
+
 export default {
   async up({ rootDir }) {
     const file = join(rootDir, 'data/settings.json');

@@ -2,7 +2,8 @@
  * `data/` paths that a MIGRATION derives from an install's existing records,
  * and that must therefore ship no `data.reference/` seed.
  *
- * The enforcement is the seed's ABSENCE, asserted by the sibling test. The
+ * The sibling test checks migration OWNED_OUTPUT_PATHS declarations against
+ * this runtime set, then enforces every seed's ABSENCE. The
  * seed filter below — used by `scripts/setup-data.js` and the boot smoke's
  * disposable install (`scripts/smoke-boot.js`) — is defense in depth for a
  * seed someone re-adds. Full rationale — and the
