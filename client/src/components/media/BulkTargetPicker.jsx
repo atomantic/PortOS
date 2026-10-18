@@ -22,6 +22,8 @@ export default function BulkTargetPicker({
   busy,
   title = 'Pick a collection',
   collections,
+  error = null,
+  onRetry = null,
   onPick,
   onClose,
 }) {
@@ -54,6 +56,8 @@ export default function BulkTargetPicker({
       newCollectionPlaceholder="New collection"
       createTitle="Create and pick"
       collections={collections}
+      error={error}
+      onRetry={onRetry}
       renderItem={renderItem}
       onCreated={handleCreated}
     />

@@ -52,18 +52,11 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
  */
 const KNOWN = Object.freeze({
   'src/pages/AIProviders.jsx': 2,
-  'src/pages/Game.jsx': 1,
   'src/pages/HistoryPage.jsx': 1,
-  'src/pages/LoraTraining.jsx': 1,
-  'src/pages/MediaCollectionDetail.jsx': 1,
-  'src/pages/MusicVideo.jsx': 1,
   'src/pages/Privacy.jsx': 1,
   'src/pages/ProcessesPage.jsx': 1,
   'src/pages/RunnerPage.jsx': 2,
-  'src/pages/Sprites.jsx': 3,
   'src/pages/Templates.jsx': 1,
-  'src/pages/VideoDownloaderPage.jsx': 1,
-  'src/pages/VideoTimeline.jsx': 2,
 });
 
 const countIn = (source) => (source.match(LIST_COLLAPSE) || []).length;

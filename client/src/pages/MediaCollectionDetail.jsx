@@ -24,6 +24,9 @@ import socket from '../services/socket';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+import useListResource from '../hooks/useListResource';
+
+const loadCollections = () => listMediaCollections({ silent: true });
 
 // Local-vs-remote state of one collection item. Local files (the normal case)
 // carry no badge; the header summarizes the peer-hosted count.
@@ -60,7 +63,10 @@ export default function MediaCollectionDetail() {
   // Full collections list — fetched once for the bulk move/copy picker so it
   // doesn't pay a per-mount listMediaCollections() round-trip when opened.
   // Already loaded for the unsorted view as part of buildUnsortedCollection().
-  const [allCollections, setAllCollections] = useState(null);
+  const collectionsResource = useListResource(loadCollections);
+  const {
+    items: allCollections, state: collectionsState, error: collectionsError, retry: retryCollections,
+  } = collectionsResource;
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -91,12 +97,12 @@ export default function MediaCollectionDetail() {
   const refresh = useCallback(async () => {
     setLoading(true);
     page.refresh();
-    const [c, cols] = await Promise.all([
-      isUnsorted ? Promise.resolve(buildUnsortedCollection([], [], [])) : getMediaCollection(id, { silent: true }).catch(err => { toast.error(err.message || 'Collection not found'); return null; }),
-      listMediaCollections({ silent: true }).catch(() => []),
-    ]);
-    setCollection(c); setAllCollections(cols); setNameDraft(c?.name || ''); setLoading(false);
-  }, [id, isUnsorted, page.refresh]);
+    retryCollections();
+    const c = await (isUnsorted
+      ? Promise.resolve(buildUnsortedCollection([], [], []))
+      : getMediaCollection(id, { silent: true }).catch(err => { toast.error(err.message || 'Collection not found'); return null; }));
+    setCollection(c); setNameDraft(c?.name || ''); setLoading(false);
+  }, [id, isUnsorted, page.refresh, retryCollections]);
   useEffect(() => { refresh(); }, [refresh]);
   // Where each item's bytes live (server-annotated): 'local' | 'remote' (hosted
   // by a peer and streamed on demand) | 'missing'. Items without an annotation
@@ -583,7 +589,9 @@ export default function MediaCollectionDetail() {
               excludeId={collection.id}
               busy={bulkBusy}
               title={`${pickerMode === 'move' ? 'Move' : 'Copy'} ${selected.size} to…`}
-              collections={allCollections}
+              collections={collectionsState === 'ready' ? allCollections : null}
+              error={collectionsError}
+              onRetry={retryCollections}
               onPick={bulkMoveOrCopy}
               onClose={() => setPickerMode(null)}
             />

@@ -545,6 +545,7 @@ export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
   onOpenTrimmer = () => {}, onChanged, corrections = null, onCorrectionChange = null,
   providers = null, provider = 'grok', onProviderChange = () => {},
+  providersError = null, onRetryProviders = null,
 }) {
   const recordId = record.id;
   // The cycle target is server-resolved (app contract → set pin → first approved
@@ -726,6 +727,8 @@ export default function WalkWorkflow({
               provider={provider}
               onChange={onProviderChange}
               disabled={finalized}
+              error={providersError}
+              onRetry={onRetryProviders}
             />
             <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-clip-${recordId}`} title={provider === 'local'
                 ? "The local model renders on a fixed frame grid, so this length is snapped to the nearest legal clip. Length only affects how much source footage the packer has to choose from, not the walk's speed."

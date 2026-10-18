@@ -38,7 +38,7 @@ vi.mock('../components/sprites/NewSpritePanel.jsx', () => ({ default: () => null
 vi.mock('../components/sprites/SpriteSearch.jsx', () => ({ default: () => null }));
 
 import Sprites from './Sprites.jsx';
-import { getSpriteRecord } from '../services/apiSprites.js';
+import { getSpriteRecord, listSpriteRecords } from '../services/apiSprites.js';
 import { listMediaJobs, getMediaJob } from '../services/apiMediaJobs.js';
 
 const detail = (status = 'rendering', id = 'example-sprite') => ({
@@ -108,5 +108,25 @@ describe('persisted sprite events in the rendered page', () => {
     await act(async () => finishOld(detail('error')));
     expect(screen.queryByRole('heading', { name: 'example-sprite' })).not.toBeInTheDocument();
     expect(getSpriteRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders ListLoadError with retry on failed sprite records load, and empty state on real empty list', async () => {
+    listSpriteRecords.mockRejectedValueOnce(new Error('503 Service Unavailable'));
+    render(
+      <MemoryRouter initialEntries={['/sprites']}>
+        <Routes><Route path="/sprites" element={<Page />} /></Routes>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load sprites — 503 Service Unavailable');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('No sprites yet')).not.toBeInTheDocument();
+
+    listSpriteRecords.mockResolvedValueOnce([]);
+    await act(async () => {
+      screen.getByRole('button', { name: 'Retry' }).click();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('No sprites yet')).toBeInTheDocument();
   });
 });

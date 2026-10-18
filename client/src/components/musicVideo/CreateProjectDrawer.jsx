@@ -22,8 +22,22 @@ const MODES = [
  * 2. Lyrics, concept, and style info are automatically read from the chosen track.
  * 3. Name, mode, character style, universe/moodboard, and brief settings.
  */
-export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, trackLibrary = null, universes, trackName, youtube, onSubmit, submitting }) {
+export default function CreateProjectDrawer({
+  open,
+  onClose,
+  form,
+  onFormChange,
+  tracks,
+  trackLibrary = null,
+  universes = null,
+  universeResource = null,
+  trackName,
+  youtube,
+  onSubmit,
+  submitting,
+}) {
   const autopilot = form.mode === 'autonomous';
+  const availableUniverses = universes ?? universeResource?.items ?? [];
   const optionLabels = trackOptionLabels(tracks || []);
   const selectedTrack = (tracks || []).find((t) => t.id === form.trackId) || null;
   const sourceLabel = trackSourceLabel(selectedTrack);
@@ -176,9 +190,17 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
               onChange={(e) => onFormChange({ universeId: e.target.value })}
               className={inputClass}
             >
-              <option value="">{universes === null ? 'Loading…' : 'No universe'}</option>
-              {(universes || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              <option value="">{universeResource?.state === 'loading' || (universes === null && !universeResource) ? 'Loading…' : 'No universe'}</option>
+              {availableUniverses.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
+            {universeResource?.state === 'error' && (
+              <ListLoadError
+                what="universes"
+                error={universeResource.error}
+                onRetry={universeResource.retry}
+                className="mt-2"
+              />
+            )}
           </div>
         </div>
 

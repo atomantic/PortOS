@@ -1,31 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Download, Film, Loader2, Trash2, ExternalLink, Video } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import YtDlpUpdateCard from '../components/video/YtDlpUpdateCard';
 import { useVideoDownload, useConfirmDelete } from '../hooks';
+import useListResource from '../hooks/useListResource';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
 import { timeAgo, formatTimecode } from '../utils/formatters';
+
+const loadVideoDownloads = () => listVideoDownloads({ silent: true });
 
 // Dev Tools video downloader (#1946) — paste a YouTube or x.com/Twitter URL,
 // download the full video via yt-dlp into data/videos (where it also shows up in
 // the media gallery), and browse/delete what's been downloaded.
 export default function VideoDownloaderPage() {
   const [url, setUrl] = useState('');
-  const [downloads, setDownloads] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const downloadsResource = useListResource(loadVideoDownloads);
+  const {
+    items: downloads, state, error, retry, setItems: setDownloads,
+  } = downloadsResource;
   const [deletingId, setDeletingId] = useState(null);
   // Thumbnail filenames that failed to load; keyed by value so a new thumbnail retries.
   const [failedThumbs, setFailedThumbs] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  useEffect(() => {
-    listVideoDownloads()
-      .then((list) => setDownloads(Array.isArray(list) ? list : []))
-      .catch(() => setDownloads([]))
-      .finally(() => setLoading(false));
-  }, []);
 
   // Prepend the finished clip to the list rather than refetching (reactive UI).
   const { active, percent, stage, start, cancel } = useVideoDownload({
@@ -112,8 +111,10 @@ export default function VideoDownloaderPage() {
 
       <section>
         <h2 className="text-sm font-semibold text-gray-300 mb-2">Downloaded ({downloads.length})</h2>
-        {loading ? (
+        {state === 'loading' ? (
           <p className="text-sm"><BrailleSpinner text="Loading…" /></p>
+        ) : state === 'error' ? (
+          <ListLoadError what="downloads" error={error} onRetry={retry} />
         ) : downloads.length === 0 ? (
           <p className="text-sm text-gray-500">No videos downloaded yet.</p>
         ) : (

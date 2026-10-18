@@ -374,7 +374,7 @@ export const previewVideoPrompt = (fields, options = {}) => request('/video-gen/
 });
 
 // Video timeline projects (non-linear editor)
-export const listTimelineProjects = () => request('/video-timeline/projects');
+export const listTimelineProjects = (options = {}) => request('/video-timeline/projects', options);
 export const getTimelineProject = (id, options) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, options);
 export const createTimelineProject = (name, options = {}) => request('/video-timeline/projects', {
   method: 'POST',

@@ -10,6 +10,7 @@ import GameCompilePanel from '../components/games/GameCompilePanel.jsx';
 import GameFeedback from '../components/games/GameFeedback.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import useDrawerTab from '../hooks/useDrawerTab.js';
+import useListResource from '../hooks/useListResource.js';
 import {
   bindGameArtwork,
   bindGameMusic,
@@ -59,7 +60,6 @@ export default function Game() {
   const [apps, setApps] = useState([]);
   const [sprites, setSprites] = useState([]);
   const [tracks, setTracks] = useState([]);
-  const [gallery, setGallery] = useState([]);
   // Integrity is keyed by the game it describes, never stored bare. `/game/A` →
   // `/game/B` reuses the same route, so the component does NOT remount: unkeyed
   // state would render B's panel with A's verdict — enabling "Start game" for a
@@ -88,15 +88,13 @@ export default function Game() {
       toast.error('Failed to load the Game studio');
     } else {
       const [gameRows, appRows, spriteRows, trackRows] = result;
-      const galleryRows = await getGalleryImages((gameRows.find(game => game.id === id)?.artworkBindings || []).map(binding => binding.imageFilename), silent).catch(() => []);
       setGames(Array.isArray(gameRows) ? gameRows : []);
       setApps((Array.isArray(appRows) ? appRows : []).filter((app) => !app.archived));
       setSprites(Array.isArray(spriteRows) ? spriteRows : []);
       setTracks(Array.isArray(trackRows) ? trackRows : []);
-      setGallery((Array.isArray(galleryRows) ? galleryRows : []).filter((image) => !image.hidden));
     }
     setLoading(false);
-  }, [id]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -128,6 +126,24 @@ export default function Game() {
   const integrityLoading = integrityFetching || !matchesGame;
 
   const game = useMemo(() => games.find((entry) => entry.id === id) || null, [games, id]);
+
+  const artworkFilenamesKey = useMemo(() => (
+    (game?.artworkBindings || []).map((binding) => binding.imageFilename).join(',')
+  ), [game?.artworkBindings]);
+
+  const loadArtworkGallery = useCallback(async () => {
+    const filenames = artworkFilenamesKey ? artworkFilenamesKey.split(',') : [];
+    if (!filenames.length) return [];
+    const rows = await getGalleryImages(filenames, silent);
+    return (Array.isArray(rows) ? rows : []).filter((image) => !image.hidden);
+  }, [artworkFilenamesKey]);
+
+  const {
+    items: gallery,
+    error: galleryError,
+    retry: retryGallery,
+  } = useListResource(loadArtworkGallery);
+
   const app = apps.find((entry) => entry.id === game?.appId);
   const replaceGame = (updated) => setGames((current) =>
     current.some((entry) => entry.id === updated.id)
@@ -448,6 +464,8 @@ export default function Game() {
                 sprites={sprites}
                 tracks={tracks}
                 gallery={gallery}
+                galleryError={galleryError}
+                onRetryGallery={retryGallery}
                 integrity={integrity}
                 busy={bindingBusy}
                 onBindSprite={(spriteId) => mutate('bind-sprite', () => bindGameSprite(game.id, spriteId, silent), 'Sprite bound')}

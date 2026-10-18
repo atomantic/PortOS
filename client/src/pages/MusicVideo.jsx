@@ -149,6 +149,7 @@ const STAGE_VIEWS = {
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
 const loadTracks = () => listTracks({ silent: true });
+const loadUniverses = () => listUniverseNames({ silent: true });
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
@@ -193,7 +194,8 @@ export default function MusicVideo() {
   // Retry, never as an empty library; an import appends to it locally.
   const trackLibrary = useListResource(loadTracks);
   const { items: tracks, setItems: setTracks } = trackLibrary;
-  const [universes, setUniverses] = useState(null);
+  const universeResource = useListResource(loadUniverses);
+  const universes = universeResource.items;
   // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
   // treat it as the index until the summaries resolve, then redirect to the newest project at that stage.
   const stageOnlyParam = !routeStage && !routeSceneId && !routeArtifactId ? resolveStageParam(routeProjectId) : null;
@@ -423,10 +425,6 @@ export default function MusicVideo() {
     navigate(id ? `/music-video/${id}${stage ? `/${stage}` : ''}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
 
-  useEffect(() => {
-    listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
-  }, []);
-
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
 
   const handleCreate = (e) => {
@@ -600,6 +598,7 @@ export default function MusicVideo() {
         tracks={tracks}
         trackLibrary={trackLibrary}
         universes={universes}
+        universeResource={universeResource}
         trackName={trackName}
         youtube={youtube}
         onSubmit={handleCreate}
