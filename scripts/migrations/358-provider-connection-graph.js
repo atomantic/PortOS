@@ -27,6 +27,9 @@ import { atomicWrite, readJSONFileStrict, tryReadFile } from '../../server/lib/f
  * the applied-list plus the explicit "already parked" check below — a second
  * run must never overwrite the pre-graph copy with a post-graph file.
  */
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['private/providers.pre-graph.json'];
+
 export default {
   async up({ rootDir }) {
     const input = join(rootDir, 'data/providers.json');

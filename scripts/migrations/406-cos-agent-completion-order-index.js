@@ -45,6 +45,9 @@ const readJSON = async (path) => {
   try { return JSON.parse(raw); } catch { return null; }
 };
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['cos/agents/index.order.json'];
+
 export default {
   async up({ rootDir }) {
     const agentsDir = join(rootDir, AGENTS_REL);

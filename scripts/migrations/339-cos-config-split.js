@@ -49,6 +49,9 @@ async function removeRetiredBackup(rootDir) {
   return removed;
 }
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['cos/config.json'];
+
 export default {
   async up({ rootDir }) {
     // Runs on every path below, including the already-split no-op: an install
