@@ -354,6 +354,10 @@ const selectProject = async (projectId) => {
     fireEvent.change(picker, { target: { value: projectId } });
   });
   await waitFor(() => expect(picker).toHaveValue(projectId));
+  // The project workspace remounts per project, so its mount-time loads
+  // (publish platforms, drafts, the final-render lookup) are settled here
+  // rather than landing after the test body.
+  await settle();
   return picker;
 };
 
@@ -609,6 +613,30 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
   });
 });
 
+describe('MusicVideo per-project workspace (#12039)', () => {
+  it('remounts the workspace per project, so switching projects starts from fresh per-project state', async () => {
+    const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
+    renderMV();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('setup');
+    // Song is not reviewed by watching, so the preview starts folded; opening
+    // it is per-project state that used to be reset by a selection effect.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand preview' }));
+    expect(screen.getByRole('button', { name: 'Collapse preview' })).toBeInTheDocument();
+
+    await selectProject(other.id);
+    await openStage('setup');
+    expect(screen.getByRole('button', { name: 'Expand preview' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse preview' })).not.toBeInTheDocument();
+
+    // Coming back starts fresh too: nothing from the first visit is carried over.
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('setup');
+    expect(screen.getByRole('button', { name: 'Expand preview' })).toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo project header', () => {
   it('keeps only the picker beside the page title inside a project; fork and delete live in Project settings', async () => {
     await openProject(PROJECT_WITH_CLIP);
@@ -721,6 +749,9 @@ describe('MusicVideo render control (#1760)', () => {
     expect(screen.getByText('Rendering 38%')).toBeInTheDocument();
     await selectProject(other.id);
     sseState.latest = { type: 'complete', result: { id: 'rh-9' } };
+    // The server persists the render result before it emits the terminal
+    // frame; the project is read back whole when it is next opened.
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, other]);
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Unrelated draft' } });
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
     await openStage('review');
@@ -2896,7 +2927,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
     const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };
     listMusicVideoProjects.mockResolvedValue([first, second]);
-    getMusicVideoPublishPlatforms.mockResolvedValueOnce({ platforms: { youtube: { enabled: true } } });
+    // Each opened project reads its own platform set.
+    getMusicVideoPublishPlatforms.mockResolvedValue({ platforms: { youtube: { enabled: true } } });
     draftMusicVideoPublishCopy.mockResolvedValueOnce({ project: second });
     render(<MemoryRouter initialEntries={['/music-video/mv-1/publish']}>
       <NavTo to="/music-video/mv-other/publish" />
