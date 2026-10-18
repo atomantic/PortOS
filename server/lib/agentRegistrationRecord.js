@@ -26,6 +26,7 @@ import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
 import { claimOwnershipBinding } from './claimContinuation.js';
 import { explicitPrCompletion } from './prDisposition.js';
+import { repositoryCleanupMergeTarget } from './recoveryMergeTarget.js';
 
 /**
  * How this run is dispatched, as one closed vocabulary rather than the nested
@@ -296,6 +297,9 @@ export function buildAgentRegistration({
     prDeliveryTarget: mergesOwnPr && worktreeInfo?.branchName && workspacePath
       ? { branch: worktreeInfo.branchName, workspacePath }
       : null,
+    // Repository-cleanup recovery (#12251): the parent PR this run was filed to
+    // land, snapshotted so a later task edit reads as a changed target.
+    recoveryMergeTarget: repositoryCleanupMergeTarget(task),
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),

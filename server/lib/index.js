@@ -706,6 +706,7 @@ export * from './apiToolResource.js';
 export * from './mergeGateContract.js';
 export * from './preflightPlan.js';
 export * from './prDisposition.js';
+export * from './recoveryMergeTarget.js';
 export * from './prHandbackPolicy.js';
 export * from './prReviewContent.js';
 export * from './prReviewReport.js';

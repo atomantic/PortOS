@@ -23,6 +23,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { injectReconcileAgentId } from '../lib/claimContinuation.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -770,6 +771,9 @@ After your task completes, the system will spawn a follow-up agent that runs the
         ...buildSentinelWriteSteps(1, sentinelPath, sentinelTail)
       ].join('\n');
     }
+  } else if (repositoryCleanupMergeTarget(task)) {
+    // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
+    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId);
   }
 
   // Build JIRA context section if applicable
@@ -1110,7 +1114,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   }));
   const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
   // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
-  if (mergesOwnPr) contractSections.push(buildMergeAdmissionSection(agentId));
+  // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
+  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
