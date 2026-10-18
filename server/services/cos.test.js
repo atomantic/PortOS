@@ -2280,6 +2280,21 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     )).toEqual({ lane: 'onDemand', taskType: 'branch-reconcile', appId: 'app-1' });
   });
 
+  it('continues a manual branch sweep with recurring dispatch disabled, preserving other one-shot boundaries', () => {
+    const oneShot = { tasks: { 'branch-reconcile': { enabled: true, perpetual: false } } };
+    const manual = { taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: 'app-1' };
+    for (const taskOnDemandOrigin of ['user', 'refill']) {
+      expect(perpetualRefillPlan(agent({ ...manual, taskOnDemandOrigin }), oneShot))
+        .toEqual({ lane: 'onDemand', taskType: 'branch-reconcile', appId: 'app-1' });
+    }
+    for (const taskOnDemandOrigin of ['quota-burn', 'unknown']) {
+      expect(perpetualRefillPlan(agent({ ...manual, taskOnDemandOrigin }), oneShot)).toEqual({ lane: 'skip' });
+    }
+    expect(perpetualRefillPlan(agent({ ...manual, taskOnDemand: false }), oneShot)).toEqual({ lane: 'skip' });
+    oneShot.tasks['branch-reconcile'].enabled = false;
+    expect(perpetualRefillPlan(agent(manual), oneShot)).toEqual({ lane: 'skip' });
+  });
+
   it('a manual run with no app resolves appId to null (global on-demand re-issue)', () => {
     expect(perpetualRefillPlan(
       agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true }),
@@ -2369,7 +2384,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // drain stalls. Pin the ignoreTaskId thread so a refactor can't reintroduce it.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
     expect(fnIdx, 'refillPerpetualForCompletedAgent must exist').toBeGreaterThan(-1);
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{[\s\S]*?ignoreTaskId:\s*agent\?\.taskId[\s\S]*?\}\s*\)/.test(fnSlice),
       'refill must forward ignoreTaskId: agent?.taskId to queueEligibleImprovementTasks'
@@ -2387,14 +2402,14 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // absence of a keyword in a comment (fragile): Improve gate → re-issue →
     // return → (only then) the queue lane.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       fnSlice.includes('const plan = perpetualRefillPlan(agent, schedule)'),
       'refill must resolve the lane via perpetualRefillPlan'
     ).toBe(true);
     expect(/plan\.lane === 'onDemand'/.test(fnSlice), 'refill must branch on the on-demand lane').toBe(true);
 
-    const improveGateIdx = fnSlice.indexOf('if (!isImprovementEnabled(state)) return;');
+    const improveGateIdx = fnSlice.indexOf("if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');");
     // queuePerpetualRefill owns the non-emitting REFILL pair so the on-demand
     // engines do NOT clear the drain's park / convergence signature / dispatch
     // counter on its behalf.
@@ -2435,7 +2450,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // unaffected: applyOnDemandRunResets clears the park for a USER-origin request
     // before this lane is ever reached.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     const parkIdx = fnSlice.indexOf('isPerpetualParkActive(plan.taskType, plan.appId)');
     const triggerIdx = fnSlice.indexOf('queuePerpetualRefill(plan.taskType, plan.appId');
     expect(parkIdx, 'refill must consult the type+app park before re-issuing').toBeGreaterThan(-1);
@@ -2450,7 +2465,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // sees the same issue as actionable). The refill must bail on a non-success
     // result and let task-retry/backoff + the recheck cadence handle failures.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       /if\s*\(\s*!agent\?\.result\?\.success\s*\)\s*return/.test(fnSlice),
       'refill must early-return when the completed agent did not succeed'

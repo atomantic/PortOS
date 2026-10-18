@@ -2021,7 +2021,7 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
 export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig, preflightCardId = null, skip = null }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
-  const isDetectorDriven = taskConfig?.perpetual === true;
+  const isDetectorDriven = taskConfig?.perpetual === true || request.taskType === 'branch-reconcile';
   const outcome = parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
 
   // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
@@ -2631,7 +2631,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Consecutive-dispatch cap for EVERY perpetual drain (#3848). First, because a
   // capped drain must not pay for a work-detector probe or a reconcile git/gh scan
   // it is only going to discard.
-  const drainCap = await applyPerpetualDrainCap(app, taskType, interval, taskSchedule);
+  const drainCap = await applyPerpetualDrainCap(app, taskType, interval, taskSchedule, { onDemand });
   if (drainCap.skip) return skipped('drain-cap');
 
   // Perpetual (drain-until-done) gate — probes for actionable work before

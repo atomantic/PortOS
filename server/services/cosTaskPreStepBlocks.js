@@ -330,8 +330,8 @@ export function buildPlanConstraintBlock(planId) {
  *
  * @returns {Promise<{skip:boolean}>}
  */
-export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule) {
-  if (interval.perpetual !== true) return { skip: false };
+export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule, { onDemand = false } = {}) {
+  if (interval.perpetual !== true && !(onDemand && taskType === 'branch-reconcile')) return { skip: false };
   // Coerce before validating: this key is not on the schedule route's allowlist, so
   // the only way it arrives non-numeric is a hand-edited schedule.json, where `"5"`
   // is the likeliest shape and reading it as "no cap" would silently unbound the
@@ -460,11 +460,15 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   });
   // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
   // so the next tick retries instead of waiting out a full recheck cadence.
-  if (!result) return { skip: true };
+  if (!result) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
+    return { skip: true };
+  }
   // Same treatment for a cycle the reconciler skipped because `gh` was unreadable
   // (#3358): its empty in-flight set is "we could not ask", not "nothing to do",
   // so parking on it would sit out a full recheck cadence over a network blip.
   if (result.forgeUnavailable) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -474,6 +478,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // rather than parking. Merged branches were still cleaned (git truth), so log
   // that before bailing.
   if (result.prStateUnavailable) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile deferred for ${app.name}: PR state unreadable this cycle (cleaned ${result.cleaned.length} merged branch(es))`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -505,6 +510,18 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     wip: result.wip, detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     gated: result.inFlight.filter(branch => !allActionable.includes(branch))
+  });
+  // This is a scan outcome, not the coordinator's success flag or a claim that
+  // the repository contains only its default branch. Keep known holds visible.
+  await taskSchedule.recordBranchReconcileOutcome(app.id, {
+    status: 'running', reason: 'batch-pending',
+    remaining: [
+      ...idlePark.remaining,
+      ...allActionable.map(b => ({ branch: b.branch, reason: 'actionable' })),
+      ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
+      ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
+    ],
+    nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
   if (allActionable.length === 0) {
     // Definitive idle: nothing in-flight to drive. Park on the recheck cadence,

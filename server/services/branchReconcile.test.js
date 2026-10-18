@@ -371,7 +371,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: worktreePath, reason: 'worktree-unmanaged-location' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
@@ -398,7 +398,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2196', reason: 'worktree-dirty' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2196', path: '/repo/.claude/worktrees/next-2196', reason: 'worktree-dirty' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
@@ -420,9 +420,9 @@ describe('cleanupMerged', () => {
     ], { activeAgentIds, claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([
-      { branch: 'locked-b', reason: 'worktree-locked' },
-      { branch: 'claim-b', reason: 'worktree-human-claim' },
-      { branch: 'active-b', reason: 'worktree-active-agent' }
+      { branch: 'locked-b', path: '/repo/data/cos/worktrees/locked', reason: 'worktree-locked' },
+      { branch: 'claim-b', path: '/repo/data/cos/worktrees/claim-foo', reason: 'worktree-human-claim' },
+      { branch: 'active-b', path: '/repo/data/cos/worktrees/agent-abc12345', reason: 'worktree-active-agent' }
     ]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
@@ -525,7 +525,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
     const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }], { claimOwners: { agents: [] } });
     expect(dirty.cleaned).toEqual([]);
-    expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', reason: 'worktree-dirty' }]);
+    expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', path: '/repo/data/cos/worktrees/claim-x', reason: 'worktree-dirty' }]);
 
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     // No completion proof — never pushed, remote ref still on origin, or the
@@ -556,8 +556,8 @@ describe('cleanupMerged', () => {
     // A lock and a running agent both end at a time nothing here can predict —
     // inventing one would park the drain past a hold that may already be gone.
     expect(res.skipped).toEqual([
-      { branch: 'locked-b', reason: 'worktree-locked' },
-      { branch: 'active-b', reason: 'worktree-active-agent' }
+      { branch: 'locked-b', path: '/repo/data/cos/worktrees/locked', reason: 'worktree-locked' },
+      { branch: 'active-b', path: '/repo/data/cos/worktrees/agent-abc12345', reason: 'worktree-active-agent' }
     ]);
   });
 });
@@ -1409,7 +1409,7 @@ describe('reconcile', () => {
       const result = await cleanupMerged('/repo', 'main', [{
         branch: 'claim/issue-101', worktreePath: '/repo/data/cos/worktrees/claim-issue-101', worktreeAgeMs: 0,
       }], { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
-      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', reason: 'worktree-dirty' }]);
+      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', path: '/repo/data/cos/worktrees/claim-issue-101', reason: 'worktree-dirty' }]);
       expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
       expect(git.deleteBranch).not.toHaveBeenCalled();
     });
@@ -1655,7 +1655,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
     }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
@@ -2634,7 +2634,7 @@ describe('describeIdleReconcilePark', () => {
 
   it('reports a quiet repo when nothing is held', () => {
     expect(describeIdleReconcilePark([], [])).toEqual({
-      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, skipCauses: null, notLaterThan: null
+      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, skipCauses: null, remaining: [], notLaterThan: null
     });
     expect(describeIdleReconcilePark()).toMatchObject({ reason: 'no-in-flight-branches' });
   });
@@ -2661,14 +2661,14 @@ describe('describeIdleReconcilePark', () => {
   });
 
   it('reports disabled cleanup and deletion failure as blockers', () => {
-    // A branch no longer merged is reclassified next pass. Disabled cleanup
-    // and a failed deletion still leave concrete work that must remain visible.
+    // A failed merge recheck leaves a surviving branch, just like disabled
+    // cleanup and a failed deletion. A one-shot sweep must report all three.
     const out = describeIdleReconcilePark([
       { branch: 'a', reason: 'cleanup-disabled' },
       { branch: 'b', reason: 'not-merged-on-recheck' },
       { branch: 'c', reason: 'delete-failed: boom' }
     ], []);
-    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 2, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'branch-delete-failed': 1 }, notLaterThan: null });
+    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 3, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'not-merged-on-recheck': 1, 'branch-delete-failed': 1 }, remaining: [{ branch: 'a', reason: 'cleanup-disabled' }, { branch: 'b', reason: 'not-merged-on-recheck' }, { branch: 'c', reason: 'branch-delete-failed' }], notLaterThan: null });
   });
 
   it('ignores an unreadable retryAt rather than parking on NaN', () => {

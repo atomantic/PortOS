@@ -1141,7 +1141,7 @@ describe('emitOnDemandEmpty', () => {
     ghHealth.mockResolvedValue({ status: 'ok', ok: true, detail: null, remedy: null });
   });
 
-  const emitTransient = async (taskType, skip = null) => {
+  const emitTransient = async (taskType, skip = null, perpetual = true) => {
     const events = [];
     const handler = (d) => events.push(d);
     cosEvents.on('schedule:on-demand-empty', handler);
@@ -1150,7 +1150,7 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-2', taskType },
         targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'on-demand', perpetual: true },
+        taskConfig: { type: 'on-demand', perpetual },
         skip
       });
     } finally {
@@ -1165,9 +1165,9 @@ describe('emitOnDemandEmpty', () => {
     expect(await emitTransient('claim-issue')).toMatchObject({ outcome: 'transient', forge: null });
   });
 
-  it('treats a perpetual on-demand drain as detector-driven for transient feedback', async () => {
+  it('treats a one-shot branch sweep as detector-driven for transient feedback', async () => {
     const skip = { gate: 'perpetual-work', cli: null, reason: 'probe-failed', remedy: null, detail: null };
-    expect(await emitTransient('branch-reconcile', skip)).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient', forge: null });
+    expect(await emitTransient('branch-reconcile', skip, false)).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient', forge: null });
   });
 
   it('skips the gh probe for a non-gh transient verdict, so a glab/git fault never toasts a gh remedy', async () => {
@@ -1701,7 +1701,7 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
   it('prepareManagedAppImprovementTask applies it ahead of the work gate and the reconcile scans', () => {
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
-    const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule)');
+    const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule, { onDemand })');
     expect(capIdx, 'the choke point must apply the per-type drain cap').toBeGreaterThan(-1);
     expect(capIdx).toBeLessThan(body.indexOf('applyPerpetualWorkGate('));
     expect(capIdx).toBeLessThan(body.indexOf('resolveBranchReconcileBlock('));

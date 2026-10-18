@@ -1031,7 +1031,6 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
     }
   };
   for (const entry of skipped) {
-    if (entry.reason === 'not-merged-on-recheck') continue;
     const cause = entry.reason?.startsWith('delete-failed') ? 'branch-delete-failed' : entry.reason || 'cleanup-failed';
     add(entry, cause);
   }
@@ -1058,6 +1057,12 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       : heldBackMerged.length === entries.length ? 'merged-branches-held-back' : 'branches-blocked';
   return {
     reason, heldBackMerged, counts, skipCauses: entries.length ? skipCauses : null,
+    remaining: entries.map(entry => ({
+      ...(entry.branch && { branch: entry.branch }),
+      ...((entry.path || entry.worktreePath) && { path: entry.path || entry.worktreePath }),
+      ...(entry.issue && { issue: entry.issue }),
+      reason: entry.cause,
+    })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null
   };
 }
@@ -1145,7 +1150,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     });
     if (!retired.ok) {
       const { ok, ...failure } = retired;
-      skipped.push({ branch: b.branch, ...failure });
+      skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
     const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin });
