@@ -1381,11 +1381,13 @@ describe('fileUtils', () => {
 
       await atomicWrite(target, { durable: true });
 
-      expect(calls).toEqual([['writeFile', true], ['rename'], ['dirSync', tmpRoot]]);
+      // Windows cannot open a directory for fsync, so syncDirectory skips it there.
+      const expectedCalls = [['writeFile', true], ['rename'], ...(process.platform === 'win32' ? [] : [['dirSync', tmpRoot]])];
+      expect(calls).toEqual(expectedCalls);
       expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ durable: true });
     });
 
-    it('keeps a published write when the directory cannot be fsynced, warning once per directory', async () => {
+    it.skipIf(process.platform === 'win32')('keeps a published write when the directory cannot be fsynced, warning once per directory', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const target = join(tmpRoot, 'netfs.json');

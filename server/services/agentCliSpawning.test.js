@@ -921,7 +921,11 @@ describe('stream error containment', () => {
       expect(JSON.parse(await fs.readFile(join(dir, 'state.json'), 'utf8')).lines)
         .toEqual(['complete batch\n', 'later batch\n']);
       fakeProcess.emit('close', 0);
-      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled());
+      // Completion runs after the in-flight transcript write lands, and since
+      // #12025 every atomicWrite fsyncs: the Windows runner needs more than
+      // vi.waitFor's 1s default (observed 1045ms) while a never-called cleanup
+      // still fails within the budget.
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { timeout: 10_000 });
     } finally {
       finish();
       writeFileGuarded.mockResolvedValue(undefined);
@@ -951,7 +955,11 @@ describe('stream error containment', () => {
     });
     const finish = async () => {
       fakeProcess.emit('close', 0);
-      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled());
+      // Completion runs after the in-flight transcript write lands, and since
+      // #12025 every atomicWrite fsyncs: the Windows runner needs more than
+      // vi.waitFor's 1s default (observed 1045ms) while a never-called cleanup
+      // still fails within the budget.
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { timeout: 10_000 });
     };
     const emitTextAndFlush = async text => {
       fakeProcess.stdout.emit('data', Buffer.from(text));
