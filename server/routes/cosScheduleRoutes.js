@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -289,12 +289,23 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
   res.json({ success: true, request });
 }));
 
+// Prepare evidence only; the separate confirmation binds its digest to fresh facts.
+router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (req, res) => {
+  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
+  const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
+  const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl });
+  if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
+    status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason },
+  });
+  res.json(result);
+}));
+
 // POST /api/cos/schedule/branch-reconcile/checkouts/retire - Archive and retire
 // one held checkout from the last branch-reconcile inventory (#12002)
 router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (req, res) => {
-  const { appId, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
+  const { appId, review, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
   const { retireInventoriedCheckout } = await import('../services/heldCheckoutRecovery.js');
-  const result = await retireInventoriedCheckout({ appId, release });
+  const result = await retireInventoriedCheckout({ appId, release, review });
   if (!result.ok) {
     throw new ServerError(`Checkout kept: ${result.reason}${result.detail ? ` (${result.detail})` : ''}`, {
       status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason },

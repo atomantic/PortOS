@@ -387,6 +387,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/trigger',
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
+  'POST /api/cos/schedule/branch-reconcile/checkouts/review',
   'POST /api/cos/schedule/maintenance-runs',
   // Editing a pending stage changes the provider used by deferred host work.
   'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',

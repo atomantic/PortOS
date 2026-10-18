@@ -40,7 +40,7 @@ vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classify
 
 import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
-import { readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
+import { reviewedRetirementPolicy, readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
 import { gatherBranchState, classifyBranches, filterActionable, formatInFlightForPrompt } from './branchReconcile.js';
 import { checkReconcileOwnership } from './cosClaimOwnership.js';
 import { removeDanglingAgentIndexEntries } from './cosAgentIndex.js';
@@ -220,5 +220,28 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     expect(policies.map(agent => agent.id)).toEqual(['agent-human']);
     await vi.waitFor(() => expect(removeDanglingAgentIndexEntries).toHaveBeenCalledWith(['agent-gone']));
     expect(await recheck()).toEqual({ admitted: false, reason: 'pr-completion-human-handoff' });
+  });
+});
+
+describe('scoped legacy retirement policy', () => {
+  it.each(['running', 'paused', 'failed', 'leave-open', 'merge-on-green', 'known-pr'])('retains %s obligations', change => {
+    register('agent-legacy', 'review-then-merge');
+    const agent = runtime.agents['agent-legacy'];
+    if (['running', 'paused'].includes(change)) agent.status = change;
+    if (change === 'failed') agent.result.success = false;
+    if (['leave-open', 'merge-on-green'].includes(change)) agent.metadata.prCompletionPolicy = change;
+    if (change === 'known-pr') agent.metadata.branchCompletionPolicy = { branch, completion: 'review-then-merge', prUrl };
+    expect(reviewedRetirementPolicy({ repoPath, branch, agents: [agent] }).reason).toBeTruthy();
+  });
+
+  it('reads archived obligations without repairing index state for operator review', async () => {
+    register('agent-legacy', 'review-then-merge');
+    await mkdir(join(runtime.dir, 'agents'), { recursive: true });
+    await writeFile(join(runtime.dir, 'agents', 'index.json'), JSON.stringify({ 'agent-gone': '2026-02-01' }));
+    removeDanglingAgentIndexEntries.mockClear();
+    const agents = await readBranchCompletionPolicies({ repairIndex: false });
+    expect(reviewedRetirementPolicy({ repoPath, branch, agents })).toMatchObject({ reason: null, policies: [{ id: 'agent-legacy' }] });
+    expect(removeDanglingAgentIndexEntries).not.toHaveBeenCalled();
+    expect(await snapshotHold(agents)).toBe('pr-completion-review-required');
   });
 });
