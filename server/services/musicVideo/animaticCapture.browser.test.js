@@ -104,7 +104,8 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
 
   const show = async (value, t) => {
     await page.evaluate(({ value, t }) => { window.uploads = []; window.show(value, t); }, { value, t });
-    await page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001, t);
+    // Assigning currentTime is synchronous; its seeked handler can still leave Ending later.
+    await page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001 && !document.querySelector('audio').seeking, t);
     await page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0));
   };
   const capture = async (label = '') => {
@@ -308,9 +309,18 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await show(project([still], { statsOutro: { enabled: true, durationSec: 8 }, filmLook: filmLookPreset('polaroid') }), 1);
     const look = page.getByRole('button', { name: 'Film look', exact: true });
     if (await look.getAttribute('aria-pressed') === 'false') await look.click();
+    // The canvas mounts with provisional counts, so its presence/fonts do not
+    // establish a capture basis. Wait for the tally, then let React paint it.
+    const statsReady = page.waitForResponse('**/api/music-video/*/stats-outro');
     await page.getByRole('button', { name: 'Ending', exact: true }).click();
     await page.getByTestId('animatic-stats-outro').waitFor();
-    await page.evaluate(() => document.fonts.ready);
+    const statsResponse = await statsReady;
+    expect(statsResponse.ok()).toBe(true);
+    expect(await statsResponse.finished()).toBeNull();
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    });
     const saved = await capture();
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
@@ -334,17 +344,32 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await show(project([still], { statsOutro: { enabled: true, durationSec: 8 } }), 1);
     await page.getByRole('button', { name: 'Ending', exact: true }).click();
     await page.getByTestId('animatic-stats-outro').waitFor();
+    await page.evaluate(() => document.fonts.ready);
     await page.evaluate(() => window.gateCaptureOnce());
     await page.getByRole('button', { name: 'Save frame', exact: true }).click();
     await page.waitForFunction(() => window.captureDecodePending);
     expect(pendingStats).toBeTruthy();
+    // The old success fixture's entire readiness condition is now true, yet
+    // the statistics request is still held and capture has not uploaded.
+    const controlState = () => page.evaluate(() => ({
+      seeking: document.querySelector('audio').seeking,
+      time: document.querySelector('audio').currentTime,
+      ending: document.querySelector('[data-testid="animatic-stats-outro"]') !== null,
+      errors: window.captureErrors, uploads: window.uploads.length,
+    }));
+    expect(await controlState()).toEqual({ seeking: false, time: 1, ending: true, errors: [], uploads: 0 });
     await pendingStats.fulfill({ json: { stats: { shots: 9, floorImages: [] } } });
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    expect(await controlState()).toEqual({ seeking: false, time: 1, ending: true, errors: [], uploads: 0 });
     await page.evaluate(() => window.releaseCapture());
     await page.waitForFunction(() => window.captureErrors.length > 0);
     expect(await page.evaluate(() => window.uploads.length)).toBe(0);
     expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
     await page.unroute('**/api/music-video/*/stats-outro');
+    // With that same Ending paused and its response applied, capture succeeds
+    // and keeps the exact displayed pixels on a second independent save.
+    const saved = await capture();
+    expect(Buffer.compare(saved, await capture())).toBe(0);
   });
   it('reports an unavailable paused color surface without uploading a different native-video image', async () => {
     await page.evaluate(() => {
