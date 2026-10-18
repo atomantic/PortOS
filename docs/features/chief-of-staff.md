@@ -124,7 +124,9 @@ the published local head, so the merge-gate check finalizes without a nudge
 audit treats the queued entry as the branch's owner. The receipt starts one
 immediate sweep of the app, which merges a head whose CI already settled
 without waiting for the 30-minute timer and spends no tick budget. Overlapping
-sweeps of one app (timer, task generator, receipt) join a single pass.
+sweeps of one app (timer, task generator, receipt) join a single pass; a receipt
+that lands during a pass which already read the queue gets one follow-up pass
+after it settles.
 
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,

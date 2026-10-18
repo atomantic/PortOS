@@ -165,6 +165,28 @@ describe('pending-merge handoff', () => {
     expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
   });
 
+  it('rechecks the queue after an overlapping sweep that read it before the receipt', async () => {
+    greenChecks();
+    let releaseRead;
+    const blocked = new Promise((resolve) => { releaseRead = resolve; });
+    const other = { ...f.pr, number: 8, headRefName: 'cos/other', headRefOid: 'b'.repeat(40), statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    const forge = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation(async (args) => (args[0] === 'pr' && args[1] === 'view' && args[2] === '8'
+      ? blocked.then(() => JSON.stringify(other)) : forge(args)));
+    f.apps.set('app1', { ...f.apps.get('app1'), pendingMergePrs: [{
+      prUrl: 'https://github.com/example/repo/pull/8', prNumber: 8, prBranch: 'cos/other', ticks: 0,
+      sourceTask: { id: 'task-other', priority: 'MEDIUM', description: 'Other change', metadata: { app: 'app1' } },
+    }] });
+
+    // The live module instance, the one the handoff's receipt sweep joins.
+    const timer = (await import('./prWatcher.js')).processPendingMergePrs(f.apps.get('app1'));
+    expect(await handoff()).toMatchObject({ queued: true });
+    releaseRead();
+    await timer;
+    await vi.waitFor(() => expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD }));
+    expect(pending().map((entry) => entry.prNumber)).toEqual([8]);
+  });
+
   it('reports a queued receipt only for the exact handed-off PR, branch and head', async () => {
     await handedOff();
     const target = { prUrl: 'https://GitHub.com/Example/Repo/pull/7', prBranch: 'claim/issue-1', headSha: HEAD.toUpperCase() };

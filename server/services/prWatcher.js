@@ -51,6 +51,7 @@ const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 // otherwise still load stale whole-file snapshots and clobber one another.
 let pendingMergeWriteTail = Promise.resolve();
 const pendingMergeSweeps = new Map();
+const pendingMergeResweeps = new Map();
 
 // Cache the gh-authenticated login PER HOST, for the process lifetime. Host-keyed
 // for two reasons: (1) `gh api` does NOT infer the host from the working
@@ -585,6 +586,20 @@ export async function sweepPendingMergePrs() {
  * never throws: the timer sweep remains the owner of every queued entry.
  */
 export function sweepPendingMergeApp(appId) {
+  const inFlight = pendingMergeSweeps.get(appId);
+  if (!inFlight) return receiptSweep(appId);
+  // That pass read the queue before this receipt was written: reload it once the
+  // pass settles. Receipts arriving meanwhile share the one follow-up pass.
+  if (!pendingMergeResweeps.has(appId)) {
+    pendingMergeResweeps.set(appId, inFlight.catch(() => null).then(() => {
+      pendingMergeResweeps.delete(appId);
+      return receiptSweep(appId);
+    }));
+  }
+  return pendingMergeResweeps.get(appId);
+}
+
+function receiptSweep(appId) {
   return joinPendingMergeSweep(appId, async () => {
     // A timer sweep may join this pass, so it answers in the same result shape.
     const app = await getAppById(appId);
