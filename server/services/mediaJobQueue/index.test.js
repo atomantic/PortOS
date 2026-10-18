@@ -2002,6 +2002,72 @@ describe('Audio kind (#1928)', () => {
 });
 
 describe('Codex lane', () => {
+  it.each([
+    { name: 'releases before the shutdown deadline', timeout: false },
+    { name: 'releases after the shutdown deadline', timeout: true },
+    { name: 'preserves independently marked uncertainty', timeout: true, uncertain: true },
+    { name: 'preserves a failed final write', timeout: true, fail: true },
+  ])('owns a completed lane until persistence settles: $name', async ({ timeout, uncertain, fail }) => {
+    let providerEntered;
+    const started = new Promise(resolve => { providerEntered = resolve; });
+    stubs.generateImageCodex.mockImplementation(async () => { providerEntered(); return {}; });
+    await mediaJobQueue.initMediaJobQueue();
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'Gated settlement', mode: 'codex' } });
+    await started;
+    mediaJobQueue.quiesceMediaJobQueue();
+    await mediaJobQueue.__drainForTests();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const write = atomicWriteSpy.getMockImplementation();
+    let release;
+    let gateEntered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const entered = new Promise(resolve => { gateEntered = resolve; });
+    let completed = false;
+    let writesAfterCompletion = 0;
+    const observe = job => { if (job.id === jobId) completed = true; };
+    mediaJobQueue.mediaJobEvents.on('completed', observe);
+    atomicWriteSpy.mockImplementation(async (...args) => {
+      // The first post-publication write archives the lane. The next write is
+      // the final flush, reached only after that archive snapshot is durable.
+      if (completed && ++writesAfterCompletion === 2) {
+        gateEntered();
+        await gate;
+        if (fail) throw new Error('Synthetic final write failure');
+      }
+      return write(...args);
+    });
+    vi.useFakeTimers();
+    try {
+      imageGenEvents.emit('completed', { generationId: jobId, filename: 'synthetic.png' });
+      await entered;
+      expect(persistedJobs().find(job => job.id === jobId).status).toBe('completed');
+      const shutdownFlush = mediaJobQueue.flushMediaJobQueue();
+      if (timeout) {
+        await vi.advanceTimersByTimeAsync(mediaJobQueue.MEDIA_QUEUE_FLUSH_TIMEOUT_MS + 1);
+        await expect(shutdownFlush).resolves.toMatchObject({ ok: false, timedOut: true });
+      }
+      // The write still belongs to this live lane, even after shutdown's
+      // separate deadline. It is pending work, not lost/uncertain ownership.
+      expect(maintenance.status().blockers).toEqual([expect.objectContaining({ resource: jobId, unsettled: undefined })]);
+      if (uncertain) maintenance.recoverOwned('media', jobId).markUnsettled();
+      release();
+      if (!timeout) await expect(shutdownFlush).resolves.toEqual({ ok: true });
+      await mediaJobQueue.__drainForTests({ settleLanes: true });
+      expect(writesAfterCompletion).toBeGreaterThanOrEqual(3);
+      expect(persistedJobs().find(job => job.id === jobId).status).toBe('completed');
+      if (uncertain || fail) {
+        expect(maintenance.status().blockers).toEqual([expect.objectContaining({ resource: jobId, unsettled: true })]);
+      } else {
+        expect(maintenance.status().blockers).toEqual([]);
+      }
+    } finally {
+      release();
+      atomicWriteSpy.mockImplementation(write);
+      mediaJobQueue.mediaJobEvents.off('completed', observe);
+      vi.useRealTimers();
+    }
+  });
+
   it('runs more than ten renders while enforcing the saved limit and cleaning up listeners', async () => {
     // Kickoff resolves; terminal events keep each render active until completed.
     let enteredTwelve;
