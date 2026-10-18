@@ -180,6 +180,15 @@ describe('unindexImage / unindexVideo (delete hooks, #2738)', () => {
     errSpy.mockRestore();
   });
 
+  it('propagates strict video-removal failures so a pre-delete caller can retain its retry evidence', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    removeAsset.mockRejectedValueOnce(new Error('db down'));
+    const { unindexVideo } = await import('./index.js');
+    await expect(unindexVideo('job-1', { strict: true })).rejects.toThrow('db down');
+    await expect(unindexVideo('job-1', { strict: true })).resolves.toBeUndefined();
+    expect(removeAsset).toHaveBeenCalledWith('video:job-1');
+  });
+
   it('no-ops under the escape hatch and on an unusable ref', async () => {
     vi.stubEnv('NODE_ENV', 'test');
     const { unindexImage } = await import('./index.js');

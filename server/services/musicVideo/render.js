@@ -155,6 +155,13 @@ function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC }
   return out;
 }
 
+function releaseProjectRender(projectId) {
+  if (projectRenders.delete(projectId)) musicVideoEvents.emit('render-cleanup-idle', { projectId });
+}
+
+// Preparation also owns the slot before a public job ID exists.
+export const isProjectRenderActive = (projectId) => projectRenders.has(projectId);
+
 /**
  * The project's live final-render job on THIS instance, or null — a render
  * still preparing (no job id yet) or running on another machine reports null.
@@ -961,7 +968,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   });
   // `written`: the success path already committed the row inside its backup lease.
   const finish = async (patch, { written = false } = {}) => {
-    projectRenders.delete(projectId);
+    releaseProjectRender(projectId);
     if (!written) await writeSettled(patch);
     emitRenderSettled(projectId, job);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
@@ -1013,6 +1020,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       await writeSettled(completed);
       return poster;
     });
+    await retireOldFinals(projectId, jobId);
     await finish(completed, { written: true });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
@@ -1062,7 +1070,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
   console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
   const { signal } = job.overlayAbort;
   const finish = (status) => {
-    projectRenders.delete(projectId);
+    releaseProjectRender(projectId);
     emitRenderSettled(projectId, job);
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
@@ -1094,9 +1102,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
       await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project)}), 'complete');
       return poster;
     });
-    finish('complete');
+    await retireOldFinals(projectId, jobId);
     // Older takes of each shot are dropped once the new cut is published.
-    const pruned = await pruneSegments(plan, { startedAtMs }).catch(() => 0);
+    const pruned = await pruneSegments(plan, { startedAtMs, current: true }).catch(err => { console.warn(`⚠️ Music-video segment cleanup failed: ${err.message}`); return 0; });
+    finish('complete');
     console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
   }).catch(async (err) => {
@@ -1138,6 +1147,8 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
     throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
   }
+  const { assertRenderCleanupIdle } = await import('./renderCleanupActivity.js');
+  assertRenderCleanupIdle(projectId);
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
     throw new ServerError('Render already in progress for this project', {
@@ -1204,7 +1215,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      projectRenders.delete(projectId);
+      releaseProjectRender(projectId);
       // A cancel restores the pre-render status (so a cancelled re-render of a
       // 'complete' project stays 'complete'); a real failure marks it 'failed'.
       const targetStatus = canceled ? priorStatus : 'failed';
@@ -1274,7 +1285,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           job.lastError = reason;
           console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: reason });
-          projectRenders.delete(projectId);
+          releaseProjectRender(projectId);
           await updateProject(projectId, settledRender('failed', { renderError: reason.slice(0, 2000) })).catch((updateErr) => {
             maintenance.markCurrentUnsettled();
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
@@ -1356,6 +1367,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               });
               return poster;
             });
+            await retireOldFinals(projectId, jobId);
             emitRenderSettled(projectId, job);
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
             broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
@@ -1371,7 +1383,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             });
             emitRenderSettled(projectId, job);
           } finally {
-            projectRenders.delete(projectId);
+            releaseProjectRender(projectId);
             closeJobAfterDelay(jobs, jobId);
             permit.finish();
           }
@@ -1384,7 +1396,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   } finally {
     // Prep threw (or we never handed off to the job lifecycle) — release the
     // reserved slot so a stale PENDING can't 409 every future render.
-    if (!handedOff) { projectRenders.delete(projectId); permit.finish(); }
+    if (!handedOff) { releaseProjectRender(projectId); permit.finish(); }
   }
 }
 
@@ -1480,4 +1492,9 @@ function scheduleRenderResumes(resumes) {
       }
     }
   }, RENDER_RESUME_DELAY_MS).unref?.();
+}
+
+async function retireOldFinals(projectId, replacementId) {
+  await import('./renderCleanup.js').then(({ cleanupSupersededFinals }) => cleanupSupersededFinals(projectId, { replacementId }))
+    .catch(err => console.warn(`⚠️ Music-video superseded render cleanup failed: ${err.message}`));
 }

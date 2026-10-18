@@ -112,7 +112,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |
 | `apiGames.js` | Game studio records, managed-app binding, reusable sprite/music bindings, deterministic asset-bundle compilation/integrity preflight, and AI feedback history. |
-| `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
+| `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. Includes render cleanup inventory/apply with optional unused film-look purging. |
 | `apiContinuousVideo.js` | Continuous-video episode generation: client-side-callable lint preview of a scene draft, queue-episode submit, and the SSE progress-events URL. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's re-derive (#2980), and animation render-provider readiness (#4876). |
 | `apiShell.js` | Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session. Keystrokes/output stay on the `shell:*` socket protocol. |

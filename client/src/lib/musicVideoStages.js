@@ -41,6 +41,7 @@ export const MUSIC_VIDEO_STAGES = [
  */
 export const MUSIC_VIDEO_PAGES = [
   { id: 'assets', label: 'Assets', title: 'Assets' },
+  { id: 'cleanup', label: 'Cleanup', title: 'Cleanup' },
 ];
 
 // Old links name the Compose tab, which is now part of Shots; the new names work as links too.

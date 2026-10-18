@@ -346,6 +346,7 @@ const SIMPLE_BRIDGES = [
   // The release cover art was composed, or its source image was queued or failed.
   { emitter: musicVideoEvents, event: 'cover-art', channel: 'music-video:cover-art' },
   // A shot's cached render segment rendering, rendered, or failed (shotSegments.js).
+  { emitter: musicVideoEvents, event: 'render-cleanup', channel: 'music-video:render-cleanup' },
   { emitter: musicVideoEvents, event: 'shot-render', channel: 'music-video:shot-render' },
 ];
 

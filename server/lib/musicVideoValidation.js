@@ -93,6 +93,9 @@ export const MUSIC_VIDEO_MODES = ['director', 'autonomous'];
 export const MUSIC_VIDEO_STATUSES = ['draft', 'analyzed', 'ready', 'rendering', 'complete', 'failed'];
 
 // Re-read a project's song style from its Suno song link.
+// Explicit cleanup keeps comparison looks unless the director opts to purge them.
+export const musicVideoRenderCleanupSchema = z.object({ unusedLooks: z.boolean().optional() }).strict();
+
 // The rendered-so-far player: `light` asks for the lighter phone copy.
 export const musicVideoRenderPreviewSchema = z.object({ light: z.boolean().optional() }).strict();
 export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });

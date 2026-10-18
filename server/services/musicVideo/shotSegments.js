@@ -23,8 +23,9 @@ import { createHash, randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { availableParallelism, tmpdir, totalmem } from 'os';
-import { join } from 'path';
-import { PATHS, safeJSONParse } from '../../lib/fileUtils.js';
+import { join, sep } from 'path';
+import { PATHS, safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
@@ -39,6 +40,7 @@ import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
 import { getProject } from './projects.js';
+import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { trackedRenderMap } from '../renderActivity.js';
@@ -46,6 +48,20 @@ import { trackedRenderMap } from '../renderActivity.js';
 export const SHOT_SEGMENT_DIR = 'music-video-segments';
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
+const segmentOwnerWrites = createKeyCachedQueue();
+const pendingShotCleanup = new Map();
+const shotCleanupWrites = createKeyCachedQueue();
+const segmentOwnersFile = dir => join(dir, 'segments.json');
+
+async function rememberSegmentOwner(plan, segment) {
+  if (!segment.baseKey) return;
+  await segmentOwnerWrites(plan.dir, async () => {
+    const owners = await readJSONFile(segmentOwnersFile(plan.dir), {}, { strict: true });
+    if (owners[segment.baseKey]?.sceneId === segment.sceneId) return;
+    owners[segment.baseKey] = { sceneId: segment.sceneId || null };
+    await atomicWrite(segmentOwnersFile(plan.dir), owners);
+  });
+}
 // Timed text this far outside a segment is left out of its key: a lyric line
 // or cue edit elsewhere in the song does not re-render it.
 const KEY_MARGIN_SEC = 5;
@@ -197,7 +213,11 @@ export function renderSegment(plan, segment, { signal, onProgress } = {}) {
     const controller = new AbortController();
     const fresh = { controller, waiters: 0, listeners: new Set() };
     fresh.promise = renderSegmentFiles(plan, segment, { signal: controller.signal, onProgress: (f) => fresh.listeners.forEach((fn) => fn(f)) })
-      .finally(() => { if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path); });
+      .finally(() => {
+        if (inFlight.get(segment.path) === fresh) inFlight.delete(segment.path);
+        // Cancellation releases its caller before the encoder/browser settles.
+        cleanupAfterShot(plan.project.id).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+      });
     inFlight.set(segment.path, fresh);
     entry = fresh;
   }
@@ -267,6 +287,7 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
       throw new ServerError(`${label(plan, segment)}: film look failed: ${err.message}`, { status: err.status || 500, code: err.code || 'SHOT_LOOK_FAILED' });
     }
   }
+  await rememberSegmentOwner(plan, segment);
   onProgress?.(1);
   return segment.path;
 }
@@ -406,40 +427,101 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
   }
 }
 
-/**
- * Remove cached files the current plan no longer uses: older takes of each
- * shot, with every look rendered over them. Each listed video look over a
- * current take stays, so a look can be restored without rendering
- * (deleteFilmLook drops one); a look that isn't listed could never be found
- * again, so its files go. The rendered-so-far previews are replaced by their
- * own builder. A file written at or after `startedAtMs` (a shot rendered while
- * the final render ran) was made after this plan was cut, so the plan cannot
- * tell whether it is current and it stays.
+/** Keep current bases and film-look comparisons; retire stale derived MP4s only.
+ * A final render's time floor preserves files created after its snapshot.
+ * Shot replacement uses the cache's owner journal to leave other shots alone;
+ * legacy caches without that journal are handled by full/explicit cleanup.
  */
-export async function pruneSegments(plan, { startedAtMs = Infinity } = {}) {
+async function staleSegmentFiles(plan, { startedAtMs = Infinity, unusedLooks = false, previews = false, sceneId = null } = {}) {
   const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
-  // Only takes that play the video's look keep its other looks; a shot's own
-  // look keeps just its current file, as before.
-  await lookWrites.get(plan.dir);
-  const listed = Object.values(await readFilmLooks(plan.dir)).map((entry) => entry?.look).filter(Boolean);
-  for (const segment of videoLookSegments(plan)) {
-    for (const look of listed) keep.add(segmentLookPath(plan, segment, look));
-  }
-  const names = await readdir(plan.dir).catch(() => []);
-  let removed = 0;
+  const owners = sceneId ? await readJSONFile(segmentOwnersFile(plan.dir), {}, { strict: true }) : null;
+  const names = await readdir(plan.dir).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const stale = [];
   for (const name of names) {
     const path = join(plan.dir, name);
-    if (keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
-    if (name.endsWith('.partial.mp4') || name.startsWith(LOOKS_FILE) || name.startsWith('preview-')) continue;
-    const info = await stat(path).catch(() => null);
-    if (!info || info.mtimeMs >= startedAtMs) continue;
-    await rm(path, { force: true }).then(() => { removed += 1; }, () => {});
+    if (owners && owners[name.replace(/^outro-/, '').slice(0, 32)]?.sceneId !== sceneId) continue;
+    // A shot-pinned look is also a useful comparison over this exact base.
+    const comparison = !unusedLooks && [...plan.segments, ...(plan.outro ? [plan.outro] : [])]
+      .some(segment => name.startsWith(`${segment.outro ? 'outro-' : ''}${segment.baseKey}-`));
+    if (comparison || keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
+    if (!name.endsWith('.mp4') || name.endsWith('.partial.mp4') || (!previews && name.startsWith('preview-'))) continue;
+    const info = await stat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!info || !info.isFile() || info.mtimeMs >= startedAtMs) continue;
+    stale.push({ name, bytes: info.size });
   }
-  return removed;
+  return stale;
+}
+
+export async function pruneSegments(plan, { reserved = false, current = false, ...options } = {}) {
+  if (current) {
+    const { withProjectMediaMutation } = await import('./projects.js');
+    return withProjectMediaMutation(async () => {
+      const { plan: latest } = await planForLooks(plan.project.id);
+      return latest && !latest.error ? pruneSegments(latest, { reserved, ...options }) : 0;
+    });
+  }
+  const prune = async () => {
+    assertSegmentCleanupIdle(plan.project.id);
+    const stale = await staleSegmentFiles(plan, options);
+    for (const file of stale) await rm(join(plan.dir, file.name), { force: true });
+    if (stale.length) await segmentOwnerWrites(plan.dir, async () => {
+      const owners = await readJSONFile(segmentOwnersFile(plan.dir), {}, { strict: true });
+      const present = new Set((await readdir(plan.dir)).filter(name => name.endsWith('.mp4')).map(name => name.replace(/^outro-/, '').slice(0, 32)));
+      const kept = Object.fromEntries(Object.entries(owners).filter(([key]) => present.has(key)));
+      if (Object.keys(kept).length !== Object.keys(owners).length) await atomicWrite(segmentOwnersFile(plan.dir), kept);
+    });
+    if (stale.length) musicVideoEvents.emit('render-cleanup', { projectId: plan.project.id });
+    return stale.length;
+  };
+  return reserved ? prune() : withRenderCleanupReservation(plan.project.id, prune);
+}
+
+function segmentCleanupBusy(projectId) {
+  const dir = shotSegmentDir(projectId);
+  return [...inFlight.keys(), ...previewBuilds.keys()].some(path => path.startsWith(`${dir}${sep}`))
+    || [...shotJobs.keys()].some(key => key.startsWith(`${projectId}:`));
+}
+
+export function assertSegmentCleanupIdle(projectId) {
+  if (segmentCleanupBusy(projectId)) {
+    throw new ServerError('Wait for shot renders and preview builds to finish before cleanup.', { status: 409, code: 'SHOT_RENDER_ACTIVE' });
+  }
+}
+
+export async function getSegmentCleanup(projectId) {
+  const { project, plan: planned } = await planForLooks(projectId);
+  const plan = planned || { project, dir: shotSegmentDir(projectId), segments: [], outro: null };
+  if (plan.error) return { available: true, error: plan.error, stale: [], unusedLooks: [] };
+  const stale = await staleSegmentFiles(plan, { previews: true });
+  const staleNames = new Set(stale.map(file => file.name));
+  const variants = (await staleSegmentFiles(plan, { previews: true, unusedLooks: true })).filter(file => !staleNames.has(file.name));
+  return { available: true, error: null, stale, unusedLooks: variants };
+}
+
+export async function cleanupShotSegments(projectId, { unusedLooks = false, reserved = false } = {}) {
+  const { withProjectMediaMutation } = await import('./projects.js');
+  const cleanup = () => withProjectMediaMutation(async () => {
+    assertSegmentCleanupIdle(projectId);
+    const { project, plan: planned } = await planForLooks(projectId);
+    const plan = planned || { project, dir: shotSegmentDir(projectId), segments: [], outro: null };
+    if (plan.error) return;
+    await pruneSegments(plan, { unusedLooks, previews: true, reserved: true });
+    if (unusedLooks && existsSync(plan.dir)) {
+      const current = normalizeFilmLook(project.filmLook);
+      const currentId = current && !isFilmLookNeutral(current) ? filmLookId(current) : null;
+      await updateFilmLooks(plan.dir, looks => {
+        for (const id of Object.keys(looks)) if (id !== currentId) delete looks[id];
+      });
+    }
+  });
+  return reserved ? cleanup() : withRenderCleanupReservation(projectId, cleanup);
 }
 
 /** Remove a project's whole segment cache (the project was deleted). */
-export const removeProjectSegments = (projectId) => rm(shotSegmentDir(projectId), { recursive: true, force: true });
+export const removeProjectSegments = (projectId) => {
+  pendingShotCleanup.delete(projectId);
+  return rm(shotSegmentDir(projectId), { recursive: true, force: true });
+};
 
 /** Boot sweep: partial files from renders a restart interrupted. */
 export async function sweepPartialSegments() {
@@ -529,8 +611,12 @@ export async function startShotRender(projectId, sceneId) {
       if (!segments.length) {
         throw new ServerError(`${nameShots(project, [sceneId])}: not in the cut yet. Give it a clip, or a still with a start and end time`, { status: 422, code: 'SHOT_NOT_IN_CUT' });
       }
-      if (segments.every(segmentRendered)) return { sceneId, state: 'rendered' };
+      if (segments.every(segmentRendered)) {
+        await cleanupAfterShot(projectId, sceneId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+        return { sceneId, state: 'rendered' };
+      }
       if (shotJobs.has(key)) return { sceneId, state: 'rendering' };
+      assertRenderCleanupIdle(projectId);
       const controller = new AbortController();
       shotJobs.set(key, { controller });
       handedOff = true;
@@ -544,6 +630,7 @@ export async function startShotRender(projectId, sceneId) {
       };
       report(0);
       const started = Date.now();
+      let rendered = false;
       Promise.resolve().then(async () => {
         let before = 0;
         for (const segment of segments) {
@@ -551,6 +638,7 @@ export async function startShotRender(projectId, sceneId) {
           before += segment.frames;
         }
       }).then(() => {
+        rendered = true;
         console.log(`🎬 Music-video ${nameShots(project, [sceneId])} rendered [${projectId.slice(0, 8)}] in ${((Date.now() - started) / 1000).toFixed(1)}s`);
         emitShotRender({ projectId, sceneId, state: 'rendered', progress: 1 });
       }, (err) => {
@@ -558,8 +646,9 @@ export async function startShotRender(projectId, sceneId) {
         const log = canceled ? console.log : console.error;
         log(`${canceled ? '🛑' : '❌'} Music-video shot render ${canceled ? 'cancelled' : 'failed'} [${projectId.slice(0, 8)}]: ${err.message}`);
         emitShotRender({ projectId, sceneId, state: canceled ? 'canceled' : 'failed', error: canceled ? null : err.message });
-      }).finally(() => {
+      }).finally(async () => {
         shotJobs.delete(key);
+        await cleanupAfterShot(projectId, rendered ? sceneId : null).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
         permit.finish();
       });
       return { sceneId, state: 'rendering' };
@@ -669,6 +758,15 @@ export async function listFilmLooks(projectId) {
 
 /** Delete one cached look's files over the current takes, and forget it. */
 export async function deleteFilmLook(projectId, lookId) {
+  return withRenderCleanupReservation(projectId, async () => {
+    const { isProjectRenderActive } = await import('./render.js');
+    if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before deleting a look.', { status: 409, code: 'RENDER_IN_PROGRESS' });
+    assertSegmentCleanupIdle(projectId);
+    return deleteFilmLookFiles(projectId, lookId);
+  });
+}
+
+async function deleteFilmLookFiles(projectId, lookId) {
   if (typeof lookId !== 'string' || !/^[0-9a-f]{32}$/.test(lookId)) throw new ServerError('Invalid film look id', { status: 400, code: 'VALIDATION_ERROR' });
   const { project, plan } = await planForLooks(projectId);
   if (!plan || plan.error) throw new ServerError('This video has no shot renders to delete', { status: 409, code: 'NO_SHOT_RENDERS' });
@@ -721,10 +819,14 @@ export async function buildRenderPreview(projectId, { light = false } = {}) {
     shots, totalShots: new Set(plan.segments.map((s) => s.sceneId)).size,
     complete: lead.length === plan.segments.length + (plan.outro ? 1 : 0),
   };
+  assertRenderCleanupIdle(projectId);
   if (existsSync(path)) return result;
   let build = previewBuilds.get(path);
   if (!build) {
-    build = writePreview(plan, lead, path, { light }).finally(() => previewBuilds.delete(path));
+    build = writePreview(plan, lead, path, { light }).finally(async () => {
+      previewBuilds.delete(path);
+      await cleanupAfterShot(projectId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+    });
     previewBuilds.set(path, build);
   }
   await build;
@@ -753,3 +855,41 @@ async function writePreview(plan, lead, path, { light }) {
     await rm(partial, { force: true }).catch(() => {});
   }
 }
+
+async function cleanupAfterShot(projectId, sceneId = null) {
+  if (sceneId) {
+    const pending = pendingShotCleanup.get(projectId) || new Set();
+    pending.add(sceneId);
+    pendingShotCleanup.set(projectId, pending);
+  }
+  if (!pendingShotCleanup.get(projectId)?.size) return;
+  return shotCleanupWrites(projectId, async () => {
+    const pending = pendingShotCleanup.get(projectId);
+    if (!pending?.size) return;
+    const { isProjectRenderActive } = await import('./render.js');
+    if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
+    const { withProjectMediaMutation } = await import('./projects.js');
+    await withProjectMediaMutation(async () => {
+      if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
+      await withRenderCleanupReservation(projectId, async () => {
+        const { plan } = await planForLooks(projectId);
+        if (!plan || plan.error) return;
+        for (const id of [...pending]) {
+          const current = plan.segments.filter(segment => segment.sceneId === id);
+          // A later edit supersedes the completed render: wait for its new success.
+          if (current.length && current.every(segmentRendered)) await pruneSegments(plan, { sceneId: id, reserved: true });
+          pending.delete(id);
+        }
+        if (!pending.size) pendingShotCleanup.delete(projectId);
+      }, { notify: false });
+    });
+  });
+}
+
+// A deferred batch also resumes after preview/full-render readers or another
+// cleanup release their ownership. Never poll or drop another completed shot.
+const resumeShotCleanup = ({ projectId }) => {
+  cleanupAfterShot(projectId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
+};
+musicVideoEvents.on('render', resumeShotCleanup);
+musicVideoEvents.on('render-cleanup-idle', resumeShotCleanup);
