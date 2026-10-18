@@ -1985,7 +1985,7 @@ describe('filterActionable', () => {
 
 describe('desiredEndState', () => {
   it('tells IN_REVIEW to merge only when autoMerge is on', () => {
-    expect(desiredEndState('IN_REVIEW', {})).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(desiredEndState('IN_REVIEW', {})).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(desiredEndState('IN_REVIEW', { autoMerge: false })).toContain('Do NOT merge');
   });
 
@@ -2044,7 +2044,7 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('Do not merely inventory unfinished work');
     expect(instruction).toContain('exceptional blocked outcome');
     expect(instruction).toContain('/do:pr --no-merge');
-    expect(instruction).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
   });
 
   it('tells NEEDS_PR to finish incomplete work instead of leaving it for another run', () => {
@@ -2071,7 +2071,7 @@ describe('desiredEndState', () => {
   // IN_REVIEW, contradicting driveToMerge's own "opening the PR is NOT the end
   // state" principle.
   it('tells CONFLICTED to merge only when autoMerge is on', () => {
-    expect(desiredEndState('CONFLICTED', {})).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(desiredEndState('CONFLICTED', {})).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(desiredEndState('CONFLICTED', { autoMerge: false })).toContain('Do NOT merge');
     expect(desiredEndState('CONFLICTED', { autoMerge: false })).not.toContain('gh pr merge');
   });
@@ -2082,7 +2082,7 @@ describe('desiredEndState', () => {
   it('drives NEEDS_PR past the PR to a merge when autoMerge is on', () => {
     const instruction = desiredEndState('NEEDS_PR', {});
     expect(instruction).toContain('gh pr checks <num> --required');
-    expect(instruction).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(instruction).toContain('NOT the end state');
   });
 
@@ -2115,19 +2115,20 @@ describe('desiredEndState', () => {
 
   // branch-reconcile runs against ANY managed app; a repo that disallows merge
   // commits would strand the branch on a hardcoded `--merge`.
-  it('gives the merge a method fallback and keeps it out of the branch worktree', () => {
+  it('pins every method fallback and preserves the worktree through archive checks', () => {
     const instruction = desiredEndState('IN_REVIEW', {});
-    expect(instruction).toContain('`--squash`');
-    expect(instruction).toContain('`--rebase`');
-    expect(instruction).toContain('NOT from inside the branch\'s worktree');
+    expect(instruction).toContain('--squash --match-head-commit <verified-head>');
+    expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
+    expect(instruction).not.toContain('--delete-branch');
+    expect(instruction).toContain('Archive failure');
     // Worktree first, then the branch — the delete fails while it's checked out.
-    expect(instruction).toContain('remove the branch\'s worktree first, then delete the local branch');
+    expect(instruction).toContain('Then remove only the authorized worktree and ancestry-gate');
   });
 
   it('names the real PR number when the branch already has one', () => {
     const instruction = desiredEndState('IN_REVIEW', {}, { prNumber: 42 });
     expect(instruction).toContain('gh pr checks 42 --required');
-    expect(instruction).toContain('gh pr merge 42 --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge 42 --merge --match-head-commit <verified-head>');
     expect(instruction).not.toContain('<num>');
   });
 
