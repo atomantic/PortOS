@@ -14,6 +14,7 @@ import { pipeline } from 'stream/promises';
 import { Router } from 'express';
 import { musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
+import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -252,7 +253,7 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // response carries `productionReadiness` — stages derive from one record, never "not done" while a
 // second request is in flight. GET /:id/production-review still serves the full review payload.
 const presentProjectForRead = (project) => {
-  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(project));
+  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(project)));
   return { ...presented, productionReadiness: productionReadiness(presented) };
 };
 

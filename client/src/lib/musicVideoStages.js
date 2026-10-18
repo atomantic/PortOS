@@ -15,6 +15,7 @@ import { falSceneTake } from './musicVideoShotTiming.js';
 import { unlockedShots } from './musicVideoSceneAttention.js';
 import { getFalVideoModel } from './falVideoModels.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
@@ -294,7 +295,7 @@ const autonomousChipLabel = (auto, { phase, step }) => {
  * `ok`, `warn` or `muted`; `short` is the phone label.
  */
 export function autopilotStatus(project, readiness = project?.productionReadiness) {
-  const auto = project?.autonomousRun;
+  const auto = supersededStillsCheckpoint(project, readiness) ? null : project?.autonomousRun;
   const { phase, step } = autonomousRunPhase(auto);
   if (phase !== 'inactive') {
     const running = phase === 'running';
@@ -577,7 +578,7 @@ export function deriveNextAction(project, {
     return { id: 'busy', kind: 'run', label, shortLabel: label, disabled: true };
   }
 
-  const autonomousAction = autonomousNextAction(project.autonomousRun);
+  const autonomousAction = supersededStillsCheckpoint(project, readiness) ? null : autonomousNextAction(project.autonomousRun);
   if (autonomousAction) return autonomousAction;
 
   switch (current) {
@@ -941,7 +942,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
   switch (stageId) {
     case 'setup': {
       // An autonomous run that is still going writes the song itself.
-      const autoPhase = autonomousRunPhase(project.autonomousRun).phase;
+      const autoPhase = autonomousRunPhase(supersededStillsCheckpoint(project, readiness) ? null : project.autonomousRun).phase;
       const autoSong = ['running', 'awaiting', 'paused'].includes(autoPhase);
       // A parked run is not writing anything; say so instead of claiming it is.
       const autoSongDetail = AUTONOMOUS_SONG_DETAILS[autoPhase];

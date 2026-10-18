@@ -9,6 +9,7 @@
  */
 import { composedDrawsLyrics, isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
+import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 
 /**
@@ -165,7 +166,7 @@ export function summarizeMusicVideoProject(project, readiness) {
     stage: currentStage(project, readiness, run),
     runStatus: project.autonomousRun?.status || run?.status || null,
     runInterrupted: Boolean(project.autonomousRun?.interrupted || project.castAndSets?.interrupted || run?.interrupted),
-    runAwaiting: project.autonomousRun?.status === 'awaiting-approval',
+    runAwaiting: project.autonomousRun?.status === 'awaiting-approval' && !supersededStillsCheckpoint(project, readiness),
     // 'schedule' when the Autonomous run task started it — the Schedule card names the project it is parked on (#10156).
     runOrigin: project.autonomousRun?.brief?.origin?.kind || null,
     poster: preview.poster || (preview.kind === 'image' ? preview.src : null),
