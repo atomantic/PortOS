@@ -25,7 +25,7 @@
     "@babel/parser": "8.0.7",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.1.0",
-    "@googleapis/gmail": "22.0.1",
+    "@googleapis/gmail": "22.0.2",
     "@novnc/novnc": "1.7.0",
     "better-sqlite3-multiple-ciphers": "13.0.3",
     "chokidar": "5.0.0",
