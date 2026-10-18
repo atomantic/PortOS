@@ -432,6 +432,32 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     expect(readFile).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves an external edit when an update starts after an older read captured the file', async () => {
+    const created = await addTask({ description: 'original', metadata: { context: 'before edit' } }, 'user');
+    __resetTaskCache();
+    const oldContent = mock.files.get(USER_FILE);
+    const reading = Promise.withResolvers();
+    const finishRead = Promise.withResolvers();
+    vi.mocked(readFile).mockImplementationOnce(async () => {
+      reading.resolve();
+      await finishRead.promise;
+      return oldContent;
+    });
+    const olderRead = getUserTasks();
+    await reading.promise;
+    mock.files.set(USER_FILE, oldContent.replace('before edit', 'external edit'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+
+    const update = updateTask(created.id, { description: 'API edit' }, 'user');
+    // Releasing the old read must not make a newer update overwrite the editor.
+    finishRead.resolve();
+    expect((await olderRead).tasks[0].metadata.context).toBe('before edit');
+    expect((await update).metadata.context).toBe('external edit');
+    expect((await getUserTasks()).tasks[0]).toMatchObject({
+      description: 'API edit', metadata: { context: 'external edit' }
+    });
+  });
+
   it('keeps a read overlapping a write from capturing or poisoning post-write readers', async () => {
     const created = await addTask({ description: 'original' }, 'user');
     await getUserTasks();

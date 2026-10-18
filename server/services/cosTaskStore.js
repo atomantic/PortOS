@@ -169,7 +169,7 @@ function isContentEdit(updates, existingMetadata = {}) {
 // Cache the parsed array per file so an unchanged file costs one `stat` plus a
 // structured clone instead of a read + full parse.
 //
-// Concurrent API/daemon readers share the complete stat/read/parse operation.
+// Concurrent API/daemon readers share the read/parse operation for each stamp.
 // Otherwise a cold cache multiplies whole-file strings and parsed task arrays
 // by the number of readers (#12225). Correctness rests on two signals:
 //
@@ -179,7 +179,7 @@ function isContentEdit(updates, existingMetadata = {}) {
 //      write, including reads started while the rename was pending. mtime can
 //      be as coarse as one second on some filesystems, so a write-then-read in
 //      the same tick must not depend on the stamp having moved.
-const parsedTaskCache = new Map(); // filePath -> generation { snapshot? }
+const parsedTaskCache = new Map(); // filePath -> generation { stamp, snapshot? }
 const taskSnapshotReads = createSingleFlight();
 
 // `null` = could not stat (missing/unreadable) → do not cache, distinct from a
@@ -192,16 +192,18 @@ const taskFileStamp = async (filePath) => {
 // Private snapshots never leave this module: list readers clone the array,
 // while ID lookups clone only the matching task. Both share invalidation.
 async function readTaskSnapshot(filePath) {
+  // Every caller checks external edits before joining a flight: a new writer
+  // must not consume a read that captured the file before an editor's change.
+  const stamp = await taskFileStamp(filePath);
   let generation = parsedTaskCache.get(filePath);
-  if (!generation) {
-    generation = {};
+  if (!generation || generation.stamp !== stamp) {
+    generation = { stamp };
     parsedTaskCache.set(filePath, generation);
   }
   // The entry identity is the flight key: invalidation detaches older reads
   // without letting them repopulate the cache or capture post-write callers.
   return taskSnapshotReads.run(generation, async () => {
-    const stamp = await taskFileStamp(filePath);
-    if (stamp && generation.snapshot?.stamp === stamp) return generation.snapshot;
+    if (stamp && generation.snapshot) return generation.snapshot;
 
     const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
     if (parsedTaskCache.get(filePath) === generation) {
