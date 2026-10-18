@@ -69,8 +69,14 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded });
   };
 
+  // Closures are needed to look up memo entries and to resolve a related
+  // plan. With the memo off, a full or files plan is just its list — the
+  // analysis of a whole workspace (~10s) must not sit in front of Vitest,
+  // least of all for a launcher the browser supervisor holds to a deadline.
   const verdicts = new Map();
-  for (const test of candidates) verdicts.set(test, analyze(test, memoDir ? readRecord(memoDir, scope, test) : null));
+  if (memoDir || mode === 'related') {
+    for (const test of candidates) verdicts.set(test, analyze(test, memoDir ? readRecord(memoDir, scope, test) : null));
+  }
 
   const selected = mode === 'related'
     ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
@@ -82,13 +88,13 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const run = [];
   for (const test of slice) {
     const info = verdicts.get(test);
-    const via = !memoDir ? null
+    const via = !memoDir || !info ? null
       : info.recorded?.memoizable && readEntry(memoDir, info.recorded.key, { test, workspace: scope }) ? 'recorded'
         : info.floor.memoizable && readEntry(memoDir, info.floor.key, { test, workspace: scope }) ? 'floor'
           : null;
     if (via) { skipped.push({ test, via }); continue; }
     run.push(test);
-    if (!info.floor.memoizable) reasons.set(test, info.recorded?.memoizable ? 'no green entry yet (recorded key)' : info.recorded?.reason ?? info.floor.reason);
+    if (info && !info.floor.memoizable) reasons.set(test, info.recorded?.memoizable ? 'no green entry yet (recorded key)' : info.recorded?.reason ?? info.floor.reason);
   }
   return { selected, slice, run, skipped, reasons, analyze, freshAnalyze, verdicts };
 }

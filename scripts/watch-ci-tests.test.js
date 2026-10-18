@@ -51,6 +51,10 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
         catch (error) { console.error('Synthetic supervisor failed closed: ' + error.message); process.exitCode = 1; }
       `], { encoding: 'utf8', timeout: 10_000, env: { ...process.env,
         PATH: `${root}${delimiter}${process.env.PATH}`, PORTOS_CI_DIAGNOSTICS_DIR: reports,
+        // The supervised launcher is the real run-ci-tests.js: pin its plan so the
+        // job's own CI_TEST_MODE/CI_SHARD/memo settings cannot put planning work
+        // in front of the fake npm the deadlines below are sized for.
+        CI_TEST_MODE: 'full', CI_TEST_FILES: '[]', CI_TEST_SOURCES: '[]', CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
         GITHUB_STEP_SUMMARY: '', GITHUB_ENV: '', NODE_DISABLE_COMPILE_CACHE: '1' } });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(denied || orphan ? 1 : stalled ? 124 : status);
