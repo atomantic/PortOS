@@ -17,6 +17,7 @@ export async function getDatabaseResetPlan() {
   // Unsupported future declarations remain excluded and fail preflight closed.
   const functions = names(/CREATE OR REPLACE FUNCTION ([a-z_][a-z_0-9]*\((?:[a-z_][a-z_0-9]* TEXT)?\))/g)
     .map(signature => `public.${signature.replace(/\([a-z_][a-z_0-9]* TEXT\)/, '(text)')}`);
+  const views = names(/CREATE OR REPLACE VIEW ([a-z_][a-z_0-9]*)/g);
   const sequences = names(/CREATE SEQUENCE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
   const literals = values => values.map(value => `'${value}'`).join(', ');
   const preflight = `DO $portos_restore$
@@ -36,6 +37,7 @@ export async function getDatabaseResetPlan() {
         AND d.objid = c.oid AND d.deptype = 'e')
       AND (c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
         OR NOT ((c.relkind = 'r' AND c.relname IN (${literals(tables)}))
+          OR (c.relkind = 'v' AND c.relname IN (${literals(views)}))
           OR (c.relkind = 'S' AND (c.relname IN (${literals(sequences)}) OR EXISTS (
             SELECT 1 FROM pg_depend d JOIN pg_class t ON t.oid = d.refobjid
             WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
@@ -89,6 +91,7 @@ export async function getDatabaseResetPlan() {
   // remains the database-enforced backstop for every unanticipated dependency,
   // including changes between preflight and replay. Never use CASCADE here.
   const reset = `${preflight}
+    DROP VIEW IF EXISTS ${views.map(name => `public.${name}`).join(', ')} RESTRICT;
     DROP TABLE IF EXISTS ${tables.map(name => `public.${name}`).join(', ')} RESTRICT;
     DROP FUNCTION IF EXISTS ${functions.join(', ')} RESTRICT;
     DROP SEQUENCE IF EXISTS ${sequences.map(name => `public.${name}`).join(', ')} RESTRICT;

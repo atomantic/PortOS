@@ -13,14 +13,14 @@ export default function CatalogPlatesPanel({ plates, candidates, missingMedia, o
   const candidateList = Array.isArray(candidates) ? candidates : [];
 
   const setRole = async (m, role) => {
-    if (busyKey) return;
+    if (busyKey || !onSetRole || m.readOnly) return;
     setBusyKey(m.mediaKey);
     await onSetRole(m, role);
     setBusyKey(null);
   };
 
   const roleButton = (m, role, label, Icon) => (
-    <button type="button" onClick={() => setRole(m, role)} disabled={!!busyKey}
+    <button type="button" onClick={() => setRole(m, role)} disabled={!!busyKey || !onSetRole || m.readOnly}
       title={label} aria-label={label}
       className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-accent disabled:opacity-50">
       {busyKey === m.mediaKey

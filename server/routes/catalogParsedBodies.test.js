@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null), assertCatalogIdentityWritable: vi.fn(async id => id) }));
 /**
  * Route-boundary regression tests for Catalog write-body normalization.
  *

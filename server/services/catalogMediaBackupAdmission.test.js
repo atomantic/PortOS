@@ -1,3 +1,4 @@
+vi.mock('./catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null), assertCatalogIdentityWritable: vi.fn(async id => id) }));
 /**
  * Catalog media, voice-memo scraps and imported round reference audio against a
  * backup cut (#9982). Each writes its file first and then commits the row that

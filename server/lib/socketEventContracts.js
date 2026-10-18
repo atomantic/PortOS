@@ -404,6 +404,12 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Release readiness observation; the last subscriber stops the observer.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'catalog:identity-changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate matching catalog identity receipt and detail views after a durable local change.',
+    payloadSchema: { type: 'object', properties: { operationId: { type: 'string' }, sourceId: { type: 'string' }, survivorId: { type: 'string' } },
+      required: ['operationId', 'sourceId', 'survivorId'], additionalProperties: false },
+  },
   'code-animation:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change.',

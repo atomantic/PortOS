@@ -20,6 +20,7 @@ vi.mock('../lib/db.js', () => ({
     // the catalog_ingredients write the assertions read, and no-op the
     // revision INSERT / prune DELETE.
     const s = sql.trim();
+    if (s.includes('catalog_identity_operations')) return { rows: [] };
     if (/^INSERT INTO catalog_ingredient_revisions/i.test(s)) {
       const [id, ingredient_id, name] = params;
       return {

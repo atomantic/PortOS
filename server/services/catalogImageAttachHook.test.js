@@ -1,3 +1,4 @@
+vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the DB layer so the hook's attach/decision logic is exercised without a

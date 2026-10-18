@@ -11,6 +11,7 @@ import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
+import { catalogIdentityViewsDdl } from '../lib/db/schema/catalogIdentityViews.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
@@ -294,6 +295,10 @@ describe.skipIf(!ready)('restore older database schema', () => {
   it('refuses unknown functions and wrong overloads even when a shipped function is absent', async () => {
     // Missing signatures resolve to NULL: they must not admit an unrelated
     // function through nullable NOT IN comparisons during an older restore.
+    // Current identity read views depend on this resolver. Model an older
+    // install lacking both views and function; never CASCADE unknown objects.
+    const identityViews = catalogIdentityViewsDdl().map(sql => /^CREATE OR REPLACE VIEW ([a-z_]+)/.exec(sql)[1]);
+    await query(`DROP VIEW IF EXISTS ${identityViews.map(name => `public.${name}`).join(', ')} RESTRICT`);
     await query('DROP FUNCTION public.catalog_resolve_ingredient_id(text) RESTRICT');
     try {
       for (const signature of ['unexpected_restore_function()', 'catalog_resolve_ingredient_id(integer)']) {
@@ -315,6 +320,11 @@ describe.skipIf(!ready)('restore older database schema', () => {
   });
 
   it('preflights unknown objects and external dependencies without mutations, including preview', async () => {
+    await query('CREATE VIEW public.unexpected_restore_view AS SELECT 42 AS value');
+    try {
+      for (const dryRun of [true, false]) expect(await restore(dryRun)).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+      expect((await query('SELECT value FROM public.unexpected_restore_view')).rows).toEqual([{ value: 42 }]);
+    } finally { await query('DROP VIEW public.unexpected_restore_view RESTRICT'); }
     await query('CREATE TABLE public.unexpected_restore_record (id integer PRIMARY KEY)');
     await query('INSERT INTO public.unexpected_restore_record VALUES (42)');
     expect(await restore()).toMatchObject({ status: 'failed', reason: 'restore_preflight' });

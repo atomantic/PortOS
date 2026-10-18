@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAccess.js';
 /**
  * Image Generation Routes — works against the external SD API, local mflux,
  * or the Codex CLI built-in image_gen tool, depending on settings.imageGen.mode
@@ -480,6 +481,7 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
+  if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
     data,
     files: req.files,

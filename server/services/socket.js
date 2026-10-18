@@ -1,3 +1,4 @@
+import { catalogIdentityEvents } from './catalogIdentity/events.js';
 import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
 import { registerFleetHostSocket } from './fleetHostNotify.js';
@@ -315,6 +316,7 @@ const SIMPLE_BRIDGES = [
   // client ignores stragglers from a prior run.
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
+  { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
   { emitter: aiStatusEvents, event: 'status', channel: 'ai:status' },
   // The call-host tab already gets `voice:call:state` from its own socket
   // handler (server/sockets/voice.js); this fans it out to every OTHER tab.

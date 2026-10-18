@@ -1,3 +1,4 @@
+import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
 
@@ -57,7 +58,10 @@ import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
+import catalogIdentityRouter from './catalogIdentity.js';
+
 const router = Router();
+router.use('/identity', catalogIdentityRouter);
 
 router.get('/stats', asyncHandler(async (req, res) => {
   res.json(await catalogDB.getCatalogStats());
@@ -270,7 +274,7 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
 router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  const [refs, sources, relations, revisions, media, missingMedia] = await Promise.all([
+  const [refs, sources, relations, revisions, media, missingMedia, sharedIdentity] = await Promise.all([
     // Live refs only (#1812): the detail page's "Appears in" panel must not
     // render a chip deep-linking to a soft-deleted universe/series/CD target.
     // The orphan stays recoverable via the Catalog "Orphaned" album.
@@ -280,6 +284,7 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }),
     catalogDB.listMediaForIngredient(req.params.id),
     catalogDB.getMissingMediaForIngredient(req.params.id),
+    getCatalogIdentityAccess(req.params.id),
   ]);
   // "From the same source" (#7617): sibling ingredients extracted from each of
   // THIS ingredient's source scraps, batched in one query so the detail page
@@ -296,6 +301,7 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   const { embedding, ...rest } = ing;
   res.json({
     ingredient: includeEmbedding ? { ...rest, embedding } : rest,
+    sharedIdentity,
     refs,
     sources: sourcesWithSiblings,
     relations,                                 // { outbound, inbound }

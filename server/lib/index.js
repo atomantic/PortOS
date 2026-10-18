@@ -36,6 +36,7 @@ export * from './appleHealthPoints.js';
 export * as brainValidation from './brainValidation.js';
 export * from './brainThreads.js';
 export * from './humanActions.js';
+export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';

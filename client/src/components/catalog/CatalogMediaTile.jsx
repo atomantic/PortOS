@@ -50,7 +50,8 @@ export default function CatalogMediaTile({
           missing
         </span>
       )}
-      <div className="port-media-overlay absolute top-1 right-1 flex gap-1 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      {m.readOnly && <p className="text-xs text-gray-500 p-2 break-words">Read-only provenance · {m.ingredientId || 'retained media'}</p>}
+      {!m.readOnly && <div className="port-media-overlay absolute top-1 right-1 flex gap-1 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {extraActions}
         {!isPortrait && isImage && onSetPortrait && (
           <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait" aria-label="Set as portrait"
@@ -70,7 +71,7 @@ export default function CatalogMediaTile({
             <X size={12} aria-hidden="true" />
           </button>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }

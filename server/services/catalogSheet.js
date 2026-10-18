@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog reference sheets: a sheet for a catalog record without needing a
  * universe, plus environment (place) and product (object) sheet kinds.
@@ -183,6 +184,7 @@ export async function previewCatalogSheet(id, options = {}) {
 
 /** Queue a sheet render for a catalog record; returns `{ jobId, variant, delegatedTo }`. */
 export async function renderCatalogSheet(id, options = {}) {
+  await assertCatalogIdentityWritable(id);
   const target = await resolveSheetTarget(id, options);
   if (target.delegate) {
     const { universeId, entryId } = target.delegate;

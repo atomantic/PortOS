@@ -190,11 +190,14 @@ export async function applyRemoteChanges(envelope = {}) {
       let res;
       try {
         res = await upsertFn(item);
+        if (res?.identityPending) tally.identityPending = (tally.identityPending || 0) + 1;
         if (lww) {
           if (res.deferred) tally.deferred = (tally.deferred || 0) + 1;
           else if (!res.applied) tally.skipped++;
           else if (res.isInsert) tally.inserted++;
           else tally.updated++;
+        } else if (res?.protectedIdentity) {
+          tally.skipped = (tally.skipped || 0) + 1;
         } else {
           tally.applied++;
         }
@@ -203,7 +206,7 @@ export async function applyRemoteChanges(envelope = {}) {
         recordFailure(errLabel, idFor(item), err);
         continue;
       }
-      if (onApplied) {
+      if (onApplied && !res?.protectedIdentity) {
         try { await onApplied(item, res); }
         catch (err) { recordFailure(`${errLabel}-postapply`, idFor(item), err); }
       }

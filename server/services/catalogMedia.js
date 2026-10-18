@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 // Direct file-upload + voice-memo attachment for catalog ingredients.
 //
 // The existing `catalogIngestSources.ingestFromVoice` runs audio through the
@@ -114,11 +115,13 @@ export async function uploadIngredientMediaFile(
   { ingredientId, dataBase64, mimeType, filename = null, role = null, caption = null } = {},
   {
     getIngredientFn = getIngredient,
+    assertWritableFn = assertCatalogIdentityWritable,
     attachMediaFn = attachMedia,
     saveImageFn = saveUploadedGalleryImage,
     persistFileFn = persistLibraryFile,
   } = {},
 ) {
+  await assertWritableFn(ingredientId);
   await requireIngredient(getIngredientFn, ingredientId);
   const classified = classifyUploadMime(mimeType);
   if (!classified) {
@@ -158,11 +161,13 @@ export async function recordIngredientVoiceMemo(
   { ingredientId, audioBase64, mimeType = 'audio/wav', role = 'voice-memo' } = {},
   {
     getIngredientFn = getIngredient,
+    assertWritableFn = assertCatalogIdentityWritable,
     attachMediaFn = attachMedia,
     transcribeFn = transcribe,
     persistFileFn = persistLibraryFile,
   } = {},
 ) {
+  await assertWritableFn(ingredientId);
   await requireIngredient(getIngredientFn, ingredientId);
   const buffer = Buffer.from(audioBase64, 'base64');
   if (buffer.length === 0) throw new ServerError('Voice memo audio was empty', { status: 400, code: 'VALIDATION_ERROR' });

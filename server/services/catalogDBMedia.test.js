@@ -20,6 +20,7 @@ const calls = [];
 
 vi.mock('../lib/db.js', () => ({
   query: vi.fn(async (sql, params) => {
+    if (sql.includes('catalog_identity_operations') || sql.includes('set_config(')) return { rows: [] };
     calls.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
     // Echo a media row back so rowToMedia works for the RETURNING * paths.
     return {
@@ -195,7 +196,7 @@ describe('listIngredients card thumbnail', () => {
     const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
     // The correlated subquery prefers a live portrait, then the most recent
     // live reference, and excludes unrenderable (audio/video/document) kinds.
-    expect(sql).toMatch(/FROM catalog_ingredient_media m/i);
+    expect(sql).toMatch(/FROM catalog_identity_read_media m/i);
     expect(sql).toMatch(/m\.kind IN \('portrait', 'reference'\)/i);
     expect(sql).toMatch(/ORDER BY \(m\.kind = 'portrait'\) DESC, m\.created_at DESC/i);
     expect(sql).toMatch(/AS thumbnail_key/i);

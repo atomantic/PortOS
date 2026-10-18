@@ -1,3 +1,4 @@
+import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 /**
  * One-time boot reconciliation: collapse any pre-existing divergence between an
  * embedded universe-canon entry and its `catalog_ingredients` row.
@@ -91,6 +92,7 @@ export async function reconcileCanonCatalog({ force = false } = {}) {
         if (!ingredientId || !entry?.id) continue;          // entries without ingredientId untouched
         totals.scanned++;
         try {
+          if (await getCatalogIdentityAccess(ingredientId)) continue; // retained contextual snapshot
           const row = await catalogDB.getIngredient(ingredientId);
           if (!row) continue;                               // dangling backlink — leave both sides alone
           const entryAt = Date.parse(entry.updatedAt || '') || 0;
