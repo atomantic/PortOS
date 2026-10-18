@@ -449,13 +449,14 @@ const TASK_INTERVAL_DEFAULTS = {
 
 // Every catalog audit is displayed as a `better-*` quality task. Give all of
 // them the current issue inventory by default so they can avoid filing work
-// that is already tracked, and the lane's recent slices so runs rotate
-// coverage (#12090). Preserve other configured inputs such as PRs.
+// that is already tracked, the lane's recent slices so runs rotate coverage
+// (#12090), and the lane's health record so a rejected or reverted finding is
+// not re-filed (#12088). Preserve other configured inputs such as PRs.
 export const DEFAULT_TASK_INTERVALS = Object.fromEntries(
   Object.entries(TASK_INTERVAL_DEFAULTS).map(([taskType, interval]) => [
     taskType,
     isAuditTaskType(taskType)
-      ? { ...interval, dataInputs: [...new Set([...(interval.dataInputs || []), 'open-issues', 'audit-slice-history'])] }
+      ? { ...interval, dataInputs: [...new Set([...(interval.dataInputs || []), 'open-issues', 'audit-slice-history', 'lane-health'])] }
       : interval
   ])
 );

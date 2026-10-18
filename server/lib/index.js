@@ -788,6 +788,7 @@ export * from './kilo.js';
 export * from './openchamber.js';
 
 export * from './layaMlx.js';
+export * from './laneHealth.js';
 export * from './layeredIntelligenceSources.js';
 export * from './layeredIntelligenceSourceKeys.js';
 

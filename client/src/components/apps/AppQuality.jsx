@@ -1,5 +1,6 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
+import AppLaneHealth from './AppLaneHealth';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
 import { useId, useState } from 'react';
 import { CalendarClock, Play } from 'lucide-react';
@@ -181,6 +182,7 @@ export default function AppQuality({ app, detail = false }) {
           </section>
         )}
       </div>
+      <AppLaneHealth appId={app.id} />
       <Drawer open={!!panel} onClose={() => setPanel(null)} title={PANELS[panel]} size="md" closeLabel="Close"
         // The schedule form holds an unapplied plan; a stray Esc/backdrop click would discard it.
         closeOnEsc={panel !== 'schedule'} closeOnBackdrop={panel !== 'schedule'}>
