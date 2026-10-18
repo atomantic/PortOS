@@ -360,6 +360,9 @@ export const ALWAYS_RUN_TESTS = [
   'server/services/orphanedPartialGc.test.js',
   'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
+  // Base-relative retired history guard: JSON edits have no import edge here.
+  // Pregate and CI forward the planner's exact CI_BASE_SHA.
+  'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
   'server/routeValidationConventions.test.js',
   'server/timerCallbackConventions.test.js',
 ];
