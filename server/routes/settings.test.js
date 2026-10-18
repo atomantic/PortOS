@@ -1529,6 +1529,7 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
         timezone: 'UTC',
       });
       expect(emitted).toHaveBeenCalledTimes(3);
+      await actual.flushSettingsLedger();
       const { recordUserAction } = await import('../services/userActions.js');
       expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({ type: 'settings.update', actor: 'user' }));
     } finally {

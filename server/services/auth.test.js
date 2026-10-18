@@ -389,6 +389,28 @@ describe('auth service', () => {
     expect(raw).toContain('tokenHash');
   });
 
+  it('revokes old sessions when a step after the hash write fails (#12018)', async () => {
+    const auth = await import('./auth.js');
+    const { settingsEvents, readSettingsStrict } = await import('./settings.js');
+    const first = await auth.setPassword({ newPassword: 'correct-horse' });
+    const before = (await readSettingsStrict()).settings.secrets.auth.passwordHash;
+    // settings:updated fires after settings.json is replaced; a listener that
+    // throws is the post-write failure (the ledger used to be another).
+    const explode = () => { throw new Error('post-write listener failed'); };
+    settingsEvents.on('settings:updated', explode);
+    try {
+      await expect(auth.setPassword({ newPassword: 'second-attempt', currentPassword: 'correct-horse' }))
+        .rejects.toThrow('post-write listener failed');
+    } finally {
+      settingsEvents.off('settings:updated', explode);
+    }
+    // The hash changed on disk, so the session minted under the old password
+    // must be gone even though the call reported failure.
+    expect((await readSettingsStrict()).settings.secrets.auth.passwordHash).not.toBe(before);
+    expect(await auth.verifySession(first.token)).toBe(false);
+    expect(await auth.verifyPassword('second-attempt')).toBe(true);
+  });
+
   it('emits sessions:revoked-all on every auth-state change so the socket layer can kick connections', async () => {
     vi.useFakeTimers();
     const auth = await import('./auth.js');
