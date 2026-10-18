@@ -1521,17 +1521,18 @@ export async function init() {
 
   // When an agent completes, refill perpetual work then dequeue the next task
   cosEvents.on('agent:completed', (agent) => {
-    // Refill the perpetual backlog FIRST, THEN dequeue — in one async task so the
-    // generic dequeue can't fill the just-freed slot with idle-review work ahead
-    // of the perpetual re-queue. Perpetual schedules (e.g. claim-issue) drain
-    // back-to-back: regenerate the next eligible task now instead of waiting for
-    // the ~hourly improvement check (dequeueNextTask only spawns ALREADY-queued
-    // work, so on its own a perpetual backlog stalls between ticks). The refill
-    // early-returns fast for non-perpetual or failed completions, so for those
-    // this stays a thin wrapper around the dequeue. Both steps are .catch-guarded
-    // because this runs outside the request lifecycle.
+    // Settle deterministic cleanup even for one-shot/failed runs. Then refill
+    // before dequeue so unrelated idle work cannot take the newly freed slot.
+    // Each phase owns its rejection because this is an event boundary.
     setImmediate(() => {
-      refillPerpetualForCompletedAgent(agent)
+      Promise.resolve()
+        .then(async () => {
+          if (agentScheduledType(agent) !== 'branch-reconcile') return;
+          const { settleBranchReconcileRun } = await import('./branchReconcileCompletion.js');
+          await settleBranchReconcileRun(agent);
+        })
+        .catch(err => console.error(`❌ Branch reconciliation completion failed: ${err.message}`))
+        .then(() => refillPerpetualForCompletedAgent(agent))
         .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
         // Same window as the refill above: this runs before the completing
         // task's `updateTask` settles it, so the idle tier's generator must

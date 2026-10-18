@@ -2005,7 +2005,7 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('SUPERSEDED');
     expect(instruction).toContain('still needed');
     expect(instruction).toMatch(/[\\/]repo[\\/]data[\\/]cos[\\/]branch-reconcile-verdicts\.json/);
-    expect(instruction).toContain('immediately-following drain pass');
+    expect(instruction).toContain('without waiting for another scheduled run');
     expect(instruction).toContain('ledger inside the abandoned worktree is invisible');
     // Ordering: the gate precedes any instruction to commit/rebase/resolve.
     const gateAt = instruction.indexOf('still needed');
