@@ -59,6 +59,7 @@ vi.mock('./history.js', () => ({
   mutateVideoHistory: async (mutate) => { mocks.history = mutate(mocks.history); },
 }));
 
+import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 import { videoGenEvents } from './events.js';
 import { videoJobState } from './jobState.js';
 import { spawnAndWatchVideo } from './spawnWatch.js';
@@ -141,10 +142,9 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
       return failed.mock.calls[0][0].error;
     };
     const asAppleSilicon = () => {
-      const orig = [Object.getOwnPropertyDescriptor(process, 'platform'), Object.getOwnPropertyDescriptor(process, 'arch')];
-      Object.defineProperty(process, 'platform', { value: 'darwin' });
-      Object.defineProperty(process, 'arch', { value: 'arm64' });
-      return () => { Object.defineProperty(process, 'platform', orig[0]); Object.defineProperty(process, 'arch', orig[1]); };
+      const restorePlatform = pinPlatform('darwin');
+      const restoreArch = pinArch('arm64');
+      return () => { restoreArch(); restorePlatform(); };
     };
 
     it('classifies from a final unterminated stderr line and arms no relaunch', async () => {
