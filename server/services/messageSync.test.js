@@ -40,11 +40,12 @@ vi.mock('./messageAccounts.js', () => ({
 }));
 
 const gmailApi = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
-vi.mock('@googleapis/gmail', () => ({
-  gmail: () => ({ users: {
-    messages: gmailApi,
-    settings: { sendAs: { list: async () => ({ data: { sendAs: [] } }) } },
-  } }),
+vi.mock('./gmailApi.js', () => ({
+  createGmailApi: () => ({
+    listMessages: gmailApi.list,
+    getMessage: gmailApi.get,
+    listSendAs: async () => ({ sendAs: [] }),
+  }),
 }));
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 
@@ -1130,10 +1131,10 @@ describe('full inbox coverage contract', () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Example inbox', email: 'owner@example.com', type: 'gmail', enabled: true });
     syncGmail.mockImplementation((await vi.importActual('./messageGmailSync.js')).syncGmail);
     gmailApi.list.mockImplementation(async ({ q }) => ({
-      data: { messages: q === 'in:inbox' ? [{ id: 'a' }, { id: 'b' }] : [] },
+      messages: q === 'in:inbox' ? [{ id: 'a' }, { id: 'b' }] : [],
     }));
-    gmailApi.get.mockImplementation(async ({ id }) => ({
-      data: { id, labelIds: ['INBOX'], payload: { headers: [] } },
+    gmailApi.get.mockImplementation(async (id) => ({
+      id, labelIds: ['INBOX'], payload: { headers: [] },
     }));
   });
 
@@ -1148,14 +1149,14 @@ describe('full inbox coverage contract', () => {
     gmailApi.list.mockImplementation(async ({ q, pageToken, maxResults }) => {
       const start = Number(pageToken || 0);
       const end = Math.min(start + maxResults, count);
-      return { data: q === 'in:inbox' ? {
+      return q === 'in:inbox' ? {
         messages: Array.from({ length: end - start }, (_, i) => ({ id: `synthetic-${start + i}` })),
         ...(end < count ? { nextPageToken: String(end) } : {}),
-      } : {} };
+      } : {};
     });
-    gmailApi.get.mockImplementation(async ({ id }) => ({ data: {
+    gmailApi.get.mockImplementation(async (id) => ({
       id, labelIds: ['INBOX'], payload: { headers: [], mimeType: 'text/plain', body: { data: Buffer.from(body).toString('base64url') } },
-    } }));
+    }));
 
     expect(await syncAccount(VALID_UUID, io, { mode: 'full' })).toMatchObject({ newMessages: count });
     expect(io.emit).toHaveBeenCalledWith('messages:sync:completed', expect.objectContaining({ newMessages: count }));
@@ -1165,7 +1166,7 @@ describe('full inbox coverage contract', () => {
 
   it('preserves identity and evaluation through failure and retry, then reconciles complete snapshots', async () => {
     gmailApi.get.mockImplementationOnce(async () => ({
-      data: { id: 'a', labelIds: ['INBOX', 'UNREAD'], payload: { headers: [] } },
+      id: 'a', labelIds: ['INBOX', 'UNREAD'], payload: { headers: [] },
     })).mockRejectedValueOnce(new Error('temporary detail failure'));
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages).toHaveLength(3);
@@ -1174,21 +1175,21 @@ describe('full inbox coverage contract', () => {
     expect(markSentIngested).toHaveBeenLastCalledWith(VALID_UUID, expect.objectContaining({ partial: true }));
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages[1]).toMatchObject({ id: 'local-b', evaluation: { priority: 'high' } });
-    gmailApi.list.mockResolvedValue({ data: { messages: [{ id: 'b' }] } });
+    gmailApi.list.mockResolvedValue({ messages: [{ id: 'b' }] });
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages.map(m => m.id)).toEqual(['local-b', 'local-only']);
-    gmailApi.list.mockResolvedValue({ data: {} });
+    gmailApi.list.mockResolvedValue({});
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages).toEqual([{ id: 'local-only' }]);
   });
 
   it('retains unseen mail when the Gmail inbox reaches its cap', async () => {
-    gmailApi.list.mockImplementation(async ({ q, maxResults, pageToken }) => ({
-      data: q === 'in:inbox' ? {
+    gmailApi.list.mockImplementation(async ({ q, maxResults, pageToken }) => (
+      q === 'in:inbox' ? {
         messages: Array.from({ length: maxResults }, (_, i) => ({ id: 'new-' + (Number(pageToken || 0) + i) })),
         nextPageToken: String(Number(pageToken || 0) + maxResults),
-      } : {},
-    }));
+      } : {}
+    ));
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages.find(m => m.id === 'local-b')).toMatchObject({ evaluation: { priority: 'high' } });
     expect(saved.messages).toHaveLength(203);
@@ -1213,10 +1214,10 @@ describe('full inbox coverage contract', () => {
   });
 
   it('does not certify malformed details or listings', async () => {
-    gmailApi.get.mockResolvedValue({ data: {} });
+    gmailApi.get.mockResolvedValue({});
     await syncAccount(VALID_UUID, null, { mode: 'full' });
     expect(saved.messages).toHaveLength(3);
-    gmailApi.list.mockResolvedValue({ data: { messages: 'invalid' } });
+    gmailApi.list.mockResolvedValue({ messages: 'invalid' });
     expect(await syncAccount(VALID_UUID, null, { mode: 'full' })).toMatchObject({ status: 502 });
     expect(saved.messages).toHaveLength(3);
   });

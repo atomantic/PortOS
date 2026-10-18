@@ -4,10 +4,10 @@
  */
 
 import { messageLogError } from '../lib/messageLogError.js';
-import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
-import { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
+import { getAuthenticatedClient } from './googleAuth.js';
+import { createGmailApi } from './gmailApi.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -27,12 +27,12 @@ function makeExternalId(gmailId) {
  * is normally itself a `sendAs` entry, so a healthy account returns at least `[primary]`.
  */
 export async function fetchSendAsAliases(gmailClient) {
-  const res = await gmailClient.users.settings.sendAs.list({ userId: 'me' }).catch((err) => {
+  const res = await gmailClient.listSendAs().catch((err) => {
     console.warn(`📧 Gmail send-as alias fetch failed: ${messageLogError(err)}`);
     return null;
   });
   if (!res) return null; // sentinel: fetch failed — do not clobber the stored aliases
-  const list = res?.data?.sendAs || [];
+  const list = res?.sendAs || [];
   return list.map((a) => String(a?.sendAsEmail || '').trim().toLowerCase()).filter(Boolean);
 }
 
@@ -236,7 +236,7 @@ export async function syncGmail(account, cache, io, options = {}) {
     return { messages: [], status: 'not-configured' };
   }
 
-  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
+  const gmailClient = createGmailApi(auth);
   // Refresh the owner's send-as aliases opportunistically each sync (#2831) — one cheap
   // settings call. Returned up to syncAccount so the activity timeline can exclude every
   // owner address, not just the primary, from received-message participants. `null` on
@@ -257,13 +257,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   const { items: messageIds, truncated } = await collectMessageIds(
     passes,
     async ({ q, maxResults, pageToken }) => {
-      const listResult = await gmailClient.users.messages.list({
-        userId: 'me',
-        q,
-        maxResults,
-        ...(pageToken && { pageToken }),
-      });
-      const data = listResult.data;
+      const data = await gmailClient.listMessages({ q, maxResults, pageToken });
       // Gmail omits messages for an empty inbox, but a missing/malformed body
       // cannot prove that the inbox is empty.
       if (!data || typeof data !== 'object' || Array.isArray(data)
@@ -300,17 +294,17 @@ export async function syncGmail(account, cache, io, options = {}) {
 
     const batch = messageIds.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map(({ id: gmailId }) =>
-      gmailClient.users.messages.get({ userId: 'me', id: gmailId, format: 'full' })
+      gmailClient.getMessage(gmailId, { format: 'full' })
         .catch(err => { console.warn(`📧 Gmail: failed to fetch message detail: ${messageLogError(err)}`); return null; })
     ));
 
     for (let j = 0; j < results.length; j++) {
-      if (!results[j]?.data || results[j].data.id !== batch[j].id
-        || !Array.isArray(results[j].data.labelIds) || !results[j].data.payload) {
+      if (!results[j] || results[j].id !== batch[j].id
+        || !Array.isArray(results[j].labelIds) || !results[j].payload) {
         detailFetchFailures++;
         continue;
       }
-      const data = results[j].data;
+      const data = results[j];
       const { id: gmailId, threadId: gmailThreadId } = batch[j];
       const headers = data.payload?.headers || [];
       const from = parseSender(getHeader(headers, 'From'));
@@ -416,11 +410,11 @@ export async function prepareGmailReply(account, draft, original) {
   }
   const auth = await getAuthenticatedClient();
   if (!auth) return replyRefusal('GMAIL_NOT_CONFIGURED', 'Google OAuth is not configured. Connect Google before sending this reply.', 502);
-  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
-  const metadata = await gmailClient.users.messages.get({
-    userId: 'me', id: original.apiId, format: 'metadata',
+  const gmailClient = createGmailApi(auth);
+  const metadata = await gmailClient.getMessage(original.apiId, {
+    format: 'metadata',
     metadataHeaders: ['Message-ID', 'References', 'In-Reply-To', 'Subject']
-  }, { timeout: 10_000, retry: false }).then(res => res.data, () => null);
+  }, { timeout: 10_000, retry: false }).catch(() => null);
   if (!metadata || metadata.id !== original.apiId || !metadata.threadId
     || (original.conversationId && metadata.threadId !== original.conversationId)) {
     return replyRefusal('GMAIL_REPLY_METADATA_UNAVAILABLE', 'Gmail could not verify the original message and conversation. Sync the account or reconnect Google, then try again.', 502);
@@ -487,7 +481,7 @@ export async function sendGmail(account, draft, delivery = null) {
     return { success: false, error: 'Google sign-in could not be refreshed — nothing was sent', status: 502, code: 'GMAIL_AUTH_FAILED' };
   }
 
-  const gmailClient = gmail({ version: 'v1', auth, timeout: GOOGLE_API_TIMEOUT_MS });
+  const gmailClient = createGmailApi(auth);
 
   // Build RFC 2822 message
   const toLine = Array.isArray(draft.to) ? draft.to.join(', ') : draft.to;
@@ -511,10 +505,10 @@ export async function sendGmail(account, draft, delivery = null) {
 
   // `retry: false`: the client must never resubmit a send on its own — a retry
   // after a lost acknowledgement is a duplicate message.
-  const sendError = await gmailClient.users.messages.send({
-    userId: 'me',
-    requestBody: { raw, ...(draft.replyToMessageId ? { threadId: delivery.threadId } : {}) }
-  }, { retry: false }).then(() => null, err => err);
+  const sendError = await gmailClient.sendMessage(
+    { raw, ...(draft.replyToMessageId ? { threadId: delivery.threadId } : {}) },
+    { retry: false }
+  ).then(() => null, err => err);
 
   if (sendError) {
     if (isDefinitiveRefusal(sendError.response?.status)) {

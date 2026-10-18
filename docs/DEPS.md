@@ -28,7 +28,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
-| `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
+| `@googleapis/gmail` | — | REPLACED | Messages/Gmail integration | Issue #12219 → `server/services/gmailApi.js`, a six-operation adapter over the `@googleapis/calendar` OAuth client's `request()` (fixed Gmail v1 origin; auth, refresh and transport stay upstream). Calendar still retains `googleapis-common`, Google auth and their transport dependencies, so this trims a direct dependency and its update churn, not that transitive supply chain |
 | `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
@@ -150,7 +150,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier 2/3 and become replacement candidates regardless of popularity:
 
-- `@googleapis/calendar` / `@googleapis/gmail` — narrow surface used; could be replaced with direct REST calls + owned auth.
+- `@googleapis/calendar` — narrow surface used; could be replaced with direct REST calls + owned auth (Gmail already is, via `gmailApi.js`).
 - Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts` deps would be re-evaluated.
 - `pm2` would NOT be replaced (foundational process manager).
 
