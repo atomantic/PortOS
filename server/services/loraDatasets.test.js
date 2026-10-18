@@ -369,11 +369,19 @@ describe('importGalleryImages', () => {
       .rejects.toMatchObject({ status: 404 });
   });
 
-  it('rejects path-traversal filenames before touching disk', async () => {
-    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
-    await expect(importGalleryImages(dataset.id, { filenames: ['../../etc/passwd.png'] }))
-      .rejects.toBeTruthy();
-  });
+  it.each(['../../etc/passwd.png', 'nested/dir/photo.png'])(
+    'rejects unsafe gallery filenames: %s',
+    async (filename) => {
+      const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+      await expect(importGalleryImages(dataset.id, { filenames: [filename] }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+
+      const after = await getDataset(dataset.id);
+      expect(after.images).toHaveLength(0);
+      const imagesDir = join(TEST_DATA_ROOT, 'lora-datasets', dataset.id, 'images');
+      expect(existsSync(imagesDir) ? readdirSync(imagesDir) : []).toEqual([]);
+    },
+  );
 
   it('400s on an empty filename list', async () => {
     const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
