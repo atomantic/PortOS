@@ -72,6 +72,11 @@ jobs:
           # ls-files` need. Cloning every commit in the repo buys nothing more.
           fetch-depth: 2
 
+      # A red impact job keeps CI Gate red; skipped test jobs are not evidence.
+      # Re-running this run is GitHub's writer-only, exact-SHA release control.
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
+
       # Reads the base commit off HEAD^1 rather than the event payload, so a
       # depth-2 clone is enough for every three-dot diff downstream. Exports
       # CI_BASE_SHA to the rest of the job.
