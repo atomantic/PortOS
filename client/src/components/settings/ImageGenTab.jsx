@@ -6,7 +6,7 @@
  * lives in the always-visible Codex CLI Imagegen section.
  */
 
-import { useState, useEffect, useCallback, useId, useRef } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
   Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal, Bot, FlaskConical
@@ -23,7 +23,7 @@ import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 import {
-  getSettings, updateSettings, getImageGenStatus, getVideoGenModelContext, generateImage,
+  getSettings, patchSettingsSlice, getImageGenStatus, getVideoGenModelContext, generateImage,
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
   getCredentialInventory, saveCredential, getProviders,
@@ -84,6 +84,66 @@ export const MEDIA_TABS = [
 ];
 const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
 
+// Per-surface render defaults (#3231). Entries with no effective pin are
+// dropped so settings.json doesn't accumulate `{ imageMode: 'auto' }` no-ops
+// for every surface the user merely glanced at.
+const pruneRenderDefaults = (rd) => Object.fromEntries(
+  Object.entries(rd).filter(([, entry]) => entry && Object.values(entry).some(
+    (v) => typeof v === 'string' && v.trim() && v !== RENDER_TARGET_BACKEND_AUTO,
+  )),
+);
+
+// Every settings field this drawer owns, grouped by the slice PATCH that
+// persists it (server: settingsSlicePartialSchemas). The server merges per
+// field inside the selected slice, so a save sends only the fields that
+// changed since load and never a snapshot of a sibling — a value VideoGen's
+// LocalSetupPanel patched after the drawer opened (`imageGen.local.pythonPath`)
+// or a hand-edited key the drawer never renders (`imageGen.local.steps`)
+// survives. Cleared strings travel as '' (every reader falls back on a blank);
+// the two pins readers coerce with `||` go as null so an un-pin needs no
+// sentinel string. `renderDefaults` merges per target, so a cleared surface
+// is an explicit null.
+const sliceFieldsOf = (f) => ({
+  imageGen: { mode: f.mode, sdapiUrl: f.sdapiUrl },
+  'imageGen.external': { sdapiUrl: f.sdapiUrl, cleanC2PA: f.cleanC2PAByMode.external, denoise: f.denoiseByMode.external },
+  'imageGen.local': {
+    pythonPath: f.pythonPath || null,
+    modelId: f.localModelId || null,
+    cleanC2PA: f.cleanC2PAByMode.local,
+    denoise: f.denoiseByMode.local,
+  },
+  'imageGen.codex': {
+    enabled: f.codexEnabled, codexPath: f.codexPath, model: f.codexModel, effort: f.codexEffort,
+    parallelLimit: f.codexParallelLimit, cleanC2PA: f.cleanC2PAByMode.codex, denoise: f.denoiseByMode.codex,
+  },
+  'imageGen.grok': {
+    enabled: f.grokEnabled, grokPath: f.grokPath, aspectRatio: f.grokAspectRatio,
+    cleanC2PA: f.cleanC2PAByMode.grok, denoise: f.denoiseByMode.grok,
+  },
+  'imageGen.agy': {
+    enabled: f.agyEnabled, agyPath: f.agyPath, model: f.agyModel,
+    cleanC2PA: f.cleanC2PAByMode.agy, denoise: f.denoiseByMode.agy,
+  },
+  'imageGen.fal': {
+    enabled: f.falEnabled, model: falImageFamily(f.falModel) ? f.falModel : '',
+    cleanC2PA: f.cleanC2PAByMode.fal, denoise: f.denoiseByMode.fal,
+  },
+  'imageGen.expose': { a1111: f.exposeA1111 },
+  renderDefaults: Object.fromEntries(RENDER_TARGET_OPTIONS.map(({ id }) => [id, f.renderDefaults[id] ?? null])),
+  videoGen: { mode: f.videoGenMode || null, defaultModelId: f.localVideoModelId || null, displaySleep: f.videoGenDisplaySleep },
+});
+
+// `[slicePath, partial]` pairs that move the persisted fields from `previous`
+// to `next`; a slice with no changed field is not sent at all.
+const diffSlicePatches = (next, previous) => {
+  const before = sliceFieldsOf(previous);
+  return Object.entries(sliceFieldsOf(next)).flatMap(([slicePath, fields]) => {
+    const changed = Object.entries(fields)
+      .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[slicePath][key]));
+    return changed.length ? [[slicePath, Object.fromEntries(changed)]] : [];
+  });
+};
+
 export function ImageGenTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -111,18 +171,9 @@ export function ImageGenTab() {
   // Only pinned entries are kept; an absent target means "auto".
   const [renderDefaults, setRenderDefaults] = useState({});
   // Install-wide video backend pin (`settings.videoGen.mode`, #3231 Phase 4).
-  // '' = no pin (local). The full loaded `videoGen` slice is kept in a ref —
-  // never rendered, only round-tripped at save time so sibling keys
-  // (defaultModelId) survive the settings PUT's wholesale slice replace.
+  // '' = no pin (local).
   const [videoGenMode, setVideoGenMode] = useState('');
   const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(false);
-  const videoGenSliceRef = useRef({});
-  // Same round-trip guard as videoGenSliceRef, for the same reason: the PUT
-  // replaces `imageGen` wholesale, and `imageGen.local` carries hand-edit-only
-  // keys this tab never renders — steps / guidance / quantize, read by
-  // fableLoom/production.js. Rebuilding the slice from the rendered fields
-  // alone silently wiped them on every Media save.
-  const localSliceRef = useRef({});
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
   // Install-wide default local image model (`settings.imageGen.local.modelId`).
@@ -250,7 +301,7 @@ export function ImageGenTab() {
     falEnabled: false, falModel: '',
     cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false },
     denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false },
-    renderDefaultsJson: '{}',
+    renderDefaults: {},
     videoGenMode: '',
     localVideoModelId: '',
     videoGenDisplaySleep: false,
@@ -363,12 +414,11 @@ export function ImageGenTab() {
     Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
       .then(([s, tools]) => {
         const ig = s?.imageGen || {};
-        // Round-trip the FULL renderDefaults object (including videoModel keys
-        // this tab doesn't edit) — the server replaces the top-level slice
-        // wholesale on save, so dropping unedited keys here would erase them.
+        // Load every target entry whole (including videoModel keys this tab
+        // doesn't edit) — an entry is saved as one unit when it changes.
         const rd = (s?.renderDefaults && typeof s.renderDefaults === 'object') ? s.renderDefaults : {};
-        // Video pin: keep the whole slice for round-trip; normalize the mode
-        // ('auto'/blank → '', i.e. no pin) for the select.
+        // Video pin: normalize the mode ('auto'/blank → '', i.e. no pin) for
+        // the select.
         const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
         const vgMode = normalizeRenderPinValue(vg.mode) || '';
         const vgModelId = vg.defaultModelId || '';
@@ -414,8 +464,6 @@ export function ImageGenTab() {
         setVideoGenMode(vgMode);
         setLocalVideoModelId(vgModelId);
         setVideoGenDisplaySleep(vgDisplaySleep);
-        localSliceRef.current = (ig.local && typeof ig.local === 'object') ? ig.local : {};
-        videoGenSliceRef.current = vg;
         setSdapiUrl(url);
         setPythonPath(py);
         setLocalModelId(localModel);
@@ -444,7 +492,7 @@ export function ImageGenTab() {
           agyEnabled: ayEnabled, agyPath: ayPath, agyModel: ayModel,
           falEnabled: flEnabled, falModel: flModel,
           cleanC2PAByMode: c2, denoiseByMode: dn,
-          renderDefaultsJson: JSON.stringify(rd),
+          renderDefaults: rd,
           videoGenMode: vgMode,
           localVideoModelId: vgModelId,
           videoGenDisplaySleep: vgDisplaySleep,
@@ -573,112 +621,78 @@ export function ImageGenTab() {
     || denoiseByMode.codex !== saved.denoiseByMode.codex
     || denoiseByMode.local !== saved.denoiseByMode.local
     || denoiseByMode.external !== saved.denoiseByMode.external
-    || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson
+    || JSON.stringify(renderDefaults) !== JSON.stringify(saved.renderDefaults)
     || videoGenMode !== saved.videoGenMode
     || localVideoModelId !== saved.localVideoModelId
     || videoGenDisplaySleep !== saved.videoGenDisplaySleep;
 
   const handleSave = async () => {
     setSaving(true);
-    const url = normalizeUrl(sdapiUrl) || undefined;
-    const cxPath = codexPath?.trim() || undefined;
-    const cxModel = codexModel?.trim() || undefined;
-    const cxEffort = codexEffort?.trim() || undefined;
-    const cxParallel = clampParallel(codexParallelLimit, parallelBounds);
-    const gkPath = grokPath?.trim() || undefined;
-    const gkRatio = grokAspectRatio?.trim() || undefined;
-    const ayPath = agyPath?.trim() || undefined;
-    const ayModel = agyModel?.trim() || undefined;
-    const patch = {
-      imageGen: {
-        mode,
-        external: { sdapiUrl: url, cleanC2PA: cleanC2PAByMode.external, denoise: denoiseByMode.external },
-        local: {
-          ...localSliceRef.current,
-          pythonPath: pythonPath || undefined,
-          // `undefined` drops the key so an un-pinned install keeps resolving
-          // through LOCAL_IMAGEGEN_DEFAULT_MODEL rather than persisting a ''
-          // that every `|| LOCAL_IMAGEGEN_DEFAULT_MODEL` read would have to
-          // keep coercing.
-          modelId: localModelId || undefined,
-          cleanC2PA: cleanC2PAByMode.local,
-          denoise: denoiseByMode.local,
-        },
-        codex: {
-          enabled: codexEnabled, codexPath: cxPath, model: cxModel, effort: cxEffort, parallelLimit: cxParallel,
-          cleanC2PA: cleanC2PAByMode.codex, denoise: denoiseByMode.codex,
-        },
-        grok: {
-          enabled: grokEnabled, grokPath: gkPath, aspectRatio: gkRatio,
-          cleanC2PA: cleanC2PAByMode.grok, denoise: denoiseByMode.grok,
-        },
-        agy: {
-          enabled: agyEnabled, agyPath: ayPath, model: ayModel,
-          cleanC2PA: cleanC2PAByMode.agy, denoise: denoiseByMode.agy,
-        },
-        fal: {
-          enabled: falEnabled, model: falImageFamily(falModel) ? falModel : undefined,
-          cleanC2PA: cleanC2PAByMode.fal, denoise: denoiseByMode.fal,
-        },
-        expose: { a1111: exposeA1111 },
-        // Keep the legacy field populated so anything still reading
-        // `imageGen.sdapiUrl` directly stays working.
-        sdapiUrl: url,
-      },
-      // Per-surface render defaults (#3231). Entries with no effective pin are
-      // dropped so settings.json doesn't accumulate `{ imageMode: 'auto' }`
-      // no-ops for every surface the user merely glanced at.
-      renderDefaults: Object.fromEntries(
-        Object.entries(renderDefaults).filter(([, entry]) => entry && Object.values(entry).some(
-          (v) => typeof v === 'string' && v.trim() && v !== RENDER_TARGET_BACKEND_AUTO,
-        )),
-      ),
-      // Install-wide video pin (#3231 Phase 4). Spread over the loaded slice so
-      // sibling keys (defaultModelId) survive the wholesale slice replace.
-      videoGen: {
-        ...videoGenSliceRef.current,
-        mode: videoGenMode || null,
-        defaultModelId: localVideoModelId || null,
-        displaySleep: videoGenDisplaySleep,
-      },
+    // What the server will hold after this save: the form, normalized the way
+    // the inputs are reflected back below (trimmed paths/models, clamped
+    // parallel limit, pruned render defaults).
+    const next = {
+      mode,
+      sdapiUrl: normalizeUrl(sdapiUrl),
+      pythonPath,
+      localModelId,
+      exposeA1111,
+      codexEnabled,
+      codexPath: codexPath?.trim() || '',
+      codexModel: codexModel?.trim() || '',
+      codexEffort: codexEffort?.trim() || '',
+      codexParallelLimit: clampParallel(codexParallelLimit, parallelBounds),
+      grokEnabled,
+      grokPath: grokPath?.trim() || '',
+      grokAspectRatio: grokAspectRatio?.trim() || '',
+      agyEnabled,
+      agyPath: agyPath?.trim() || '',
+      agyModel: agyModel?.trim() || '',
+      falEnabled,
+      falModel,
+      cleanC2PAByMode,
+      denoiseByMode,
+      renderDefaults: pruneRenderDefaults(renderDefaults),
+      videoGenMode,
+      localVideoModelId,
+      videoGenDisplaySleep,
     };
+    const url = next.sdapiUrl || undefined;
+    const cxPath = next.codexPath || undefined;
+    const cxModel = next.codexModel || undefined;
+    const cxEffort = next.codexEffort || undefined;
+    const cxParallel = next.codexParallelLimit;
+    const gkPath = next.grokPath || undefined;
+    const gkRatio = next.grokAspectRatio || undefined;
+    const ayPath = next.agyPath || undefined;
+    const ayModel = next.agyModel || undefined;
     try {
-      await updateSettings(patch, { silent: true });
-      // Store trimmed values to match what was persisted — otherwise
-      // trailing whitespace in the inputs leaves isDirty stuck true even
-      // after a successful save (state has " codex " but `saved` was
-      // updated with the trimmed "codex").
-      setSaved({
-        mode, sdapiUrl: url || '', pythonPath, localModelId, exposeA1111,
-        codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '', codexEffort: cxEffort || '',
-        codexParallelLimit: cxParallel,
-        grokEnabled, grokPath: gkPath || '', grokAspectRatio: gkRatio || '',
-        agyEnabled, agyPath: ayPath || '', agyModel: ayModel || '',
-        falEnabled, falModel,
-        cleanC2PAByMode, denoiseByMode,
-        renderDefaultsJson: JSON.stringify(patch.renderDefaults),
-        videoGenMode,
-        localVideoModelId,
-        videoGenDisplaySleep,
-      });
+      // One request per changed slice, in order, so the server's write queue
+      // merges each against the freshest persisted settings. A failure part
+      // way leaves `saved` untouched: the next save re-sends the same
+      // (idempotent) patches.
+      for (const [slicePath, partial] of diffSlicePatches(next, saved)) {
+        await patchSettingsSlice(slicePath, partial, { silent: true });
+      }
+      // `saved` holds the normalized values — otherwise trailing whitespace in
+      // the inputs leaves isDirty stuck true after a successful save.
+      setSaved(next);
       // Reflect the pruned no-op entries back into the editor state so the
       // dirty check compares like against like after a save.
-      setRenderDefaults(patch.renderDefaults);
-      videoGenSliceRef.current = patch.videoGen;
-      localSliceRef.current = patch.imageGen.local;
+      setRenderDefaults(next.renderDefaults);
       if (cxParallel !== codexParallelLimit) {
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
       }
       // Reflect the normalization back into the inputs so what the user
       // sees matches what was saved.
-      if (cxPath !== codexPath) setCodexPath(cxPath || '');
-      if (cxModel !== codexModel) setCodexModel(cxModel || '');
-      if (cxEffort !== codexEffort) setCodexEffort(cxEffort || '');
-      if (gkPath !== grokPath) setGrokPath(gkPath || '');
-      if (gkRatio !== grokAspectRatio) setGrokAspectRatio(gkRatio || '');
-      if (ayPath !== agyPath) setAgyPath(ayPath || '');
-      if (ayModel !== agyModel) setAgyModel(ayModel || '');
+      if (next.codexPath !== codexPath) setCodexPath(next.codexPath);
+      if (next.codexModel !== codexModel) setCodexModel(next.codexModel);
+      if (next.codexEffort !== codexEffort) setCodexEffort(next.codexEffort);
+      if (next.grokPath !== grokPath) setGrokPath(next.grokPath);
+      if (next.grokAspectRatio !== grokAspectRatio) setGrokAspectRatio(next.grokAspectRatio);
+      if (next.agyPath !== agyPath) setAgyPath(next.agyPath);
+      if (next.agyModel !== agyModel) setAgyModel(next.agyModel);
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
