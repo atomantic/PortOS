@@ -14,6 +14,8 @@ import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { removeByMetadata } from './notifications.js';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 vi.mock('./prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
 import { persistPrWatcherState } from './prWatcher.js';
@@ -396,6 +398,101 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     const second = await getUserTasks();
     expect(mock.parseCalls).toBe(1); // no re-parse — the file did not move
     expect(second.tasks).toEqual(first.tasks);
+  });
+
+  it('coalesces concurrent task views after cold and externally changed files', async () => {
+    await addTask({ description: 'user task' }, 'user');
+    await addTask({ description: 'internal task' }, 'internal');
+    __resetTaskCache();
+    mock.parseCalls = 0;
+    vi.mocked(readFile).mockClear();
+
+    const views = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
+    expect(mock.parseCalls).toBe(2);
+    expect(readFile).toHaveBeenCalledTimes(2);
+    views[0].user.tasks[0].description = 'caller mutation';
+    expect(views[1].user.tasks[0].description).toBe('user task');
+
+    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('user task', 'edited task'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+    const changed = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
+    expect(mock.parseCalls).toBe(3);
+    expect(readFile).toHaveBeenCalledTimes(3);
+    expect(changed.every(view => view.user.tasks[0].description === 'edited task')).toBe(true);
+  });
+
+  it('retries shared read failures on the next task view request', async () => {
+    await addTask({ description: 'readable again' }, 'user');
+    __resetTaskCache();
+    vi.mocked(readFile).mockClear().mockRejectedValueOnce(new Error('temporary read failure'));
+    const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => getUserTasks()));
+    expect(attempts.every(result => result.status === 'rejected' && result.reason.message === 'temporary read failure')).toBe(true);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect((await getUserTasks()).tasks[0].description).toBe('readable again');
+    expect(readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves an external edit when an update starts after an older read captured the file', async () => {
+    const created = await addTask({ description: 'original', metadata: { context: 'before edit' } }, 'user');
+    __resetTaskCache();
+    const oldContent = mock.files.get(USER_FILE);
+    const reading = Promise.withResolvers();
+    const finishRead = Promise.withResolvers();
+    vi.mocked(readFile).mockImplementationOnce(async () => {
+      reading.resolve();
+      await finishRead.promise;
+      return oldContent;
+    });
+    const olderRead = getUserTasks();
+    await reading.promise;
+    mock.files.set(USER_FILE, oldContent.replace('before edit', 'external edit'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+
+    const update = updateTask(created.id, { description: 'API edit' }, 'user');
+    // Releasing the old read must not make a newer update overwrite the editor.
+    finishRead.resolve();
+    expect((await olderRead).tasks[0].metadata.context).toBe('before edit');
+    expect((await update).metadata.context).toBe('external edit');
+    expect((await getUserTasks()).tasks[0]).toMatchObject({
+      description: 'API edit', metadata: { context: 'external edit' }
+    });
+  });
+
+  it('keeps a read overlapping a write from capturing or poisoning post-write readers', async () => {
+    const created = await addTask({ description: 'original' }, 'user');
+    await getUserTasks();
+    const originalContent = mock.files.get(USER_FILE);
+    const originalMtime = mock.mtimes.get(USER_FILE);
+    const writing = Promise.withResolvers();
+    const finishWrite = Promise.withResolvers();
+    const originalWrite = vi.mocked(atomicWrite).getMockImplementation();
+    vi.mocked(atomicWrite).mockImplementationOnce(async (...args) => {
+      writing.resolve();
+      await finishWrite.promise;
+      await originalWrite(...args);
+      // A length-neutral edit on a coarse-mtime filesystem has the same stamp.
+      mock.files.set(USER_FILE, originalContent.replace('original', 'REWRITTN'));
+      mock.mtimes.set(USER_FILE, originalMtime);
+    });
+    const write = updateTask(created.id, { description: 'REWRITTN' }, 'user');
+    await writing.promise;
+
+    const reading = Promise.withResolvers();
+    const finishRead = Promise.withResolvers();
+    vi.mocked(readFile).mockImplementationOnce(async () => {
+      reading.resolve();
+      await finishRead.promise;
+      return originalContent;
+    });
+    const overlappingRead = getUserTasks();
+    await reading.promise;
+    finishWrite.resolve();
+    await write;
+    // This must neither join the old flight nor consume its eventual snapshot.
+    expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
+    finishRead.resolve();
+    expect((await overlappingRead).tasks[0].description).toBe('original');
+    expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
   });
 
   it('re-parses after an external edit bumps mtime', async () => {
