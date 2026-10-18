@@ -120,6 +120,7 @@ describe('pregate hidden-content invocation', () => {
     root = template.repo;
     scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // No runners or test files: docs-only changes produce an empty test plan.
     for (const path of [
@@ -134,6 +135,7 @@ describe('pregate hidden-content invocation', () => {
       copyFileSync(join(REPO_ROOT, path), join(root, path));
     }
     write('package.json', '{"type":"module"}\n');
+    write('.gitignore', 'node_modules\n');
     for (const workspace of ['', 'client', 'server', 'autofixer']) {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
