@@ -82,7 +82,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
 
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
-    const { path, release } = await heldCheckout('detached-held');
+    await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
+    await execGit(['add', 'eol.txt'], repo);
+    await execGit(['commit', '-m', 'chore: synthetic text file'], repo);
+    const { path, release } = await heldCheckout('detached-held', { beforeLock: async (tree) => {
+      // Normalization hides these CRLF bytes from every diff.
+      await writeFile(join(tree, '.gitattributes'), 'eol.txt text eol=lf\n');
+      await writeFile(join(tree, 'eol.txt'), 'one\r\ntwo\r\n');
+    } });
     // Only the index holds this file once its working copy is gone.
     await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
     await execGit(['add', 'staged-only.txt'], path);
@@ -95,7 +102,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(release.path)).toBe(false);
     const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
     expect(manifest.release).toEqual(release);
-    expect(manifest.captured.files.map(file => file.path).sort()).toEqual(['.gitignore', 'ignored.txt', 'untracked.txt']);
+    expect(manifest.captured.files.map(file => `${file.path}${file.tracked ? ' (tracked)' : ''}`).sort())
+      .toEqual(['.gitattributes', '.gitignore', 'eol.txt (tracked)', 'ignored.txt', 'initial.txt (tracked)', 'untracked.txt']);
+    expect(await readFile(join(result.archiveDir, 'files', 'eol.txt'), 'utf8')).toBe('one\r\ntwo\r\n');
     expect(manifest.captured.symlinks).toEqual(SYMLINKS ? [{ path: 'linked', target: '../shared-target' }] : []);
     expect(await readFile(join(result.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await readFile(join(result.archiveDir, 'worktree.diff'), 'utf8')).toContain('+tracked edit');

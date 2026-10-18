@@ -11,13 +11,15 @@
  *
  * Before any mutation every unique byte is archived under
  * `data/cos/held-checkout-archives/`: a bundle of commits not on the default
- * branch, the staged and unstaged diffs, and verbatim copies of untracked AND
- * ignored files (symlinks as recorded targets). The archive is verified by hash against the
+ * branch, the staged and unstaged diffs, raw bytes of tracked files that differ
+ * from their index blob, and verbatim copies of untracked AND ignored files
+ * (symlinks as recorded targets). The archive is verified by hash against the
  * checkout, and the checkout's content hashes must not move between archive and
  * removal. A live owner, manual completion handoff, unreadable state or archive
  * failure leaves the checkout, its lock and its branch exactly as found.
  */
 
+import { createReadStream } from 'node:fs';
 import { lstat, readlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -44,44 +46,64 @@ const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : 
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).then(r => r.stdout || '');
 
+/** Git's object id for raw bytes, with no clean filter or line-ending conversion. */
+async function rawBlobId(source, size, format) {
+  const hash = createHash(format).update(`blob ${size}\0`);
+  for await (const chunk of createReadStream(source)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
 /**
  * Everything the archive must preserve, read in one pass: the staged and
  * unstaged diffs (separately, so a staged blob whose working copy is gone
- * survives) and every untracked or ignored file by content hash, symlinks by
- * target. Throws on anything that cannot be archived faithfully, before any
- * copy is made. The fingerprint is compared again immediately before removal.
+ * survives), raw copies of tracked files whose bytes differ from their index
+ * blob (a clean filter or line-ending conversion hides those from diff), and
+ * every untracked or ignored file by content hash, symlinks by target. Throws
+ * on anything that cannot be archived faithfully, before any copy is made.
+ * The fingerprint is compared again immediately before removal.
  */
 async function snapshotContent(path) {
   if ((await git(['ls-files', '-u', '-z'], path)).length) throw new Error('unmerged index entries cannot be archived');
+  const stage = zLines(await git(['ls-files', '--stage', '-z'], path));
   // A submodule's files and commits live in its own repository; its gitlink is not its content.
-  if (zLines(await git(['ls-files', '--stage', '-z'], path)).some(line => line.startsWith('160000 '))) {
-    throw new Error('submodules cannot be archived');
-  }
+  if (stage.some(line => line.startsWith('160000 '))) throw new Error('submodules cannot be archived');
   // Assume-unchanged (lowercase tag) and skip-worktree (S) entries hide edits from diff.
   const hidden = zLines(await git(['ls-files', '-v', '-z'], path)).find(line => /^[a-zS]/.test(line));
   if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
-  // Raw bytes only: a textconv or external diff driver can drop content.
+  // A textconv or external diff driver can drop bytes from a patch.
   const indexDiff = await git(['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path);
   const worktreeDiff = await git(['diff', '--binary', '--no-textconv', '--no-ext-diff'], path);
-  const others = [];
+
+  const files = [];
   let total = 0;
+  const addFile = async (rel, info, extra = {}) => {
+    total += info.size;
+    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
+    files.push({ path: rel, bytes: info.size, sha256: await sha256File(join(path, rel)), ...extra });
+  };
+  const format = (await git(['rev-parse', '--show-object-format'], path)).trim() || 'sha1';
+  for (const line of stage) {
+    const tab = line.indexOf('\t');
+    const [mode, blob] = line.slice(0, tab).split(' ');
+    const rel = line.slice(tab + 1);
+    // Symlink blobs are not filtered; deletions and type changes are in the diff.
+    if (mode !== '100644' && mode !== '100755') continue;
+    const info = await lstat(join(path, rel)).catch(err => (err.code === 'ENOENT' ? null : Promise.reject(err)));
+    if (!info?.isFile()) continue;
+    if (await rawBlobId(join(path, rel), info.size, format) !== blob) await addFile(rel, info, { tracked: true });
+  }
+  const symlinks = [];
   for (const rel of zLines(await git(['ls-files', '--others', '-z'], path))) {
     // `ls-files --others` names a nested repository as `dir/` without its files.
     if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
-    const source = join(path, rel);
-    const info = await lstat(source);
-    if (info.isSymbolicLink()) {
-      others.push({ path: rel, symlink: await readlink(source) });
-      continue;
-    }
-    if (!info.isFile()) throw new Error(`${rel} is not a regular file`);
-    total += info.size;
-    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
-    others.push({ path: rel, bytes: info.size, sha256: await sha256File(source) });
+    const info = await lstat(join(path, rel));
+    if (info.isSymbolicLink()) symlinks.push({ path: rel, target: await readlink(join(path, rel)) });
+    else if (info.isFile()) await addFile(rel, info);
+    else throw new Error(`${rel} is not a regular file`);
   }
   const fingerprint = createHash('sha256').update(indexDiff).update('\0').update(worktreeDiff).update('\0')
-    .update(JSON.stringify(others)).digest('hex');
-  return { indexDiff, worktreeDiff, others, fingerprint };
+    .update(JSON.stringify({ files, symlinks })).digest('hex');
+  return { indexDiff, worktreeDiff, files, symlinks, fingerprint };
 }
 
 /**
@@ -116,8 +138,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
   if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
-  const files = snapshot.others.filter(entry => entry.symlink === undefined);
-  const symlinks = snapshot.others.filter(entry => entry.symlink !== undefined).map(({ path, symlink }) => ({ path, target: symlink }));
+  const { files, symlinks } = snapshot;
   for (const file of files) {
     const destination = join(dir, 'files', file.path);
     await ensureDir(dirname(destination));
@@ -135,6 +156,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
       `git -C <repo> worktree add <checkout> ${tree.head}`,
       snapshot.indexDiff ? 'git -C <checkout> apply --index index.diff' : null,
       snapshot.worktreeDiff ? 'git -C <checkout> apply worktree.diff' : null,
+      // Last, so raw tracked bytes replace the filtered form the diffs restore.
       files.length ? 'cp -R files/. <checkout>/' : null,
       symlinks.length ? 'recreate manifest.captured.symlinks with ln -s' : null,
     ].filter(Boolean),
