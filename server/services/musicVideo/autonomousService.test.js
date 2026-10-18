@@ -803,6 +803,95 @@ describe('cancel while the final render is preparing (#11768)', () => {
   });
 });
 
+describe('stage completion after ownership is released (#12064)', () => {
+  // Uniquely catches a successful late stage restoring approval/continuation after cancel, stop, or a process handoff.
+  it.each(['cancel', 'stop', 'handoff'])('keeps a checkpoint released by %s terminal and preserves its finished output', async (action) => {
+    const lyrics = Promise.withResolvers();
+    doubles.writeLyrics.mockImplementationOnce(() => lyrics.promise);
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'] });
+    await vi.waitFor(() => expect(doubles.writeLyrics).toHaveBeenCalledOnce());
+    if (action === 'handoff') runOf().processId = 'proc-other';
+    else await service[`${action}AutonomousVideo`]('mv-auto');
+    const released = clone(runOf());
+    lyrics.resolve({ lyrics: 'finished words' });
+    await service.__testing.settleBackground();
+    expect(runOf()).toMatchObject({ status: released.status, stage: 'lyrics', awaiting: released.awaiting, processId: released.processId,
+      output: { lyrics: 'finished words' }, stages: { lyrics: { status: 'done' } } });
+    expect(doubles.createMoodBoard).not.toHaveBeenCalled();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches production being dispatched after a cancel during the preceding preparation/review.
+  it('does not start production when preparation returns after cancellation', async () => {
+    const { prepareProductionReview } = await import('./productionReviewService.js');
+    const prepare = Promise.withResolvers();
+    prepareProductionReview.mockImplementationOnce(() => prepare.promise);
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.stage).toBe('produce'));
+    await service.cancelAutonomousVideo('mv-auto');
+    prepare.resolve();
+    await service.__testing.settleBackground();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
+    expect(runOf()).toMatchObject({ status: 'canceled', stage: 'produce', errorCode: null });
+  });
+
+  // Uniquely catches a child created during cancellation running without an owned autonomous parent.
+  it.each(['cancel', 'stop', 'handoff'])('cancels a production returned after %s while preserving the released run', async (action) => {
+    const production = Promise.withResolvers();
+    doubles.startProduction.mockImplementationOnce(() => production.promise);
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    if (action === 'handoff') runOf().processId = 'proc-other';
+    else await service[`${action}AutonomousVideo`]('mv-auto');
+    const released = clone(runOf());
+    production.resolve({ run: { id: 'mvpr-late' } });
+    await service.__testing.settleBackground();
+    expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-late');
+    expect(runOf()).toMatchObject({ status: released.status, stage: 'produce', processId: released.processId, errorCode: null });
+    expect(runOf().output.productionRunId).toBeUndefined();
+  });
+
+  // Uniquely catches cancellation winning the handoff write after the executor's last ownership read.
+  it('cancels production when cancellation reaches the serialized handoff first', async () => {
+    const projects = await import('./projects.js');
+    const getProject = projects.getProject;
+    let read;
+    doubles.startProduction.mockImplementationOnce(async () => {
+      read = vi.spyOn(projects, 'getProject').mockImplementationOnce(async (id) => {
+        const snapshot = await getProject(id);
+        writeTail = writeTail.then(() => { runOf().status = 'canceled'; });
+        return snapshot;
+      });
+      return { run: { id: 'mvpr-handoff' } };
+    });
+    try {
+      await service.startAutonomousVideo({ prompt: 'p' });
+      await service.__testing.settleBackground();
+      expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-handoff');
+      expect(runOf()).toMatchObject({ status: 'canceled', stage: 'produce', output: { productionRunId: 'mvpr-handoff' } });
+    } finally {
+      read?.mockRestore();
+    }
+  });
+
+  // Uniquely catches stop reading a child id before an already-admitted write stores it.
+  it('stops children stored between the initial read and the serialized status change', async () => {
+    const lyrics = Promise.withResolvers();
+    doubles.writeLyrics.mockImplementationOnce(() => lyrics.promise);
+    doubles.stopAutoReview = vi.fn(async () => ({}));
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(doubles.writeLyrics).toHaveBeenCalledOnce());
+    writeTail = writeTail.then(() => { Object.assign(runOf().output, { productionRunId: 'mvpr-just-stored', finalAutoReviewId: 'mvar-just-stored' }); });
+    await service.stopAutonomousVideo('mv-auto');
+    lyrics.resolve({ lyrics: 'finished words' });
+    await service.__testing.settleBackground();
+    expect(doubles.stopProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-just-stored');
+    expect(doubles.stopAutoReview).toHaveBeenCalledWith('mv-auto', 'mvar-just-stored');
+    expect(runOf().status).toBe('stopped');
+  });
+});
+
 describe('overlay text pass before the final render', () => {
   const finding = (atSec, message, severity = 'error') => ({ id: `f${atSec}`, kind: severity === 'error' ? 'overlap' : 'contrast', severity, atSec, texts: ['A'], message, count: 1 });
   const textEntries = () => (runOf()?.orchestration?.reviews || []).filter((r) => r.checkpoint === 'text');
@@ -898,7 +987,8 @@ describe('retaking the song at the song checkpoint', () => {
 
     doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
     doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
-      // A fresh request: the rejected take's ids are not offered for reuse.
+      // A fresh request: the rejected take's ids and project link are no longer used.
+      expect(store.get('mv-auto').trackId).toBeNull();
       expect(opts.songIds).toBeNull();
       await opts.onSubmitted(['song-c', 'song-d']);
       return { songId: 'song-d', songIds: ['song-c', 'song-d'], filename: 'music-song-d.m4a' };
@@ -918,8 +1008,7 @@ describe('retaking the song at the song checkpoint', () => {
     expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
       lyrics: '[verse]\nnew words', style: 'darker synthwave', excludeStyles: 'metal', vocalGender: 'male', model: 'v6',
     }), expect.any(Object));
-    // The project was unlinked from the rejected track, then linked to the new one; analysis has not run.
-    expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', { trackId: null });
+    // The project was linked to the new take; analysis has not run.
     expect(store.get('mv-auto').trackId).toBe('track-2');
     expect(calls).not.toContain('analyze');
 
@@ -1597,6 +1686,22 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     // The orchestrator also judges production's plates and drafts.
     expect(doubles.startProduction).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ reviewer: { providerId: 'orch', model: 'judge' } }));
     expect(doubles.orchestrate).toHaveBeenCalledWith(expect.objectContaining({ orchestrator: ORCHESTRATOR }));
+  });
+
+  // Uniquely catches a late song-retake verdict unlinking a canceled project's track or restarting song generation.
+  it('keeps the song linked when a retake review returns after cancellation', async () => {
+    const review = Promise.withResolvers();
+    const orchestrate = doubles.orchestrate.getMockImplementation();
+    doubles.orchestrate.mockImplementation((args) => checkpointOf(args.prompt) === 'song' ? review.promise : orchestrate(args));
+    await service.startAutonomousVideo({ prompt: 'p', songSource: 'local', orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.orchestrate.mock.calls.some(([args]) => checkpointOf(args.prompt) === 'song')).toBe(true));
+    await service.cancelAutonomousVideo('mv-auto');
+    review.resolve({ text: JSON.stringify({ verdict: 'retake', score: 3, notes: 'Try another take.' }), route: ORCHESTRATOR, visual: false });
+    await service.__testing.settleBackground();
+    expect(runOf()).toMatchObject({ status: 'canceled', stage: 'analyze' });
+    expect(store.get('mv-auto').trackId).toBe('track-1');
+    expect(doubles.generateLocalSong).toHaveBeenCalledOnce();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
   });
 
   // Uniquely catches a run with no video tool spending on clips, the orchestrator approving stills it never saw,

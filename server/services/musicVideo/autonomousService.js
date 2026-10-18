@@ -177,6 +177,7 @@ const runError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
 
 const projectAutonomousRun = (project) => project?.autonomousRun || null;
+const ownsRunningRun = (current, run) => current?.id === run.id && current.status === 'running' && current.processId === PROCESS_ID;
 
 async function requireRun(projectId) {
   const project = await getProject(projectId);
@@ -1233,6 +1234,9 @@ const STAGES = {
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
     const pool = briefProductionPool(run.brief, project);
+    if (!ownsRunningRun(projectAutonomousRun(await getProject(project.id)), run)) {
+      throw runError(409, 'RUN_STOPPED', 'The run stopped before production could start');
+    }
     const started = await deps.startProduction(project.id, {
       directive: briefDirective(run.brief),
       pool,
@@ -1244,6 +1248,11 @@ const STAGES = {
         : { providerId: run.brief.llm?.providerId || null, model: run.brief.llm?.model || null },
       authoring: input,
     });
+    // A stop during preparation had no child id to stop; cancel the fresh child before handing it off.
+    if (!ownsRunningRun(projectAutonomousRun(await getProject(project.id)), run)) {
+      await settleChildStop([], project.id, run, 'cancel production', started.run.id, () => deps.cancelProduction(project.id, started.run.id));
+      throw runError(409, 'RUN_STOPPED', 'The run stopped while production was preparing');
+    }
     return { output: { productionRunId: started.run.id }, wait: true };
   },
 };
@@ -1398,17 +1407,33 @@ async function advance(projectId) {
         return;
       }
       const finishedAt = new Date().toISOString();
+      // Preserve useful late output, but only the still-owned run may continue the pipeline.
+      let owned = false;
       if (result.goto) {
         // The orchestrator sent the run back (a song retake): both stages run again.
         const pending = { status: 'pending', startedAt: null, finishedAt: null, error: null, step: null };
-        await patchRun(projectId, (r) => ({ output: result.output, stage: result.goto,
-          stages: { [stage]: { ...r.stages[stage], ...pending }, [result.goto]: { ...r.stages[result.goto], ...pending } } }));
+        await patchRun(projectId, (r) => {
+          owned = ownsRunningRun(r, run);
+          return { output: result.output, ...(owned ? { stage: result.goto } : {}),
+            stages: { [stage]: { ...r.stages[stage], ...pending }, [result.goto]: { ...r.stages[result.goto], ...pending } } };
+        });
+        if (!owned) return;
         if (result.unlinkTrack) await unlinkRunTrack(projectId, run.id, result.unlinkTrack);
         console.log(`🎬 Autonomous music video ${short(run.id)} going back to ${result.goto}`);
         continue;
       }
       if (result.wait) {
-        await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) }));
+        await patchRun(projectId, (r) => {
+          owned = ownsRunningRun(r, run);
+          return { output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) };
+        });
+        if (!owned) {
+          // Cancellation can win the serialized write after the executor's final ownership read.
+          const { productionRunId, renderJobId } = result.output || {};
+          if (productionRunId) await settleChildStop([], projectId, run, 'cancel production', productionRunId, () => deps.cancelProduction(projectId, productionRunId));
+          if (renderJobId) await settleChildStop([], projectId, run, 'cancel render', renderJobId, () => deps.cancelRender(renderJobId));
+          return;
+        }
         console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : result.step === CAST_STEP ? 'Cast & Sets' : 'production'}`);
         // The render may have settled before its job id was stored on the run.
         if (result.step === RENDER_STEP) await reconcileFinalRender(projectId);
@@ -1422,11 +1447,15 @@ async function advance(projectId) {
       }
       const next = nextAutonomousStage(stage);
       const checkpoint = run.brief.checkpoints.includes(stage);
-      await patchRun(projectId, (r) => ({
-        output: result.output,
-        ...stagePatch(r, stage, { status: 'done', finishedAt, step: null }),
-        ...(checkpoint ? { status: 'awaiting-approval', awaiting: stage, stage: next } : next ? { stage: next } : { status: 'completed', stage }),
-      }));
+      await patchRun(projectId, (r) => {
+        owned = ownsRunningRun(r, run);
+        return {
+          output: result.output,
+          ...stagePatch(r, stage, { status: 'done', finishedAt, step: null }),
+          ...(owned && (checkpoint ? { status: 'awaiting-approval', awaiting: stage, stage: next } : next ? { stage: next } : { status: 'completed', stage })),
+        };
+      });
+      if (!owned) return;
       console.log(`🎬 Autonomous music video ${short(run.id)} finished ${stage}${checkpoint ? ' — waiting for approval' : ''}`);
       if (checkpoint || !next) return;
     }
@@ -1451,12 +1480,11 @@ function advanceInBackground(projectId) {
  * lyrics. A failed unlink is not fatal: that same link replaces the old one.
  */
 async function unlinkRunTrack(projectId, runId, trackId) {
-  const project = await getProject(projectId);
-  if (project?.trackId === trackId) {
-    await deps.updateProject(projectId, { trackId: null })
-      .catch((err) => console.warn(`⚠️ Autonomous music video ${short(runId)} could not unlink the retaken track: ${err.message}`));
-  }
-  console.log(`🎬 Autonomous music video ${short(runId)} retaking its song`);
+  const { applyProjectPatch } = await import('./projectsLogic.js');
+  // The track and run ownership must be checked in the same write as the unlink.
+  await mutateProjectRecord(projectId, (project) => ({ project: project.trackId === trackId && ownsRunningRun(projectAutonomousRun(project), { id: runId })
+    ? applyProjectPatch(project, { trackId: null }) : project }))
+    .catch((err) => console.warn(`⚠️ Autonomous music video ${short(runId)} could not unlink the retaken track: ${err.message}`));
 }
 
 // ---- director actions ------------------------------------------------------------
@@ -1861,11 +1889,12 @@ export async function stopAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!['running', 'awaiting-approval', 'needs-human'].includes(run.status)) throw runError(409, 'NOT_RUNNING', `A ${run.status} run cannot be stopped`);
   const out = await patchRun(projectId, () => ({ status: 'stopped' }));
+  const { productionRunId, finalAutoReviewId } = out.run.output;
   const childStopFailures = [];
-  if (run.output.productionRunId) {
-    await settleChildStop(childStopFailures, projectId, run, 'stop production', run.output.productionRunId, () => deps.stopProduction(projectId, run.output.productionRunId));
+  if (productionRunId) {
+    await settleChildStop(childStopFailures, projectId, run, 'stop production', productionRunId, () => deps.stopProduction(projectId, productionRunId));
   }
-  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'stop auto-review', run.output.finalAutoReviewId, () => deps.stopAutoReview(projectId, run.output.finalAutoReviewId));
+  if (finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'stop auto-review', finalAutoReviewId, () => deps.stopAutoReview(projectId, finalAutoReviewId));
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(projectId, out.run, childStopFailures);
   return { project: out.project, run: presentAutonomousRun(out.run), childStopFailures };
