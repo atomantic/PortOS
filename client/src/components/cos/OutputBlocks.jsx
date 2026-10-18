@@ -36,9 +36,19 @@ function renderBlock(block, i, linkifyText) {
   return <MarkdownOutput key={i} content={block.content} linkifyText={linkifyText} preserveLineBreaks />;
 }
 
+const PAGE_BUTTON_CLASS = 'w-full py-2 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded transition-colors min-h-[40px]';
+
 // `linkifyText` is forwarded to MarkdownOutput so a caller that knows the
 // record (a CoS run and its tracker) can link the bare `#7640` in its prose.
-export default function OutputBlocks({ output, linkifyText = null }) {
+//
+// `anchor` picks which end of a long transcript the bounded window shows.
+// `head` (finished transcripts) pages forward from the start. `tail` is for a
+// RUNNING agent, whose caller feeds a sliding buffer that appends at the end
+// and drops from the front: a head window stopped changing after the first
+// page and hid every new line under "Show more", so a working agent read as
+// stalled (#12028). The tail window always holds the newest blocks and pages
+// backwards with "Show earlier".
+export default function OutputBlocks({ output, linkifyText = null, anchor = 'head' }) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_BLOCKS);
 
   // Group consecutive lines: tool lines render as monospace, lifecycle markers
@@ -72,16 +82,25 @@ export default function OutputBlocks({ output, linkifyText = null }) {
   }, [output]);
 
   const hasMore = blocks.length > visibleCount;
+  const tail = anchor === 'tail';
+  const start = tail && hasMore ? blocks.length - visibleCount : 0;
+  const visible = tail ? blocks.slice(start) : blocks.slice(0, visibleCount);
+  const hidden = blocks.length - visible.length;
+  const revealMore = () => setVisibleCount(prev => prev + LOAD_MORE_BLOCKS);
 
   return (
     <div className="space-y-0.5 min-w-0 overflow-hidden">
-      {blocks.slice(0, visibleCount).map((block, i) => renderBlock(block, i, linkifyText))}
-      {hasMore && (
-        <button
-          onClick={() => setVisibleCount(prev => prev + LOAD_MORE_BLOCKS)}
-          className="w-full py-2 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded transition-colors min-h-[40px]"
-        >
-          Show more ({blocks.length - visibleCount} remaining)
+      {tail && hasMore && (
+        <button type="button" onClick={revealMore} className={PAGE_BUTTON_CLASS}>
+          Show earlier ({hidden})
+        </button>
+      )}
+      {/* Keyed by absolute block index so a sliding tail window keeps each
+          block's element rather than remounting the whole page per line. */}
+      {visible.map((block, i) => renderBlock(block, start + i, linkifyText))}
+      {!tail && hasMore && (
+        <button type="button" onClick={revealMore} className={PAGE_BUTTON_CLASS}>
+          Show more ({hidden} remaining)
         </button>
       )}
     </div>
