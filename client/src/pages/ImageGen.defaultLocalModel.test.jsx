@@ -6,7 +6,7 @@
  * rendered a different model depending on which screen you started from.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
   imageGenModel,
@@ -32,6 +32,22 @@ describe('ImageGen default local model', () => {
     resetImageGenMockState();
     state.models = [DEV, KLEIN, QWEN];
     window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  });
+
+  it('keeps a native MOSS backend selectable without Python when a cloud backend is configured', async () => {
+    state.models = [imageGenModel('moss-image-sft-bf16', { name: 'MOSS SFT', runner: 'moss-swift', supportsImg2Img: false, supportsLoras: false })];
+    state.settings = { imageGen: { mode: 'codex', codex: { enabled: true }, local: { modelId: 'moss-image-sft-bf16' } } };
+    await renderImageGenPage();
+    const local = await screen.findByRole('button', { name: 'Local' });
+    await waitFor(() => expect(local).not.toBeDisabled());
+    fireEvent.click(local);
+    await waitFor(() => expect(modelSelect().value).toBe('moss-image-sft-bf16'));
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a lighthouse at dusk' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).not.toBeDisabled());
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
+    await waitFor(() => expect(state.generateImage).toHaveBeenCalled());
+    expect(state.generateImage.mock.calls[0][0]).toMatchObject({ mode: 'local', modelId: 'moss-image-sft-bf16' });
+    expect(state.generateImage.mock.calls[0][0].quantize).toBeUndefined();
   });
 
   it('offers ten Qwen reference slots without strength controls', async () => {

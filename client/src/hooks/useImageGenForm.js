@@ -471,9 +471,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
-  const i2iCapable = isI2iCapableMode(effectiveMode);
+  const i2iCapable = remoteTargetActive
+    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
+    : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
-  const referenceSlotCount = referenceSlotsFor(effectiveMode, {
+  const referenceSlotCount = remoteTargetActive
+    ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
+    : referenceSlotsFor(effectiveMode, {
     hasInitImage: initImage.source != null,
     // fal.ai's edit models take 9–14 references (a mood board is the point),
     // so it gets every form slot; the per-model cap below still bounds it.
@@ -502,6 +506,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     () => referenceImages.slice(referenceSlotCount).filter((slot) => slot.file != null).length,
     [referenceImages, referenceSlotCount],
   );
+  const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
+    && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTargetActive) return null;
     const model = remoteTarget.model;
@@ -736,11 +742,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       handleClearInitImage,
       handlePickReferenceImage,
       handleClearReferenceImage,
+      clearReferenceImages: () => referenceImages.forEach((_, index) => handleClearReferenceImage(index)),
       handleReferenceStrengthChange,
       handleGallerySelect,
     },
     derived: {
       loraHandoffBlocked,
+      unsupportedLocalInputs,
       currentModel,
       isFlux2Model,
       sharesFlux2Venv,

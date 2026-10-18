@@ -8,6 +8,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 | Doc | Covers |
 |-----|--------|
+| [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [SUPERCOLLIDER.md](./SUPERCOLLIDER.md) | Managed SuperCollider Docker runtime: `setup:supercollider`, readiness states, containment policy and platform evidence |
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |

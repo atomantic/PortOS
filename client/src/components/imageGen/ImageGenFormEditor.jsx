@@ -80,10 +80,10 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       >
         <button
           type="submit"
-          disabled={derived.loraHandoffBlocked || remix.pending || (derived.remoteTargetActive
+          disabled={derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
             ? derived.remoteBlocked !== null
             : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
-          title={loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
+          title={derived.unsupportedLocalInputs ? 'Remove unsupported LoRAs and input images in Options before rendering.' : loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
             ? 'Restoring this image’s settings…'
             : derived.localBackendPending
               ? 'Checking the image backend…'
@@ -230,6 +230,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             seed={fields.seed}
             onSeedChange={fields.setSeed}
             showSeed
+            remoteTargetActive={derived.remoteTargetActive}
             showModel={!derived.remoteTargetActive}
             showQuantize={!derived.remoteTargetActive}
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
@@ -249,7 +250,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             </p>
           )}
 
-          {isLocalMode && (
+          {isLocalMode && (derived.remoteTargetActive || derived.currentModel?.supportsLoras !== false) && (
             <LoraPicker
               availableLoras={catalogs.availableLoras}
               selected={fields.selectedLoras}
@@ -259,6 +260,18 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
               onAppendTrigger={(words) => fields.setPrompt((prompt) => appendTriggerWords(prompt, words, derived.styledPrompt))}
               prompt={derived.styledPrompt}
             />
+          )}
+          {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsLoras === false && fields.selectedLoras.length > 0 && (
+            <Banner tone="warning" size="sm">
+              This model cannot use the selected LoRAs. Remove them before rendering.
+              <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={() => fields.setSelectedLoras([])}>Remove selected LoRAs</button>
+            </Banner>
+          )}
+          {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsImg2Img === false && images.initImage.source != null && (
+            <Banner tone="warning" size="sm">
+              This model cannot use the selected input image.
+              <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.handleClearInitImage}>Remove input image</button>
+            </Banner>
           )}
 
           {derived.i2iCapable && (
@@ -295,6 +308,9 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
               {derived.referenceSlotCount === 1 ? ' reference' : ' references'} here
               {images.initImage.source != null && derived.referenceSlotCount > 0 ? ', and the init image already uses a slot' : ''}.
               {' '}They stay selected if you clear the init image or switch backends.
+              {!derived.remoteTargetActive && derived.currentModel?.runner === 'moss-swift' && (
+                <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.clearReferenceImages}>Remove reference images</button>
+              )}
             </p>
           )}
 

@@ -20,8 +20,10 @@ import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import {
-  IMAGE_RUNTIME_LABELS, IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY, imageRuntimeFor, usesTorchVenv,
+  IMAGE_RUNTIME_LABELS, IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY, imageRuntimeFor, usesTorchVenv, usesMossSwift,
 } from '../../lib/imageRuntimeRemedies.js';
+import { diagnoseMossRuntime, MOSS_MANIFEST } from './mossRuntime.js';
+import { verifyMossWeights } from './mossWeights.js';
 
 const { READY, UNAVAILABLE, UNKNOWN } = IMAGE_RUNTIME_READINESS;
 
@@ -78,6 +80,20 @@ export async function diagnoseLocalRuntime({ modelId: requestedModelId, settings
       readiness: UNKNOWN,
       reason: compat.reasons?.join(' · ') || 'Could not verify this machine supports the selected model',
     });
+  }
+
+  if (usesMossSwift(model)) {
+    if (model.repo !== MOSS_MANIFEST.repo || model.revision !== MOSS_MANIFEST.revision) {
+      return verdict({ readiness: UNAVAILABLE, reason: 'MOSS Swift supports only the pinned SFT model profile. Restore its shipped repo and revision.',
+        remedy: { kind: IMAGE_RUNTIME_REMEDY.CHOOSE_MODEL, label: 'Choose the pinned MOSS SFT profile' } });
+    }
+    const status = await diagnoseMossRuntime();
+    if (status.readiness !== READY) return verdict(status);
+    const weights = await verifyMossWeights();
+    if (!weights.cached) return verdict({ readiness: UNAVAILABLE,
+      reason: 'The pinned MOSS SFT weights are missing or incomplete (27.2 GB download).',
+      remedy: { kind: IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS, label: 'Download / repair MOSS weights (27.2 GB)' } });
+    return verdict({ readiness: READY });
   }
 
   if (usesTorchVenv(model)) {

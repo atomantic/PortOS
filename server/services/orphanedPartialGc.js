@@ -26,6 +26,8 @@ import { slotstreamCacheDir } from '../lib/slotstreamModels.js';
 // module calling `createDownloadSlot` stops being reachable from here.
 import './slotstreamModelManager.js';
 import './loras.js';
+import './imageGen/mossWeights.js';
+import { mossSnapshot } from './imageGen/mossRuntime.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 export { ORPHANED_PARTIAL_MAX_AGE_MS };
@@ -52,6 +54,8 @@ export async function collectPartialSweepDirs() {
   // an abandoned pull can strand tens of gigabytes of `.partial` a level down —
   // the sweep is recursive, so naming the cache root covers every checkpoint.
   dirs.add(slotstreamCacheDir());
+  // Only PortOS's pinned MOSS snapshot; do not sweep unrelated Hugging Face downloads.
+  dirs.add(mossSnapshot());
   return [...dirs];
 }
 

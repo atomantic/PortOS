@@ -29,7 +29,8 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
-import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
+import { usesTorchVenv, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
+import { mossRenderArgs, mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -90,6 +91,7 @@ export const cancel = () => {
 };
 
 export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [], referenceImageStrengths = [], platform = process.platform }) => {
+  if (usesMossSwift(model)) return mossRenderArgs({ prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths, initImagePath, referenceImagePaths });
   const modelId = model?.id;
   if (usesDiffusersRunner(model)) {
     const runnerLabel = isErnie(model) ? 'ERNIE' : isHiDream(model) ? 'HiDream' : isQwen(model) ? 'Qwen' : 'Z-Image';
@@ -492,8 +494,8 @@ export function buildSidecarMeta({
     model: {
       id: modelId,
       name: model?.name || modelId,
-      license: model?.license,
-      repo: model?.repo,
+      license: usesMossSwift(model) ? 'apache-2.0' : model?.license,
+      repo: usesMossSwift(model) ? MOSS_MANIFEST.repo : model?.repo,
       disclosure: model?.disclosure,
     },
     loras: validLoraFilenames.map((filename) => ({
@@ -624,7 +626,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
-  if (!usesTorchVenv(model) && !pythonPath) {
+  if (usesMossSwift(model)) {
+    // Check raw requests before sidecar normalization can discard a missing input file or LoRA.
+    if (loraFilenames.length || loraPaths.length || initImagePath || referenceImagePaths.length) {
+      throw new ServerError('MOSS SFT supports text-to-image only; remove LoRAs and input images.', { status: 400, code: 'MOSS_INPUT_UNSUPPORTED' });
+    }
+    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
+    const runtime = await diagnoseLocalRuntime({ modelId });
+    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MOSS_NOT_READY' });
+  }
+  if (!usesTorchVenv(model) && !usesMossSwift(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
@@ -714,6 +725,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
+  if (usesMossSwift(model)) {
+    meta.quantize = null;
+    meta.quantization = 'bf16';
+    meta.modelRepo = MOSS_MANIFEST.repo;
+    meta.modelRevision = MOSS_MANIFEST.revision;
+    meta.nativeRuntime = { runtime: 'moss-swift', sourceRevision: MOSS_MANIFEST.sourceRevision, adapterVersion: MOSS_MANIFEST.adapterVersion };
+  }
   if (addedTriggerWords.length) {
     console.log(`🔤 LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
   }
@@ -791,7 +809,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
-    const childEnv = await hfChildEnv();
+    const childEnv = usesMossSwift(model) ? mossChildEnv() : await hfChildEnv();
     // Last spawn gate: a cancel() during the awaits above found no child to signal.
     if (preparation.cancelRequested) {
       throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });

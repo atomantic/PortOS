@@ -37,7 +37,7 @@ vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 import {
   getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
-  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders,
+  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -125,7 +125,7 @@ describe('ImageGenTab grouped tabs', () => {
     await renderTab();
     expect(screen.getByRole('heading', { name: 'Backend' })).toBeTruthy();
     expect(screen.getByText('External SD API')).toBeTruthy();
-    expect(screen.getByText('Local (mflux)')).toBeTruthy();
+    expect(screen.getByText('Local models')).toBeTruthy();
     // Sections from other tabs are not mounted in the default view.
     expect(screen.queryByText('HuggingFace Token')).toBeNull();
     expect(screen.queryByText('Test Render')).toBeNull();
@@ -145,6 +145,30 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByTestId('local-setup-panel')).toBeTruthy();
     // The tab's lazy model-catalog probe resolves after the click.
     await act(async () => {});
+  });
+
+  it.each([
+    ['moss-image-sft-bf16', true],
+    ['schnell', false],
+  ])('offers a Python-free local test backend only for the native model pin %s', async (modelId, available) => {
+    getSettings.mockResolvedValue({ imageGen: {
+      mode: 'external', external: { sdapiUrl: 'http://localhost:7860' }, local: { modelId },
+    } });
+    await renderTab(['/media/image?mediaTab=test']);
+    const options = [...screen.getByLabelText('Backend').options].map(option => option.value);
+    expect(options.includes('local')).toBe(available);
+  });
+
+  it('registers the local image tool for a MOSS pin without a Python interpreter', async () => {
+    getSettings.mockResolvedValue({ imageGen: {
+      mode: 'external', external: { sdapiUrl: 'http://localhost:7860' }, local: { modelId: 'moss-image-sft-bf16' },
+    } });
+    await renderTab();
+    fireEvent.click(screen.getByRole('button', { name: /Local models/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'sdapi', enabled: true, config: expect.objectContaining({ mode: 'local', pythonPath: '' }),
+    }), { silent: true }));
   });
 
   it('lets the user set a default local video model separately from the backend target', async () => {

@@ -169,6 +169,7 @@ export { usesTorchVenv as modelUsesFluxVenv };
 //     Windows `imagine_win.py` drops the init-image args, so excluded there.
 export function modelSupportsRegen(model) {
   if (!model) return false;
+  if (model.supportsImg2Img === false || model.runner === 'moss-swift') return false;
   if (isFlux2(model)) return true;
   if (usesDiffusersRunner(model)) return false;
   return !IS_WIN;

@@ -293,7 +293,7 @@ export function useImageGenPageRuntime() {
       steps: fields.steps ? Number(fields.steps) : undefined,
       guidance: fields.guidance ? Number(fields.guidance) : undefined,
       seed: fields.seed && Number(fields.seed) >= 0 ? Number(fields.seed) : undefined,
-      quantize: fields.quantize,
+      quantize: derived.currentModel?.runner === 'moss-swift' ? undefined : fields.quantize,
       loraFilenames: fields.selectedLoras.map((lora) => lora.filename),
       loraScales: fields.selectedLoras.map((lora) => lora.scale),
       mode: IMAGE_GEN_MODE.LOCAL,
@@ -404,7 +404,7 @@ export function useImageGenPageRuntime() {
 
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
-    if (form.remix.pending || derived.loraHandoffBlocked) return;
+    if (form.remix.pending || derived.loraHandoffBlocked || derived.unsupportedLocalInputs) return;
     if (derived.editImageMissing || derived.cloudNeedsPrompt) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {
