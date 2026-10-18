@@ -31,10 +31,18 @@ export function markUpgradeClaimed(socket) {
   }
 }
 
-function isSocketIoUpgrade(req) {
-  if (!req?.url) return false;
-  const pathname = req.url.split('?', 1)[0];
-  return pathname === '/socket.io' || pathname.startsWith('/socket.io/');
+function hasEngineIoListener(server) {
+  if (!server || typeof server.listeners !== 'function') return false;
+  return server.listeners('upgrade').some((fn) => {
+    const src = fn.toString();
+    return src.includes('handleUpgrade') && src.includes('destroyUpgrade');
+  });
+}
+
+function isEngineIoUpgrade(server, req, customPath = '/socket.io') {
+  if (!hasEngineIoListener(server)) return false;
+  const prefix = (customPath || '/socket.io').replace(/\/$/, '') + '/';
+  return typeof req?.url === 'string' && req.url.slice(0, prefix.length) === prefix;
 }
 
 /**
@@ -44,11 +52,13 @@ function isSocketIoUpgrade(req) {
  * @param {import('node:http').Server|import('node:https').Server|null|undefined} server
  * @param {object} [options]
  * @param {number} [options.timeoutMs=1000]
+ * @param {string} [options.socketIoPath='/socket.io']
  * @param {((req: import('node:http').IncomingMessage, socket: import('node:net').Socket) => boolean)} [options.isClaimed]
  * @returns {(() => void)} Cleanup function to detach listener
  */
 export function installUpgradeFallback(server, {
   timeoutMs = DEFAULT_UPGRADE_TIMEOUT_MS,
+  socketIoPath = '/socket.io',
   isClaimed = () => false,
 } = {}) {
   if (!server || typeof server.on !== 'function') {
@@ -60,7 +70,7 @@ export function installUpgradeFallback(server, {
   mountedUpgradeFallbackServers.add(server);
 
   const onUpgrade = (req, socket) => {
-    if (socket.portosUpgradeClaimed || isSocketIoUpgrade(req) || isClaimed(req, socket)) {
+    if (socket.portosUpgradeClaimed || isEngineIoUpgrade(server, req, socketIoPath) || isClaimed(req, socket)) {
       socket.portosUpgradeClaimed = true;
       return;
     }

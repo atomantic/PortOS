@@ -356,4 +356,26 @@ describe('main-server eidoverse reverse-proxy', () => {
     expect(client.connected).toBe(true);
     client.disconnect();
   });
+
+  it('ends an unanswered upgrade to /socket.io (without trailing slash) after timeout', async () => {
+    const app = express();
+    const server = createServer(app);
+    const io = new SocketIoServer(server, {
+      destroyUpgrade: false,
+      path: '/socket.io',
+    });
+    ioServers.push(io);
+    installUpgradeFallback(server, { timeoutMs: 100 });
+    const port = await listen(server);
+
+    const client = new WebSocket(`ws://127.0.0.1:${port}/socket.io`);
+    webSocketClients.push(client);
+    const closed = await new Promise((resolve) => {
+      client.on('close', () => resolve(true));
+      client.on('error', () => resolve(true));
+    });
+    expect(closed).toBe(true);
+    expect(client.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
+    webSocketClients.pop();
+  });
 });
