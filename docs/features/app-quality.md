@@ -85,6 +85,27 @@ route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
 an older install keeps reading it; the slice text never leaves the machine.
 
+### Lane health
+
+Every audit lane also preloads what became of the issues it filed, through the
+`lane-health` task data input ("Lane health", #12088). `server/lib/laneHealth.js`
+computes, per lane (the audit's metric label; the shared `code-quality` label
+yields to the more specific lane label beside it), the issues filed in the last
+60 days and how they ended: completed, not planned (or duplicate), open, fixes
+reverted (a later commit whose subject starts with `Revert` and names the
+closing PR or one of its SHAs), and re-filed (a new issue citing a
+`path/to/file.ext` that a closed finding of the same lane cited within 30
+days). The block lists up to ten of the lane's not-planned, reverted or re-filed
+titles under "Findings this lane got wrong or repeated", and the discovery
+contract tells the lane not to re-file one of them without new evidence.
+`services/appLaneHealth.js` reads the forge (`gh`/`glab`) and the checkout's
+revert commits on request; nothing is cached or scheduled. The Quality page
+shows the same numbers for every lane in a "Lane health" table
+(`GET /api/apps/:id/lane-health`), noisiest lane first, so the operator can see
+which lanes to retune. A truncated issue read shortens the window and says so;
+a failed pull-request or commit read is named rather than read as "nothing
+reverted".
+
 ## Coverage review
 
 The existing catalog already separates conventional quality, cyclomatic

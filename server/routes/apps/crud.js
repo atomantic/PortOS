@@ -1,6 +1,7 @@
 import { appListQuerySchema, appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
+import { getAppLaneHealth } from '../../services/appLaneHealth.js';
 import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
@@ -82,6 +83,12 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
   const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
   res.json(await getAppQualityHistory(req.loadedApp, days));
+}));
+
+// GET /api/apps/:id/lane-health - What became of each audit lane's filed issues
+// (#12088): a forge read on request, never cached into the app record.
+router.get('/:id/lane-health', loadApp, asyncHandler(async (req, res) => {
+  res.json(await getAppLaneHealth(req.loadedApp));
 }));
 
 // POST /api/apps/:id/quality-snapshot - Land this app's numeric snapshot as

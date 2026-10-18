@@ -612,6 +612,7 @@ export * from './renderTargets.js';
 export * from './renderTiming.js';
 export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
+export * from './imageQuotaSignal.js';
 export * from './falImageModels.js';
 export * from './imageRuntimeRemedies.js';
 export * from './renderModeLadder.js';
@@ -787,6 +788,7 @@ export * from './kilo.js';
 export * from './openchamber.js';
 
 export * from './layaMlx.js';
+export * from './laneHealth.js';
 export * from './layeredIntelligenceSources.js';
 export * from './layeredIntelligenceSourceKeys.js';
 

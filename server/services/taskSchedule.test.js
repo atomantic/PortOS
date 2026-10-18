@@ -1973,9 +1973,10 @@ describe('taskSchedule', () => {
     // asserting it in two places 20 lines apart just means a future flag gets
     // added to one of them. Every audit includes open issues; some also preload
     // PRs to dedup against work in flight without spending forge calls. Every
-    // audit also preloads its recent slices so runs rotate coverage (#12090).
-    const OPEN_ISSUES_ONLY = ['open-issues', 'audit-slice-history']
-    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests', 'audit-slice-history']
+    // audit also preloads its recent slices so runs rotate coverage (#12090)
+    // and its lane health so it does not re-file a rejected finding (#12088).
+    const OPEN_ISSUES_ONLY = ['open-issues', 'audit-slice-history', 'lane-health']
+    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests', 'audit-slice-history', 'lane-health']
     const FILE_ISSUES_LANES = [
       ['data-safety', OPEN_ISSUES_ONLY],
       ['simplify', OPEN_ISSUES_ONLY],
@@ -2000,10 +2001,11 @@ describe('taskSchedule', () => {
       ])
     })
 
-    it('ships open issues and the slice rotation record for every scheduled quality audit', () => {
+    it('ships open issues, the slice rotation record and lane health for every scheduled quality audit', () => {
       for (const taskType of AUDIT_TASK_TYPES) {
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('audit-slice-history')
+        expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('lane-health')
       }
     })
 

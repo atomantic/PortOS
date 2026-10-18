@@ -11,7 +11,7 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
   gate.admission = actual.createMaintenanceAdmission(gate.root);
   return { ...actual, maintenance: gate.admission };
 });
-import { bindMaintenanceIo } from './maintenanceControl.js';
+import { bindMaintenanceIo, _getMaintenanceWatcher } from './maintenanceControl.js';
 
 afterAll(() => rmSync(gate.root, { recursive: true, force: true }));
 
@@ -49,5 +49,22 @@ describe('maintenance notifications', () => {
 
     // Nothing private is broadcast.
     expect(JSON.stringify(sent)).not.toMatch(/resource-that-must-not-leak|pid|owner|hold/i);
+  });
+
+  it('handles watcher error without throwing and recovers watching on next emit', async () => {
+    const watcher = _getMaintenanceWatcher();
+    expect(watcher).toBeDefined();
+    expect(watcher.listenerCount('error')).toBe(1);
+
+    // Emitting error should close watcher and not throw
+    expect(() => {
+      watcher.emit('error', new Error('EPERM: operation not permitted'));
+    }).not.toThrow();
+
+    expect(_getMaintenanceWatcher()).toBeNull();
+
+    // Re-arming through bindMaintenanceIo or emitChanges restores the watcher
+    bindMaintenanceIo(io);
+    expect(_getMaintenanceWatcher()).not.toBeNull();
   });
 });

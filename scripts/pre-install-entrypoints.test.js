@@ -26,6 +26,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Run by the CI `impact` job before any dependency install. */
 const PRE_INSTALL_ENTRYPOINTS = [
+  'scripts/ci-dependabot-admission.js',
   'scripts/ci-base-sha.js',
   'scripts/ci-test-plan.js',
   'scripts/scan-diff-hidden-content.js',

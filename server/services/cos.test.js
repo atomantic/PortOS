@@ -31,11 +31,11 @@
  * `availableSlots <= 0` short-circuit flips a clear red flag.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
+import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
@@ -1995,6 +1995,61 @@ describe('cos.js source — priority + capacity invariants', () => {
     const handler = COS_SRC.slice(onIdx, COS_SRC.indexOf('});', onIdx) + 3);
     expect(handler).toMatch(/data\.task\?\.status\s*===\s*'completed'/);
     expect(handler).toMatch(/retryTasksResolvedByInvestigation\(data\.task\)/);
+  });
+});
+
+describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
+  let taskStore;
+  let agentManagement;
+  const taskId = 'task-rerun';
+  const older = {
+    id: 'agent-older', taskId, status: 'completed', result: { success: true },
+    startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z',
+  };
+  const latest = {
+    id: 'agent-latest', taskId, status: 'completed', result: { success: false },
+    startedAt: '2026-01-01T01:00:00Z', completedAt: '2026-01-01T01:01:00Z',
+    metadata: { worktreePath: '/synthetic/resume-worktree', branch: 'resume-branch' },
+  };
+
+  beforeEach(async () => {
+    const state = await import('./cosState.js');
+    taskStore = await import('./cosTaskStore.js');
+    const identity = await import('./instanceIdentity.js');
+    agentManagement = await import('./agentManagement.js');
+    // Put the older run last in the map: chronology, not insertion order,
+    // determines which run can settle this task.
+    vi.spyOn(state, 'loadState').mockResolvedValue({ agents: { latest, older } });
+    vi.spyOn(identity, 'ensureInstanceId').mockResolvedValue('synthetic-instance');
+    vi.spyOn(taskStore, 'getAllTasks').mockResolvedValue({
+      user: { exists: true, grouped: { in_progress: [{ id: taskId, status: 'in_progress', metadata: {} }] } },
+      cos: { exists: false },
+    });
+    vi.spyOn(taskStore, 'updateTask').mockResolvedValue({});
+    vi.spyOn(agentManagement, 'handleOrphanedTask').mockResolvedValue({});
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-01-01T02:00:00Z'));
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('recovers the latest failed rerun despite an older successful run', async () => {
+    await resetOrphanedTasks();
+
+    expect(taskStore.updateTask).not.toHaveBeenCalled();
+    expect(agentManagement.handleOrphanedTask).toHaveBeenCalledExactlyOnceWith(
+      taskId, latest.id, taskStore.getTaskById,
+      { agentMetadata: latest.metadata, agentStartedAt: latest.startedAt }
+    );
+  });
+
+  it('completes a missed task update when the latest run succeeded', async () => {
+    const state = await import('./cosState.js');
+    state.loadState.mockResolvedValue({ agents: { latest: { ...latest, result: { success: true } }, older } });
+
+    await resetOrphanedTasks();
+
+    expect(taskStore.updateTask).toHaveBeenCalledExactlyOnceWith(taskId, { status: 'completed' }, 'user');
+    expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
   });
 });
 

@@ -3,6 +3,40 @@
 PortOS uses a test-impact-aware CI workflow plus a release workflow that cannot
 publish until the complete CI suite has passed on the exact tree being released.
 
+## Release Dependabot CI after review
+
+Dependabot pull requests start with a small checkout/admission check only.
+`Plan test impact` fails with a maintainer-release message before dependency
+installation or tests, so the required `CI Gate` remains red. The optional
+SuperCollider workflow uses the same check before installing or building.
+Other pull requests, scheduled checks, releases and manual dispatches retain
+their existing behavior. No schedule or repository security setting changes.
+
+After reviewing the dependency diff, open the **current commit's** CI workflow
+run and choose **Re-run all jobs**, or run `gh run rerun RUN_ID`. GitHub permits
+reruns only to repository writers. If SuperCollider also ran, release that
+workflow's current run separately. Re-running failed jobs also reruns their
+dependents; re-running only CI Gate cannot release a failed impact check.
+Tests still have to pass before merging.
+
+This approval is **commit-bound**: GitHub preserves the original SHA and ref
+when rerunning. An older run cannot validate a newer commit. Every subsequent
+commit, including a maintainer fix or Dependabot rebase, starts a new run at
+attempt 1 and needs review/release again. Repeated reruns are still subject to
+the same writer-only GitHub control. Labels and PR approval reviews do not
+release CI. Automated bot reruns (including cancellation recovery) cannot
+release held updates. Existing runs created before this workflow change keep
+the workflow version with which they started.
+
+The existing **Run workflow** dispatch remains an explicit writer-controlled
+way to run the full suite on a selected branch/ref. Inspect its exact SHA:
+a dispatch on `main` says nothing about a dependency PR, and a later commit
+needs its own validation. The normal dependency workflow is the PR rerun above.
+No privileged `pull_request_target` execution, writable test token or secrets
+are introduced; reruns retain the original actor's restricted token.
+
+See [GitHub's rerun permissions and revision semantics](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+
 ## Where the suite actually runs
 
 Every change reaches `main` through a pull request, and `main` reaches

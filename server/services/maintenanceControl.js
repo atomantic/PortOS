@@ -17,6 +17,7 @@ function readinessProjection(status = maintenance.status()) {
 function emitChanges() {
   boundIo?.emit('maintenance:changed');
   const next = readinessProjection();
+  if (!watcher && boundIo) bindMaintenanceIo(boundIo);
   if (lastReadiness && lastReadiness.state === next.state && lastReadiness.blockerCount === next.blockerCount) return;
   lastReadiness = next;
   boundIo?.emit('maintenance:readiness', next);
@@ -30,12 +31,26 @@ export function bindMaintenanceIo(io) {
   mkdirSync(maintenance.directory, { recursive: true, mode: 0o700 });
   // Cross-process runner settlements also invalidate the UI. Payload contains
   // no operation capability or private resource identity; GET remains auth gated.
-  watcher = watch(maintenance.directory, () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; emitChanges(); }, 100);
-    timer.unref?.();
-  });
-  watcher.unref?.();
+  try {
+    watcher = watch(maintenance.directory, () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; emitChanges(); }, 100);
+      timer.unref?.();
+    });
+    watcher.on('error', (err) => {
+      console.error(`❌ Maintenance directory watcher error: ${err.message}`);
+      watcher?.close();
+      watcher = null;
+    });
+    watcher.unref?.();
+  } catch (err) {
+    console.error(`❌ Failed to watch maintenance directory: ${err.message}`);
+    watcher = null;
+  }
+}
+
+export function _getMaintenanceWatcher() {
+  return watcher;
 }
 
 export async function resumeMaintenance(input) {

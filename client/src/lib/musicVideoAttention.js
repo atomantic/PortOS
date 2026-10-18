@@ -12,6 +12,7 @@
  * `NeedsAttentionBanner` renders them and the page wires their actions.
  */
 
+import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { describeAutonomousWait } from './musicVideoAutonomous.js';
 import { RESUMABLE_RUN_STATUSES, changedFieldsText, currentProductionRun } from './musicVideoStages.js';
 
@@ -132,7 +133,7 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
     });
   }
   const stale = staleApprovalItem(project, readiness, stage);
-  return [...items, ...parkedRunItems(project, headerAction), ...(stale ? [stale] : [])];
+  return [...items, ...parkedRunItems(project, headerAction, readiness), ...(stale ? [stale] : [])];
 }
 
 // Approvals in the order they are given, with the tab (and editor) each is re-given on.
@@ -193,10 +194,11 @@ export const autoReviewNeedsUser = (project) => asList(project?.autoReviews).som
 // Rows for runs the server holds that nobody is watching: an autonomous run
 // parked on the director, a production run stopped on a limit, an auto-review
 // that halted. Each is derived from the saved record, so it survives a reload.
-function parkedRunItems(project, headerAction) {
+function parkedRunItems(project, headerAction, readiness) {
   const items = [];
   const auto = project.autonomousRun;
-  const autoParked = auto && (AUTONOMOUS_PARKED.has(auto.status) || auto.interrupted);
+  const superseded = supersededStillsCheckpoint(project, readiness);
+  const autoParked = !superseded && auto && (AUTONOMOUS_PARKED.has(auto.status) || auto.interrupted);
   if (autoParked) {
     const interrupted = auto.interrupted && auto.status === 'running';
     const awaiting = auto.status === 'awaiting-approval';
@@ -215,7 +217,7 @@ function parkedRunItems(project, headerAction) {
   }
   const production = currentProductionRun(project);
   // An autonomous run parked on this production reports the stop itself.
-  const ownedByAuto = autoParked && auto.output?.productionRunId === production?.id;
+  const ownedByAuto = (autoParked || superseded) && auto.output?.productionRunId === production?.id;
   if (production && PRODUCTION_PARKED.has(production.status) && !ownedByAuto) {
     const reason = production.stopReason || production.error;
     items.push({

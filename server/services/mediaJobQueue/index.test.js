@@ -1454,6 +1454,11 @@ describe('mediaJobQueue', () => {
       prompt: 'delayed dispatch', videoProduction: { projectId: 'example', attemptId: 'example-attempt' },
     } });
     let hold;
+    const ready = Promise.withResolvers();
+    const onMaintenanceChanged = status => {
+      if (status.state === 'ready') ready.resolve();
+    };
+    maintenance.events.on('changed', onMaintenanceChanged);
     try {
       await vi.waitFor(() => expect(checkEntered).toBe(true), { interval: 1 });
       ({ hold } = maintenance.begin({ reason: 'Drain pending preparation', owner: 'Operator' }));
@@ -1461,10 +1466,14 @@ describe('mediaJobQueue', () => {
       await vi.waitFor(() => expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed'));
       expect(maintenance.status().state).toBe('draining');
       dispatchCheck.resolve();
-      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      // Finalization performs real file I/O; await its actual readiness signal
+      // instead of a wall-clock poll that also advances the fake flush deadline.
+      await ready.promise;
+      expect(maintenance.status().state).toBe('ready');
       expect(stubs.generateVideo).not.toHaveBeenCalled();
       expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
     } finally {
+      maintenance.events.off('changed', onMaintenanceChanged);
       dispatchCheck.resolve();
       await flush();
       if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
@@ -3679,6 +3688,133 @@ describe('backup snapshot admission for media completion', () => {
     expect(capture(jobId)).toEqual({ files: [`${jobId}.mp4`], queueStatus: 'completed', rows: new Map([[jobId, `${jobId}.mp4`]]) });
   });
 
+  it('releases a finished provider lane after admission times out and recovers its pending result', async () => {
+    vi.useFakeTimers();
+    const completed = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('completed', completed);
+    let release;
+    let finishProvider;
+    stubs.generateVideo.mockImplementationOnce(() => new Promise(resolve => { finishProvider = resolve; }));
+    try {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'synthetic' } });
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(1));
+      await flush();
+      release = await boundary.acquireBackupSnapshotCut();
+      renderFinishes(jobId);
+      await vi.advanceTimersByTimeAsync(0);
+      // Jump to the final notice interval instead of executing an hour of worker ticks.
+      vi.setSystemTime(Date.now() + 59 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const pending = { status: 'completed', result: { filename: `${jobId}.mp4` } };
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'running', durabilityPending: pending }));
+      expect(mediaJobQueue.getRunningJob().id).toBe(jobId);
+      finishProvider({});
+      await vi.waitFor(() => expect(mediaJobQueue.getRunningJob()).toBeNull());
+      expect(persistedJobs().find(j => j.id === jobId)).toMatchObject({ status: 'running', durabilityPending: pending });
+      expect(completed).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0);
+      const { sanitizeJob } = await import('./sanitizeJob.js');
+      const publicJob = sanitizeJob(mediaJobQueue.getJob(jobId));
+      expect(publicJob.durabilityPending).toBeUndefined();
+      expect(publicJob.result).toBeUndefined();
+
+      const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'next synthetic' } });
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(2));
+      expect(mediaJobQueue.getRunningJob().id).toBe(next.jobId);
+      release();
+      release = null;
+      await flush();
+      await vi.waitFor(() => expect(rows.get(jobId)).toBe(`${jobId}.mp4`));
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result: pending.result });
+      expect(mediaJobQueue.getJob(jobId).durabilityPending).toBeUndefined();
+      renderFinishes(next.jobId);
+      await flush();
+      await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+      const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+      expect(maintenance.status().blockers).toEqual([]);
+    } finally {
+      finishProvider?.({});
+      release?.();
+      await flush();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      mediaJobQueue.mediaJobEvents.off('completed', completed);
+    }
+  });
+
+  it.each([false, true])('restores a pending completion without replay or premature publication (uncertain ownership: %s)', async (uncertain) => {
+    const jobId = '00000000-0000-4000-8000-000000000091';
+    const result = { filename: `${jobId}.mp4` };
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const permit = maintenance.admit('media', jobId);
+    if (uncertain) permit.markUnsettled();
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic' },
+      durabilityPending: { status: 'completed', result, progress: 1, statusMsg: 'Completed', completedAt: new Date().toISOString() },
+    }] }));
+    const release = await boundary.acquireBackupSnapshotCut();
+    try {
+      await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'running', durabilityPending: { status: 'completed', result } });
+      expect(mediaJobQueue.getRunningJob()).toBeNull();
+      expect(persistedJobs()[0]).toMatchObject({ status: 'running', durabilityPending: { result } });
+      expect(rows.size).toBe(0);
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+    await flush();
+    await waitFor(() => rows.has(jobId));
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result });
+    expect(mediaJobQueue.getJob(jobId).error).toBeUndefined();
+    expect(persistedJobs()[0]).toMatchObject({ status: 'completed', result });
+    expect(persistedJobs()[0].durabilityPending).toBeUndefined();
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(maintenance.status().blockers).toEqual(uncertain
+      ? [expect.objectContaining({ resource: jobId, unsettled: true })] : []);
+  });
+
+  it('waits for boot hook registration before recovering a receipt with admission already open', async () => {
+    const jobId = '00000000-0000-4000-8000-000000000092';
+    const result = { filename: `${jobId}.mp4` };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic' },
+      durabilityPending: { status: 'completed', result, completedAt: new Date().toISOString() },
+    }] }));
+    mediaJobQueue.mediaJobEvents.off('completed', onCompleted);
+    const completed = vi.fn();
+    const { runPostRouteSequence } = await import('../bootstrapSequence.js');
+    const noWork = async () => {};
+    const onFatal = vi.fn();
+    let beforeHooks;
+    await runPostRouteSequence({
+      startBackgroundServices: noWork, ensureSelf: noWork, initSyncLog: noWork,
+      recoverStuckClassifications: noWork, recoverInterruptedRepoClones: noWork,
+      initMediaJobQueue: mediaJobQueue.initMediaJobQueue,
+      initLoraTraining: async () => {
+        await mediaJobQueue.flushMediaJobQueue();
+        beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
+      },
+      initMediaJobDependentHooks: () => {
+        mediaJobQueue.mediaJobEvents.on('completed', onCompleted);
+        mediaJobQueue.mediaJobEvents.on('completed', completed);
+      },
+      resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
+      initSharing: noWork, recoverCreativeDirectorProjects: noWork,
+      runDatabasePhase: noWork, loadSeriesCoverBackfill: async () => noWork,
+      startListening: noWork, onFatal,
+    });
+    await flush();
+    await waitFor(() => rows.has(jobId));
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(beforeHooks).toMatchObject({ job: { status: 'running', durabilityPending: { result } }, rowCount: 0 });
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result });
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    mediaJobQueue.mediaJobEvents.off('completed', completed);
+  });
+
   it('drains a completion already publishing its queue row and hook rows before the cut', async () => {
     let finishWrite;
     const writeGate = new Promise((resolve) => { finishWrite = resolve; });
@@ -3745,6 +3881,7 @@ describe('backup snapshot admission for media completion', () => {
     const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
     // Storage is writable again and an unrelated queue write lands during the cut.
     await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'unrelated' } });
+    mediaJobQueue.quiesceMediaJobQueue();
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(mediaJobQueue.getJob(recovered).status).toBe('running');
     expect(capture(recovered)).toEqual({ files: [`${recovered}.mp4`], queueStatus: 'running', rows: new Map() });
@@ -3762,6 +3899,7 @@ describe('backup snapshot admission for media completion', () => {
     await settle();
     const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
     await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'unrelated' } });
+    mediaJobQueue.quiesceMediaJobQueue();
     const flushed = await mediaJobQueue.flushMediaJobQueue({ timeoutMs: 200 });
     expect(flushed).toMatchObject({ ok: false, timedOut: true });
     release();
@@ -3875,5 +4013,105 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('provider quota cooldowns', () => {
+  // Verbatim from this install on 2026-10-17 (redacted of nothing — it carries
+  // no private state). The duration is the only machine-readable part.
+  const QUOTA_ERROR = 'Agy did not produce an image at the directed path. Agy said: "The `generate_image` tool failed due to a rate-limit / quota exhaustion error: `429 RESOURCE_EXHAUSTED: "You have exhausted your capacity on this model. Your quota will reset after 2h26m1s."`"';
+
+  // No local beforeEach: the file-level one already gives each test a fresh
+  // temp data dir and a fresh module instance, so the cooldown map starts
+  // empty. Re-importing here would reset modules mid-setup.
+
+  it('holds a later render for the same backend instead of dispatching it into the same 429', async () => {
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+
+    // The point of the whole change: it is still queued, not burned.
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toMatch(/resumes at /);
+  });
+
+  it('keeps one hold message for the window, then promotes the job without it once the reset passes', async () => {
+    // Resolve so the first render releases its cloud slot once it fails.
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+    const waiting = mediaJobQueue.getJob(second.jobId).statusMsg;
+    // A later scan in the same window must not rewrite (and re-persist) it.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe(waiting);
+
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow + 3 * 60 * 60 * 1000);
+    try {
+      await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'running');
+      expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe('Starting');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('leaves a different backend free to run during another backend\'s cooldown', async () => {
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    stubs.generateImage.mockImplementation(() => new Promise(() => {}));
+    const local = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'page 2' } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    expect(mediaJobQueue.getJob(local.jobId).status).toBe('running');
+  });
+
+  it('does not hold anything for an ordinary failure that states no reset', async () => {
+    // Resolve rather than hang: the lane is released by the gen call settling,
+    // so a hanging stub would keep the cloud slot and mask the assertion.
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: 'Agy generation failed: Exit code 1' });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+    await flush();
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 2);
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('running');
+  });
+
+  it('keeps the cooldown across a restart so a reboot does not release the queue early', async () => {
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+    await flush();
+
+    const persisted = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+    expect(persisted.quotaCooldowns).toEqual([['codex', expect.any(Number)]]);
+
+    stubs.generateImageCodex.mockClear();
+    await importFresh();
+    // The restart itself: init is what re-reads the snapshot.
+    await mediaJobQueue.initMediaJobQueue();
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+    expect(stubs.generateImageCodex).not.toHaveBeenCalled();
   });
 });
