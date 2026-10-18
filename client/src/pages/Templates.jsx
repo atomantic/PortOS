@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
 import * as api from '../services/api';
 import FolderPicker from '../components/FolderPicker';
 import { FormField } from '../components/ui/FormField';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import useListResource from '../hooks/useListResource.js';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const ICONS = {
   layers: Layers,
@@ -17,8 +19,6 @@ const ICONS = {
 
 export default function Templates() {
   const navigate = useNavigate();
-  const [templates, setTemplates] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [createMode, setCreateMode] = useState(false);
   const [appName, setAppName] = useState('');
@@ -26,15 +26,12 @@ export default function Templates() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    loadTemplates();
+  const fetchTemplates = useCallback(async () => {
+    const serverTemplates = await api.getTemplates({ silent: true });
+    return Array.isArray(serverTemplates) ? serverTemplates : [];
   }, []);
-
-  const loadTemplates = async () => {
-    const serverTemplates = await api.getTemplates().catch(() => []);
-    setTemplates(serverTemplates);
-    setLoading(false);
-  };
+  const templatesResource = useListResource(fetchTemplates);
+  const { items: templates, state: templatesState, error: templatesError, retry: retryTemplates } = templatesResource;
 
   const handleSelectTemplate = (template) => {
     setSelectedTemplate(template);
@@ -67,7 +64,7 @@ export default function Templates() {
     navigate('/apps');
   };
 
-  if (loading) {
+  if (templatesState === 'loading') {
     return (
       <PageSkeleton
         label="Loading app templates"
@@ -165,7 +162,14 @@ export default function Templates() {
           </form>
         </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+        <>
+          {templatesState === 'error' && (
+            <ListLoadError className="mb-4" what="app templates" error={templatesError} onRetry={retryTemplates} />
+          )}
+          {templatesState === 'ready' && templates.length === 0 && (
+            <p className="text-sm text-gray-500 mb-4">No app templates available.</p>
+          )}
+          <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
           {templates.map(template => {
             const Icon = ICONS[template.icon] || Layers;
             return (
@@ -219,6 +223,7 @@ export default function Templates() {
             <span>Add Custom Template</span>
           </button>
         </div>
+        </>
       )}
 
       {/* Info */}

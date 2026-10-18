@@ -239,4 +239,57 @@ describe('FleetProviderSetup', () => {
     expect(screen.getByDisplayValue('Fleet GPU · OpenCode TUI')).toBeInTheDocument();
     expect(screen.getByDisplayValue('qwen3.8-27b')).toBeInTheDocument();
   });
+
+  it('renders ListLoadError when peers fail to load and recovers on retry', async () => {
+    const onRetryPeers = vi.fn();
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client']}>
+        <FleetProviderSetup
+          peers={[]}
+          peersState="error"
+          peersError={new Error('fleet offline')}
+          onRetryPeers={onRetryPeers}
+          onClose={() => {}}
+          onCreate={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load fleet peers — fleet offline');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryPeers).toHaveBeenCalled();
+
+    rerender(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client']}>
+        <FleetProviderSetup
+          peers={peers}
+          peersState="ready"
+          peersError={null}
+          onRetryPeers={onRetryPeers}
+          onClose={() => {}}
+          onCreate={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Known PortOS peer')).toBeInTheDocument();
+  });
+
+  it('renders empty copy when peers list is ready but empty', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client']}>
+        <FleetProviderSetup
+          peers={[]}
+          peersState="ready"
+          onClose={() => {}}
+          onCreate={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('No known PortOS peers discovered on your network.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

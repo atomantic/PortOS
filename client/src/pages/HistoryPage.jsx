@@ -5,6 +5,8 @@ import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
 import Banner from '../components/ui/Banner';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource.js';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 export function HistoryPage() {
@@ -13,25 +15,29 @@ export function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [historyFailed, setHistoryFailed] = useState(false);
   const [filter, setFilter] = useState({ action: '', success: '' });
-  const [actions, setActions] = useState([]);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
 
+  const fetchActions = useCallback(async () => {
+    const list = await api.getHistoryActions({ silent: true });
+    return Array.isArray(list) ? list : [];
+  }, []);
+  const actionsResource = useListResource(fetchActions);
+  const { items: actions, state: actionsState, error: actionsError, retry: retryActions } = actionsResource;
+
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [historyData, statsData, actionsData] = await Promise.all([
+    const [historyData, statsData] = await Promise.all([
       api.getHistory({
         limit: 100,
         action: filter.action || undefined,
         success: filter.success !== '' ? filter.success === 'true' : undefined
       }).catch(() => null),
       api.getHistoryStats().catch(() => null),
-      api.getHistoryActions().catch(() => [])
     ]);
     setHistoryFailed(historyData === null);
     if (historyData) setHistory(historyData.entries || []);
     setStats(statsData);
-    setActions(actionsData);
     setLoading(false);
   }, [filter]);
 
@@ -110,19 +116,23 @@ export function HistoryPage() {
       )}
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 sm:items-center">
-        <div className="flex flex-wrap gap-2 sm:gap-4">
-          <select
-            value={filter.action}
-            onChange={(e) => setFilter(prev => ({ ...prev, action: e.target.value }))}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-            aria-label="Filter by action type"
-          >
-            <option value="">All Actions</option>
-            {actions.map(action => (
-              <option key={action} value={action}>{action}</option>
-            ))}
-          </select>
+      <div className="space-y-2">
+        {actionsState === 'error' && (
+          <ListLoadError what="history actions" error={actionsError} onRetry={retryActions} />
+        )}
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 sm:items-center">
+          <div className="flex flex-wrap gap-2 sm:gap-4">
+            <select
+              value={filter.action}
+              onChange={(e) => setFilter(prev => ({ ...prev, action: e.target.value }))}
+              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+              aria-label="Filter by action type"
+            >
+              <option value="">{actionsState === 'ready' && actions.length === 0 ? 'No actions available' : 'All Actions'}</option>
+              {actions.map(action => (
+                <option key={action} value={action}>{action}</option>
+              ))}
+            </select>
 
           <select
             value={filter.success}
@@ -162,6 +172,7 @@ export function HistoryPage() {
             Clear History
           </button>
         )}
+        </div>
       </div>
 
       {/* History List */}
