@@ -325,7 +325,6 @@ export const buildArgs = ({ loraPaths = [], loraScales = [], referenceImagePaths
   return mfluxArgs(inputs);
 };
 
-
 // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
 // corrupt sidecar value like Number('bad') would slip through and end up
 // serialized into metadata / the CLI flag. `null` here means "no strength
