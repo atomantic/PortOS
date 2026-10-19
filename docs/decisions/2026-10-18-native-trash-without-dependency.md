@@ -1,7 +1,7 @@
 # ADR: Recycle media through OS facilities PortOS owns, not the `trash` package
 
 **Date:** 2026-10-18
-**Status:** Accepted — macOS and Linux mechanisms proven; the Windows mechanism is specified and must pass its acceptance checks in the implementing PR before any adapter ships
+**Status:** Accepted — macOS and Linux mechanisms proven; the Windows mechanism is specified and must pass its acceptance checks in the implementing PR before any adapter ships. Implemented by issue #12246 (`server/lib/nativeTrash.js`, `server/lib/nativeTrashXdg.js`); the POC harnesses now import the production scripts. Windows checks executed on a `windows-latest` runner: check 2 passed on the `DriveType` pre-flight; check 3 showed that `FOF_WANTNUKEWARNING` makes the shell block on a confirmation no unattended process can answer (the deadline kill left the file intact), so the adapter adds the `BitBucket` `MaxCapacity` / `NukeOnDelete` pre-check — the shell-recorded value when present, else the OS default of 10% of the first 40 GB plus 5% of the rest, which matched the values the shell wrote for two fresh volumes; check 6 measured 0.5 s per batch after first use (4.2 s on a cold runner), so the P/Invoke stays and the `Microsoft.VisualBasic` call is not needed. PowerShell also serialises a redirected error stream as CLIXML, so the report is written to stdout on both paths
 **Evidence:** [Native trash feasibility study](../research/2026-10-18-native-trash-feasibility.md) (issue #12231)
 
 ## Question
@@ -141,8 +141,8 @@ replaces the adapter and records the removal in `docs/DEPS.md`.
   executables.
 - macOS deletes spawn one short-lived `osascript` per file (deletion batches
   are a handful of files; ~50 ms each).
-- Windows deletes pay an `Add-Type` compile per batch unless check 6 moves the
-  adapter to the no-compile VisualBasic call.
+- Windows deletes pay an `Add-Type` compile per batch (about 0.5 s once the
+  runtime is warm); check 6 confirmed that is well inside the deadline.
 - WSL installs recycle into an XDG trash on the mounted drive rather than the
   Windows Recycle Bin; documented, recoverable, out of scope.
 - If a future macOS release changes the per-process Put Back behaviour, the

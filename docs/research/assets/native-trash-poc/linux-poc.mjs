@@ -1,4 +1,4 @@
-// Linux harness for xdgTrash.mjs (issue #12231 study). Run through
+// Linux harness for the XDG adapter (issue #12231 study; production module `server/lib/nativeTrashXdg.js`). Run through
 // linux-docker-run.sh, which provides the extra volumes it expects. Exits 1 when
 // any assertion fails so a broken adapter cannot produce a passing-looking report.
 import { trashXdg } from './xdgTrash.mjs';

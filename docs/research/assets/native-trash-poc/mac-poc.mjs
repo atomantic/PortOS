@@ -12,32 +12,9 @@ import { join, basename, dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const execFileAsync = promisify(execFile);
-// The script PortOS would embed. `$()` (typed nil) is the out-parameter idiom that
-// works on macOS 26; `Ref()` crashes osascript after the move succeeds.
-const JXA = `
-ObjC.import('Foundation');
-ObjC.import('stdlib');
-function run(argv) {
-  const fm = $.NSFileManager.defaultManager;
-  const results = [];
-  let failed = false;
-  for (const path of argv) {
-    const trashedUrl = $();
-    const error = $();
-    const ok = fm.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(path), trashedUrl, error);
-    if (ok) results.push({ path, trashedPath: ObjC.unwrap(trashedUrl.path) });
-    else {
-      failed = true;
-      results.push({ path, code: Number(error.code), domain: ObjC.unwrap(error.domain), error: ObjC.unwrap(error.localizedDescription) });
-    }
-  }
-  const out = JSON.stringify(results);
-  if (failed) {
-    $.NSFileHandle.fileHandleWithStandardError.writeData($(out).dataUsingEncoding($.NSUTF8StringEncoding));
-    $.exit(1);
-  }
-  return out;
-}`;
+// The exact script `server/lib/nativeTrash.js` embeds, so this harness proves
+// the production body rather than a copy of it.
+import { MACOS_TRASH_SCRIPT as JXA } from '../../../../server/lib/nativeTrash.js';
 
 async function osascriptTrash(paths) {
   const started = Date.now();
@@ -46,7 +23,7 @@ async function osascriptTrash(paths) {
     return { ok: true, ms: Date.now() - started, results: JSON.parse(stdout.trim()) };
   } catch (error) {
     let results = null;
-    try { results = JSON.parse(String(error.stderr || '').trim()); } catch {}
+    try { results = JSON.parse(String(error.stdout || '').trim()); } catch {}
     return { ok: false, ms: Date.now() - started, exitCode: error.code, killed: error.killed, results, stderr: results ? undefined : String(error.stderr || '').trim().slice(0, 300) };
   }
 }
