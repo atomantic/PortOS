@@ -246,7 +246,7 @@ describe('persistent database maintenance boundary', () => {
     const stub = `const log=[]; globalThis.sqlLog=log; export default {
       Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},
       types:{setTypeParser(){}},Pool:class {
-        on(){} async connect(){globalThis.beforeCheckout(); return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
+        on(){} async connect(){globalThis.beforeCheckout(); return {on(){},removeListener(){},query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
         query(){throw Error('NEW_QUERY_REACHED')}
       }};`;
     writeFileSync(loader, `export async function resolve(s,c,n) {

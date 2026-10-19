@@ -41,8 +41,8 @@ describe('catalogValidation — ingredient types & ref kinds', () => {
     expect(Object.isFrozen(INGREDIENT_TYPES)).toBe(true);
   });
 
-  it('exposes the documented ref kinds (universe/series/issue/work/creative-director)', () => {
-    expect(REF_KINDS).toEqual(['universe', 'series', 'issue', 'work', 'creative-director']);
+  it('exposes the documented ref kinds (universe/series/issue/work/creative-director/music-video)', () => {
+    expect(REF_KINDS).toEqual(['universe', 'series', 'issue', 'work', 'creative-director', 'music-video']);
     expect(Object.isFrozen(REF_KINDS)).toBe(true);
   });
 });

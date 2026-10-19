@@ -142,7 +142,7 @@ import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
-import { activeAgents, runnerAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
 /**
  * A direct-mode agent's spawned handle. Its prototype is ChildProcess so it
@@ -1715,6 +1715,18 @@ describe('orphan retries resume what the dead run left behind', () => {
 
   // The sweep is the only place that knows an agent DIED rather than exited, so
   // it is the only place that can put that distinction in the ledger (#4540).
+  it('does not retire or retry an exited runner while completion owns its outcome', async () => {
+    completingAgents.add(deadAgent.id);
+    try {
+      await cleanupOrphanedAgents();
+      expect(retireDeadAgent).not.toHaveBeenCalled();
+      expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+    } finally {
+      completingAgents.delete(deadAgent.id);
+    }
+  });
+
   it('records the reap in the lifecycle ledger, keyed by agent when no run id survived', async () => {
     await cleanupOrphanedAgents();
 
@@ -2012,6 +2024,26 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
   });
 
   const requeuedMetadata = () => updateTask.mock.calls.at(-1)[1].metadata;
+
+  it('recovers a shutdown-marked dispatch during startup grace without charging either retry budget', async () => {
+    getAgents.mockResolvedValue([{
+      ...deadAgent,
+      startedAt: new Date().toISOString(),
+      metadata: { ...deadMetadata, phase: 'initializing', useRunner: true },
+    }]);
+    getTaskById.mockResolvedValue({
+      id: 'task-1', taskType: 'user', status: 'in_progress',
+      metadata: { orphanRetryCount: 1, totalSpawnCount: 2 },
+    });
+    readHostShutdownMarker.mockResolvedValue({ at: new Date().toISOString(), signal: 'SIGTERM', agentIds: ['agent-dead'] });
+
+    await cleanupOrphanedAgents();
+
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(requeuedMetadata()).toMatchObject({ orphanRetryCount: 1, totalSpawnCount: 1, interruptedByRestart: true });
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ category: 'interrupted', exitCode: 143 }));
+    expect(clearHostShutdownMarker).toHaveBeenCalled();
+  });
 
   it('requeues an interrupted run without incrementing orphanRetryCount or stamping lastOrphanedAt', async () => {
     getTaskById.mockResolvedValue({

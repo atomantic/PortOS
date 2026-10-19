@@ -6,6 +6,7 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { request } from '../lib/testHelper.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -75,6 +76,24 @@ const runGate = async (gate, req) => new Promise((resolve) => {
 });
 
 describe('authGate middleware', () => {
+  it('keeps health details password-gated while public health remains reachable', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+
+    const health = await runGate(authGate, { method: 'GET', path: '/api/system/health', headers: {} });
+    expect(health.called).toBe(true);
+
+    const details = await runGate(authGate, { method: 'GET', path: '/api/system/health/details', headers: {} });
+    expect(details.called).toBe(false);
+    expect(details.res.statusCode).toBe(401);
+    expect(details.res.body).toEqual({
+      error: 'Authentication required',
+      code: 'AUTH_REQUIRED',
+      timestamp: expect.any(Number),
+    });
+  });
+
   it('is a no-op when auth is disabled', async () => {
     const { authGate } = await import('./authGate.js');
     const req = { path: '/api/cos', headers: {} };
@@ -650,6 +669,39 @@ describe('authGate HTTP Basic auth (peer federation)', () => {
     expect(result.res.statusCode).toBe(401);
   });
 
+  it('keeps refusing a wrong password on repeat attempts (failures never become cached successes)', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { authGate } = await import('./authGate.js');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await runGate(authGate, {
+        path: '/api/cos',
+        headers: { authorization: basicHeader('wrong') },
+      });
+      expect(result.called).toBe(false);
+      expect(result.res.statusCode).toBe(401);
+    }
+  });
+
+  it('stops accepting a cached Basic password immediately after rotation', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'old-secret' });
+    const { authGate } = await import('./authGate.js');
+    const attempt = (password) => runGate(authGate, {
+      path: '/api/cos',
+      headers: { authorization: basicHeader(password) },
+    });
+    // Warm the success cache with the old password.
+    expect((await attempt('old-secret')).called).toBe(true);
+
+    await auth.setPassword({ newPassword: 'new-secret', currentPassword: 'old-secret' });
+
+    const stale = await attempt('old-secret');
+    expect(stale.called).toBe(false);
+    expect(stale.res.statusCode).toBe(401);
+    expect((await attempt('new-secret')).called).toBe(true);
+  });
+
   it('does not cache failed password verification', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'future-secret' });
@@ -728,7 +780,7 @@ describe('host-control authority', () => {
     expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }))).toBe(true);
     expect(await socketHasCurrentHostControl(socketFor())).toBe(false);
     expect(await socketHasCurrentHostControl(socketFor({ authorization: 'Basic fixture' }))).toBe(false);
-    expect(await socketHasCurrentHostControl(socketFor({ 'x-portos-peer-token': 'fixture' }))).toBe(false);
+    expect(await socketHasCurrentHostControl(socketFor({ [PEER_AUTH_HEADER.toLowerCase()]: 'fixture' }))).toBe(false);
     expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }, true))).toBe(false);
 
     await auth.revokeSession(bearerSession.token);
@@ -738,6 +790,42 @@ describe('host-control authority', () => {
     vi.setSystemTime(expiringSession.expiresAt + 1);
     expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${expiringSession.token}` }))).toBe(false);
     vi.useRealTimers();
+  });
+
+  // The Tailcat ingress accepts remote peers on a loopback listener, so the
+  // socket address reads as local. Only the listener's mark separates them;
+  // it must refuse password-free host control for HTTP and for the Socket.IO
+  // handshake (which engine.io intercepts before the app handler).
+  it('refuses password-free host control to requests the Tailcat ingress marked remote', async () => {
+    const { remoteRequestHandler, markRemoteServer } = await import('../lib/requestOrigin.js');
+    const { hostControlBodyGate, requestHasHostControl, socketAuthGate, socketHasHostControl } = await import('./authGate.js');
+    const local = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
+    const viaIngress = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
+    remoteRequestHandler(() => {})(viaIngress, {});
+    expect(requestHasHostControl(local)).toBe(true);
+    expect(requestHasHostControl(viaIngress)).toBe(false);
+
+    const policyWrite = { ...viaIngress, method: 'PUT', path: '/api/cos/config', body: { autonomyMode: 'execute' } };
+    remoteRequestHandler(() => {})(policyWrite, {});
+    const bodyGate = await runGate(hostControlBodyGate, policyWrite);
+    expect(bodyGate.called).toBe(false);
+    expect(bodyGate.res.statusCode).toBe(403);
+    expect(bodyGate.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+
+    const { EventEmitter } = await import('node:events');
+    const server = markRemoteServer(new EventEmitter());
+    const handshake = async (request) => {
+      const socket = { request, handshake: { address: '127.0.0.1', headers: {} } };
+      await new Promise((resolve) => socketAuthGate(socket, resolve));
+      return socketHasHostControl(socket);
+    };
+    const upgradeRequest = {};
+    server.emit('upgrade', upgradeRequest);
+    const pollingRequest = {};
+    server.emit('request', pollingRequest);
+    expect(await handshake({})).toBe(true);
+    expect(await handshake(upgradeRequest)).toBe(false);
+    expect(await handshake(pollingRequest)).toBe(false);
   });
 
   it('keeps password-free socket host control limited to connected local sockets', async () => {
@@ -1187,6 +1275,20 @@ describe('paired peer credential (#8356)', () => {
     }
   });
 
+  it('refuses a pair secret shorter than 32 characters even with a correctly derived token', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const app = await buildApp();
+    const shortSecret = 'x'.repeat(31);
+    writePeers([pairedPeer({ syncSecret: shortSecret })]);
+    expect((await withHeaders(request(app).get('/api/example'), await peerHeaders(PEER_ID, shortSecret))).status).toBe(401);
+
+    const okSecret = 'x'.repeat(32);
+    writePeers([pairedPeer({ syncSecret: okSecret })]);
+    // A 32-character secret authenticates as a peer (then hits the peer scope fence).
+    expect((await withHeaders(request(app).get('/api/example'), await peerHeaders(PEER_ID, okSecret))).status).toBe(403);
+  });
+
   it('keeps an unpaired or older peer federating over Basic, warning once when a paired peer still uses it', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'example-password' });
@@ -1343,6 +1445,18 @@ describe('socketAuthGate middleware', () => {
       socketAuthGate({ handshake: { headers: { authorization: header } } }, (e) => resolve(e));
     });
     expect(err).toBeUndefined();
+  });
+
+  it('rejects a peer relay handshake with a wrong Basic password', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { socketAuthGate } = await import('./authGate.js');
+    const header = `Basic ${Buffer.from(':wrong-secret').toString('base64')}`;
+    const err = await new Promise((resolve) => {
+      socketAuthGate({ handshake: { headers: { authorization: header } } }, (e) => resolve(e));
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.data.code).toBe('AUTH_REQUIRED');
   });
 
   it('rejects a cross-origin handshake', async () => {

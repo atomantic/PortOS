@@ -22,6 +22,8 @@ import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js
 
 vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
 
+import { emitLog } from '../cosEvents.js';
+
 const { createTuiSessionController } = await import('./sessionController.js');
 
 const TASK = { id: 'task-8021', description: 'extract the session controller' };
@@ -47,6 +49,7 @@ function makeController({
   prompt = 'do the work',
   securityScanGrant = null,
   sentinelRead = async () => sentinelSummary ?? '',
+  spoolerOverrides = {},
 } = {}) {
   // A DISTINCT closer per arm: the merge-gate case below has to tell the
   // re-armed watcher apart from the one it replaced, which one shared spy
@@ -68,6 +71,7 @@ function makeController({
     write: vi.fn(),
     paste: vi.fn(() => ({ /* a live submit-Enter interval handle */ })),
     kill: vi.fn(),
+    markUnsettled: vi.fn(),
     resolveErrorAnalysis: vi.fn(async ({ immediateFallbackAnalysis }) => immediateFallbackAnalysis),
   };
   const controller = createTuiSessionController({
@@ -93,6 +97,7 @@ function makeController({
       drainLines: vi.fn().mockResolvedValue(undefined),
       drainRaw: vi.fn().mockResolvedValue(undefined),
       getOutputBuffer: () => '',
+      ...spoolerOverrides,
     },
     session: {
       write: seams.write,
@@ -102,6 +107,7 @@ function makeController({
       hasLiveChild: async () => true,
     },
     persistence: {
+      markUnsettled: seams.markUnsettled,
       updateAgent: seams.updateAgent,
       appendRunEvent: vi.fn(),
       // THE CASE UNDER TEST: no active-run entry for this agent.
@@ -147,6 +153,27 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     // A run with no record still releases: `unregisterSpawnedAgent` is skipped
     // (no pid to unregister) but the map entry is deleted unconditionally.
     expect(releaseRunRecord).toHaveBeenCalledWith(null);
+  });
+
+  it.each([
+    ['drainLines', 'parsed output'],
+    ['drainRaw', 'raw PTY spool'],
+  ])('still finalizes, releases the lane and kills the session when %s rejects (BACKUP_SNAPSHOT_BUSY)', async (drainName, label) => {
+    const busy = Object.assign(new Error('backup snapshot busy'), { code: 'BACKUP_SNAPSHOT_BUSY' });
+    const { controller, finalizeAgent, releaseRunRecord, kill, markUnsettled } = makeController({
+      spoolerOverrides: { [drainName]: vi.fn().mockRejectedValue(busy) },
+    });
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    await controller.handleExit({ exitCode: 0, killed: false });
+
+    expect(controller.isTerminal()).toBe(true);
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-8021', success: true }));
+    expect(releaseRunRecord).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith('session-abcdef12');
+    expect(markUnsettled).toHaveBeenCalled();
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining(`${label} drain failed`), { agentId: 'agent-8021' });
   });
 
   it('keeps the run alive when a completion sentinel read fails, then retries it', async () => {
@@ -224,6 +251,7 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     await vi.advanceTimersByTimeAsync(300);
     await controller.handleData('A sufficiently long prompt for this controller test');
     await vi.advanceTimersByTimeAsync(300);
+    expect(write).toHaveBeenCalledWith('session-abcdef12', '\r', { promptSubmission: true });
 
     const banner = "\n⏺ You've hit your session limit · resets 6:00 PM";
     await controller.handleData(banner);

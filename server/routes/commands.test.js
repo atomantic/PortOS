@@ -22,6 +22,12 @@ vi.mock('../services/history.js', () => ({
   logAction: vi.fn(),
 }));
 
+// Command output reaches only subscribed sockets (#12019); the route never
+// touches the global io instance.
+vi.mock('../services/socket.js', () => ({
+  broadcastToCommandSubscribers: vi.fn(),
+}));
+
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([]),
   listProcessesStrict: vi.fn().mockResolvedValue([]),
@@ -66,6 +72,8 @@ vi.mock('../services/settings.js', () => ({
 }));
 
 import { authGate } from '../services/authGate.js';
+import { broadcastToCommandSubscribers } from '../services/socket.js';
+import { logAction } from '../services/history.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { existsSync, realpathSync, statSync } from 'fs';
 import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
@@ -78,6 +86,8 @@ function createChildProcess() {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
   child.kill = vi.fn();
   return child;
 }
@@ -347,7 +357,7 @@ describe('commands routes', () => {
 
     it('returns FORBIDDEN for a command outside the operator allowlist', async () => {
       allowWorkspace();
-      const { app, io } = createApp();
+      const { app } = createApp();
 
       const response = await request(app)
         .post('/api/commands/execute')
@@ -356,7 +366,7 @@ describe('commands routes', () => {
       expect(response.status).toBe(403);
       expect(response.body.code).toBe('FORBIDDEN');
       expect(spawnMock).not.toHaveBeenCalled();
-      expect(io.emit).not.toHaveBeenCalledWith(
+      expect(broadcastToCommandSubscribers).not.toHaveBeenCalledWith(
         expect.stringMatching(/^command:/),
         expect.anything(),
       );
@@ -384,26 +394,60 @@ describe('commands routes', () => {
       child.emit('close', 0);
 
       const eventPrefix = `command:${response.body.commandId}`;
-      expect(io.emit).toHaveBeenCalledWith(`${eventPrefix}:data`, {
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(`${eventPrefix}:data`, {
         data: 'workspace output',
         stream: 'stdout',
       });
-      expect(io.emit).toHaveBeenCalledWith(`${eventPrefix}:data`, {
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(`${eventPrefix}:data`, {
         data: 'workspace warning',
         stream: 'stderr',
       });
-      expect(io.emit).toHaveBeenCalledWith(`${eventPrefix}:complete`, expect.objectContaining({
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(`${eventPrefix}:complete`, expect.objectContaining({
         success: true,
         exitCode: 0,
         output: 'workspace outputworkspace warning',
       }));
+      // Scoped to command subscribers — never the global io broadcast (#12019).
+      expect(io.emit).not.toHaveBeenCalled();
+    });
+
+    it('redacts secrets in every copy of the output: the streamed chunk, the completion frame, and the history row (#12019)', async () => {
+      allowWorkspace();
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp();
+
+      const response = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'git config --list', workspacePath: WORKSPACE_PATH });
+      expect(response.status).toBe(202);
+
+      child.stdout.emit('data', Buffer.from('user.name=Example\ngithub.token=ghp_example_value\n'));
+      // A value split across two chunks is still redacted once the buffer is whole.
+      child.stdout.emit('data', Buffer.from('API_TO'));
+      child.stdout.emit('data', Buffer.from('KEN=split-example\n'));
+      child.emit('close', 0);
+
+      const eventPrefix = `command:${response.body.commandId}`;
+      const frames = broadcastToCommandSubscribers.mock.calls
+        .filter(([event]) => event === `${eventPrefix}:data`)
+        .map(([, payload]) => payload.data);
+      expect(frames[0]).toBe('user.name=Example\ngithub.token=[REDACTED]\n');
+      expect(frames.join('')).not.toContain('ghp_example_value');
+
+      const [, completion] = broadcastToCommandSubscribers.mock.calls.find(([event]) => event === `${eventPrefix}:complete`);
+      expect(completion.output).toBe('user.name=Example\ngithub.token=[REDACTED]\nAPI_TOKEN=[REDACTED]\n');
+
+      const [, , , historyRow] = logAction.mock.calls.find(([type, , , details]) => type === 'command' && details.exitCode === 0);
+      expect(historyRow.output).toBe('user.name=Example\ngithub.token=[REDACTED]\nAPI_TOKEN=[REDACTED]\n');
+      expect(JSON.stringify(logAction.mock.calls)).not.toMatch(/ghp_example_value|split-example/);
     });
 
     it('invokes onComplete exactly once with error details when child process fails to spawn, even if close emits after error', async () => {
       allowWorkspace();
       const child = createChildProcess();
       spawnMock.mockReturnValue(child);
-      const { app, io } = createApp();
+      const { app } = createApp();
       const { logAction } = await import('../services/history.js');
 
       const response = await request(app)
@@ -422,14 +466,14 @@ describe('commands routes', () => {
       child.emit('close', null);
 
       // Verify onComplete was called exactly once with the error details
-      expect(io.emit).toHaveBeenCalledWith(`${eventPrefix}:complete`, {
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(`${eventPrefix}:complete`, {
         success: false,
         error: 'ENOENT: no such file or directory',
         exitCode: 1,
       });
 
       // Count completion events to ensure only one was emitted
-      const completionCalls = io.emit.mock.calls.filter(
+      const completionCalls = broadcastToCommandSubscribers.mock.calls.filter(
         call => call[0] === `${eventPrefix}:complete`
       );
       expect(completionCalls).toHaveLength(1);
@@ -463,6 +507,42 @@ describe('commands routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ stopped: true });
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // The child has not closed yet (it may be ignoring SIGTERM): a repeat
+      // stop inside the grace window is absorbed, not reported as gone (#12021).
+      const again = await request(app)
+        .post(`/api/commands/${started.body.commandId}/stop`);
+      expect(again.status).toBe(200);
+      expect(again.body).toEqual({ stopped: true });
+      expect(child.kill).toHaveBeenCalledTimes(1);
+
+      child.emit('close', null, 'SIGTERM');
+      const afterClose = await request(app)
+        .post(`/api/commands/${started.body.commandId}/stop`);
+      expect(afterClose.status).toBe(404);
+      expect(afterClose.body.code).toBe('NOT_ACTIVE');
+      expect(broadcastToCommandSubscribers).toHaveBeenCalledWith(
+        `command:${started.body.commandId}:complete`,
+        expect.objectContaining({ success: false, signal: 'SIGTERM', stopped: true, error: 'Stopped (SIGTERM)' }),
+      );
+    });
+
+    it('accepts an optional per-command timeoutMs and rejects a non-positive one (#12021)', async () => {
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp();
+
+      const rejected = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'pwd', timeoutMs: 0 });
+      expect(rejected.status).toBe(400);
+      expect(spawnMock).not.toHaveBeenCalled();
+
+      const started = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'pwd', timeoutMs: 60_000 });
+      expect(started.status).toBe(202);
+      child.emit('close', 0);
     });
 
     it('returns NOT_ACTIVE for an unknown command id', async () => {

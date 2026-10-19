@@ -35,6 +35,7 @@ import {
 import { listSeries } from '../pipeline/series.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
+import { isFileBackend } from '../../lib/pgFileFacade.js';
 
 // Once-per-process flag for the canon-backfill log — readState() runs in both
 // the queue and from un-queued readers, and the in-memory migration is cheap
@@ -313,6 +314,7 @@ export async function createUniverse(input = {}) {
       console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
     });
   }
+  promoteNewCanonEntries(created);
   return created;
 }
 
@@ -739,7 +741,25 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   if (!silent) {
     emitRecordUpdated('universe', merged.id);
   }
+  promoteNewCanonEntries(merged);
   return merged;
+}
+
+// A save that adds a canon character/place/object gives it a catalog row (and
+// stamps the ingredientId back) so Casting / Environments / Objects list it
+// without a manual "Sync from Universes". Deterministic ids keep two peers that
+// promote the same entry on the same row. Fire-and-forget: the save already
+// succeeded, and the promotion re-reads the universe inside its own write.
+// Ephemeral scratch universes and the file/test backend stay out of the catalog.
+function promoteNewCanonEntries(universe) {
+  if (!universe || universe.ephemeral || isFileBackend()) return;
+  import('../../scripts/migrateBibleToCatalog.js')
+    .then(({ hasUnpromotedCanon, promoteUniverseCanon }) => (
+      hasUnpromotedCanon(universe) ? promoteUniverseCanon(universe.id) : null
+    ))
+    .catch((err) => {
+      console.error(`❌ canon→catalog promotion failed for ${universe.id}: ${err.message}`);
+    });
 }
 
 /**

@@ -257,6 +257,43 @@ describe('networkExposure.buildNetworkSetupGuide', () => {
     });
   });
 
+  it('blocks the certificate step with no action while the sandboxed CLI cannot reach MagicDNS', () => {
+    const guide = buildNetworkSetupGuide(baseNetwork, {
+      available: true,
+      running: false,
+      sandboxed: true,
+    });
+
+    expect(guide.steps.find((step) => step.id === 'https-cert')).toMatchObject({
+      status: 'blocked',
+      detail: expect.stringContaining('brew install tailscale'),
+      action: null,
+    });
+  });
+
+  it('explains that a matching certificate still needs Tailscale connected before activation', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      cert: {
+        ...baseNetwork.cert,
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: 'host-alpha.example-tailnet.ts.net',
+      },
+    }, {
+      available: true,
+      running: false,
+      sandboxed: false,
+    });
+
+    expect(guide.steps.find((step) => step.id === 'https-cert')).toMatchObject({ status: 'complete', action: null });
+    expect(guide.steps.find((step) => step.id === 'activate-https')).toMatchObject({
+      status: 'blocked',
+      detail: 'Connect Tailscale and confirm its current MagicDNS name before launching the trusted URL.',
+      action: null,
+    });
+  });
+
   it('names a stale certificate hostname before offering reprovisioning', () => {
     const guide = buildNetworkSetupGuide({
       ...baseNetwork,

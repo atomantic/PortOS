@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Shield, LayoutDashboard, KeyRound, Building2, Repeat, ShieldOff } from 'lucide-react';
 import { useValidTab } from '../hooks/useValidTab';
@@ -13,6 +13,8 @@ import PrivacyChangesTab from '../components/privacy/PrivacyChangesTab';
 import PrivacyBrokersTab from '../components/privacy/PrivacyBrokersTab';
 import SubjectSwitcher from '../components/privacy/SubjectSwitcher';
 import SubjectsDrawer from '../components/privacy/SubjectsDrawer';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource.js';
 import { SELF_SUBJECT_ID, privacyTabPath } from '../components/privacy/constants';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
@@ -35,7 +37,6 @@ export default function Privacy() {
   const navigate = useNavigate();
   const activeTab = useValidTab(TABS, 'overview');
   const [searchParams, updateParams] = useUrlParams();
-  const [subjects, setSubjects] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Which household subject is in scope lives in the URL (#3658), so a view of
@@ -43,11 +44,18 @@ export default function Privacy() {
   // other selection. An absent param means `self`, matching the server default.
   const subjectId = searchParams.get('subject') || SELF_SUBJECT_ID;
 
-  useEffect(() => {
-    getPrivacySubjects({ silent: true })
-      .then((rows) => setSubjects(rows || []))
-      .catch(() => setSubjects([]));
+  const fetchSubjects = useCallback(async () => {
+    const rows = await getPrivacySubjects({ silent: true });
+    return Array.isArray(rows) ? rows : [];
   }, []);
+  const subjectsResource = useListResource(fetchSubjects);
+  const {
+    items: subjects,
+    state: subjectsState,
+    error: subjectsError,
+    retry: retrySubjects,
+    setItems: setSubjects,
+  } = subjectsResource;
 
   // `self` is the default scope, so it stays out of the URL entirely — a null
   // patch value is `useUrlParams`'s delete signal.
@@ -123,7 +131,10 @@ export default function Privacy() {
         mobileCompact
         ariaLabel="Privacy Center sections"
       />
-      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-4">
+        {subjectsState === 'error' && (
+          <ListLoadError what="household subjects" error={subjectsError} onRetry={retrySubjects} />
+        )}
         <div>
           <SubjectSwitcher
             subjects={subjects}
@@ -132,6 +143,9 @@ export default function Privacy() {
             onManage={() => setDrawerOpen(true)}
           />
         </div>
+        {subjectsState === 'ready' && subjects.length === 0 && (
+          <p className="text-xs text-gray-500">No household subjects on record.</p>
+        )}
         {/* Keying on the subject remounts the tab when the scope changes, so ALL
             of its local state resets at once — revealed plaintext, open drawers,
             expanded rows, filters. Clearing those by hand inside each tab's

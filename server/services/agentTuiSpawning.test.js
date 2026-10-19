@@ -13,6 +13,7 @@ vi.mock('./shell.js', () => ({
   getSession: vi.fn(),
   getSessionProcess: vi.fn(),
   registerExternalSession: vi.fn(),
+  unregisterExternalSession: vi.fn(),
 }));
 
 // Only the spawn rpc is faked. The refusal/ambiguity classifier is the real one
@@ -79,7 +80,6 @@ vi.mock('./ollamaAgentContext.js', () => ({
 }));
 
 vi.mock('./agentFinalization.js', () => ({
-  persistSimplifySummaries: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn()
 }));
@@ -267,6 +267,11 @@ import {
   OOM_NUDGE_TEXT,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
+  CAPACITY_NUDGE_SETTLE_MS,
+  CAPACITY_NUDGE_ARM_WINDOW_MS,
+  CAPACITY_NUDGE_COOLDOWN_MS,
+  CAPACITY_NUDGE_MAX_ATTEMPTS,
+  CAPACITY_NUDGE_TEXT,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
@@ -848,6 +853,13 @@ describe('spawnTuiAgent runtime', () => {
     );
 
     await capturedOnExit({ exitCode: 1, signal: 15 });
+
+    // The runner proxy accepts writes after its PTY died, so only removing the
+    // record makes a later paste report the session gone (#11861) — and it has
+    // to happen before the run is finalized, which is where a nudge is decided.
+    expect(shellService.unregisterExternalSession).toHaveBeenCalledWith(SESSION_ID, { exitCode: 1 });
+    expect(vi.mocked(shellService.unregisterExternalSession).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(agentLifecycle.finalizeAgent).mock.invocationCallOrder[0]);
   });
 
   it('passes the repo-owner-pinned GH_TOKEN into the TUI session env (buildSafeEnv would otherwise strip it)', async () => {
@@ -2039,6 +2051,84 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
+  // ── Model at capacity: a nudge after a long quiet, then fail over ──────────
+  // Codex halts the turn on `Selected model is at capacity.` and waits at the
+  // composer. Provider load clears in minutes, so the settle window is far
+  // longer than the OOM one; the same three behaviors are pinned.
+  const CAPACITY_BANNER = 'Selected model is at capacity. Please try a different model.';
+  const PAST_CAPACITY_SETTLE_MS = CAPACITY_NUDGE_SETTLE_MS + 10000;
+
+  it('nudges a session a model-at-capacity rejection parked, without re-sending the prompt', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    await flushMicrotasks();
+    // Well past the OOM settle window, still inside the capacity one.
+    await vi.advanceTimersByTimeAsync(OOM_NUDGE_SETTLE_MS + 10000);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledWith(
+      SESSION_ID,
+      CAPACITY_NUDGE_TEXT,
+      expect.objectContaining({ label: expect.stringContaining('model-capacity') }),
+    );
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a session that kept working after the capacity rejection alone', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    await flushMicrotasks();
+    for (let elapsed = 0; elapsed <= CAPACITY_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
+      await capturedOnData(Buffer.from('still working\n'));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(5000);
+      await flushMicrotasks();
+    }
+    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+    await flushMicrotasks();
+
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+  });
+
+  it('falls back once the capacity rejections outlast every nudge', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    for (let i = 0; i < CAPACITY_NUDGE_MAX_ATTEMPTS; i += 1) {
+      await capturedOnData(Buffer.from(CAPACITY_BANNER));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+      await flushMicrotasks();
+      // Clear the dedupe cooldown so the next banner reads as a NEW rejection.
+      await vi.advanceTimersByTimeAsync(CAPACITY_NUDGE_COOLDOWN_MS);
+      await flushMicrotasks();
+    }
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(CAPACITY_NUDGE_MAX_ATTEMPTS);
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        completionReason: 'fallback-signal',
+      })
+    );
+  });
+
   // ── Retry stall: the provider keeps failing the same request ───────────────
   // agent-e057cca7 (2026-09-04): a Stage 3 prefill the harness cancelled every
   // ~6 minutes and re-sent verbatim. The screen repaints on every attempt, so
@@ -2742,7 +2832,7 @@ describe('spawnTuiAgent runtime', () => {
 
     expect(activeAgents.has('agent-1')).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
-    expect(shellService.killSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(shellService.registerExternalSession, 'a PTY that already exited is not registered').not.toHaveBeenCalled();
     expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalled();
   });
 
@@ -3377,6 +3467,14 @@ describe('spawnTuiAgent runtime', () => {
       for (let i = 0; i < 8; i += 1) await flushMicrotasks();
     };
 
+    // The sentinel watcher's fallback poll, past the 5000ms tick AND the 50ms
+    // settle delay `watchForFile` applies after a `detect()`. A nudge is only
+    // ever decided on this trigger: a PTY exit means nobody is left to read it.
+    const fireSentinelWatcher = async () => {
+      await vi.advanceTimersByTimeAsync(5100);
+      await settle();
+    };
+
     beforeEach(() => { sentinelExists = false; });
 
     it('leaves a read-only run with an open PR to PortOS without a merge re-prompt', async () => {
@@ -3410,8 +3508,7 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
 
       // Round 1: nudged, not finalized. The reprompt path deletes the
       // sentinel (`rm` flips `sentinelExists` false, see withSentinel) and
@@ -3425,11 +3522,7 @@ describe('spawnTuiAgent runtime', () => {
       // blocker) and the RE-ARMED watcher's fallback poll picks it up —
       // proving the re-arm itself works, not just a second exit event.
       sentinelExists = true;
-      // Past the 5000ms poll AND the 50ms settle delay `watchForFile` applies
-      // after a `detect()` — a bare 5000ms advance lands exactly on the poll
-      // tick but not the settle timer it then schedules.
-      await vi.advanceTimersByTimeAsync(5100);
-      await settle();
+      await fireSentinelWatcher();
       await spawnPromise;
 
       // One nudge per run: round 2 finalizes instead of nudging again.
@@ -3472,12 +3565,34 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
       await spawnPromise;
 
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
       expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    });
+
+    // #11861: a runner proxy accepts a paste after its PTY died, so a truthy
+    // paste cannot prove the nudge reached anyone. When the exit is what
+    // decides, the run finalizes; the open PR takes the post-finalize path.
+    it('finalizes without nudging when a PTY exit is the deciding trigger, even if the paste would succeed', async () => {
+      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
+      vi.mocked(probePrForBranch).mockResolvedValue({
+        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+      });
+      withSentinel('## Summary\nShipped the fix and opened the PR.');
+
+      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
+      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
+
+      sentinelExists = true; // the agent writes .agent-done, then exits first
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      await spawnPromise;
+
+      expect(shellService.pasteToSession).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
     it('replays a finish() trigger dropped while the merge-gate check was deciding, instead of losing it', async () => {
@@ -3490,17 +3605,26 @@ describe('spawnTuiAgent runtime', () => {
       const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
+      // Hold the forge probe so the second trigger lands mid-decision.
+      let releaseProbe;
+      vi.mocked(probePrForBranch).mockImplementationOnce(() => new Promise((resolve) => {
+        releaseProbe = () => resolve({
+          prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+        });
+      }));
+
       sentinelExists = true; // the agent writes .agent-done
-      // Two triggers fire back-to-back with no await between them: the first
-      // (a clean exit) starts the merge-gate decision; the second (a kill
-      // signal racing in right after) is dropped by the `finishing` guard
-      // while the first is still deciding. It must be replayed — not lost —
-      // once the first settles on "not finalizing after all", or the run
-      // would sit forever waiting for a nudge into a session that already died.
-      const p1 = capturedOnExit({ exitCode: 0, killed: false });
-      const p2 = capturedOnExit({ exitCode: 1, killed: true });
+      // The sentinel watcher starts the merge-gate decision; a kill signal
+      // racing in while it decides is parked by the `finishing` guard. It must
+      // be replayed — not lost — once the first settles on "not finalizing
+      // after all", or the run would sit forever waiting for a nudge into a
+      // session that already died.
+      await fireSentinelWatcher();
+      expect(releaseProbe).toBeTypeOf('function');
+      const exited = capturedOnExit({ exitCode: 1, killed: true });
+      releaseProbe();
       await settle();
-      await Promise.all([p1, p2]);
+      await exited;
       await spawnPromise;
 
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
@@ -3527,8 +3651,7 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
 

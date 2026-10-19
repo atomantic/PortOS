@@ -21,6 +21,7 @@ import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../test/enabledBarrier.js';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
+vi.mock('./AppLaneHealth', () => ({ default: () => null }));
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, setMaintenanceRunArchived } from '../../services/apiAgents';
 import useProviderModels from '../../hooks/useProviderModels';
 vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), setMaintenanceRunArchived: vi.fn() }));

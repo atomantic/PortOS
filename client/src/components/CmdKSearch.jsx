@@ -15,6 +15,7 @@ import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWor
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
+import { ingredientPath } from '../lib/creativeLibraries.js';
 import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
@@ -269,7 +270,7 @@ export default function CmdKSearch() {
       id: ing.id,
       name: ing.name,
       type: ing.type,
-      path: `/catalog/${encodeURIComponent(ing.type)}/${encodeURIComponent(ing.id)}`,
+      path: ingredientPath(ing),
     })),
     [catalogResults]
   );
@@ -382,7 +383,12 @@ export default function CmdKSearch() {
         toast(`${item.label} needs arguments — use voice or open the related page.`);
         return;
       }
-      const res = await runPaletteAction(item.id);
+      // request() already toasts the failure centrally; a rejection here
+      // must neither bubble as unhandled nor raise a second toast. The
+      // palette stays open with the query intact so the user can retry or
+      // pick another command — mirrors the capture and layout branches.
+      const res = await runPaletteAction(item.id).then((result) => result, () => null);
+      if (!res) { inputRef.current?.focus(); return; }
       const summary = res?.result?.summary || `${item.label} ran.`;
       if (res?.ok === false) toast.error(summary);
       else toast.success(summary);

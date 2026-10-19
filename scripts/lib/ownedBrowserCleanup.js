@@ -27,12 +27,27 @@ const failureWithin = (work, ms) => browserCleanupDeadline(
 export const reapOwnedBrowser = async (server, budgetMs) => {
   const child = server.process();
   const exitStatus = () => child?.exitCode ?? child?.signalCode ?? null;
-  const confirmed = failure => failure ?? (exitStatus() === null ? 'returned without an exit status' : null);
-  const closeFailure = confirmed(await failureWithin(() => server.close(), Math.floor(budgetMs * 0.3)));
-  if (!closeFailure) return;
-  const killFailure = confirmed(await failureWithin(() => server.kill(), Math.floor(budgetMs * 0.6)));
-  if (!killFailure) return;
-  const exit = exitStatus();
-  const state = exit !== null ? ` (process exited with ${exit})` : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
-  throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}`);
+  // Node emits 'exit' before 'close' when a browser helper retains inherited
+  // pipes. Playwright waits for 'close' before removing its profile, and both
+  // server.close() and server.kill() await that cleanup. Release only this
+  // exited child's streams so its close/cleanup can actually settle.
+  const releaseExitedPipes = () => {
+    if (exitStatus() === null) return;
+    const pipes = new Set([...(child?.stdio ?? []), child?.stdout, child?.stderr]);
+    for (const pipe of pipes) pipe?.destroy?.();
+  };
+  child?.once?.('exit', releaseExitedPipes);
+  try {
+    releaseExitedPipes(); // Exit may have occurred before fixture teardown.
+    const confirmed = failure => failure ?? (exitStatus() === null ? 'returned without an exit status' : null);
+    const closeFailure = confirmed(await failureWithin(() => server.close(), Math.floor(budgetMs * 0.3)));
+    if (!closeFailure) return;
+    const killFailure = confirmed(await failureWithin(() => server.kill(), Math.floor(budgetMs * 0.6)));
+    if (!killFailure) return;
+    const exit = exitStatus();
+    const state = exit !== null ? ` (process exited with ${exit})` : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
+    throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}`);
+  } finally {
+    child?.removeListener?.('exit', releaseExitedPipes);
+  }
 };

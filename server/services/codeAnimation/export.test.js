@@ -128,6 +128,14 @@ describe('startCodeAnimationExport', () => {
     expect(Object.keys(enqueueJob.mock.calls[0][0].params)).toEqual(['directory']);
   });
 
+  it('removes the staging directory when the render cannot be queued', async () => {
+    const { access } = await import('fs/promises');
+    const full = vi.fn(async ({ params }) => { lastDirectory = params.directory; throw new Error('media queue is full'); });
+    await expect(startCodeAnimationExport(JOB_ID, { enqueueJob: full, beatGrid: vi.fn(async () => null) })).rejects.toThrow('media queue is full');
+    expect(full).toHaveBeenCalledTimes(1);
+    await expect(access(join(state.dataRoot, lastDirectory))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses frame sizes the composition renderer cannot encode and unfinished jobs', async () => {
     state.job = { ...state.job, frame: { ...state.job.frame, width: 1440, height: 1080 } };
     await expect(startCodeAnimationExport(JOB_ID, { enqueueJob })).rejects.toMatchObject({ code: 'EXPORT_SIZE_UNSUPPORTED' });

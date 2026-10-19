@@ -29,8 +29,40 @@ import { isPathInsideDir } from '../lib/pathSafety.js';
 import { requestHasHostControl, HOST_CONTROL_FORBIDDEN_MESSAGE } from '../services/authGate.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { getSetupCheck, invalidateSetupCheck, REQUIRED_PIP_NAMES } from '../services/imageGen/setup.js';
+import { installMossRuntime } from '../services/imageGen/mossInstall.js';
+import { diagnoseMossRuntime } from '../services/imageGen/mossRuntime.js';
+import { downloadMossWeights, mossModelCacheStatus } from '../services/imageGen/mossWeights.js';
 
 const router = Router();
+
+export async function streamMossAction(req, res, start) {
+  if (!requestHasHostControl(req)) forbidWithoutHostControl();
+  const { send, safeEnd } = openSseStream(res);
+  const log = createInstallLogger({ installer: 'MOSS Swift' });
+  const emit = event => { log.onEvent(event); send(event); };
+  let handle;
+  let disconnected = false;
+  onClientDisconnect(req, res, () => { disconnected = true; handle?.kill(); log.cancel(); safeEnd(); });
+  log.start();
+  try {
+    if (disconnected) return;
+    handle = start(emit);
+    await handle.promise;
+  } catch (error) {
+    emit({ type: 'error', message: error.message });
+  } finally { safeEnd(); }
+}
+
+router.get('/moss-install', asyncHandler(async (_req, res) => res.json(await diagnoseMossRuntime())));
+router.post('/moss-install', asyncHandler(async (req, res) => {
+  validateRequest(z.object({ runtime: z.literal('moss-swift').optional() }).strict(), req.query);
+  await streamMossAction(req, res, installMossRuntime);
+}));
+router.get('/moss-weights', asyncHandler(async (_req, res) => res.json(await mossModelCacheStatus('moss-image-sft-bf16'))));
+router.post('/moss-weights', asyncHandler(async (req, res) => {
+  validateRequest(z.object({ runtime: z.literal('moss-swift').optional() }).strict(), req.query);
+  await streamMossAction(req, res, downloadMossWeights);
+}));
 
 // AUTHORITY gate for a caller-supplied interpreter path, layered on top of
 // `isAllowedPython`'s FORMAT check (basename looks like a python interpreter,

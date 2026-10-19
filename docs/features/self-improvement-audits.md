@@ -75,12 +75,12 @@ the operator's live checkout.
 |---|---|---|---|---|
 | `security` | Exposure real under the app's own threat model | `security` | implement | |
 | `code-quality` | Conventional maintainability defects | `code-quality` | implement | |
-| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | implement | |
+| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | file | |
 | `performance` | Provably wasted work on a hot path | `performance`, `perf` | implement | |
 | `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
 | `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
 | `ui-bugs` | Things that are broken in the running interface | `bug`, `ui-bug` | implement | |
-| `mobile-responsive` | Small-screen and touch usability | `mobile` | implement | |
+| `mobile-responsive` | Layout at viewport widths ≤1024 and touch mechanics | `mobile` | implement | |
 | `error-handling` | Failure paths, timeouts, retries, degraded fallback | `resilience` | implement | |
 | `typing` | Type contracts at boundaries | `code-quality`, `typing` | implement | |
 | `console-errors` | What the app actually emits while running | `bug`, `console` | implement | |
@@ -100,12 +100,13 @@ the operator's live checkout.
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 | `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
 | `infrastructure` | Deployment, container, IaC and CI configuration | `infrastructure` | file | |
-| `data-integrity` | Ingestion, idempotency, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
+| `data-integrity` | Ingestion, idempotency, lost updates, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
 | `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
 | `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
 | `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
 | `feature-completeness` | Work started and never finished, offered to users anyway | `bug`, `incomplete` | file | |
 | `workflow-recovery` | Multi-step workflows that strand their record between steps | `bug`, `workflow` | file | |
+| `upgrade-rehearsal` | Executed migrations, backup restore and boot against scratch installs | `data-safety`, `upgrade-rehearsal` | file | |
 
 ## Why the boundaries are explicit
 
@@ -113,15 +114,47 @@ Lanes only pay off if they do not file each other's findings. Every
 mission body names what it cedes and to whom, so two lanes cannot both claim one
 problem:
 
+- **`code-quality` is the triage lane.** After ceding drift, complexity,
+  cognitive load, module hygiene, dead code, runtime defects, logging, and
+  unhandled boundary calls to their owners, its second deliverable is a ranked
+  `Recommended next audits` list in the completion summary; dispatch parses it
+  (`parseRecommendedAudits`) onto the task's execution record, and the Schedule
+  card shows it under the last run (#12085). `test-coverage` files by default
+  for the same reason the other filing lanes do: an unattended test addition
+  has no reviewer weighing the regression it names against suite time (#12087).
 - **Complexity is split three ways.** `better-complexity` owns *counted*
   branching and must report the number. `better-cognitive-load` owns reader cost
   that no metric captures — mixed abstraction levels, flag arguments, names that
   lie. `module-hygiene` owns responsibility boundaries and treats a complexity
   score only as a candidate signal, never as a finding.
+- **Layout is split by what is narrow.** `mobile-responsive` owns every layout
+  defect at a viewport width ≤1024 (phone and tablet) plus touch mechanics —
+  overflow, clipping, breakpoint gaps, tap targets. `ux` checklist item 8 keeps
+  only a narrow CONTAINER on a desktop viewport (a dashboard widget, an embedded
+  panel, a side panel); the two lanes name each other's side (#12084).
 - **Duplication is split two ways.** `simplify` owns copy-paste and dead code.
   `better-structural-drift` owns a derived artifact or hand-synced registry acting
   as a second source of truth, which is a different fix (derive it, or add the
-  parity check).
+  parity check). It also owns **behaviour twins** — two code paths implementing
+  one concern for different callers (an operator lane and an unattended lane, a
+  modal and a drawer) where a guard or contract check landed in only one; the
+  proof is `git log -S` on the one-sided fix, and the resolution is a shared
+  primitive or a parity test, never a copied patch (#12092). File splits and
+  responsibility boundaries stay with `module-hygiene`, which `simplify` cedes
+  by name (#12083).
+- **Read-modify-write races have one owner.** `data-integrity` owns lost
+  updates and read-modify-write races on a persisted record or file;
+  `data-safety` and `better-runtime-safety` cede them by name, and runtime-safety
+  keeps only check-then-act races on in-memory module state (#12082).
+  `error-handling` likewise cedes sensitive detail leaking through an error path
+  to `privacy` and partial writes to `data-integrity` (#12086).
+- **Upgrade safety is split by read versus run.** `data-safety` reads
+  migrations, seeds and backup code for missing safety nets. `upgrade-rehearsal`
+  executes them: it builds scratch installs from the fixture shapes the
+  migration tests carry, runs the seed step and the migration runner, boots to
+  the health endpoint, and restores a backup into a second scratch root — never
+  the live `data/` or the real Postgres — and files only what the executed path
+  broke, one issue per root cause (#12091).
 - **Defects are split four ways.** `better-runtime-safety` reads source for
   latent defects; `console-errors` collects what actually errors at runtime;
   `error-handling` owns the failure path once something goes wrong; and
@@ -163,7 +196,11 @@ characters and hyphens.
 `fileIssues` decides the deliverable, and the banner injected at
 `{modeInstructions}` is what enforces it — overriding any instruction in the
 body. In file-issues mode the dispatch also stamps `noCodeOutput`, so a run that
-produces no diff is not scored as a failure.
+produces no diff is not scored as a failure. The banners also own the rules
+every lane shares — redact before publishing (`AUDIT_REDACTION_RULE`), read the
+repository's `AGENTS.md` first, and, in do-work mode only, resolve every
+accepted finding — so a mission body never restates them; `auditCatalog.test.js`
+fails on a restatement (#12080).
 
 Findings go to whichever tracker the app resolves to — a `PLAN.md` checklist
 item, a GitHub or GitLab issue, or a JIRA ticket — via `{trackerInstructions}`.
@@ -171,3 +208,24 @@ PLAN.md keeps its existing checklist IDs. New forge and JIRA issues use plain
 human-readable titles, with the issue number/key as the ID and category/metric
 labels for filtering. Earlier bracketed title prefixes are read only when
 checking for duplicates; new issue titles do not add them.
+
+### The dependency-freedom removal bar
+
+`better-dependency-freedom` carries one more knob than its siblings: the
+**removal bar** (`taskMetadata.depfreeMode`, set globally on the Schedule page
+and overridable per app), rendered at `{depfreeMode}` and prepended when a
+customized prompt dropped the token. Its values are the slashdo `/do:depfree`
+modes, so a scheduled audit and a terminal run draw the same line:
+
+| Bar | Exempt | Ceiling |
+|:--|:--|:--|
+| `default` | large, widely audited libraries | ~300 lines of owned code |
+| `heavy` | foundational frameworks, runtimes, core tooling | ~300 lines; popularity is not an exemption |
+| `extreme` | the runtime, security-sensitive protocols and primitives, native bindings, CI-required tooling | none — a parity test suite and a written replacement design gate each swap |
+
+The extreme bar is written for the strongest available model at maximum
+reasoning effort; it tells the agent to say so at the top of its report when it
+is running on a budget provider, rather than quietly lowering the bar. Pin the
+model and effort on the same Schedule card. The server-side vocabulary is
+`DEPFREE_MODES` in `server/lib/auditCatalog.js`, beside the block text in
+`applyDepfreeMode`; `server/lib/cosValidation.js` re-exports the vocabulary.

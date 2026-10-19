@@ -26,7 +26,7 @@ import {
   isNativeTeardownAbort,
   verifyPostCompletionOutputs,
   describeSignalDeath,
-  planPromptEncodingRetry,
+  isPromptEncodingMetalWatchdog,
   planMetalBufferRetry,
   bufferChildExit,
 } from './generateVideoHelpers.js';
@@ -101,15 +101,12 @@ export async function spawnAndWatchVideo({
   // Reads (and detaches) whatever terminal event the first child emitted before
   // its real listeners were attached. Set the instant the spawn resolves.
   let takeEarlyExit = null;
-  // Prompt-encode relaunches already spent on this job. Exactly one is allowed:
-  // a second watchdog abort at the reduced budget is a real failure the user has
-  // to see, not something to keep grinding the GPU over.
-  let promptEncodingRetriesUsed = 0;
-  // Same single-shot rule for the small-command-buffer relaunch (any-phase Metal
-  // watchdog abort on an MLX runtime).
+  // The one allowed relaunch per job: a second watchdog abort at the smaller
+  // command-buffer setting is a real failure the user has to see, not something
+  // to keep grinding the GPU over. Covers every phase, prompt encode included.
   let metalBufferRetriesUsed = 0;
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
-  // plus a lowered Gemma budget, instead of rebuilding it from scratch.
+  // plus smaller MLX command buffers, instead of rebuilding it from scratch.
   let childEnv;
 
   // Runners publish one atomically-replaced `preview.png`. Keep the reader
@@ -169,6 +166,11 @@ export async function spawnAndWatchVideo({
     previewWatcher = fsWatch(stepwiseDir, (event) => {
       if (event === 'rename' || event === 'change') void processLatestPreview();
     });
+    // Windows raises EPERM here when the watched dir is deleted (job teardown);
+    // with no listener that is an uncaught exception and the server exits.
+    previewWatcher.on?.('error', (err) => {
+      console.warn(`⚠️ Video preview watcher error [${jobId.slice(0, 8)}]: ${err?.message}`);
+    });
   } catch { /* preview is best-effort; the final video remains authoritative */ }
 
   // Every file this render was asked to write, in the order the runner emits
@@ -192,8 +194,8 @@ export async function spawnAndWatchVideo({
   // without minting a new one. Everything job-level (jobId, args, seed, meta,
   // history entry, heavy claim, staged temp files) is closed over and survives
   // the relaunch. The only thing that relaunches a render is a Metal
-  // command-buffer watchdog abort inside the Gemma prompt encoder; see
-  // maybeRelaunchForPromptEncoding below.
+  // command-buffer watchdog abort on an MLX runtime; see
+  // maybeRelaunchForMetalWatchdog below.
   const wireRenderChild = (proc) => {
     // The prompt-encode phase belongs to ONE child, but `job` outlives the
     // relaunch — reset it explicitly so a phase left open by the child that just
@@ -427,12 +429,11 @@ export async function spawnAndWatchVideo({
       // guard survives anyone later putting an await between the two.
       const cancelEpochAtClose = videoJobState.cancelEpoch;
       videoJobState.activeProcess = null;
-      // One-shot relaunch for a Metal command-buffer watchdog abort that landed
-      // INSIDE the Gemma prompt encoder (issue #4589). Decided here, ahead of
+      // One-shot relaunch for a Metal command-buffer watchdog abort (issue #4589). Decided here, ahead of
       // the claim release and the temp-file cleanup below, because a relaunch
       // has to keep both: it renders the SAME job off the SAME staged inputs and
       // must not surrender the GPU lane between the two children.
-      if (await maybeRelaunchForPromptEncoding({ code, signal, childKilled: proc.killed, cancelEpochAtClose, stderr: stderrTail.join('\n') })) return;
+      if (await maybeRelaunchForMetalWatchdog({ code, signal, childKilled: proc.killed, cancelEpochAtClose, stderr: stderrTail.join('\n') })) return;
       // The child has exited, so its accelerator allocation is gone. Release
       // before emitting the terminal completion event: an extend chain starts its
       // next child from that event and must be able to acquire the machine claim.
@@ -509,11 +510,13 @@ export async function spawnAndWatchVideo({
             }
           } else if (signal) {
             // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-            // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
             // stamped with the runtime fingerprint that died so the report is
             // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
             reason = describeSignalDeath(signal, {
               fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
+              stderr: stderrTail.join('\n'),
+              mlxRuntime: runtimeUsesMlx(model.runtime),
             });
           } else {
             const diagnostic = failure?.summary || failure?.cause;
@@ -640,19 +643,19 @@ export async function spawnAndWatchVideo({
   };
 
   // Relaunch this render once when the macOS Metal command-buffer watchdog
-  // aborted the child while the Gemma prompt encoder was running, with a lowered
-  // prompt-encode budget so each encoder command buffer finishes inside the
-  // watchdog window. Returns true when a replacement child owns the job (the
+  // aborted the child, with smaller MLX command buffers so each buffer finishes
+  // inside the watchdog window. Never shortens the prompt: the args are reused
+  // verbatim, so history's prompt is exactly what the replacement encodes. Returns true when a replacement child owns the job (the
   // caller must then leave the failure path alone), false when the render should
   // fail normally.
   //
   // Everything the render is defined by — jobId, seed, output path, history
   // metadata, staged source images/audio — is closed over and reused verbatim, so
-  // the relaunch is the same render at a smaller prompt budget, not a new job.
+  // the relaunch is the same render with smaller command buffers, not a new job.
   // Deliberately NOT gated on a runtime allowlist: the phase markers the decision
   // reads are emitted by scripts/generate_ltx2.py alone, so every other runtime is
   // excluded by construction rather than by a list that could drift.
-  const maybeRelaunchForPromptEncoding = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
+  const maybeRelaunchForMetalWatchdog = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
     if (code === 0) return false;
     // A batch member already in history must never be rendered again over its
     // committed filename by a whole-batch prompt-encode retry.
@@ -663,23 +666,14 @@ export async function spawnAndWatchVideo({
     // would be answered by relaunching the render the user just stopped.
     if (childKilled) return false;
     const stderrText = typeof stderr === 'string' ? stderr : '';
-    // At most ONE relaunch per job across both mitigations: a render that already
-    // spent either retry does not get a second GPU-grinding attempt.
-    const relaunchesUsed = promptEncodingRetriesUsed + metalBufferRetriesUsed;
-    const encodePlan = planPromptEncodingRetry({
-      signal,
-      stderr,
-      promptEncodePhase: job.promptEncodePhase,
-      retriesUsed: relaunchesUsed,
-      platform: process.platform,
-    });
-    const bufferPlan = encodePlan || relaunchesUsed > 0 ? null : planMetalBufferRetry({
+    const bufferPlan = planMetalBufferRetry({
       signal,
       stderr: stderrText,
-      retriesUsed: 0,
+      retriesUsed: metalBufferRetriesUsed,
       mlxRuntime: runtimeUsesMlx(model.runtime),
     });
-    if (!encodePlan && !bufferPlan) return false;
+    if (!bufferPlan) return false;
+    const inEncoder = isPromptEncodingMetalWatchdog({ signal, stderr: stderrText, promptEncodePhase: job.promptEncodePhase });
     // Runs from a child 'close' handler, outside the Express request lifecycle —
     // an uncaught throw here would crash the process, and a failed relaunch must
     // degrade into the normal failure report rather than strand the job.
@@ -691,18 +685,12 @@ export async function spawnAndWatchVideo({
     let retryProc = null;
     let retryWired = false;
     try {
-      let retryArgs = args;
-      let retryEnv = childEnv;
-      let message;
-      if (encodePlan) {
-        promptEncodingRetriesUsed += 1;
-        retryArgs = [...args, '--gemma-max-length', String(encodePlan.gemmaMaxLength)];
-        message = `Metal watchdog aborted the prompt encoder — retrying once at ${encodePlan.gemmaMaxLength} Gemma tokens`;
-      } else {
-        metalBufferRetriesUsed += 1;
-        retryEnv = { ...childEnv, ...bufferPlan.env };
-        message = 'Metal watchdog stopped the GPU — retrying once with smaller command buffers';
-      }
+      metalBufferRetriesUsed += 1;
+      const retryArgs = args;
+      const retryEnv = { ...childEnv, ...bufferPlan.env };
+      const message = inEncoder
+        ? 'Metal watchdog aborted the prompt encoder — retrying once with smaller command buffers (prompt unchanged)'
+        : 'Metal watchdog stopped the GPU — retrying once with smaller command buffers';
       console.log(`♻️ ${message} [${jobId.slice(0, 8)}]`);
       broadcastSse(job, { type: 'status', message });
       videoGenEvents.emit('status', { generationId: jobId, message });

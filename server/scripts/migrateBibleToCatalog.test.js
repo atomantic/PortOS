@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null) }));
 /**
  * Idempotency tests for the bible→catalog backfill.
  *
@@ -25,6 +26,13 @@ vi.mock('../services/universeBuilder.js', () => ({
   // guard can be exercised independently by overriding this mock per-test.
   listUniverses: vi.fn(async ({ includeDeleted = true } = {}) =>
     (includeDeleted ? universes : universes.filter((u) => !u.deleted))),
+  ERR_NOT_FOUND: 'NOT_FOUND',
+  // Throws NOT_FOUND for a missing or soft-deleted universe, like the real one.
+  getUniverse: vi.fn(async (id, { includeDeleted = false } = {}) => {
+    const u = universes.find((x) => x.id === id);
+    if (!u || (u.deleted && !includeDeleted)) throw Object.assign(new Error(`Universe not found: ${id}`), { code: 'NOT_FOUND' });
+    return u;
+  }),
   updateUniverse: vi.fn(async (id, patchOrMutator) => {
     const u = universes.find((x) => x.id === id);
     if (!u) return null;
@@ -86,7 +94,7 @@ vi.mock('../lib/migrationMarker.js', () => ({
   writeMarker: vi.fn(async (_name, payload) => { markerBlob = JSON.stringify(payload); }),
 }));
 
-import { migrateBibleToCatalog } from './migrateBibleToCatalog.js';
+import { migrateBibleToCatalog, promoteUniverseCanon, hasUnpromotedCanon } from './migrateBibleToCatalog.js';
 import { listUniverses } from '../services/universeBuilder.js';
 
 function makeUniverse(overrides = {}) {
@@ -152,7 +160,14 @@ describe('migrateBibleToCatalog', () => {
     // Marker is now written; a plain (non-forced) re-run must no-op.
     const rerun = await migrateBibleToCatalog();
     expect(rerun.skipped).toBe(true);
-    expect(rerun.marker.version).toBe(1);
+    expect(rerun.marker.version).toBe(2);
+  });
+
+  it('re-walks once on an install whose marker predates save-time promotion', async () => {
+    markerBlob = JSON.stringify({ version: 1, completedAt: '2026-01-01T00:00:00.000Z' });
+    const result = await migrateBibleToCatalog();
+    expect(result.skipped).toBe(false);
+    expect(result.stats.promoted).toBe(4);
   });
 
   it('re-links an already-promoted entry that lost its ref (idempotent linking)', async () => {
@@ -189,5 +204,55 @@ describe('migrateBibleToCatalog', () => {
     expect(ingredients.has('cat-chr-peer-abc123')).toBe(true);
     // The other three entries still promote under deterministic ids.
     expect(result.stats.promoted).toBe(4);
+  });
+});
+
+describe('promoteUniverseCanon', () => {
+  it('promotes only the entries a save added, under deterministic ids', async () => {
+    await migrateBibleToCatalog();
+    universes[0].places.push({ id: 'p-2', name: 'Night Ferry' });
+    expect(hasUnpromotedCanon(universes[0])).toBe(true);
+
+    const stats = await promoteUniverseCanon('u-1');
+
+    expect(stats.promoted).toBe(1);
+    expect(ingredients.size).toBe(5);
+    const ferry = universes[0].places.find((p) => p.id === 'p-2');
+    expect(ferry.ingredientId).toMatch(/^cat-plc-bible-/);
+    expect(refLinks).toContainEqual({ ingredientId: ferry.ingredientId, refKind: 'universe', refId: 'u-1', role: 'canon-place' });
+    expect(hasUnpromotedCanon(universes[0])).toBe(false);
+  });
+
+  it('is a no-op when every entry already has a catalog row', async () => {
+    await migrateBibleToCatalog();
+    createIngredient.mockClear();
+    expect(await promoteUniverseCanon('u-1')).toBeNull();
+    expect(createIngredient).not.toHaveBeenCalled();
+  });
+
+  it('coalesces overlapping saves into one walk plus one follow-up', async () => {
+    const first = promoteUniverseCanon('u-1');
+    const second = promoteUniverseCanon('u-1');
+    expect(second).toBe(first);
+    await first;
+    expect(ingredients.size).toBe(4);
+    expect(createIngredient).toHaveBeenCalledTimes(4);
+  });
+
+  it('quietly does nothing for a universe deleted or removed before it runs', async () => {
+    universes[0].deleted = true;
+    expect(await promoteUniverseCanon('u-1')).toBeNull();
+    expect(await promoteUniverseCanon('u-missing')).toBeNull();
+    expect(createIngredient).not.toHaveBeenCalled();
+  });
+
+  it('waits for the boot walk instead of racing it for the same catalog ids', async () => {
+    const boot = migrateBibleToCatalog({ force: true });
+    universes[0].places.push({ id: 'p-3', name: 'Rooftop' });
+    const save = promoteUniverseCanon('u-1');
+    const [bootResult] = await Promise.all([boot, save]);
+    expect(bootResult.stats.errors).toBe(0);
+    expect(universes[0].places.every((p) => p.ingredientId)).toBe(true);
+    expect(new Set(createIngredient.mock.calls.map(([input]) => input.id)).size).toBe(createIngredient.mock.calls.length);
   });
 });

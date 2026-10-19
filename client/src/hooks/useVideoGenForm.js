@@ -78,7 +78,7 @@ const editableRemixModel = (models, defaultModelId) => {
  *     only to decide whether to show the control at all.
  */
 export function useVideoGenForm({
-  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false,
+  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false,
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -105,6 +105,9 @@ export function useVideoGenForm({
     falModelId, setFalModelId,
     falResolution, setFalResolution,
     falGenerateAudio, setFalGenerateAudio,
+    runwayModelId, setRunwayModelId,
+    runwayDuration, setRunwayDuration,
+    runwayResolution, setRunwayResolution,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
@@ -159,6 +162,15 @@ export function useVideoGenForm({
     setFalResolution('');
     setFalGenerateAudio(false);
   }, [falModelId]);
+
+  // Each Runway model has its own lengths and sizes.
+  const runwayModelPickRef = useRef(runwayModelId);
+  useEffect(() => {
+    if (runwayModelPickRef.current === runwayModelId) return;
+    runwayModelPickRef.current = runwayModelId;
+    setRunwayDuration('');
+    setRunwayResolution('');
+  }, [runwayModelId]);
 
   // Music renders live in the shared library rather than in the browser's
   // local file picker. Turn a render's deep-link filename into the same File
@@ -643,7 +655,9 @@ export function useVideoGenForm({
   // (`reactorEnabled`) — same short-circuit shape as fal, plus native
   // clip-to-clip chaining via continue_from_clip_id.
   const isReactor = reactorEnabled && backend === 'reactor';
-  const referenceModeApplies = mode === 'image' && !isGrok && !isFal && !isReactor;
+  // Runway is usability-gated the same way, and renders image-to-video only.
+  const isRunway = runwayEnabled && backend === 'runway';
+  const referenceModeApplies = mode === 'image' && !isGrok && !isFal && !isReactor && !isRunway;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
   // rather than the pipeline's 1.0, and the panel must say so.
@@ -927,7 +941,9 @@ export function useVideoGenForm({
   // clip survives the switch and reappears if the user flips back.
   const handleBackendChange = (id) => {
     setBackend(id);
-    if ((id === 'grok' || id === 'fal' || id === 'reactor') && mode !== 'text' && mode !== 'image') {
+    if (id === 'runway' && mode !== 'image') {
+      handleModeChange('image');
+    } else if ((id === 'grok' || id === 'fal' || id === 'reactor') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1227,6 +1243,16 @@ export function useVideoGenForm({
       setMode(p.videoMode === 'image' ? 'image' : 'text');
       if (p.duration) setFalDuration(p.duration);
       if (p.modelId) setFalModelId(p.modelId);
+    } else if (p.mode === 'runway') {
+      // Runway job: same discriminator shape as fal above; image-to-video only.
+      setBackend('runway');
+      setMode('image');
+      if (p.modelId) {
+        runwayModelPickRef.current = p.modelId;
+        setRunwayModelId(p.modelId);
+      }
+      if (p.duration) setRunwayDuration(String(p.duration));
+      if (p.resolution) setRunwayResolution(p.resolution);
     } else if (p.mode === 'reactor') {
       // reactor.inc job: same discriminator shape as grok/fal above.
       setBackend('reactor');
@@ -1309,6 +1335,7 @@ export function useVideoGenForm({
   const submissionState = {
     isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
+    isRunway, runwayModelId, runwayDuration, runwayResolution,
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
@@ -1325,12 +1352,15 @@ export function useVideoGenForm({
 
   return {
     // Backend + mode
-    backend, isGrok, isFal, isReactor, handleBackendChange,
+    backend, isGrok, isFal, isReactor, isRunway, handleBackendChange,
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,
     falResolution, setFalResolution,
     falGenerateAudio, setFalGenerateAudio,
+    runwayModelId, setRunwayModelId,
+    runwayDuration, setRunwayDuration,
+    runwayResolution, setRunwayResolution,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

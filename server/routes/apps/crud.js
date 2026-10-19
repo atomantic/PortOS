@@ -1,6 +1,7 @@
 import { appListQuerySchema, appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
+import { getAppLaneHealth } from '../../services/appLaneHealth.js';
 import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
@@ -16,6 +17,7 @@ import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile
  */
 
 import { Router } from 'express';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { readJSONFile } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
@@ -28,10 +30,19 @@ import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
 import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
+import { isRepo } from '../../services/git.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
 
 const router = Router();
+
+// Lets the task form disable worktree/PR for a non-git app before submit (the
+// create route refuses it with NOT_A_GIT_REPO). Left undefined — i.e. unknown,
+// not "not a repo" — when the directory is missing, mirroring that route.
+async function withGitRepoFlag(app) {
+  if (!app.repoPath || !existsSync(app.repoPath)) return app;
+  return { ...app, isGitRepo: await isRepo(app.repoPath) };
+}
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
@@ -56,7 +67,7 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
-  const apps = await enrichAppsWithPm2Status(rawApps);
+  const apps = await Promise.all((await enrichAppsWithPm2Status(rawApps)).map(withGitRepoFlag));
   if (view === 'probe') {
     res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type }) => ({
       id, name, icon, overallStatus, uiPort, apiPort, type,
@@ -72,6 +83,12 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
   const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
   res.json(await getAppQualityHistory(req.loadedApp, days));
+}));
+
+// GET /api/apps/:id/lane-health - What became of each audit lane's filed issues
+// (#12088): a forge read on request, never cached into the app record.
+router.get('/:id/lane-health', loadApp, asyncHandler(async (req, res) => {
+  res.json(await getAppLaneHealth(req.loadedApp));
 }));
 
 // POST /api/apps/:id/quality-snapshot - Land this app's numeric snapshot as

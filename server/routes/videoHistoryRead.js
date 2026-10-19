@@ -1,6 +1,7 @@
 // One-record video-history read, shared by the video-gen router and the
 // isolated collection-audit fixture so both exercise the same production
 // handler without importing the generation stack.
+import { withMediaFileSize } from '../lib/mediaFileInfo.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 
@@ -30,7 +31,7 @@ export function createVideoHistoryItemRead(getHistoryItem = async (id) => (await
     if (!parsed.success) failValidation(parsed);
     const query = historyReadQuerySchema.safeParse(req.query);
     if (!query.success) failValidation(query);
-    const entry = await getHistoryItem(parsed.data);
+    const entry = await withMediaFileSize('video', await getHistoryItem(parsed.data));
     if (!entry) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
     // Hosted clips may omit geometry. Opt-in playback callers measure the same source the render measures.
     if (query.data.geometry === 'true' && !(entry.numFrames && entry.fps && entry.width && entry.height)) {

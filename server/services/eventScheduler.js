@@ -393,8 +393,14 @@ function schedule(config) {
     runCount: 0,
     active: true,
     lastRunSucceeded: null,
+    lastRunSkipped: null,
+    lastSkipReason: null,
     lastError: null,
-    consecutiveFailures: 0
+    consecutiveFailures: 0,
+    // The promise of the run in progress, or null. One run per event at a
+    // time: a trigger that lands mid-run joins it instead of starting a
+    // second handler over the same state (#12022).
+    inFlight: null
   }
 
   // Calculate next run time
@@ -536,7 +542,7 @@ function rearm(event) {
  * @param {boolean} result.success - Whether the handler completed
  * @param {string|null} result.error - Handler failure message, if any
  */
-function recordEventHistory(event, { startTime, success, error }) {
+function recordEventHistory(event, { startTime, success, error, skipped, skipReason }) {
   // push + truncate is faster than unshift + pop for large arrays
   eventHistory.push({
     eventId: event.id,
@@ -544,7 +550,9 @@ function recordEventHistory(event, { startTime, success, error }) {
     runAt: startTime,
     duration: Date.now() - startTime,
     success,
-    error
+    error,
+    skipped,
+    skipReason
   })
 
   if (eventHistory.length > MAX_HISTORY) {
@@ -553,10 +561,26 @@ function recordEventHistory(event, { startTime, success, error }) {
 }
 
 /**
- * Run an event
+ * Run an event, or join the run already in flight for it. Only `runBackup`
+ * guards itself; every other handler relies on this latch to never execute
+ * twice concurrently.
+ * @param {Object} event - Event object
+ * @returns {Promise<void>}
+ */
+function runEvent(event) {
+  if (event.inFlight) return event.inFlight
+  event.inFlight = executeEvent(event).finally(() => {
+    event.inFlight = null
+  })
+  return event.inFlight
+}
+
+/**
+ * Execute an event's handler once and record the outcome. Callers go through
+ * `runEvent`, which owns the in-flight latch.
  * @param {Object} event - Event object
  */
-async function runEvent(event) {
+async function executeEvent(event) {
   const startTime = Date.now()
 
   event.lastRunAt = startTime
@@ -564,9 +588,17 @@ async function runEvent(event) {
 
   let success = true
   let error = null
+  let skipped = false
+  let skipReason = null
 
   try {
-    await event.handler(event)
+    const result = await event.handler(event)
+    // A handler that did no work reports `{ skipped: true, reason }` so the
+    // slot is recorded as skipped rather than as a successful run (#12023).
+    if (result?.skipped === true) {
+      skipped = true
+      skipReason = typeof result.reason === 'string' ? result.reason : null
+    }
   } catch (err) {
     success = false
     error = err.message
@@ -579,14 +611,16 @@ async function runEvent(event) {
     })
   } finally {
     event.lastRunSucceeded = success
+    event.lastRunSkipped = skipped
+    event.lastSkipReason = skipReason
     event.lastError = error
     event.consecutiveFailures = success ? 0 : event.consecutiveFailures + 1
 
-    recordEventHistory(event, { startTime, success, error })
+    recordEventHistory(event, { startTime, success, error, skipped, skipReason })
 
     // A synchronous listener that throws must not cost the schedule its re-arm
     try {
-      cosEvents.emit('scheduler:ran', { id: event.id, success, runCount: event.runCount })
+      cosEvents.emit('scheduler:ran', { id: event.id, success, skipped, runCount: event.runCount })
     } catch (err) {
       console.error(`⚠️ Event ${event.id} scheduler:ran listener threw: ${err.message}`)
     }
@@ -711,6 +745,8 @@ function getEvent(id) {
     lastRunAt: event.lastRunAt,
     runCount: event.runCount,
     lastRunSucceeded: event.lastRunSucceeded,
+    lastRunSkipped: event.lastRunSkipped,
+    lastSkipReason: event.lastSkipReason,
     lastError: event.lastError,
     consecutiveFailures: event.consecutiveFailures,
     metadata: event.metadata
@@ -744,7 +780,8 @@ function getHistory(options = {}) {
  */
 function getStats() {
   const events = Array.from(scheduledEvents.values())
-  const recent = eventHistory.slice(-100).reverse()
+  // A skipped slot did no work, so it counts toward neither side of the rate.
+  const recent = eventHistory.slice(-100).reverse().filter(h => !h.skipped)
 
   return {
     totalEvents: events.length,
@@ -776,13 +813,22 @@ function cancelAll() {
 }
 
 /**
- * Trigger an event immediately (for testing or manual runs)
+ * Trigger an event immediately (for testing or manual runs). A trigger that
+ * lands while the event's timer run is still in flight joins that run rather
+ * than starting a second one, and resolves once it finishes.
  * @param {string} id - Event identifier
- * @returns {Promise<boolean>} - True if event was found and triggered
+ * @returns {Promise<boolean|{ joined: true }>} - `false` for an unknown id,
+ *   `true` when this call ran the handler, `{ joined: true }` when it waited
+ *   on a run already in progress.
  */
 async function triggerNow(id) {
   const event = scheduledEvents.get(id)
   if (!event) return false
+
+  if (event.inFlight) {
+    await event.inFlight
+    return { joined: true }
+  }
 
   // Disarm before running: a long manual run must not have its own pending
   // deadline elapse underneath it and start a second, concurrent run.

@@ -1280,3 +1280,71 @@ describe('isStandardizable', () => {
     }
   });
 });
+
+describe('streamDetection frame sequence', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; pm2Mock.processes = []; });
+
+  const run = async (target) => {
+    const frames = [];
+    let completed = null;
+    const socket = {
+      emit: (event, payload) => {
+        if (event === 'detect:step') frames.push(`${payload.step}:${payload.status}`);
+        else if (event === 'detect:complete') completed = payload;
+      }
+    };
+    await streamDetection(socket, target);
+    return { frames, completed };
+  };
+
+  it('streams every step in order for a Node + PM2 app and completes with the merged result', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-frames-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name: 'example-app',
+      dependencies: { express: '^4.0.0' },
+      scripts: { start: 'node server.js', build: 'echo build' }
+    }));
+    writeFileSync(join(dir, '.env'), 'PORT=4321\n');
+    writeFileSync(join(dir, 'README.md'), '# Example\n\nAn example service.\n');
+    pm2Mock.processes = [{ name: 'example-app', status: 'online', pid: 42 }];
+
+    const { frames, completed } = await run(dir);
+
+    expect(frames).toEqual([
+      'validate:running', 'validate:done',
+      'files:running', 'files:done',
+      'package:running', 'package:done',
+      'config:running', 'config:done',
+      'pm2:running', 'pm2:done',
+      'readme:running', 'readme:done',
+      'icon:running', 'icon:done'
+    ]);
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({
+      name: 'example-app',
+      description: 'An example service.',
+      type: 'single-node-server',
+      apiPort: 4321,
+      buildCommand: 'npm run build',
+      startCommands: ['npm start'],
+      pm2ProcessNames: ['example-app'],
+      pm2Status: [{ name: 'example-app', status: 'online', pid: 42 }]
+    });
+  });
+
+  it('stops after the validate error frame when the directory is missing', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-frames-'));
+    const { frames, completed } = await run(join(dir, 'does-not-exist'));
+    expect(frames).toEqual(['validate:running', 'validate:error']);
+    expect(completed).toEqual({ success: false, error: 'Directory does not exist' });
+  });
+
+  it('stops after the validate error frame when the path is a file', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-frames-'));
+    writeFileSync(join(dir, 'plain.txt'), 'x');
+    const { frames, completed } = await run(join(dir, 'plain.txt'));
+    expect(frames).toEqual(['validate:running', 'validate:error']);
+    expect(completed).toEqual({ success: false, error: 'Path is not a directory' });
+  });
+});

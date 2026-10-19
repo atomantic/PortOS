@@ -2,7 +2,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264 } from './browserSuiteGate.js';
+import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264, resolveClientBundler, resolveTestChrome } from './browserSuiteGate.js';
+
+describe('resolveClientBundler', () => {
+  it('returns undefined when the client workspace is absent', () => {
+    expect(resolveClientBundler('/nonexistent/example-root')).toBeUndefined();
+  });
+});
+
+describe('resolveTestChrome', () => {
+  it('prefers CHROME_PATH, then the bundled Chromium, then the first installed package path, and reports none', () => {
+    const exists = (path) => ['/usr/bin/chromium', '/opt/chrome', '/pw/chrome'].includes(path);
+    expect(resolveTestChrome({ CHROME_PATH: '/opt/chrome' }, { exists, bundled: () => '/pw/chrome' })).toBe('/opt/chrome');
+    expect(resolveTestChrome({ CHROME_PATH: '/missing/chrome' }, { exists, bundled: () => '/pw/chrome' })).toBe('/pw/chrome');
+    expect(resolveTestChrome({}, { exists, bundled: () => null })).toBe('/usr/bin/chromium');
+    expect(resolveTestChrome({}, { exists: () => false, bundled: () => null })).toBeNull();
+  });
+});
 
 const original = process.env.PORTOS_REQUIRE_BROWSER_SUITES;
 
@@ -129,4 +145,33 @@ describe('H.264 probe outcomes', () => {
     expect(browserSuiteCanRun('suite', { 'Chrome with H.264': { probeFailure: 'teardown-failed' }, ffmpeg: null })).toBe(false);
     expect(log).toHaveBeenCalledWith('⏭️ suite: skipping suite — missing ffmpeg; Chrome with H.264 probe failed (teardown-failed)');
   });
+
+  it('fails loudly on probe timeout when CI requires browser suites', () => {
+    process.env.PORTOS_REQUIRE_BROWSER_SUITES = '1';
+    expect(() => browserSuiteCanRun('suite', { 'Chrome with H.264': { probeFailure: 'probe-timeout' }, ffmpeg: '/usr/bin/ffmpeg' }))
+      .toThrow('suite: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — Chrome with H.264 probe failed (probe-timeout)');
+  });
+
+  posix('supplies background and credential suppression flags to prevent probe teardown hangs', async () => {
+    const argsFile = join(mkdtempSync(join(tmpdir(), 'portos-fake-args-')), 'args.json');
+    dirs.push(join(argsFile, '..'));
+    const chrome = fakeChrome(`
+      require('node:fs').writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+      process.stdout.write('<body>H264:probably</body>');
+    `);
+    const result = await probeChromeH264(chrome);
+    expect(result).toEqual({ ok: true, chromePath: chrome });
+    const passedArgs = JSON.parse(readFileSync(argsFile, 'utf8'));
+    expect(passedArgs).toEqual(expect.arrayContaining([
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-sync',
+      '--disable-breakpad',
+      '--password-store=basic',
+      '--use-mock-keychain',
+    ]));
+  });
 });
+

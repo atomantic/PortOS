@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
-import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
@@ -93,7 +93,8 @@ import {
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
-const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
+// `runId` lets the run's repairs land on shots its own approval locked (preserveAutomatedShotLocks).
+const mutateProjectRecord = (id, transform, { runId = null } = {}) => mutateRecord(id, transform, { source: 'orchestrator', runId });
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
@@ -176,6 +177,7 @@ const runError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
 
 const projectAutonomousRun = (project) => project?.autonomousRun || null;
+const ownsRunningRun = (current, run) => current?.id === run.id && current.status === 'running' && current.processId === PROCESS_ID;
 
 async function requireRun(projectId) {
   const project = await getProject(projectId);
@@ -1232,6 +1234,9 @@ const STAGES = {
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
     const pool = briefProductionPool(run.brief, project);
+    if (!ownsRunningRun(projectAutonomousRun(await getProject(project.id)), run)) {
+      throw runError(409, 'RUN_STOPPED', 'The run stopped before production could start');
+    }
     const started = await deps.startProduction(project.id, {
       directive: briefDirective(run.brief),
       pool,
@@ -1243,6 +1248,15 @@ const STAGES = {
         : { providerId: run.brief.llm?.providerId || null, model: run.brief.llm?.model || null },
       authoring: input,
     });
+    // A stop during preparation had no child id to stop; cancel the fresh child before handing it off.
+    if (!ownsRunningRun(projectAutonomousRun(await getProject(project.id)), run)) {
+      // Persist the child before cancellation: a failed stop must leave it discoverable for recovery.
+      await patchRun(project.id, (current) => current.id === run.id && current.output.productionRunId === run.output.productionRunId
+        ? { output: { productionRunId: started.run.id } } : {})
+        .catch((err) => console.error(`❌ Autonomous music video ${short(run.id)} could not retain late production ${started.run.id}: ${err.message}`));
+      await settleChildStop([], project.id, run, 'cancel production', started.run.id, () => deps.cancelProduction(project.id, started.run.id));
+      throw runError(409, 'RUN_STOPPED', 'The run stopped while production was preparing');
+    }
     return { output: { productionRunId: started.run.id }, wait: true };
   },
 };
@@ -1264,11 +1278,13 @@ function stopsBeforeClips(project, run, pool) {
 }
 
 /**
- * One review round over every still. Returns the flagged shots that will be
- * regenerated (none once the rounds are spent, or when the reviewer could
- * not see the images).
+ * One review round over every still. Clears the flagged stills (their fixes
+ * ride the next prompt) and returns those shots, which production makes again:
+ * none once the rounds are spent, when the reviewer could not see the images,
+ * or when a lock the run did not give refuses the repair. Null when a stop or
+ * cancel released the run during the review, which then changes nothing.
  */
-async function reviewStills(projectId, run) {
+async function reviewStills(projectId, run, productionRunId) {
   const { buildStillsReviewPrompt } = await reviewModule();
   const project = await getProject(projectId);
   const shots = (project.scenes || []).filter((scene) => scene.referenceImageId);
@@ -1293,14 +1309,23 @@ async function reviewStills(projectId, run) {
     if (review.visual && review.verdict === 'revise') issues.push(...review.issues.filter((issue) => known.has(issue.sceneId)));
   }
   const spent = revisionsSpent(await latestRun(projectId), 'stills');
-  const regenerate = spent < reviewLimit(run) ? issues : [];
+  const flagged = spent < reviewLimit(run) ? issues : [];
+  if (!await ownsStillsReview(projectId, productionRunId)) return null;
+  const fixes = new Map();
+  for (const issue of flagged) fixes.set(issue.sceneId, [fixes.get(issue.sceneId), issue.text].filter(Boolean).join(' '));
+  const at = new Date().toISOString();
+  // Clearing the still is what makes production generate it again; the fixes ride its next prompt.
+  const refused = fixes.size > 0 && (await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((scene) => (fixes.has(scene.sceneId)
+    ? { ...scene, referenceImageId: null, stillFixes: { text: trimTo(fixes.get(scene.sceneId), STILL_FIXES_MAX), at } } : scene)) } }), { runId: run.id })).rejected === true;
+  const regenerate = refused ? [] : flagged;
   const scored = reviews.map((r) => r.score).filter((n) => n != null);
   // Approval needs every still seen and nothing flagged; an inconclusive or unresolved round is not one.
   const conclusive = shots.length > 0 && shown === shots.length;
   const unresolved = issues.length > 0 && !regenerate.length;
   const why = !reviews.length ? 'No still could be shown to the reviewer. '
     : reviews.some((r) => !r.visual) ? 'The reviewer could not see every still. '
-      : unresolved ? 'Revision limit reached with changes still open. ' : '';
+      : refused ? `${nameShots(project, [...fixes.keys()])} locked by an approval this run did not give; unlock to regenerate. `
+        : unresolved ? 'Revision limit reached with changes still open. ' : '';
   await recordReview(projectId, { checkpoint: 'stills', verdict: regenerate.length || unresolved || !conclusive ? 'revise' : 'approve',
     score: scored.length ? Math.min(...scored) : null, route: reviews.at(-1)?.route || null, visual: reviews.length > 0 && reviews.every((r) => r.visual),
     notes: trimTo(`${why}${regenerate.length ? `Regenerating ${regenerate.length} still${regenerate.length === 1 ? '' : 's'}. ` : ''}${reviews.map((r) => r.notes).filter(Boolean).join(' ')}`, 1500),
@@ -1336,15 +1361,10 @@ async function ownsStillsReview(projectId, productionRunId) {
 
 async function reviewOrPark(projectId, run, productionRunId) {
   if (isOrchestratedRun(run)) {
-    const regenerate = await reviewStills(projectId, run);
-    if (!await ownsStillsReview(projectId, productionRunId)) return;
+    const regenerate = await reviewStills(projectId, run, productionRunId);
+    // A stop or cancel can also land while the repair and its review entry are written.
+    if (!regenerate || !await ownsStillsReview(projectId, productionRunId)) return;
     if (regenerate.length) {
-      const fixes = new Map();
-      for (const issue of regenerate) fixes.set(issue.sceneId, [fixes.get(issue.sceneId), issue.text].filter(Boolean).join(' '));
-      const at = new Date().toISOString();
-      // Clearing the still is what makes production generate it again; the fixes ride its next prompt.
-      await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((scene) => (fixes.has(scene.sceneId)
-        ? { ...scene, referenceImageId: null, stillFixes: { text: trimTo(fixes.get(scene.sceneId), STILL_FIXES_MAX), at } } : scene)) } }));
       await deps.resumeProduction(projectId, productionRunId, { acceptBasis: true, stopBefore: 'clips' });
       return;
     }
@@ -1356,10 +1376,14 @@ async function reviewOrPark(projectId, run, productionRunId) {
 
 const isLoginRequired = (err) => err?.code === 'PUBLISH_LOGIN_REQUIRED';
 
+function logParkedRun(run, status, error) {
+  const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
+  log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Autonomous music video ${short(run.id)} ${status}${error ? `: ${error}` : ''}`);
+}
+
 async function park(projectId, status, patch) {
   const out = await patchRun(projectId, () => ({ status, ...patch }));
-  const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
-  log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Autonomous music video ${short(out.run.id)} ${status}${patch.error ? `: ${patch.error}` : ''}`);
+  logParkedRun(out.run, status, patch.error);
   return out;
 }
 
@@ -1383,25 +1407,47 @@ async function advance(projectId) {
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
       } catch (err) {
-        // A stop/cancel mid-stage (it cancels the song operation) must not become a failure.
-        const latest = projectAutonomousRun(await getProject(projectId));
-        if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
-        await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }));
-        await park(projectId, isLoginRequired(err) || err.code === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
+        // Recheck ownership inside the failure write, so an already queued stop/cancel wins.
+        let failed = false;
+        const out = await patchRun(projectId, (r) => {
+          failed = ownsRunningRun(r, run);
+          return failed ? {
+            ...stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }),
+            status: isLoginRequired(err) || err.code === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'needs-human' : 'failed',
+            error: trimTo(err.message, 500), errorCode: err.code || null,
+          } : {};
+        });
+        if (failed) logParkedRun(out.run, out.run.status, out.run.error);
         return;
       }
       const finishedAt = new Date().toISOString();
+      // Preserve useful late output, but only the still-owned run may continue the pipeline.
+      let owned = false;
       if (result.goto) {
         // The orchestrator sent the run back (a song retake): both stages run again.
         const pending = { status: 'pending', startedAt: null, finishedAt: null, error: null, step: null };
-        await patchRun(projectId, (r) => ({ output: result.output, stage: result.goto,
-          stages: { [stage]: { ...r.stages[stage], ...pending }, [result.goto]: { ...r.stages[result.goto], ...pending } } }));
+        await patchRun(projectId, (r) => {
+          owned = ownsRunningRun(r, run);
+          return { output: result.output, ...(owned ? { stage: result.goto } : {}),
+            stages: { [stage]: { ...r.stages[stage], ...pending }, [result.goto]: { ...r.stages[result.goto], ...pending } } };
+        });
+        if (!owned) return;
         if (result.unlinkTrack) await unlinkRunTrack(projectId, run.id, result.unlinkTrack);
         console.log(`🎬 Autonomous music video ${short(run.id)} going back to ${result.goto}`);
         continue;
       }
       if (result.wait) {
-        await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) }));
+        await patchRun(projectId, (r) => {
+          owned = ownsRunningRun(r, run);
+          return { output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) };
+        });
+        if (!owned) {
+          // Cancellation can win the serialized write after the executor's final ownership read.
+          const { productionRunId, renderJobId } = result.output || {};
+          if (productionRunId) await settleChildStop([], projectId, run, 'cancel production', productionRunId, () => deps.cancelProduction(projectId, productionRunId));
+          if (renderJobId) await settleChildStop([], projectId, run, 'cancel render', renderJobId, () => deps.cancelRender(renderJobId));
+          return;
+        }
         console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : result.step === CAST_STEP ? 'Cast & Sets' : 'production'}`);
         // The render may have settled before its job id was stored on the run.
         if (result.step === RENDER_STEP) await reconcileFinalRender(projectId);
@@ -1415,11 +1461,15 @@ async function advance(projectId) {
       }
       const next = nextAutonomousStage(stage);
       const checkpoint = run.brief.checkpoints.includes(stage);
-      await patchRun(projectId, (r) => ({
-        output: result.output,
-        ...stagePatch(r, stage, { status: 'done', finishedAt, step: null }),
-        ...(checkpoint ? { status: 'awaiting-approval', awaiting: stage, stage: next } : next ? { stage: next } : { status: 'completed', stage }),
-      }));
+      await patchRun(projectId, (r) => {
+        owned = ownsRunningRun(r, run);
+        return {
+          output: result.output,
+          ...stagePatch(r, stage, { status: 'done', finishedAt, step: null }),
+          ...(owned && (checkpoint ? { status: 'awaiting-approval', awaiting: stage, stage: next } : next ? { stage: next } : { status: 'completed', stage })),
+        };
+      });
+      if (!owned) return;
       console.log(`🎬 Autonomous music video ${short(run.id)} finished ${stage}${checkpoint ? ' — waiting for approval' : ''}`);
       if (checkpoint || !next) return;
     }
@@ -1444,12 +1494,11 @@ function advanceInBackground(projectId) {
  * lyrics. A failed unlink is not fatal: that same link replaces the old one.
  */
 async function unlinkRunTrack(projectId, runId, trackId) {
-  const project = await getProject(projectId);
-  if (project?.trackId === trackId) {
-    await deps.updateProject(projectId, { trackId: null })
-      .catch((err) => console.warn(`⚠️ Autonomous music video ${short(runId)} could not unlink the retaken track: ${err.message}`));
-  }
-  console.log(`🎬 Autonomous music video ${short(runId)} retaking its song`);
+  const { applyProjectPatch } = await import('./projectsLogic.js');
+  // The track and run ownership must be checked in the same write as the unlink.
+  await mutateProjectRecord(projectId, (project) => ({ project: project.trackId === trackId && ownsRunningRun(projectAutonomousRun(project), { id: runId })
+    ? applyProjectPatch(project, { trackId: null }) : project }))
+    .catch((err) => console.warn(`⚠️ Autonomous music video ${short(runId)} could not unlink the retaken track: ${err.message}`));
 }
 
 // ---- director actions ------------------------------------------------------------
@@ -1854,11 +1903,12 @@ export async function stopAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!['running', 'awaiting-approval', 'needs-human'].includes(run.status)) throw runError(409, 'NOT_RUNNING', `A ${run.status} run cannot be stopped`);
   const out = await patchRun(projectId, () => ({ status: 'stopped' }));
+  const { productionRunId, finalAutoReviewId } = out.run.output;
   const childStopFailures = [];
-  if (run.output.productionRunId) {
-    await settleChildStop(childStopFailures, projectId, run, 'stop production', run.output.productionRunId, () => deps.stopProduction(projectId, run.output.productionRunId));
+  if (productionRunId) {
+    await settleChildStop(childStopFailures, projectId, run, 'stop production', productionRunId, () => deps.stopProduction(projectId, productionRunId));
   }
-  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'stop auto-review', run.output.finalAutoReviewId, () => deps.stopAutoReview(projectId, run.output.finalAutoReviewId));
+  if (finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'stop auto-review', finalAutoReviewId, () => deps.stopAutoReview(projectId, finalAutoReviewId));
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(projectId, out.run, childStopFailures);
   return { project: out.project, run: presentAutonomousRun(out.run), childStopFailures };
@@ -1951,12 +2001,19 @@ async function repairPilot(projectId, run, productionRunId, { pilot, result }) {
   if (spent < reviewLimit(run)) {
     const at = new Date().toISOString();
     const slot = repair.category === 'plate' ? 'stillFixes' : 'clipFixes';
-    await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((s) => {
+    const { rejected } = await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((s) => {
       if (s.sceneId !== pilot.sceneId) return s;
       // Earlier fixes stay in the prompt so a repair never undoes the last one; the newest win the length cap.
       const text = [s[slot]?.text, problems].filter(Boolean).join(' ');
       return { ...s, ...(slot === 'stillFixes' ? { referenceImageId: null } : {}), [slot]: { text: text.slice(-(slot === 'stillFixes' ? STILL_FIXES_MAX : CLIP_FIXES_MAX)), at } };
-    }) } }));
+    }) } }), { runId: run.id });
+    if (rejected) {
+      // Nothing landed, so production would make the same take again: leave it to the director.
+      await recordReview(projectId, { checkpoint: 'pilot', sceneId: pilot.sceneId, verdict: 'revise',
+        notes: trimTo(`Pilot ${scene.label || pilot.sceneId}: ${repair.category} repair not applied; ${nameShots(project, [pilot.sceneId])} is locked by an approval this run did not give. Unlock it to repair. ${problems}`, 1500),
+        changes: [trimTo(`${pilot.sceneId}: ${problems}`, 300)] });
+      return false;
+    }
     await recordReview(projectId, { checkpoint: 'pilot', sceneId: pilot.sceneId, verdict: 'revise',
       notes: trimTo(`Pilot ${scene.label || pilot.sceneId}: ${repair.category} repair (${spent + 1} of ${reviewLimit(run)}), generated again with the fix. ${problems}`, 1500),
       changes: [trimTo(`${pilot.sceneId}: ${problems}`, 300)] });

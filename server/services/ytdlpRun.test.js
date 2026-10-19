@@ -85,6 +85,16 @@ describe('describeYtDlpFailure', () => {
     expect(reason).not.toMatch(/yt-dlp -U/);
   });
 
+  // EBADF on connect is a local outbound filter denying the binary, on any
+  // site; the upgrade advice would be the wrong remedy.
+  it('names the local network filter when connect() fails with EBADF', () => {
+    const blocked = "ERROR: [twitter] 1: Unable to download JSON metadata: HTTPSConnection(host='api.x.com', port=443): Failed to establish a new connection: [Errno 9] Bad file descriptor";
+    const reason = describeYtDlpFailure(1, blocked, { url: X_URL });
+    expect(reason).toContain('[Errno 9] Bad file descriptor');
+    expect(reason).toMatch(/network filter/);
+    expect(reason).not.toMatch(/yt-dlp -U/);
+  });
+
   it('withholds the hint when the caller passed no URL at all', () => {
     expect(describeYtDlpFailure(1, FORBIDDEN)).not.toMatch(/yt-dlp -U/);
   });

@@ -172,7 +172,16 @@ export async function createAgentTuiSession({
     // response. Open the readiness gate before handing off to avoid discarding
     // the TUI's first bracketed-paste/input-ready signals.
     onInitialCommandSent?.();
-    const session = await spawnTuiSessionViaRunner({
+    // An external session's exit wiring belongs to its owner (shell.js
+    // adoptPtySession), so this branch unregisters it, as agentRunnerSync.js
+    // does for a recovered run. Otherwise the record outlives the PTY and a
+    // later paste "succeeds" into the runner proxy, whose writes always report
+    // true (#11861). It runs BEFORE the controller sees the exit; `exited`
+    // keeps a `tui:exit` that beats the spawn response from registering a
+    // session that is already dead.
+    let session = null;
+    let exited = false;
+    session = await spawnTuiSessionViaRunner({
       agentId,
       taskId,
       command: tuiConfig.spawnCommand,
@@ -182,10 +191,15 @@ export async function createAgentTuiSession({
       providerAuth: cliProviderAuthDescriptor(provider),
       doneSentinelPath,
       securityScanGrant,
+      trackPromptSubmission: true,
       onData,
-      onExit,
+      onExit: (event) => {
+        exited = true;
+        if (session) shellService.unregisterExternalSession(session.sessionId, { exitCode: event?.exitCode });
+        return onExit?.(event);
+      },
     });
-    shellService.registerExternalSession(session.sessionId, session.ptyProcess, sessionOptions);
+    if (!exited) shellService.registerExternalSession(session.sessionId, session.ptyProcess, sessionOptions);
     // The runner owns this PTY, so it already returns the pty/pid pair the tail
     // below would otherwise have to look up locally.
     return session;
@@ -376,7 +390,9 @@ export async function spawnTuiAgent({
     mergeGateIsOwed,
     spooler,
     session: {
-      write: (sessionId, keys) => shellService.writeToSession(sessionId, keys),
+      write: (sessionId, keys, options) => options
+        ? shellService.writeToSession(sessionId, keys, options)
+        : shellService.writeToSession(sessionId, keys),
       paste: (sessionId, text, options) => shellService.pasteToSession(sessionId, text, options),
       isAlive: (sessionId) => !!shellService.getSession(sessionId),
       kill: (sessionId) => shellService.killSession(sessionId),
@@ -588,8 +604,7 @@ export async function spawnTuiAgent({
   // this process. The controller's handleExit then finalizes the run while
   // createAgentTuiSession is still awaiting that response. Do not revive the
   // finalized agent by registering its returned session, timers, or active-agent
-  // record; release the external shell session that was registered during the
-  // late response.
+  // record; release any external shell session the late response registered.
   if (controller.isTerminal()) {
     if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
     return null;

@@ -162,8 +162,16 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       if (!rawSpoolTruncationWarned) {
         console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
         // Publish the warning before dropping bytes; if this fails, preserve
-        // the previous spool and retry the warning on the next flush.
-        await updateAgent(agentId, { metadata: { rawSpoolTruncated: true } });
+        // the previous spool and retry the warning on the next flush. Reported,
+        // never thrown: drainRaw runs inside finish(), where a rejection would
+        // abandon the run's teardown.
+        const published = await updateAgent(agentId, { metadata: { rawSpoolTruncated: true } })
+          .then(() => true)
+          .catch(async (err) => {
+            await reporter.report('state', err);
+            return false;
+          });
+        if (!published) return;
         rawSpoolTruncationWarned = true;
       }
       // Only update the byte counter on successful write — a failed write

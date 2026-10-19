@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 const pool = vi.hoisted(() => ({
   client: null,
@@ -18,11 +19,15 @@ vi.mock('pg', async (importOriginal) => ({
 import { withTransaction, query, withDatabaseMaintenance } from './db.js';
 
 function makeClient(query) {
-  return {
-    query,
-    release: vi.fn(),
-  };
+  const client = new EventEmitter();
+  client.query = query;
+  client.release = vi.fn();
+  return client;
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -108,6 +113,61 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => { throw dropError; })).rejects.toBe(dropError);
 
     expect(client.release).toHaveBeenCalledWith(dropError);
+  });
+
+  it('handles a checked-out client socket error and removes the listener before reuse', async () => {
+    const socketError = new Error('Connection terminated unexpectedly');
+    const client = makeClient(vi.fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(socketError)
+      .mockRejectedValueOnce(new Error('ROLLBACK on closed socket')));
+    pool.client = client;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withTransaction(async (transaction) => {
+      expect(client.listenerCount('error')).toBe(1);
+      expect(() => client.emit('error', socketError)).not.toThrow();
+      await transaction.query('SELECT 1');
+    })).rejects.toBe(socketError);
+
+    expect(log).toHaveBeenCalledWith(`🗄️ Checked-out database client error: ${socketError.message}`);
+    expect(client.listenerCount('error')).toBe(0);
+    expect(client.release).toHaveBeenCalledWith(socketError);
+
+    client.query.mockResolvedValue({});
+    await expect(withTransaction(async () => 'reused')).resolves.toBe('reused');
+    expect(client.listenerCount('error')).toBe(0);
+    expect(client.release).toHaveBeenLastCalledWith(undefined);
+  });
+});
+
+// Cross-reference: db.guards.test.js covers assertWriteAllowed() directly; this
+// proves the withTransaction() client proxy actually routes writes through it.
+describe('withTransaction non-test database write guard', () => {
+  beforeEach(() => {
+    vi.stubEnv('PGDATABASE', 'portos');
+    vi.stubEnv('TEST_DB_OK', '');
+  });
+
+  it.each([
+    ['string DELETE', 'DELETE FROM universes'],
+    ['{ text } INSERT', { text: 'INSERT INTO x VALUES (1)' }],
+  ])('refuses a %s and never forwards it to the pg client', async (_label, statement) => {
+    const client = makeClient(vi.fn().mockResolvedValue({}));
+    pool.client = client;
+
+    await expect(withTransaction(c => c.query(statement))).rejects.toThrow(/Refusing to mutate/);
+
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ['ROLLBACK']]);
+  });
+
+  it('still lets a SELECT through the guarded client', async () => {
+    const client = makeClient(vi.fn().mockResolvedValue({ rows: [] }));
+    pool.client = client;
+
+    await withTransaction(c => c.query('SELECT 1'));
+
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ['SELECT 1'], ['COMMIT']]);
   });
 });
 

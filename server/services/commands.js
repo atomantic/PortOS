@@ -1,11 +1,26 @@
 import { spawn } from '../lib/childProcess.js';
 import { logAction } from './history.js';
-import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
+import { ALLOWED_COMMANDS, redactOutput, validateCommand } from '../lib/commandSecurity.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { terminateWithEscalation } from '../lib/bufferedSpawn.js';
 
-// Track active commands
+// SIGTERM grace before a stopped command is SIGKILLed (#12021).
+export const STOP_GRACE_MS = 5000;
+
+// commandId → { child, label, cancelEscalation, stopping, timedOut }. An entry lives
+// until the child's `close`/`error` fires, never from a stop request: a
+// child that ignores SIGTERM is still running and still ours to escalate.
 const activeCommands = new Map();
+
+// Stop an active entry: SIGTERM now, SIGKILL after STOP_GRACE_MS if the child
+// is still alive. Idempotent — a second request during the grace window is
+// absorbed rather than re-signalling or reporting the command as gone.
+function stopEntry(entry) {
+  if (entry.stopping) return;
+  entry.stopping = true;
+  entry.cancelEscalation = terminateWithEscalation(entry.child, { graceMs: STOP_GRACE_MS, label: entry.label });
+}
 
 /**
  * Execute a shell command with safety checks
@@ -14,8 +29,12 @@ const activeCommands = new Map();
  * 1. Base command must be in allowlist
  * 2. Command cannot contain shell metacharacters that enable injection
  * 3. Command executed via spawn with shell:false where possible
+ *
+ * `timeoutMs` (optional, default none — the operator watches an interactive
+ * run) bounds the run: at the deadline the child is stopped through the same
+ * SIGTERM→SIGKILL path as a manual stop and the completion reports `timedOut`.
  */
-export function executeCommand(command, workspacePath, onData, onComplete) {
+export function executeCommand(command, workspacePath, onData, onComplete, { timeoutMs = null } = {}) {
   const commandId = Date.now().toString(36) + Math.random().toString(36).substr(2);
 
   const validation = validateCommand(command);
@@ -50,47 +69,74 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
     shell: false
   });
 
-  activeCommands.set(commandId, child);
+  const entry = { child, label: `command '${command.substring(0, 50)}'`, cancelEscalation: null, stopping: false, timedOut: false };
+  activeCommands.set(commandId, entry);
+  const timeoutTimer = timeoutMs > 0
+    ? setTimeout(() => {
+      entry.timedOut = true;
+      console.warn(`⚠️ ${entry.label} exceeded ${timeoutMs}ms — stopping it`);
+      stopEntry(entry);
+    }, timeoutMs)
+    : null;
+  timeoutTimer?.unref?.();
+  const settle = () => {
+    settled = true;
+    clearTimeout(timeoutTimer);
+    entry.cancelEscalation?.();
+    activeCommands.delete(commandId);
+  };
 
+  // Every copy of the output leaves this function redacted (#12019): each
+  // streamed chunk on its own, and the accumulated buffer once more at close
+  // so a secret split across two chunks is still caught in the persisted and
+  // completion copies.
   child.stdout.on('data', (data) => {
     const text = data.toString();
     output += text;
-    onData?.(text, 'stdout');
+    onData?.(redactOutput(text), 'stdout');
   });
 
   child.stderr.on('data', (data) => {
     const text = data.toString();
     output += text;
-    onData?.(text, 'stderr');
+    onData?.(redactOutput(text), 'stderr');
   });
 
-  child.on('close', (code) => {
+  child.on('close', (code, signal) => {
     if (settled) return;
-    settled = true;
-    activeCommands.delete(commandId);
+    settle();
     const runtime = Date.now() - startTime;
     const success = code === 0;
+    const redacted = redactOutput(output);
+    const error = success ? null
+      : entry.timedOut ? `Timed out after ${timeoutMs}ms`
+        : entry.stopping ? `Stopped (${signal || `exit code ${code}`})`
+          : signal ? `Killed by ${signal}` : `Exit code ${code}`;
 
     logAction('command', null, command.substring(0, 50), {
       command,
       workspacePath,
       exitCode: code,
+      signal,
       runtime,
-      output: output.substring(0, 10000) // Truncate to prevent huge history
-    }, success, success ? null : `Exit code ${code}`);
+      output: redacted.substring(0, 10000) // Truncate to prevent huge history
+    }, success, error);
 
     onComplete?.({
       success,
       exitCode: code,
+      signal,
       runtime,
-      output
+      output: redacted,
+      ...(error ? { error } : {}),
+      ...(entry.stopping ? { stopped: true } : {}),
+      ...(entry.timedOut ? { timedOut: true } : {}),
     });
   });
 
   child.on('error', (err) => {
     if (settled) return;
-    settled = true;
-    activeCommands.delete(commandId);
+    settle();
     logAction('command', null, command.substring(0, 50), { command, workspacePath }, false, err.message);
     onComplete?.({
       success: false,
@@ -103,16 +149,16 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
 }
 
 /**
- * Stop a running command
+ * Stop a running command: SIGTERM, then SIGKILL after STOP_GRACE_MS if it is
+ * still alive. Returns true while the command is ours to stop — including a
+ * repeat request during the grace window, which is a no-op rather than
+ * "not active" — and false once `close` has retired the entry.
  */
 export function stopCommand(commandId) {
-  const child = activeCommands.get(commandId);
-  if (child) {
-    child.kill('SIGTERM');
-    activeCommands.delete(commandId);
-    return true;
-  }
-  return false;
+  const entry = activeCommands.get(commandId);
+  if (!entry) return false;
+  stopEntry(entry);
+  return true;
 }
 
 /**

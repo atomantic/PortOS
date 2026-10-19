@@ -48,6 +48,9 @@ const DATA_DIR = PATHS.data;
 //     per-item deletion: naming a directory does not make a live job safe.
 //     Categories with no `busyCheck` are unaffected. Probes live in
 //     `dataManagerBusy.js`.
+//   purgeFilter — optional `name => boolean`. A category-wide purge removes only
+//     the entries it accepts. Use it when the directory also holds files the
+//     category's own service owns (backup's state.json and in-flight staging).
 export const CATEGORIES = {
   'agents': { label: 'Agents', description: 'Agent personality data', archivable: false, deletable: false },
   'ask-conversations': { label: 'Ask Conversations', description: 'Saved Ask chat transcripts', archivable: true, deletable: false },
@@ -56,7 +59,8 @@ export const CATEGORIES = {
   'avatar': { label: 'Avatar', description: 'Uploaded avatar images', archivable: true, deletable: false },
   // Machine-local ownership authority must survive every generic cleanup action.
   'backup-admission': { label: 'Backup Admission', description: 'Active publication and snapshot ownership — reconcile through backup recovery', archivable: false, deletable: false },
-  'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true, purgeScope: 'category' },
+  // data/backup/ also holds the backup service's state.json and .archive-* staging; the purge is archives-only.
+  'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true, purgeScope: 'category', purgeFilter: name => ARCHIVE_FILENAME.test(name) },
   'brain': { label: 'Brain', description: 'Brain items and sync log', archivable: true, deletable: false },
   // The Beeper attachment byte mirror (#37) — the only thing the Beeper feature
   // writes to `data/`; every other Beeper record is Postgres. Not archivable:
@@ -153,6 +157,7 @@ export const CATEGORIES = {
   // configuration are user-authored and not regenerable. Only the mail cache is
   // reproducible, and it is bounded per account, so no cache-only purge is offered.
   'messages': { label: 'Messages', description: 'Message accounts, drafts, triage rules and cached mail — drafts and rules are not regenerable', archivable: true, deletable: false },
+  'migrations': { label: 'Legacy Migration Ledger', description: 'Pre-2026-05 location of the migration applied-list — the next migration run moves it to migrations.applied.json, and setup removes the empty folder', archivable: false, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
@@ -575,11 +580,12 @@ export async function purgeCategory(categoryKey, options = {}) {
       await rmGuarded(resolvedTarget, { recursive: !itemScoped, force: true });
       console.log(`🗑️ Purged item from data/${categoryKey}`);
     } else {
-      const entries = await readdir(dirPath).catch(() => []);
+      const allEntries = await readdir(dirPath).catch(() => []);
+      const entries = meta.purgeFilter ? allEntries.filter(meta.purgeFilter) : allEntries;
       const removals = await Promise.allSettled(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
       const failed = removals.find(result => result.status === 'rejected');
       if (failed) throw failed.reason;
-      console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
+      console.log(`🗑️ Purged ${entries.length} of ${allEntries.length} entries from data/${categoryKey}`);
     }
 
     return { category: categoryKey, subPath: wantsItem ? options.subPath : null };

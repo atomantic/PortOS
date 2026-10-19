@@ -504,3 +504,22 @@ describe('getFeedStats', () => {
     expect(stats.topUnread[0].unread).toBe(2);
   });
 });
+
+describe('extractTag', () => {
+  it('reads attributed, CDATA-wrapped and case-folded tags like the regex did', () => {
+    const { extractTag } = feeds.__testing;
+    expect(extractTag('<title type="html">  Hello  </title>', 'title')).toBe('Hello');
+    expect(extractTag('<title>\n<![CDATA[ A & B ]]>\n</TITLE>', 'title')).toBe('A & B');
+    expect(extractTag('<titles>no</titles><title>yes</title>', 'title')).toBe('yes');
+    expect(extractTag('<dc:creator>Ann</dc:creator>', 'dc:creator')).toBe('Ann');
+    expect(extractTag('<title>never closed', 'title')).toBe('');
+    expect(extractTag('<title>\u0130</title>', 'title')).toBe('\u0130');
+  });
+
+  it('does not backtrack on an unclosed tag padded with whitespace', () => {
+    const { extractTag } = feeds.__testing;
+    const started = performance.now();
+    expect(extractTag('<title>' + ' '.repeat(200_000), 'title')).toBe('');
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});

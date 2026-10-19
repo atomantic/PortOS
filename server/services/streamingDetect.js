@@ -1138,6 +1138,310 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
   return { file: null, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
 }
 
+// Each detection step mutates the shared `result` and emits its own `detect:step`
+// frames. A step returning `false` means the stream must stop (validate only).
+
+async function validateStep(socket, dirPath, result, emit) {
+  emit('validate', 'running', { message: 'Validating directory path...' });
+
+  const fail = (message) => {
+    emit('validate', 'error', { message });
+    socket.emit('detect:complete', { success: false, error: message });
+    return false;
+  };
+
+  if (!existsSync(dirPath)) return fail('Directory does not exist');
+  const stats = await stat(dirPath);
+  if (!stats.isDirectory()) return fail('Path is not a directory');
+
+  emit('validate', 'done', { message: 'Valid directory' });
+  result.name = basename(dirPath);
+  return true;
+}
+
+/** XcodeGen `project.yml`: name, platform-derived type, and build command. */
+async function applyXcodeGenProject(dirPath, result) {
+  const ymlContent = await readFile(join(dirPath, 'project.yml'), 'utf-8').catch(() => '');
+  const nameMatch = ymlContent.match(/^name:\s*(.+)$/m);
+  if (nameMatch) result.name = nameMatch[1].trim();
+
+  const platformMatch = ymlContent.match(/platform:\s*\[?([^\]\n]+)/);
+  const platforms = platformMatch ? platformMatch[1].toLowerCase() : '';
+  if (platforms.includes('ios') && !platforms.includes('macos')) result.type = 'ios-native';
+  else if (platforms.includes('macos') && !platforms.includes('ios')) result.type = 'macos-native';
+  else result.type = 'xcode';
+
+  result.buildCommand = 'xcodebuild -scheme ' + result.name + ' build';
+}
+
+/** Swift/Xcode projects are recognized from directory contents alone. */
+async function detectSwiftProject(dirPath, files, result) {
+  const hasXcodeproj = files.some(f => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'));
+  const hasProjectYml = files.includes('project.yml');
+  const hasPackageSwift = files.includes('Package.swift');
+  if (!hasXcodeproj && !hasProjectYml && !hasPackageSwift) return;
+
+  if (hasProjectYml) {
+    await applyXcodeGenProject(dirPath, result);
+  } else if (hasPackageSwift) {
+    result.type = 'swift';
+    result.buildCommand = 'swift build';
+  } else {
+    // .xcodeproj without project.yml
+    const xcodeprojDir = files.find(f => f.endsWith('.xcodeproj'));
+    const schemeName = xcodeprojDir?.replace('.xcodeproj', '') || result.name;
+    result.type = 'xcode';
+    result.buildCommand = 'xcodebuild -scheme ' + schemeName + ' build';
+  }
+
+  result.startCommands = [];
+  result.pm2ProcessNames = [];
+  result.editorCommand = process.platform === 'darwin' ? 'xed .' : 'code .';
+}
+
+/** Returns the directory entry names so later steps can reuse them. */
+async function filesStep(dirPath, result, emit) {
+  emit('files', 'running', { message: 'Scanning directory...' });
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const files = entries.map(e => e.name);
+  emit('files', 'done', { message: `Found ${files.length} files`, files: files.slice(0, 20) });
+  await detectSwiftProject(dirPath, files, result);
+  return files;
+}
+
+function applyPackageJson(pkg, result) {
+  result.name = pkg.name || result.name;
+  result.description = pkg.description || '';
+
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (deps.vite && deps.express) result.type = 'vite+express';
+  else if (deps.vite || deps.react || deps.vue) result.type = 'vite';
+  else if (deps.express || deps.fastify || deps.koa) result.type = 'single-node-server';
+  else if (deps.next) result.type = 'nextjs';
+
+  const scripts = pkg.scripts || {};
+  if (scripts.dev) result.startCommands.push('npm run dev');
+  if (scripts.start && !scripts.dev) result.startCommands.push('npm start');
+  if (scripts.build) result.buildCommand = 'npm run build';
+}
+
+async function packageStep(dirPath, files, result, emit) {
+  emit('package', 'running', { message: 'Reading package.json...' });
+  const pkgPath = join(dirPath, 'package.json');
+
+  if (!existsSync(pkgPath)) {
+    // No package.json ⇒ nothing Node owns this repo, so fall back to marker-file
+    // classification for the common non-Node runtimes. Without this, a Python
+    // service / Go binary / Docker stack / static site all landed on `unknown`
+    // and were offered Node PM2 standardization. Guarded on `unknown` so an
+    // Apple type already resolved in the files step (a Swift repo that also ships a
+    // Dockerfile) isn't overwritten.
+    const nonNodeType = result.type === 'unknown' ? classifyNonNodeType(files) : null;
+    if (nonNodeType) result.type = nonNodeType;
+    emit('package', 'done', {
+      message: nonNodeType ? `No package.json — detected ${nonNodeType} project` : 'No package.json found',
+      type: result.type
+    });
+    return;
+  }
+
+  const content = await tryReadFile(pkgPath);
+  if (!content) return;
+  const pkg = safeJSONParse(content, null);
+  if (!pkg) {
+    emit('package', 'error', { message: 'Invalid package.json format' });
+    return;
+  }
+  applyPackageJson(pkg, result);
+  emit('package', 'done', {
+    message: `Found: ${result.name}`,
+    name: result.name,
+    description: result.description,
+    type: result.type,
+    startCommands: result.startCommands
+  });
+}
+
+async function applyEnvPorts(dirPath, result, configFiles) {
+  const envPath = join(dirPath, '.env');
+  if (!existsSync(envPath)) return;
+  const content = await readFile(envPath, 'utf-8').catch(() => '');
+  const portMatch = content.match(/PORT\s*=\s*(\d+)/i);
+  if (portMatch) result.apiPort = parseInt(portMatch[1], 10);
+  const viteMatch = content.match(/VITE_PORT\s*=\s*(\d+)/i);
+  if (viteMatch) result.devUiPort = parseInt(viteMatch[1], 10);
+  configFiles.push('.env');
+}
+
+async function applyViteConfigPorts(dirPath, result, configFiles) {
+  for (const viteConfig of ['vite.config.js', 'vite.config.ts']) {
+    const configPath = join(dirPath, viteConfig);
+    if (!existsSync(configPath)) continue;
+    const content = await readFile(configPath, 'utf-8').catch(() => '');
+    const portMatch = content.match(/port\s*:\s*(\d+)/);
+    if (portMatch) result.devUiPort = parseInt(portMatch[1], 10);
+    configFiles.push(viteConfig);
+  }
+}
+
+/** Fold the parsed ecosystem processes into `result`, deriving any unset ports. */
+async function applyParsedProcesses(dirPath, parsedProcesses, result) {
+  // For processes that use vite and don't have a port, check their cwd for vite.config
+  for (const proc of parsedProcesses) {
+    const vitePort = await resolveViteConfigPortForProcess(dirPath, proc);
+    if (vitePort) proc.port = vitePort;
+    // Clean up internal properties
+    delete proc.cwd;
+    delete proc.usesVite;
+  }
+
+  result.processes = parsedProcesses;
+  result.pm2ProcessNames = parsedProcesses.map(p => p.name);
+
+  const apiProc = parsedProcesses.find(p => p.ports?.api);
+  if (apiProc && !result.apiPort) result.apiPort = apiProc.ports.api;
+  const uiProc = parsedProcesses.find(p => p.ports?.ui);
+  if (uiProc && !result.uiPort) result.uiPort = uiProc.ports.ui;
+  const devUiProc = parsedProcesses.find(p => p.ports?.devUi);
+  if (devUiProc && !result.devUiPort) result.devUiPort = devUiProc.ports.devUi;
+  // When app has API + Vite dev but no dedicated UI port,
+  // the prod UI is served by the API server
+  if (!result.uiPort && result.apiPort && result.devUiPort) result.uiPort = result.apiPort;
+}
+
+async function applyEcosystemConfig(dirPath, result, configFiles) {
+  for (const ecosystemFile of ECOSYSTEM_CONFIG_FILENAMES) {
+    const ecosystemPath = join(dirPath, ecosystemFile);
+    if (!existsSync(ecosystemPath)) continue;
+    const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
+    if (!content) continue;
+
+    const { processes: parsedProcesses, pm2Home } = parseEcosystemConfig(content);
+    if (pm2Home) result.pm2Home = pm2Home;
+    if (parsedProcesses.length > 0) await applyParsedProcesses(dirPath, parsedProcesses, result);
+
+    // Extract UI port from CLIENT_URL (still needed as it's not in process configs)
+    const clientUrlMatch = content.match(/CLIENT_URL\s*:\s*['"]https?:\/\/[^:]+:(\d+)/);
+    if (clientUrlMatch && !result.uiPort) result.uiPort = parseInt(clientUrlMatch[1], 10);
+
+    configFiles.push(ecosystemFile);
+  }
+}
+
+async function configStep(dirPath, result, emit) {
+  emit('config', 'running', { message: 'Checking configuration files...' });
+  const configFiles = [];
+
+  await applyEnvPorts(dirPath, result, configFiles);
+  await applyViteConfigPorts(dirPath, result, configFiles);
+  await applyEcosystemConfig(dirPath, result, configFiles);
+
+  // When config-file heuristics found a Vite dev port but no dedicated uiPort,
+  // derive uiPort: API serves prod UI if present, otherwise devUiPort is the only UI
+  if (!result.uiPort && result.devUiPort) {
+    result.uiPort = result.apiPort ?? result.devUiPort;
+  }
+
+  emit('config', 'done', {
+    message: configFiles.length ? `Found: ${configFiles.join(', ')}` : 'No config files found',
+    uiPort: result.uiPort,
+    devUiPort: result.devUiPort,
+    apiPort: result.apiPort,
+    pm2ProcessNames: result.pm2ProcessNames.length > 0 ? result.pm2ProcessNames : undefined,
+    processes: result.processes.length > 0 ? result.processes : undefined,
+    configFiles
+  });
+}
+
+/** Generate PM2 process names only when the ecosystem config supplied none. */
+function defaultPm2ProcessNames(result) {
+  const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  return result.type === 'vite+express' ? [`${baseName}-ui`, `${baseName}-api`] : [baseName];
+}
+
+async function pm2Step(result, emit) {
+  if (!usesPm2(result.type)) {
+    emit('pm2', 'skipped', { message: `Not applicable for ${result.type} apps` });
+    return;
+  }
+
+  emit('pm2', 'running', { message: 'Checking PM2 processes...' });
+  // `listProcessesStrict()` returns `null` when the read itself FAILED (vs
+  // `[]` for a successful read with no processes) — the absent-vs-empty
+  // contract from issue #968, now the one non-test owner of raw `pm2 jlist`
+  // execution/parsing alongside `autofixer/shared.js` (#8164). Use custom
+  // PM2_HOME if detected from ecosystem config.
+  const pm2Processes = await listProcessesStrict(result.pm2Home || null);
+
+  if (pm2Processes === null) {
+    // A failed read must not be reported as "no matching processes" — that
+    // would silently drop the pm2ProcessNames the ecosystem config already
+    // found. Leave result.pm2Status/pm2ProcessNames as already derived and
+    // surface the read failure on its own stage.
+    emit('pm2', 'error', { message: 'PM2 process read failed — status is unavailable' });
+    return;
+  }
+
+  // Look for processes that might be this app
+  const possibleNames = [
+    result.name,
+    result.name.toLowerCase(),
+    result.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+    `${result.name}-ui`,
+    `${result.name}-api`
+  ];
+  const matchingProcesses = pm2Processes.filter(p =>
+    possibleNames.some(name => p.name.includes(name) || name.includes(p.name))
+  );
+
+  if (matchingProcesses.length === 0) {
+    emit('pm2', 'done', { message: 'No matching PM2 processes found' });
+    if (result.pm2ProcessNames.length === 0) result.pm2ProcessNames = defaultPm2ProcessNames(result);
+    return;
+  }
+
+  result.pm2Status = matchingProcesses.map(p => ({ name: p.name, status: p.status, pid: p.pid }));
+  // Use actual found PM2 process names
+  result.pm2ProcessNames = matchingProcesses.map(p => p.name);
+  emit('pm2', 'done', {
+    message: `Found ${matchingProcesses.length} running process(es)`,
+    pm2Status: result.pm2Status,
+    pm2ProcessNames: result.pm2ProcessNames
+  });
+}
+
+/** Fast, no-AI description: the first non-heading, non-image README line. */
+async function readmeStep(dirPath, result, emit) {
+  if (result.description) {
+    emit('readme', 'skipped', { message: 'Description already found in package.json' });
+    return;
+  }
+
+  emit('readme', 'running', { message: 'Reading README.md...' });
+  for (const readmeFile of ['README.md', 'readme.md', 'Readme.md']) {
+    const readmePath = join(dirPath, readmeFile);
+    if (!existsSync(readmePath)) continue;
+    const content = await readFile(readmePath, 'utf-8').catch(() => '');
+    if (!content) continue;
+    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('!'));
+    if (lines.length > 0) result.description = lines[0].trim().substring(0, 200);
+    emit('readme', 'done', { message: `Found: ${readmeFile}`, description: result.description });
+    return;
+  }
+  emit('readme', 'done', { message: 'No README found' });
+}
+
+async function iconStep(dirPath, result, emit) {
+  emit('icon', 'running', { message: 'Looking for app icon...' });
+  const detectedIcon = await detectAppIcon(dirPath, result.type);
+  if (!detectedIcon) {
+    emit('icon', 'done', { message: 'No app icon found' });
+    return;
+  }
+  result.appIconPath = detectedIcon;
+  emit('icon', 'done', { message: `Found: ${basename(detectedIcon)}`, appIconPath: detectedIcon });
+}
+
 /**
  * Stream detection results to a socket as each step completes
  */
@@ -1163,331 +1467,19 @@ export async function streamDetection(socket, dirPath) {
     appIconPath: null
   };
 
-  // Step 1: Validate path
-  emit('validate', 'running', { message: 'Validating directory path...' });
+  if (!await validateStep(socket, dirPath, result, emit)) return;
 
-  if (!existsSync(dirPath)) {
-    emit('validate', 'error', { message: 'Directory does not exist' });
-    socket.emit('detect:complete', { success: false, error: 'Directory does not exist' });
-    return;
-  }
-
-  const stats = await stat(dirPath);
-  if (!stats.isDirectory()) {
-    emit('validate', 'error', { message: 'Path is not a directory' });
-    socket.emit('detect:complete', { success: false, error: 'Path is not a directory' });
-    return;
-  }
-
-  emit('validate', 'done', { message: 'Valid directory' });
-  result.name = basename(dirPath);
-
-  // Step 2: Read directory contents
-  emit('files', 'running', { message: 'Scanning directory...' });
-  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
-  const files = entries.map(e => e.name);
-  emit('files', 'done', { message: `Found ${files.length} files`, files: files.slice(0, 20) });
+  const files = await filesStep(dirPath, result, emit);
   const godotNativeLaunch = detectGodotNativeLaunch(dirPath);
-
-  // Detect Swift/Xcode projects from directory contents
-  const hasXcodeproj = files.some(f => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'));
-  const hasProjectYml = files.includes('project.yml');
-  const hasPackageSwift = files.includes('Package.swift');
-
-  if (hasXcodeproj || hasProjectYml || hasPackageSwift) {
-    // Parse project.yml for XcodeGen projects
-    if (hasProjectYml) {
-      const ymlContent = await readFile(join(dirPath, 'project.yml'), 'utf-8').catch(() => '');
-      const nameMatch = ymlContent.match(/^name:\s*(.+)$/m);
-      if (nameMatch) result.name = nameMatch[1].trim();
-
-      // Detect platform from targets
-      const platformMatch = ymlContent.match(/platform:\s*\[?([^\]\n]+)/);
-      if (platformMatch) {
-        const platforms = platformMatch[1].toLowerCase();
-        if (platforms.includes('ios') && platforms.includes('macos')) {
-          result.type = 'xcode';
-        } else if (platforms.includes('ios')) {
-          result.type = 'ios-native';
-        } else if (platforms.includes('macos')) {
-          result.type = 'macos-native';
-        } else {
-          result.type = 'xcode';
-        }
-      } else {
-        result.type = 'xcode';
-      }
-
-      // Extract build command
-      result.buildCommand = 'xcodebuild -scheme ' + result.name + ' build';
-    } else if (hasPackageSwift) {
-      result.type = 'swift';
-      result.buildCommand = 'swift build';
-    } else {
-      // .xcodeproj without project.yml
-      const xcodeprojDir = files.find(f => f.endsWith('.xcodeproj'));
-      const schemeName = xcodeprojDir?.replace('.xcodeproj', '') || result.name;
-      result.type = 'xcode';
-      result.buildCommand = 'xcodebuild -scheme ' + schemeName + ' build';
-    }
-
-    result.startCommands = [];
-    result.pm2ProcessNames = [];
-    result.editorCommand = process.platform === 'darwin' ? 'xed .' : 'code .';
-  }
-
-  // Step 3: Read package.json
-  emit('package', 'running', { message: 'Reading package.json...' });
-  const pkgPath = join(dirPath, 'package.json');
-
-  if (existsSync(pkgPath)) {
-    const content = await tryReadFile(pkgPath);
-    if (content) {
-      const pkg = safeJSONParse(content, null);
-      if (!pkg) {
-        emit('package', 'error', { message: 'Invalid package.json format' });
-      } else {
-        result.name = pkg.name || result.name;
-        result.description = pkg.description || '';
-
-        // Detect project type
-        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        if (deps.vite && deps.express) result.type = 'vite+express';
-        else if (deps.vite || deps.react || deps.vue) result.type = 'vite';
-        else if (deps.express || deps.fastify || deps.koa) result.type = 'single-node-server';
-        else if (deps.next) result.type = 'nextjs';
-
-        // Get start commands and build command
-        const scripts = pkg.scripts || {};
-        if (scripts.dev) result.startCommands.push('npm run dev');
-        if (scripts.start && !scripts.dev) result.startCommands.push('npm start');
-        if (scripts.build) result.buildCommand = 'npm run build';
-
-        emit('package', 'done', {
-          message: `Found: ${result.name}`,
-          name: result.name,
-          description: result.description,
-          type: result.type,
-          startCommands: result.startCommands
-        });
-      }
-    }
-  } else {
-    // No package.json ⇒ nothing Node owns this repo, so fall back to marker-file
-    // classification for the common non-Node runtimes. Without this, a Python
-    // service / Go binary / Docker stack / static site all landed on `unknown`
-    // and were offered Node PM2 standardization. Guarded on `unknown` so an
-    // Apple type already resolved in step 2 (a Swift repo that also ships a
-    // Dockerfile) isn't overwritten.
-    const nonNodeType = result.type === 'unknown' ? classifyNonNodeType(files) : null;
-    if (nonNodeType) result.type = nonNodeType;
-    emit('package', 'done', {
-      message: nonNodeType ? `No package.json — detected ${nonNodeType} project` : 'No package.json found',
-      type: result.type
-    });
-  }
-
+  await packageStep(dirPath, files, result, emit);
   // Native game launch is additive: web ports/processes remain the standard
   // managed app while the game gets its own explicit action.
   if (godotNativeLaunch) result.nativeLaunch = godotNativeLaunch;
 
-  // Step 4: Check config files for ports
-  emit('config', 'running', { message: 'Checking configuration files...' });
-  const configFiles = [];
+  await configStep(dirPath, result, emit);
+  await pm2Step(result, emit);
+  await readmeStep(dirPath, result, emit);
+  await iconStep(dirPath, result, emit);
 
-  // Check .env
-  const envPath = join(dirPath, '.env');
-  if (existsSync(envPath)) {
-    const content = await readFile(envPath, 'utf-8').catch(() => '');
-    const portMatch = content.match(/PORT\s*=\s*(\d+)/i);
-    if (portMatch) result.apiPort = parseInt(portMatch[1], 10);
-    const viteMatch = content.match(/VITE_PORT\s*=\s*(\d+)/i);
-    if (viteMatch) result.devUiPort = parseInt(viteMatch[1], 10);
-    configFiles.push('.env');
-  }
-
-  // Check vite.config
-  for (const viteConfig of ['vite.config.js', 'vite.config.ts']) {
-    const configPath = join(dirPath, viteConfig);
-    if (existsSync(configPath)) {
-      const content = await readFile(configPath, 'utf-8').catch(() => '');
-      const portMatch = content.match(/port\s*:\s*(\d+)/);
-      if (portMatch) result.devUiPort = parseInt(portMatch[1], 10);
-      configFiles.push(viteConfig);
-    }
-  }
-
-  // Check ecosystem.config.js/cjs for PM2 configuration
-  for (const ecosystemFile of ECOSYSTEM_CONFIG_FILENAMES) {
-    const ecosystemPath = join(dirPath, ecosystemFile);
-    if (existsSync(ecosystemPath)) {
-      const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
-      if (content) {
-        // Parse all processes with their ports using the dedicated parser
-        const { processes: parsedProcesses, pm2Home } = parseEcosystemConfig(content);
-        if (pm2Home) {
-          result.pm2Home = pm2Home;
-        }
-        if (parsedProcesses.length > 0) {
-          // For processes that use vite and don't have a port, check their cwd for vite.config
-          for (const proc of parsedProcesses) {
-            const vitePort = await resolveViteConfigPortForProcess(dirPath, proc);
-            if (vitePort) proc.port = vitePort;
-            // Clean up internal properties
-            delete proc.cwd;
-            delete proc.usesVite;
-          }
-
-          result.processes = parsedProcesses;
-          result.pm2ProcessNames = parsedProcesses.map(p => p.name);
-
-          // Derive ports from parsed processes
-          const apiProc = parsedProcesses.find(p => p.ports?.api);
-          if (apiProc && !result.apiPort) {
-            result.apiPort = apiProc.ports.api;
-          }
-          const uiProc = parsedProcesses.find(p => p.ports?.ui);
-          if (uiProc && !result.uiPort) {
-            result.uiPort = uiProc.ports.ui;
-          }
-          const devUiProc = parsedProcesses.find(p => p.ports?.devUi);
-          if (devUiProc && !result.devUiPort) {
-            result.devUiPort = devUiProc.ports.devUi;
-          }
-          // When app has API + Vite dev but no dedicated UI port,
-          // the prod UI is served by the API server
-          if (!result.uiPort && result.apiPort && result.devUiPort) {
-            result.uiPort = result.apiPort;
-          }
-        }
-
-        // Extract UI port from CLIENT_URL (still needed as it's not in process configs)
-        const clientUrlMatch = content.match(/CLIENT_URL\s*:\s*['"]https?:\/\/[^:]+:(\d+)/);
-        if (clientUrlMatch && !result.uiPort) {
-          result.uiPort = parseInt(clientUrlMatch[1], 10);
-        }
-
-        configFiles.push(ecosystemFile);
-      }
-    }
-  }
-
-  // When config-file heuristics found a Vite dev port but no dedicated uiPort,
-  // derive uiPort: API serves prod UI if present, otherwise devUiPort is the only UI
-  if (!result.uiPort && result.devUiPort) {
-    result.uiPort = result.apiPort ?? result.devUiPort;
-  }
-
-  emit('config', 'done', {
-    message: configFiles.length ? `Found: ${configFiles.join(', ')}` : 'No config files found',
-    uiPort: result.uiPort,
-    devUiPort: result.devUiPort,
-    apiPort: result.apiPort,
-    pm2ProcessNames: result.pm2ProcessNames.length > 0 ? result.pm2ProcessNames : undefined,
-    processes: result.processes.length > 0 ? result.processes : undefined,
-    configFiles
-  });
-
-  // Step 5: Check PM2 status (skip for non-PM2 app types)
-  if (!usesPm2(result.type)) {
-    emit('pm2', 'skipped', { message: `Not applicable for ${result.type} apps` });
-  } else {
-    emit('pm2', 'running', { message: 'Checking PM2 processes...' });
-    // `listProcessesStrict()` returns `null` when the read itself FAILED (vs
-    // `[]` for a successful read with no processes) — the absent-vs-empty
-    // contract from issue #968, now the one non-test owner of raw `pm2 jlist`
-    // execution/parsing alongside `autofixer/shared.js` (#8164). Use custom
-    // PM2_HOME if detected from ecosystem config.
-    const pm2Processes = await listProcessesStrict(result.pm2Home || null);
-
-    if (pm2Processes === null) {
-      // A failed read must not be reported as "no matching processes" — that
-      // would silently drop the pm2ProcessNames the ecosystem config already
-      // found. Leave result.pm2Status/pm2ProcessNames as already derived and
-      // surface the read failure on its own stage.
-      emit('pm2', 'error', { message: 'PM2 process read failed — status is unavailable' });
-    } else {
-      // Look for processes that might be this app
-      const possibleNames = [
-        result.name,
-        result.name.toLowerCase(),
-        result.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
-        `${result.name}-ui`,
-        `${result.name}-api`
-      ];
-
-      const matchingProcesses = pm2Processes.filter(p =>
-        possibleNames.some(name => p.name.includes(name) || name.includes(p.name))
-      );
-
-      if (matchingProcesses.length > 0) {
-        result.pm2Status = matchingProcesses.map(p => ({
-          name: p.name,
-          status: p.status,
-          pid: p.pid
-        }));
-        // Use actual found PM2 process names
-        result.pm2ProcessNames = matchingProcesses.map(p => p.name);
-        emit('pm2', 'done', {
-          message: `Found ${matchingProcesses.length} running process(es)`,
-          pm2Status: result.pm2Status,
-          pm2ProcessNames: result.pm2ProcessNames
-        });
-      } else {
-        emit('pm2', 'done', { message: 'No matching PM2 processes found' });
-        // Generate PM2 process names only if none found from ecosystem.config
-        if (result.pm2ProcessNames.length === 0) {
-          const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-          if (result.type === 'vite+express') {
-            result.pm2ProcessNames = [`${baseName}-ui`, `${baseName}-api`];
-          } else {
-            result.pm2ProcessNames = [baseName];
-          }
-        }
-      }
-    }
-  }
-
-  // Step 6: Read README.md for description (fast, no AI needed)
-  if (!result.description) {
-    emit('readme', 'running', { message: 'Reading README.md...' });
-    let foundReadme = false;
-    for (const readmeFile of ['README.md', 'readme.md', 'Readme.md']) {
-      const readmePath = join(dirPath, readmeFile);
-      if (existsSync(readmePath)) {
-        const content = await readFile(readmePath, 'utf-8').catch(() => '');
-        if (content) {
-          // Extract first paragraph or heading as description
-          const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('!'));
-          if (lines.length > 0) {
-            result.description = lines[0].trim().substring(0, 200);
-          }
-          emit('readme', 'done', { message: `Found: ${readmeFile}`, description: result.description });
-          foundReadme = true;
-          break;
-        }
-      }
-    }
-    if (!foundReadme) {
-      emit('readme', 'done', { message: 'No README found' });
-    }
-  } else {
-    emit('readme', 'skipped', { message: 'Description already found in package.json' });
-  }
-
-  // Step 7: Detect app icon
-  emit('icon', 'running', { message: 'Looking for app icon...' });
-  const detectedIcon = await detectAppIcon(dirPath, result.type);
-  if (detectedIcon) {
-    result.appIconPath = detectedIcon;
-    emit('icon', 'done', { message: `Found: ${basename(detectedIcon)}`, appIconPath: detectedIcon });
-  } else {
-    emit('icon', 'done', { message: 'No app icon found' });
-  }
-
-  // Complete
-  socket.emit('detect:complete', {
-    success: true,
-    result
-  });
+  socket.emit('detect:complete', { success: true, result });
 }

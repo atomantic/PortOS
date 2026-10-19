@@ -95,6 +95,12 @@ function invalidateStatus() {
 // committed ref metadata, including worktree/common-dir layouts. Exclude index:
 // git status itself can refresh it, which would make a read/notify feedback loop.
 // Working-tree-only edits reconcile on activity, scheduler ticks and tab show.
+//
+// Must stay `persistent: true`: chokidar only attaches its `error` listener to
+// the native fs.watch handle on that path. A non-persistent watcher returns the
+// bare handle, and on Windows deleting a watched ref directory (git prunes
+// `refs/heads/<prefix>/` once a worktree branch is deleted) emits EPERM with no
+// listener — an uncaught exception that exits the server.
 async function watchRepoChanges() {
   const [{ stdout: gitDir }, { stdout: commonDir }] = await Promise.all([
     execGit(['rev-parse', '--absolute-git-dir'], PATHS.root),
@@ -103,7 +109,7 @@ async function watchRepoChanges() {
   const roots = [...new Set([gitDir.trim(), resolve(PATHS.root, commonDir.trim())])];
   repoWatcher = watch(roots.flatMap(root => [
     join(root, 'HEAD'), join(root, 'refs'), join(root, 'packed-refs'),
-  ]), { ignoreInitial: true, persistent: false, ignored: /\.lock$/ });
+  ]), { ignoreInitial: true, persistent: true, ignored: /\.lock$/ });
   repoWatcher.on('all', invalidateStatus);
   repoWatcher.on('error', err => console.error(`❌ Auto-update repo watcher failed: ${err.message}`));
 }
@@ -292,7 +298,13 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   const read = await checkUpdateRepoReadiness({ fetch: true })
     .catch((err) => ({ ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] }));
   if (!read.ready && !isRepairableOnly(read)) {
-    if (read.needsAgent && config.resolveBlockersWithAgent && repairDispatchDue(runtime, config.minIntervalMs, now)) {
+    // A live owner (or an unreadable owner registry) means the repair agent could
+    // only stand down — the claim-ownership coordinator refuses it while another
+    // agent holds the checkout. Dispatching anyway would burn the repair cooldown
+    // on a run that cannot act; defer so the first tick after the owners release
+    // the checkout enqueues the repair instead.
+    const ownerHoldsCheckout = read.reasons?.includes('agent-at-work') || read.reasons?.includes('agent-check-unreadable');
+    if (read.needsAgent && !ownerHoldsCheckout && config.resolveBlockersWithAgent && repairDispatchDue(runtime, config.minIntervalMs, now)) {
       const task = await queueRepoRepairTask(read);
       // Stamp only on a REAL dispatch. `addTask`'s dedup (cosTaskStore.js)
       // only collapses repeat ticks onto one task while that task stays open

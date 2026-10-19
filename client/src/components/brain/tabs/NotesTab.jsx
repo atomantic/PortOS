@@ -26,6 +26,7 @@ import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js'
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import NoteDetailPane from '../../notes/NoteDetailPane.jsx';
 import useVaultNote from '../../../hooks/useVaultNote.js';
+import MarkdownOutput from '../../cos/MarkdownOutput.jsx';
 
 function UnavailableState({ title, message, onRetry }) {
   return (
@@ -662,7 +663,7 @@ export default function NotesTab() {
           onRequestDelete={requestDelete} onDelete={handleDeleteNote}
           onCancelDelete={cancelDelete} forceOffered={forceOffered}
           dismissForce={dismissForce}
-          renderPreview={content => <MarkdownPreview content={content} onLinkClick={handleSelectNote} />}
+          renderPreview={content => <MarkdownOutput content={content} linkifyText={noteLinkify(handleSelectNote)} />}
           renderLinks={note => (
             <>
               <LinkSection icon={<Link2 size={10} />} label="Links" items={note.wikilinks}
@@ -899,223 +900,20 @@ function NoteListItem({ note, selected, onClick, compact, isSearch }) {
   );
 }
 
-/**
- * Simple markdown preview renderer
- * Handles headings, bold, italic, code, links, wikilinks, lists, blockquotes
- */
-function MarkdownPreview({ content, onLinkClick }) {
-  if (!content) return null;
+// Note-specific inline syntax the shared renderer leaves as literal text:
+// `[[target|display]]` opens that vault note in place, and `#tag` gets the
+// accent tint. Everything else — including href vetting for `[text](url)` —
+// is MarkdownOutput's.
+const NOTE_INLINE_RE = /(\[\[[^\]|]+(?:\|[^\]]+)?\]\]|(?<=^|\s)#[a-zA-Z][a-zA-Z0-9_/-]*)/;
 
-  const lines = content.split('\n');
-  const elements = [];
-  let inCodeBlock = false;
-  let codeLines = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Code blocks
-    if (line.trimStart().startsWith('```')) {
-      if (inCodeBlock) {
-        elements.push(
-          <pre key={i} className="bg-port-bg border border-port-border rounded p-3 overflow-x-auto text-sm text-gray-300 font-mono my-2">
-            <code>{codeLines.join('\n')}</code>
-          </pre>
-        );
-        codeLines = [];
-        inCodeBlock = false;
-      } else {
-        inCodeBlock = true;
-      }
-      continue;
+function noteLinkify(onLinkClick) {
+  return text => text.split(NOTE_INLINE_RE).filter(Boolean).map(seg => {
+    const wiki = seg.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+    if (wiki) {
+      const target = wiki[1].trim();
+      return { ref: wiki[2]?.trim() || target, onClick: () => onLinkClick?.(`${target}.md`) };
     }
-
-    if (inCodeBlock) {
-      codeLines.push(line);
-      continue;
-    }
-
-    // Empty lines
-    if (!line.trim()) {
-      elements.push(<div key={i} className="h-3" />);
-      continue;
-    }
-
-    // Headings
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const sizes = ['text-2xl', 'text-xl', 'text-lg', 'text-base', 'text-sm', 'text-xs'];
-      elements.push(
-        <div key={i} className={`${sizes[level - 1]} font-bold text-white mt-4 mb-2`}>
-          {renderInline(headingMatch[2], onLinkClick)}
-        </div>
-      );
-      continue;
-    }
-
-    // Horizontal rule
-    if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim())) {
-      elements.push(<hr key={i} className="border-port-border my-3" />);
-      continue;
-    }
-
-    // Blockquotes
-    if (line.trimStart().startsWith('> ')) {
-      elements.push(
-        <div key={i} className="border-l-2 border-port-accent/40 pl-3 text-gray-400 text-sm italic my-1">
-          {renderInline(line.replace(/^>\s*/, ''), onLinkClick)}
-        </div>
-      );
-      continue;
-    }
-
-    // Unordered lists
-    const listMatch = line.match(/^(\s*)[*-]\s+(.+)/);
-    if (listMatch) {
-      const indent = Math.floor(listMatch[1].length / 2);
-      elements.push(
-        <div key={i} className="text-sm text-gray-300 my-0.5" style={{ paddingLeft: `${indent * 16 + 16}px` }}>
-          <span className="text-gray-500 mr-2">&#8226;</span>
-          {renderInline(listMatch[2], onLinkClick)}
-        </div>
-      );
-      continue;
-    }
-
-    // Ordered lists
-    const olMatch = line.match(/^(\s*)\d+\.\s+(.+)/);
-    if (olMatch) {
-      const indent = Math.floor(olMatch[1].length / 2);
-      elements.push(
-        <div key={i} className="text-sm text-gray-300 my-0.5" style={{ paddingLeft: `${indent * 16 + 16}px` }}>
-          {renderInline(olMatch[2], onLinkClick)}
-        </div>
-      );
-      continue;
-    }
-
-    // Checkbox items
-    const checkMatch = line.match(/^(\s*)[*-]\s+\[([ xX])\]\s+(.+)/);
-    if (checkMatch) {
-      const checked = checkMatch[2] !== ' ';
-      elements.push(
-        <div key={i} className={`text-sm my-0.5 flex items-start gap-2 ${checked ? 'text-gray-500 line-through' : 'text-gray-300'}`} style={{ paddingLeft: '16px' }}>
-          <span className="mt-0.5">{checked ? '☑' : '☐'}</span>
-          {renderInline(checkMatch[3], onLinkClick)}
-        </div>
-      );
-      continue;
-    }
-
-    // Regular paragraph
-    elements.push(
-      <p key={i} className="text-sm text-gray-300 my-1 leading-relaxed">
-        {renderInline(line, onLinkClick)}
-      </p>
-    );
-  }
-
-  // Close unclosed code block
-  if (inCodeBlock && codeLines.length > 0) {
-    elements.push(
-      <pre key="unclosed-code" className="bg-port-bg border border-port-border rounded p-3 overflow-x-auto text-sm text-gray-300 font-mono my-2">
-        <code>{codeLines.join('\n')}</code>
-      </pre>
-    );
-  }
-
-  return <div className="prose-dark">{elements}</div>;
-}
-
-/**
- * Render inline markdown: bold, italic, code, links, wikilinks, tags
- */
-function renderInline(text, onLinkClick) {
-  if (!text) return null;
-
-  // Split on inline patterns and rebuild
-  const parts = [];
-  let remaining = text;
-  let key = 0;
-
-  while (remaining) {
-    // Wikilinks: [[target|display]] or [[target]]
-    const wikiMatch = remaining.match(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/);
-    // Inline code
-    const codeMatch = remaining.match(/`([^`]+)`/);
-    // Bold
-    const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
-    // Italic
-    const italicMatch = remaining.match(/(?<!\*)\*([^*]+)\*(?!\*)/);
-    // External links: [text](url)
-    const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/);
-    // Tags: #tag
-    const tagMatch = remaining.match(/(?:^|\s)(#[a-zA-Z][a-zA-Z0-9_/-]*)/);
-
-    // Find earliest match
-    const matches = [
-      wikiMatch && { type: 'wiki', match: wikiMatch },
-      codeMatch && { type: 'code', match: codeMatch },
-      boldMatch && { type: 'bold', match: boldMatch },
-      italicMatch && { type: 'italic', match: italicMatch },
-      linkMatch && { type: 'link', match: linkMatch },
-      tagMatch && { type: 'tag', match: tagMatch }
-    ].filter(Boolean).sort((a, b) => a.match.index - b.match.index);
-
-    if (matches.length === 0) {
-      parts.push(remaining);
-      break;
-    }
-
-    const first = matches[0];
-    const before = remaining.slice(0, first.match.index);
-    if (before) parts.push(before);
-
-    switch (first.type) {
-      case 'wiki': {
-        const target = first.match[1].trim();
-        const display = first.match[2]?.trim() || target;
-        parts.push(
-          <button
-            key={key++}
-            onClick={() => onLinkClick?.(target + '.md')}
-            className="text-port-accent hover:text-white hover:underline"
-          >
-            {display}
-          </button>
-        );
-        break;
-      }
-      case 'code':
-        parts.push(
-          <code key={key++} className="bg-port-bg border border-port-border rounded px-1 py-0.5 text-xs text-port-accent font-mono">
-            {first.match[1]}
-          </code>
-        );
-        break;
-      case 'bold':
-        parts.push(<strong key={key++} className="text-white font-semibold">{first.match[1]}</strong>);
-        break;
-      case 'italic':
-        parts.push(<em key={key++} className="text-gray-400 italic">{first.match[1]}</em>);
-        break;
-      case 'link':
-        parts.push(
-          <a key={key++} href={first.match[2]} target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
-            {first.match[1]}
-          </a>
-        );
-        break;
-      case 'tag':
-        parts.push(
-          <span key={key++} className="text-port-accent/70">{first.match[1]}</span>
-        );
-        break;
-    }
-
-    remaining = remaining.slice(first.match.index + first.match[0].length);
-  }
-
-  return parts;
+    if (seg[0] === '#') return { ref: seg, className: 'text-port-accent/70' };
+    return seg;
+  });
 }

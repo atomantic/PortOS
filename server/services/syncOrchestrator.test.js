@@ -675,6 +675,27 @@ describe('syncOrchestrator', () => {
       expect(result.catalog.catalogSeqs.refs ?? '0').toBe('0');
     });
 
+    it('retains ingredient and association cursors during identity reservation, then retries the same page after unfreeze', async () => {
+      const page = {
+        ingredients: [{ id: 'reserved-survivor' }], media: [{ ingredientId: 'reserved-survivor', mediaKey: 'later.png' }],
+        maxSequences: { scraps: '0', ingredients: '7', sources: '0', refs: '0', relations: '0', tags: '0', media: '9' },
+        hasMore: false, portosMeta: { schemaVersions: { catalog: 1 } },
+      };
+      mockFetch.mockResolvedValue({ ok: true, json: async () => page });
+      applyCatalogChanges.mockResolvedValueOnce({
+        ingredients: { skipped: 1, failed: 0, identityPending: 1 },
+        media: { skipped: 1, failed: 0, identityPending: 1 },
+      });
+      const pending = await syncWithPeer(catalogPeer);
+      expect(pending.catalog.catalogSeqs.ingredients ?? '0').toBe('0');
+      expect(pending.catalog.catalogSeqs.media ?? '0').toBe('0');
+      applyCatalogChanges.mockResolvedValueOnce({ ingredients: { updated: 1, failed: 0 }, media: { applied: 1, failed: 0 } });
+      const completed = await syncWithPeer(catalogPeer);
+      expect(applyCatalogChanges.mock.calls.at(-1)[0].ingredients).toEqual(page.ingredients);
+      expect(completed.catalog.catalogSeqs.ingredients).toBe('7');
+      expect(completed.catalog.catalogSeqs.media).toBe('9');
+    });
+
     it('clears a previously recorded schema gap after a successful catalog drain', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

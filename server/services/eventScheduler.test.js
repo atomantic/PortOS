@@ -409,6 +409,57 @@ describe('schedule() lifecycle with fake timers', () => {
     expect(await triggerNow('does-not-exist')).toBe(false);
   });
 
+  it('triggerNow() mid-run joins the in-flight timer run instead of starting a second handler (#12022)', async () => {
+    let release;
+    const handler = vi.fn(() => new Promise(resolve => { release = resolve; }));
+    schedule({ id: 'trigger-join', type: 'interval', intervalMs: 60000, handler });
+
+    // The timer starts the run; "Run now" lands while it is still executing.
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const manual = triggerNow('trigger-join');
+    const secondManual = triggerNow('trigger-join');
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    release();
+    expect(await manual).toEqual({ joined: true });
+    expect(await secondManual).toEqual({ joined: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(getEvent('trigger-join').runCount).toBe(1);
+    expect(getHistory({ eventId: 'trigger-join' })).toHaveLength(1);
+
+    // The latch releases with the run: the next trigger executes again.
+    handler.mockResolvedValue(undefined);
+    expect(await triggerNow('trigger-join')).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('records a handler that reports { skipped } as a skipped slot, not a successful run (#12023)', async () => {
+    const ran = vi.fn();
+    cosEvents.on('scheduler:ran', ran);
+    const handler = vi.fn()
+      .mockResolvedValueOnce({ skipped: true, reason: 'already running' })
+      .mockRejectedValueOnce(new Error('boom'));
+    schedule({ id: 'skip-1', type: 'interval', intervalMs: 5000, handler });
+    const rateBefore = getStats().recentSuccessRate;
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const [entry] = getHistory({ eventId: 'skip-1' });
+    expect(entry).toMatchObject({ success: true, skipped: true, skipReason: 'already running', error: null });
+    expect(getEvent('skip-1')).toMatchObject({ lastRunSucceeded: true, lastRunSkipped: true, lastSkipReason: 'already running', runCount: 1 });
+    expect(ran).toHaveBeenCalledWith(expect.objectContaining({ id: 'skip-1', success: true, skipped: true }));
+
+    // The skipped slot counts toward neither side of the success rate; the
+    // failure that follows does.
+    expect(getStats().recentSuccessRate).toBe(rateBefore);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(getStats().recentSuccessRate).not.toBe(rateBefore);
+    expect(getEvent('skip-1')).toMatchObject({ lastRunSucceeded: false, lastRunSkipped: false, lastSkipReason: null });
+    cosEvents.off('scheduler:ran', ran);
+  });
+
   it('records a failed handler in history without deactivating a recurring event', async () => {
     const handler = vi.fn().mockRejectedValue(new Error('boom'));
     schedule({ id: 'fail-1', type: 'interval', intervalMs: 5000, handler });

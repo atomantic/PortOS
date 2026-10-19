@@ -39,8 +39,14 @@ replace that key; explicit null/empty values clear fields where their schema all
 Unreadable/malformed persisted settings and failed writes return errors.
 
 Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
-`localLlm.mtplx`, `localLlm.slotstream`, `imageGen.local`, `pipeline`,
+`localLlm.mtplx`, `localLlm.slotstream`, `imageGen`, `imageGen.external`,
+`imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
+`imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
 `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, and `autoUpdate`.
+The Media settings drawer saves only the fields the user changed through these,
+one slice per request, so a value a sibling panel patched after the drawer
+opened is never overwritten by a stale snapshot. A `renderDefaults` target sent
+as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
 fields retain the same operator authority checks as `PUT /api/settings`,
@@ -120,7 +126,8 @@ legacy list for local Apps/Dashboard views.
 | POST | `/apps/:id/restart` | Restart app via PM2 |
 | GET | `/apps/:id/status` | Get PM2 status |
 | GET | `/apps/:id/logs` | Get recent logs |
-| POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
+| POST | `/apps/:id/refresh-config` | Re-parse ecosystem config; the record's `apiPort`/`uiPort`/`devUiPort` are set to match it, and a port the config no longer declares is cleared |
+| GET | `/apps/:id/lane-health` | What became of the issues each audit lane filed in the last 60 days (#12088), read from the app's GitHub/GitLab tracker on request: `{ available, windowDays, refileDays, from, to, truncated, partial, lanes }`, one row per audit lane with `filed`, `completed`, `notPlanned` (not planned or duplicate), `open`, `reverted` (a later `Revert` commit names the closing PR or one of its SHAs), `refiled` (a new issue citing a file a closed finding of the same lane cited within 30 days) and up to ten `flagged` issues. `truncated` means the issue read hit its limit and `from` moved to the oldest issue covered; `partial` names the pull-request or commit read that failed, so a reverted count of 0 is not evidence. `{ available: false, reason }` for an app without a forge tracker (`forge-unavailable`) or a failed issue read (`issues`, with the remedy in `error`). |
 | POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and land canonical schema v2 `.quality.json` through an immediately-merged pull request on `portos/quality-snapshot` (scoped to that one path; the live checkout is not committed). The file is not the peer wire payload (`PORTOS_SCHEMA_VERSIONS.appQuality` stays 1). A v1 file is rewritten when current evidence exists. Answers `{ success, published, path }` plus the commit `hash`, `prUrl`, and `prNumber`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` / `no-remote` / `no-default-branch` / `pr-failed` / `unsupported-format` / `invalid-evidence` when nothing was written. `unsupported-format` means a future, unrecognized, malformed, or oversize file was left in place. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` (or a historical `quality-snapshot.json` when `.quality.json` is absent) is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step; `npm run quality:snapshot -- --migrate` converts an old file without reading the database). |
 | GET | `/apps/:id/quality-schedule` | The Quality tab's weekly-schedule form: every audit check with its applicability verdict and reason, the repository shapes that verdict came from, the cron expressions already occupied on this app, and the plan the shipped defaults produce. Read-only — no LLM call, no write. |
 | POST | `/apps/:id/quality-schedule/preview` | Re-plan for an edited form (selection, per-check delivery mode, checks per day, hour window, claim-drain task and offset). Still read-only; a POST only because the option bag carries a per-check map. |
@@ -229,7 +236,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/scaffold/directories` | List candidate parent directories |
+| GET | `/scaffold/directories` | Browse host directories for the location picker (host control: enumerates any readable directory) |
 | GET | `/scaffold/templates` | List available templates |
 | POST | `/scaffold/templates/create` | Create app from template |
 | POST | `/scaffold` | Scaffold a new app |
@@ -260,6 +267,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/tools/calls/:requestId` | Read a retained normalized tool result |
 | PUT | `/cos/config` | Update configuration |
 | GET | `/cos/tasks` | Bounded task list: all non-completed tasks plus the first 25 completed (`completedCount`, `completedNextCursor`); `view=queue`, `view=completed` (paged), `view=full` (raw unbounded store) |
+| GET | `/cos/tasks/:id` | One task as stored plus the queue it lives in: `{ task, source: 'user' \| 'internal' }`; 404 when unknown |
 | POST | `/cos/evaluate` | Force task evaluation |
 | GET | `/cos/health` | Get health status |
 | POST | `/cos/health/check` | Run health check |
@@ -305,6 +313,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
 | PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`; `autoStart`: set false for manual-only on-demand drains, omitted preserves legacy automatic starts/rechecks) |
 | POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
+| POST | `/cos/schedule/branch-reconcile/checkouts/retire` | Archive and retire one held checkout named exactly as the last branch-reconcile inventory reported it (operator only) |
 | GET | `/cos/schedule/maintenance-runs` | List manual maintenance runs (the Schedule tab's "Run maintenance now"; running first, then recent history) |
 | POST | `/cos/schedule/maintenance-runs` | Start a manual maintenance run for one app (`appId`, `providerId`, `model`, optional `effort`); returns the run and its first dispatch or hold reason. Independent of Quota Burn |
 | POST | `/cos/schedule/maintenance-runs/:id/stop` | Stop a run from dispatching further steps (a task already queued or running is not recalled) |
@@ -727,7 +736,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/capabilities` | Feature capability flags |
 | `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |
 | `/api/workspace-contexts` | Workspace context management |
-| `/api/apps/:appId/reference-repos` | Per-app reference repos |
+| `/api/apps/:appId/reference-repos` | Per-app reference repos (create, a PATCH that names `repoUrl` or `branch`, and `check` are host control: the path names a host directory the scheduled reference-watch runs git in) |
 | `/api/managed-visitor-admin` | Owner-only provisioning and revocation of scoped managed-app visitor credentials; [contract](features/managed-visitors.md) |
 | `/api/managed-visitors/v1` | Loopback managed visitor admission, observation, bounded actions and confirmed cleanup; requires a separate scoped app credential even when the instance password is off; [contract](features/managed-visitors.md) |
 | `/api/network-exposure` | Network exposure checks |
@@ -768,7 +777,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/health` | Apple Health metrics, ingest, and XML import |
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
-| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
+| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)); `POST /api/sharing/buckets` is host control (it names a host folder PortOS writes records into and imports manifests from) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
 | `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |
@@ -805,9 +814,9 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/rounds` | Rounds (music + Morse training) |
 | `/api/ask` | Ask (LLM Q&A) |
 | `/api/quota-burn` | Quota-burn plan (ordered scheduled-task references + per-invocation overrides), its live status, the app/provider catalog its pickers read, manual runs, and re-arm. The referenced work itself is read from — and only ever edited through — `/api/cos/schedule` and `/api/cos/jobs`. |
-| `/api/timeline` | Human-activity timeline (day + events) |
+| `/api/timeline` | Human-activity timeline (day + events); the path-based Gmail mbox import is host control (it names a host file or folder to read) |
 | `/api/games` | Game projects |
-| `/api/sprites` | Sprite catalog / export |
+| `/api/sprites` | Sprite catalog / export; `POST /import` is host control (it names a host source tree to copy from) |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import MediaCard from './MediaCard';
+import { normalizeImage, normalizeVideo } from './normalize';
 
 const socketHandlers = new Map();
 vi.mock('../../services/socket', () => ({
@@ -228,5 +229,20 @@ describe('MediaCard render-time chip', () => {
   it('renders no chip when the record carries no render time', () => {
     const { container } = render(<MediaCard item={{ ...imageItem, renderMs: null }} />);
     expect(container.querySelector('[title^="Render time"]')).toBeNull();
+  });
+});
+
+describe('shared media-card file size', () => {
+  it.each(['image', 'video'])('shows the actual %s file size beside the geometry chips', kind => {
+    const normalize = kind === 'image' ? normalizeImage : normalizeVideo;
+    render(<MediaCard item={normalize({ ...imageItem, id: 'example-clip', width: 640, height: 480, fps: kind === 'video' ? 24 : undefined, fileSizeBytes: 1572864 })} />);
+    expect(screen.getByTitle('Original file size')).toHaveTextContent('1.5 MB');
+    expect(screen.getByText('640×480').parentElement).toContainElement(screen.getByTitle('Original file size'));
+  });
+  it('omits unknown sizes while retaining a measured zero', () => {
+    const { rerender } = render(<MediaCard item={imageItem} />);
+    expect(screen.queryByTitle('Original file size')).not.toBeInTheDocument();
+    rerender(<MediaCard item={{ ...imageItem, fileSizeBytes: 0 }} />);
+    expect(screen.getByTitle('Original file size')).toHaveTextContent('0 B');
   });
 });

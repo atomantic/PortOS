@@ -4,6 +4,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { existsSync } from 'fs';
+import { isRepo, notGitRepoMessage } from '../services/git.js';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
@@ -12,6 +14,7 @@ import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.j
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
+import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cosSpawnWindow.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
@@ -101,6 +104,19 @@ async function assertAssignableInstance(instanceId) {
   const assignable = await getAssignableInstances();
   if (assignable.some(i => i.instanceId === instanceId)) return;
   throw new ServerError('Unknown instance — pick one of this install\'s federated instances', { status: 400, code: 'UNKNOWN_INSTANCE' });
+}
+
+// Worktree/PR delivery needs a git checkout; refuse at creation rather than
+// letting the task block at spawn. A missing directory is left to the spawn-time
+// workspace validation, which has its own message.
+async function assertWorktreeCapableApp(taskData) {
+  if (!taskData.app || !(taskData.useWorktree || taskData.openPR)) return;
+  const app = await getAppById(taskData.app);
+  if (!app?.repoPath || !existsSync(app.repoPath)) return app;
+  if (!(await isRepo(app.repoPath))) {
+    throw new ServerError(notGitRepoMessage(app.name || taskData.app), { status: 400, code: 'NOT_A_GIT_REPO' });
+  }
+  return app;
 }
 
 const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
@@ -228,6 +244,16 @@ router.get('/tasks/internal', asyncHandler(async (req, res) => {
   res.json(tasks);
 }));
 
+// GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
+// Staff page reads this when a selection lands outside the lists it already
+// holds, instead of re-reading the whole queue per click (#12032). Registered
+// after the literal /tasks/user and /tasks/internal routes so those still win.
+router.get('/tasks/:id', asyncHandler(async (req, res) => {
+  const found = await cos.findTaskWithSource(req.params.id);
+  if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(found);
+}));
+
 // POST /api/cos/tasks/refresh - Force refresh tasks
 router.post('/tasks/refresh', asyncHandler(async (req, res) => {
   const tasks = await taskWatcher.refreshTasks();
@@ -266,7 +292,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   const {
     command, app, provider, model, effort, simplify, issueTarget, prCompletion,
     target, issueContext, overrideContext, issueAuthorFilter, reviewers, usernames, optionalReviewers,
-    reviewerMaxRounds, reviewerModels, reviewerEfforts
+    reviewerMaxRounds, reviewerModels, reviewerEfforts, depfreeMode
   } = validateRequest(slashdoTaskSchema, req.body);
 
   const workflow = getSlashdoWorkflow(command);
@@ -390,10 +416,17 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       },
     };
   } else {
+    // `/do:depfree`'s removal bar rides along as the command's own flag: the
+    // bundled body parses `--heavy` / `--extreme` itself, and the default bar
+    // is the flag-less invocation. Ignored for every other command, whose body
+    // has no such flag to read.
+    const depfreeArgs = command === 'depfree' && depfreeMode && depfreeMode !== 'default'
+      ? { slashdoArgs: `--${depfreeMode}` }
+      : {};
     shape = {
-      description: `${workflow.label} for ${appObj.name} — ${workflow.description}`,
+      description: `${workflow.label} for ${appObj.name} — ${workflow.description}${depfreeArgs.slashdoArgs ? ` (${depfreeMode} mode)` : ''}`,
       slashdoCommand: command,
-      taskMetadata: { useWorktree, openPR, worktreeChangesExpected },
+      taskMetadata: { useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs },
     };
   }
 
@@ -467,6 +500,14 @@ router.post('/tasks', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const { type, isInvestigation, ...taskData } = parsed.data;
   if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
+  const app = await assertWorktreeCapableApp(taskData);
+  // API callers can omit the UI's previewed value. Resolve against the app at
+  // creation, then persist the choice so later configuration changes cannot
+  // turn an in-flight draft/human handoff into an automatic merge.
+  const opensPr = taskData.openPR === true || (taskData.useWorktree === true && taskData.openPR !== false);
+  if (type === 'user' && !taskData.planOnly && !isInvestigation && opensPr && taskData.prCompletion === undefined) {
+    taskData.prCompletion = resolveAppPrCompletion(app, taskData);
+  }
   const preparedTask = await preparePlanOnlyTask(taskData);
   // A UI-queued investigation (#6043) goes through the SAME producer as an
   // auto-filed one, so it lands with the markers the shared machinery reads —

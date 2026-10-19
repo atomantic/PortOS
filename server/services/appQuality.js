@@ -4,7 +4,7 @@ import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
+import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt, deepDiscoveryComplete = false }, deps = {}) {
@@ -23,14 +23,34 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     console.warn(`⚠️ Audit quality skipped for ${agentId}: no valid run start time`);
     return false;
   }
+  // The AUDIT_SLICE line is the rotation record (#12090); a v2 report names the
+  // same slice, so a summary that dropped the line still records one.
+  const slice = parseAuditSlice(summary) ?? (report.version === 2 ? report.slice : null);
   await (deps.ensureSchema || ensureSchema)();
   await (deps.query || query)(
-    `INSERT INTO app_quality_measurements (app_id, category, agent_id, assessed_at, report)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
+    `INSERT INTO app_quality_measurements (app_id, category, agent_id, assessed_at, report, slice)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6)
      ON CONFLICT (app_id, category, agent_id) DO NOTHING`,
-    [task.metadata.app, category, agentId, assessedAt, JSON.stringify(report)]
+    [task.metadata.app, category, agentId, assessedAt, JSON.stringify(report), slice]
   );
   return true;
+}
+
+export const AUDIT_SLICE_HISTORY_RUNS = 8;
+
+/**
+ * The slices this lane recorded for an app in its most recent runs, newest
+ * first, for the `audit-slice-history` task data input (#12090). Runs that
+ * recorded no slice (older prompts, summaries without the line) are skipped.
+ */
+export async function readRecentAuditSlices(appId, taskType, deps = {}) {
+  const result = await (deps.query || query)(
+    `SELECT assessed_at, slice FROM app_quality_measurements
+     WHERE app_id = $1 AND category = $2 AND slice IS NOT NULL
+     ORDER BY assessed_at DESC, agent_id DESC LIMIT $3`,
+    [appId, normalizeAuditTaskType(taskType), AUDIT_SLICE_HISTORY_RUNS]
+  );
+  return result.rows.map(row => ({ assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice }));
 }
 
 /**
@@ -41,10 +61,17 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
  */
 export async function enrichAppsWithQuality(apps, deps = {}) {
   if (!apps.length) return apps;
-  // One app-scoped query per list, not one per tile or transcript scan.
+  // One app-scoped query per list, not one per tile or transcript scan. Every
+  // run inside the freshness window feeds a category's rolling figure; the
+  // newest run per category is kept past it as the row's evidence (#12076).
+  const now = deps.now ?? Date.now();
   const result = await (deps.query || query)(
-    `SELECT DISTINCT ON (app_id, category) app_id, category, agent_id, assessed_at, report FROM app_quality_measurements WHERE app_id = ANY($1::text[]) ORDER BY app_id, category, assessed_at DESC, agent_id DESC`,
-    [apps.map(app => app.id)]
+    `SELECT app_id, category, agent_id, assessed_at, report FROM (
+       SELECT app_id, category, agent_id, assessed_at, report,
+         row_number() OVER (PARTITION BY app_id, category ORDER BY assessed_at DESC, agent_id DESC) AS run_rank
+       FROM app_quality_measurements WHERE app_id = ANY($1::text[])) runs
+     WHERE run_rank = 1 OR assessed_at >= $2`,
+    [apps.map(app => app.id), new Date(now - AUDIT_FRESHNESS_MS)]
   ).catch(err => {
     console.error(`❌ App quality unavailable: ${err.message}`);
     return null;
@@ -60,10 +87,10 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
       deps.resolveApplicability ? deps.resolveApplicability(app).catch(() => ({})) : {},
     ]);
     return { ...app,
-      quality: result ? { ...summarizeAppQuality(latestQualityRecords([
+      quality: result ? { ...summarizeAppQuality(dailyQualityRecords([
         ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
         ...shared.records, ...releases[index],
-      ]), deps.now ?? Date.now(), { inapplicable }), federation: shared.federation }
+      ]), now, { inapplicable }), federation: shared.federation }
         : { ...summarizeAppQuality(), unavailable: true },
     };
   }));

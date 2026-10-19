@@ -8,7 +8,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null, executionFault: false }));
+const fixture = vi.hoisted(() => ({
+  dataRoot: null,
+  releaseFault: null,
+  releaseJournalUnlinked: false,
+  releaseFaultTriggered: false,
+  executionFault: false,
+}));
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal();
   return {
@@ -17,10 +23,14 @@ vi.mock('node:fs', async (importOriginal) => {
       if (fixture.releaseFault === 'unlink' && path === join(fixture.dataRoot, 'database-restore-recovery.json')) {
         throw Object.assign(new Error('synthetic unlink failure'), { code: 'EIO' });
       }
-      return fs.unlinkSync(path);
+      const result = fs.unlinkSync(path);
+      if (path === join(fixture.dataRoot, 'database-restore-recovery.json')) fixture.releaseJournalUnlinked = true;
+      return result;
     }),
     fsyncSync: vi.fn((fd) => {
-      if (fixture.releaseFault === 'directory-sync' && fs.fstatSync(fd).isDirectory()) {
+      if (fixture.releaseFault === 'directory-sync' && fixture.releaseJournalUnlinked
+        && !fixture.releaseFaultTriggered && fs.fstatSync(fd).isDirectory()) {
+        fixture.releaseFaultTriggered = true;
         throw Object.assign(new Error('synthetic directory sync failure'), { code: 'EIO' });
       }
       return fs.fsyncSync(fd);
@@ -60,7 +70,12 @@ vi.mock('./paths.js', async (importOriginal) => {
 });
 
 const pool = vi.hoisted(() => ({
-  connect: vi.fn(async () => ({ query: vi.fn(async () => ({ rows: [] })), release: vi.fn() })),
+  connect: vi.fn(async () => ({
+    query: vi.fn(async () => ({ rows: [] })),
+    on: vi.fn(),
+    removeListener: vi.fn(),
+    release: vi.fn(),
+  })),
   on: vi.fn(),
   query: vi.fn(async () => ({ rows: [] })),
 }));
@@ -86,6 +101,9 @@ const FENCED = { status: 503, code: 'DATABASE_RESTORE_RECOVERY' };
 
 beforeEach(() => {
   rmSync(databaseRestoreRecovery.path, { force: true });
+  fixture.releaseFault = null;
+  fixture.releaseJournalUnlinked = false;
+  fixture.releaseFaultTriggered = false;
   fixture.executionFault = false;
   vi.clearAllMocks();
 });

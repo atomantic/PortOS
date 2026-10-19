@@ -59,7 +59,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
 | `apiReview.js` | Review hub. |
 | `apiCodeReview.js` | Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model). |
-| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets) and scrap ingest (create/extract/commit + url/file/voice/brain). |
+| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets) scrap ingest (create/extract/commit + url/file/voice/brain), reference sheets (`listCatalogSheetVariants` / `previewCatalogSheet` / `renderCatalogSheet`), and local consolidation preview/apply/history/recovery. |
+| `apiCatalogIdentity.js` | Owner-coordinated shared identity preview, creation, import, acceptance, progress, abort and guarded recovery. |
 | `apiCatalogTypes.js` | User-defined catalog ingredient types (list active registry + create/update/delete user types). |
 | `apiRuns.js` | Agent run history. |
 | `apiScaffold.js` | App scaffolding templates. |
@@ -104,14 +105,14 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 |---|---|
 | `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus models, LoRAs, cancel and delete. |
 | `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
-| `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
+| `apiMedia.js` | `importGalleryFile` dispatches image/video imports through the Prompt gallery upload endpoints; `assignImportedMedia` adds existing imports through idempotent bulk membership. Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
 | `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation (plus its SSE progress URL), single/batch card renders. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |
 | `apiGames.js` | Game studio records, managed-app binding, reusable sprite/music bindings, deterministic asset-bundle compilation/integrity preflight, and AI feedback history. |
-| `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
+| `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. Includes render cleanup inventory/apply with optional unused film-look purging. |
 | `apiContinuousVideo.js` | Continuous-video episode generation: client-side-callable lint preview of a scene draft, queue-episode submit, and the SSE progress-events URL. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's re-derive (#2980), and animation render-provider readiness (#4876). |
 | `apiShell.js` | Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session. Keystrokes/output stay on the `shell:*` socket protocol. |

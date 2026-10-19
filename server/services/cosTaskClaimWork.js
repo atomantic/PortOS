@@ -20,7 +20,7 @@
 
 import { sanitizeTaskMetadata, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
-import { PR_COMPLETIONS } from '../lib/prDisposition.js';
+import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAppTaskTypeOverrides } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -128,7 +128,7 @@ export async function resolveAppClaimReviewers(app) {
     // lookup: the task metadata layer wins over them anyway.
     getCodeReviewDefaults().catch(() => null)
   ]);
-  const prCompletion = metadata?.prCompletion || app?.defaultPrCompletion || PR_COMPLETIONS.REVIEW_THEN_MERGE;
+  const prCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
   return {
     ...claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion }),
     prCompletion,
@@ -202,11 +202,11 @@ export async function buildClaimWorkTask(app, {
   );
 
   const resolvedAuthorFilter = resolveClaimAuthorFilter(issueAuthorFilter, metadata);
-  const effectivePrCompletion = prCompletion ?? metadata?.prCompletion ?? app?.defaultPrCompletion;
+  const effectivePrCompletion = prCompletion ?? metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
 
   const claimReviewers = claimReviewersFrom(metadata, codeReviewDefaults, {
     reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts,
-    ...(effectivePrCompletion !== undefined ? { prCompletion: effectivePrCompletion } : {})
+    prCompletion: effectivePrCompletion
   });
   const {
     reviewers: reviewersList,
@@ -248,7 +248,7 @@ export async function buildClaimWorkTask(app, {
   // names — the reviewer pin is emitted once from there (#4770).
   const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata || {};
   const taskMetadata = { ...reviewerConfigMetadata(claimReviewers), claimFlow: true };
-  if (effectivePrCompletion) taskMetadata.prCompletion = effectivePrCompletion;
+  taskMetadata.prCompletion = effectivePrCompletion;
   // The manual `/do:next` path persists this non-raw task through addTask's
   // metadata allowlist before agentLifecycle sees it. Carry the same count that
   // rendered the swarm block so Codex can size its session to root + workers.
@@ -281,10 +281,8 @@ async function resolveClaimReviewerPrompt(app) {
   // The app's configured claim-work metadata layers over the Code Review
   // Defaults through the same claimReviewersFrom the scheduled path uses —
   // resolving from the defaults alone would silently drop a pinned override.
-  const effectivePrCompletion = metadata?.prCompletion ?? app?.defaultPrCompletion;
-  const config = effectivePrCompletion !== undefined
-    ? claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion: effectivePrCompletion })
-    : claimReviewersFrom(metadata, codeReviewDefaults);
+  const effectivePrCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
+  const config = claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion: effectivePrCompletion });
   const { reviewers: list, reviewerModels, reviewerEfforts, csv } = config;
   return {
     csv,

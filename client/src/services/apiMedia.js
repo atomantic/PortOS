@@ -1,3 +1,5 @@
+import { uploadGalleryImage } from './apiSystem.js';
+import { uploadGalleryVideo } from './apiImageVideo.js';
 import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { formatBytes } from '../utils/formatters.js';
 import {
@@ -364,3 +366,23 @@ export const fetchCleanResult = async (jobId) => {
 // page's own useAsyncAction/catch owns the error toast.
 export const saveCleanResult = (jobId, options = {}) =>
   request(`/image-clean/result/${encodeURIComponent(jobId)}/save`, { method: 'POST', ...options });
+
+// Reuse the same upload endpoints as the Prompt page's gallery pickers.
+export async function importGalleryFile(file, options = {}) {
+  const extension = file.name.split('.').pop().toLowerCase();
+  if (!file.size) throw Object.assign(new Error('The file is empty.'), { code: 'INVALID_MEDIA_FILE' });
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)) {
+    const saved = await uploadGalleryImage(file, options);
+    return { kind: 'image', data: { ...saved, ...saved.metadata }, ref: saved.filename };
+  }
+  if (['mp4', 'm4v', 'mov', 'webm', 'mkv'].includes(extension)) {
+    const saved = await uploadGalleryVideo(file, file.name, options);
+    return { kind: 'video', data: saved, ref: saved.id };
+  }
+  throw Object.assign(new Error('Unsupported type. Use PNG, JPEG, GIF, WebP, MP4, MOV, M4V, WebM, or MKV.'), { code: 'INVALID_MEDIA_FILE' });
+}
+
+export const assignImportedMedia = (collectionId, item, options = {}) => request(
+  `/media/collections/${encodeURIComponent(collectionId)}/items/bulk`, {
+    method: 'POST', body: JSON.stringify({ add: [{ kind: item.kind, ref: item.ref }] }), ...options,
+  });

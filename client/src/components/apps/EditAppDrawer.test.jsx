@@ -211,6 +211,16 @@ describe('EditAppDrawer work tracker selector', () => {
     await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
     expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('leave-open');
   });
+  it('preserves an app draft default when saving another field', async () => {
+    renderDrawer({ app: { ...APP, defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'draft' } });
+    await openTab('Workflow');
+    expect(await screen.findByLabelText('Default PR completion')).toHaveValue('draft');
+    expect(screen.getByText(/Automatic merging is managed by PortOS, not GitHub native auto-merge/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('draft');
+  });
+
   it('defaults the repo-state audit ON for an app that has never set it, and saves an opt-out', async () => {
     // Unset means ON server-side (repoStateVerificationEnabled), so an app record
     // with no such key must render checked — otherwise the first save of an

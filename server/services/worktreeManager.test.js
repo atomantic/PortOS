@@ -141,7 +141,7 @@ describe('Worktree dependency preparation', () => {
 
 describe('classifyWorktreeDirt (real exported helper)', () => {
   it('reports clean for empty / whitespace-only porcelain', () => {
-    expect(classifyWorktreeDirt('')).toEqual({ clean: true, lockfileOnly: false, lockfilePaths: [], realChangePaths: [], hasRealChanges: false });
+    expect(classifyWorktreeDirt('')).toEqual({ clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false });
     expect(classifyWorktreeDirt('  \n  ').clean).toBe(true);
     expect(classifyWorktreeDirt(null).clean).toBe(true);
   });
@@ -367,7 +367,7 @@ describe('listWorktrees line endings', () => {
     'worktree /repo/.claude/worktrees/wt',
     'HEAD def456',
     'branch refs/heads/feature',
-    'locked',
+    'locked waiting for explicit owner handoff',
     'prunable',
     '',
     'worktree /repo/detached',
@@ -392,6 +392,7 @@ describe('listWorktrees line endings', () => {
       head: 'def456',
       branch: 'refs/heads/feature',
       locked: true,
+      lockReason: 'waiting for explicit owner handoff',
       prunable: true,
     });
     expect(worktrees[2]).toEqual({ path: '/repo/detached', head: 'fed789', detached: true });
@@ -739,6 +740,42 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
     expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
     expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(false);
+  });
+
+  // An untracked lockfile has no index entry, so `git checkout --` cannot restore it
+  // and used to reject the whole removal (#11867). It must be deleted instead.
+  it('removes a worktree whose only dirt is an untracked lockfile', async () => {
+    scriptGit({ porcelain: '?? package-lock.json' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(true);
+    expect(rm).toHaveBeenCalledWith(join(PATHS.worktrees, 'agent-x', 'package-lock.json'), { force: true });
+    expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
+  });
+
+  it('restores a modified tracked lockfile with checkout before removal', async () => {
+    scriptGit({ porcelain: ' M pnpm-lock.yaml' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(true);
+    expect(calledWith(['checkout', '--', 'pnpm-lock.yaml'])).toBe(true);
+    expect(rm).not.toHaveBeenCalledWith(expect.stringContaining('pnpm-lock.yaml'), expect.anything());
+  });
+
+  it('preserves the worktree instead of rejecting when the lockfile discard fails', async () => {
+    scriptGit({ porcelain: ' M yarn.lock' });
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => (args[0] === 'checkout'
+      ? Promise.reject(new Error('index is locked'))
+      : scripted(args, ...rest)));
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result).toMatchObject({ removed: false, merged: false, uncommittedSaved: false });
+    expect(result.warnings.join(' ')).toMatch(/lockfile discard failed/);
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
   });
 
   it('still removes an empty branch after a verified zero commit count', async () => {
@@ -1248,6 +1285,17 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
     await expect(adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead')).resolves.toBeNull();
   });
 
+  it('deletes an untracked lockfile rather than checking it out when adopting', async () => {
+    execGitMock.mockImplementation((args) => Promise.resolve({
+      stdout: args[0] === 'status' ? '?? package-lock.json' : '', stderr: '', exitCode: 0,
+    }));
+
+    await adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead');
+
+    expect(rm).toHaveBeenCalledWith(join(NEW_TREE, 'package-lock.json'), { force: true });
+    expect(execGitMock).not.toHaveBeenCalledWith(['checkout', '--', 'package-lock.json'], expect.anything());
+  });
+
   it('is a no-op when the tree already sits at the destination', async () => {
     scriptPaths({ source: true, target: true });
 
@@ -1555,7 +1603,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
     lstat.mockReset().mockResolvedValue({});
   });
 
-  it('removes only the clean inactive agent and preserves active, human, locked and dirty trees', async () => {
+  it('removes only the clean inactive agent and preserves active, human, locked, dirty and detached trees', async () => {
     const entries = [
       { path: '/repo', branch: 'main' },
       { path: join(PATHS.worktrees + '-old', 'agent-outside'), branch: 'outside' },
@@ -1564,12 +1612,15 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       { path: tree('agent-locked'), branch: 'cos/task/agent-locked', locked: true },
       { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
       { path: tree('agent-dirty'), branch: 'cos/task/agent-dirty' },
+      // Detached HEAD (e.g. interrupted rebase) may carry commits no ref holds; removal would orphan them.
+      { path: tree('agent-detached'), detached: true },
     ];
     // `worktree list` reflects removals made so far, as real git does — removal is
     // verified against the registration afterwards.
     const removedPaths = new Set();
     const listing = () => entries.filter(entry => !removedPaths.has(entry.path)).flatMap(entry => [
-      'worktree ' + entry.path, 'HEAD abc123', 'branch refs/heads/' + entry.branch,
+      'worktree ' + entry.path, 'HEAD abc123',
+      entry.detached ? 'detached' : 'branch refs/heads/' + entry.branch,
       ...(entry.locked ? ['locked protected'] : []), '',
     ]).join('\n');
     // Include the same on-disk entries in the external-repo scan: ownership
@@ -1586,7 +1637,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
 
-    expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']))).toBe(1);
+    expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']), { claimOwners: { agents: [] } })).toBe(1);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
       .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
@@ -1594,5 +1645,44 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'status').map(([, cwd]) => cwd))
       .toEqual([tree('agent-dead'), tree('agent-dirty')]);
     expect(rm).not.toHaveBeenCalled();
+  });
+
+  it('re-reads liveness and the agent registry per tree, so a tree claimed after the caller snapshot survives', async () => {
+    const entries = [
+      { path: '/repo', branch: 'main' },
+      { path: tree('agent-late'), branch: 'cos/task/agent-late' },
+      { path: tree('agent-registered'), branch: 'cos/task/agent-registered' },
+      { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
+    ];
+    const live = new Set();
+    const removedPaths = new Set();
+    execGitMock.mockImplementation((args, cwd) => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        // CoS dispatches agent-late after the job snapshot, before this pass reaches its tree.
+        live.add('agent-late');
+        return Promise.resolve({ stdout: entries.filter(e => !removedPaths.has(e.path))
+          .flatMap(e => ['worktree ' + e.path, 'HEAD abc123', 'branch refs/heads/' + e.branch, '']).join('\n') });
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') removedPaths.add(args[2]);
+      if (args[0] === 'rev-parse') return Promise.resolve({ stdout: args[1] === '--show-toplevel' ? cwd : 'main' });
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0', stderr: '', exitCode: 0 });
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+    const claimOwners = { agents: [{ id: 'agent-registered', status: 'running', workspacePath: tree('agent-registered'), sourceWorkspace: '/repo' }] };
+
+    expect(await cleanupOrphanedWorktrees('/repo', () => new Set(live), { claimOwners })).toBe(1);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
+      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
+      .toEqual([[['branch', '-D', 'cos/task/agent-dead'], '/repo']]);
+  });
+
+  it('holds every tree when the agent registry cannot be read', async () => {
+    execGitMock.mockImplementation((args) => args[0] === 'worktree' && args[1] === 'list'
+      ? Promise.resolve({ stdout: ['worktree ' + tree('agent-dead'), 'HEAD abc123', 'branch refs/heads/cos/task/agent-dead', ''].join('\n') })
+      : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }));
+
+    expect(await cleanupOrphanedWorktrees('/repo', () => new Set(), { claimOwners: { agents: null } })).toBe(0);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
   });
 });

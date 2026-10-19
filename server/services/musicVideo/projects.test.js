@@ -291,18 +291,33 @@ describe('automation respects persisted shot locks (#11218)', () => {
 
   it('checks fresh locks when an asynchronous repair lands and preserves generated clip output', async () => {
     const { setShotLocks, shotLocks } = await import('./productionReview.js');
-    const p = await projects.createProject({ name: 'Repair race' });
-    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved input' });
-    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: true }) }));
-    const repair = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, clipFixes: { text: 'New motion' } })) } }), { source: 'orchestrator' });
-    expect(repair.project.scenes[0].clipFixes).toBeUndefined();
-    const frame = await projects.appendSceneTakes(p.id, scene.sceneId, [{ kind: 'image', assetId: 'candidate.png', source: 'generated' }]);
-    expect(frame.scene.referenceImageId).toBeNull();
-    expect(frame.scene.takes.some(take => take.assetId === 'candidate.png')).toBe(true);
-    expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
-    const clip = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'new-clip' })) } }), { source: 'production-run' });
-    expect(clip.project.scenes[0].videoHistoryId).toBe('new-clip');
-    expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
+    const { PATHS } = await import('../../lib/paths.js');
+    const { writeFileSync, unlinkSync, mkdirSync } = await import('fs');
+    const { join } = await import('path');
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'candidate.png'), 'png');
+    writeFileSync(join(PATHS.images, 'candidate-2.png'), 'png');
+    try {
+      const p = await projects.createProject({ name: 'Repair race' });
+      const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved input' });
+      await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: true }) }));
+      const repair = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, clipFixes: { text: 'New motion' } })) } }), { source: 'orchestrator' });
+      expect(repair.project.scenes[0].clipFixes).toBeUndefined();
+      const frame = await projects.appendSceneTakes(p.id, scene.sceneId, [{ kind: 'image', assetId: 'candidate.png', source: 'generated' }]);
+      expect(frame.scene.referenceImageId).toBe('candidate.png');
+      expect(frame.scene.takes.some(take => take.assetId === 'candidate.png')).toBe(true);
+      expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+      const frame2 = await projects.appendSceneTakes(p.id, scene.sceneId, [{ kind: 'image', assetId: 'candidate-2.png', source: 'generated' }]);
+      expect(frame2.scene.referenceImageId).toBe('candidate.png');
+      expect(frame2.scene.takes.some(take => take.assetId === 'candidate-2.png')).toBe(true);
+      expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+      const clip = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'new-clip' })) } }), { source: 'production-run' });
+      expect(clip.project.scenes[0].videoHistoryId).toBe('new-clip');
+      expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
+    } finally {
+      try { unlinkSync(join(PATHS.images, 'candidate.png')); } catch {}
+      try { unlinkSync(join(PATHS.images, 'candidate-2.png')); } catch {}
+    }
   });
 });
 

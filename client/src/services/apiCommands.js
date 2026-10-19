@@ -7,7 +7,7 @@ export const executeCommand = (command, workspacePath, options = {}) => request(
   ...options
 });
 export const stopCommand = (id) => request(`/commands/${id}/stop`, { method: 'POST' });
-export const getAllowedCommands = () => request('/commands/allowed');
+export const getAllowedCommands = (options = {}) => request('/commands/allowed', options);
 export const getProcessesList = ({ appId, ...options } = {}) => request(
   `/commands/processes${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`, options
 );

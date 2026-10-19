@@ -7,19 +7,18 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
-import { browserSuiteCanRun } from './browserSuiteGate.js';
+import { _withTestPreviewLoadDiagnostics } from '../services/musicVideo/testPreviewLoadDiagnostics.js';
+import { browserSuiteCanRun, resolveTestChrome } from './browserSuiteGate.js';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, filmLookFilterMarkup, filmLookPreset, normalizeFilmLook } from './filmLook.js';
 import { filmLookGpuRuntimeSource } from './filmLookGpu.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('film look GPU browser', { Chrome: chrome });
 const width = 320;
 const height = 180;
@@ -162,7 +161,8 @@ describe.skipIf(!canRun).each([
         document.documentElement.style.filter = css;
       }, { filter, css });
       await gpu.evaluate(({ look, w, h }) => globalThis.primaryRenderer.render(document.getElementById('v'), look, { frame: 0, width: w, height: h }), { look, w, h });
-      const reference = await sharp(await svg.screenshot()).removeAlpha().raw().toBuffer();
+      const reference = await sharp(await _withTestPreviewLoadDiagnostics(svg, () => svg.screenshot(),
+        { phase: 'film-look-reference-screenshot' })).removeAlpha().raw().toBuffer();
       const finished = await sharp(await gpu.screenshot()).removeAlpha().raw().toBuffer();
       expect(psnr(reference, finished)).toBeGreaterThanOrEqual(40);
     } finally {

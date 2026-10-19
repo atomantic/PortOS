@@ -10,6 +10,8 @@ import { safeChildProcessOptions } from './processEnv.js';
 // over 32K characters, so a filter graph longer than this goes to ffmpeg in a file.
 export const FILTER_GRAPH_ARG_LIMIT = 16 * 1024;
 
+const FFMPEG_7_RELEASE_DATE = '2024-04-05';
+
 // ffmpeg 7 reads an option's value from a file with `-/filter_complex <file>`;
 // older builds only have `-filter_complex_script`, which later builds drop.
 // `null` = not probed; a probe that couldn't run stays uncached.
@@ -19,9 +21,13 @@ const probeFilterGraphFileFlag = async (bin) => {
   if (filterGraphFileFlag) return filterGraphFileFlag;
   const out = await promisify(execFile)(bin, ['-hide_banner', '-version'], safeChildProcessOptions({}))
     .then((r) => String(r.stdout || ''), () => null);
-  // A git build ("ffmpeg version N-…") is newer than any release.
+  // An "N-…" git build is newer than any release, but a date-stamped one
+  // ("ffmpeg version 2021-02-13-git-…", the common Windows builds) is only as
+  // new as its date and `-/` landed with the 7.0 release.
   const major = /ffmpeg version n?(\d+)\./.exec(out || '')?.[1];
-  const flag = major && Number(major) < 7 ? '-filter_complex_script' : '-/filter_complex';
+  const buildDate = /ffmpeg version (\d{4}-\d{2}-\d{2})-/.exec(out || '')?.[1];
+  const predatesFileOptions = major ? Number(major) < 7 : Boolean(buildDate && buildDate < FFMPEG_7_RELEASE_DATE);
+  const flag = predatesFileOptions ? '-filter_complex_script' : '-/filter_complex';
   if (out !== null) filterGraphFileFlag = flag;
   return flag;
 };

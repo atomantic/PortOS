@@ -1,4 +1,6 @@
 vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
+vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
+import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cosEvents } from './cosEvents.js';
 vi.mock('./publicationValidation.js', () => ({ validatePublication: vi.fn() }));
@@ -1273,6 +1275,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
   it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {
     // The follow-up agent already merged via `gh pr merge`; re-merging the worktree
     // branch into source workspace would duplicate the squashed commits.
+    findPullRequestForBranchMock.mockResolvedValueOnce({ status: 'found', detail: 'MERGED' });
     await cleanupAgentWorktree('agent-1', true, { prCreation: 'never', skipMerge: true });
 
     expect(removeWorktree).toHaveBeenCalledWith(
@@ -1856,6 +1859,50 @@ describe('spawnReviewLoopFollowUp', () => {
     vi.clearAllMocks();
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
     forceSpawnTask.mockResolvedValue({ success: true });
+    readClaimOwnershipAgents.mockResolvedValue([]);
+  });
+
+  it('resumes a persisted coordinator without resetting its budget or creating a descendant', async () => {
+    const task = { id: 'sys-rl-original', taskType: 'internal', status: 'completed', metadata: {
+      reviewLoopFollowUp: 'true', reviewLoopPRUrl: 'https://github.com/o/r/pull/7',
+      reviewLoopPRBranch: 'feature', totalSpawnCount: '2',
+    } };
+    getTaskById.mockResolvedValue(task);
+    getAgents.mockResolvedValue([]);
+    updateTask.mockImplementationOnce(async (_id, patch) => Object.assign(task, { status: patch.status }));
+    // Old persisted receipts omitted the marker; the live task is authoritative.
+    const request = { originalTask: { id: task.id }, prUrl: task.metadata.reviewLoopPRUrl, prBranch: 'feature' };
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ id: task.id, resumed: true });
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ id: task.id, duplicate: true });
+    expect(task.metadata.totalSpawnCount).toBe('2');
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    expect(updateTask.mock.calls[0][3]).toMatchObject({ expectedStatus: 'completed', expectedMetadata: { totalSpawnCount: '2', reviewLoopPRBranch: 'feature' } });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('waits for the live owner and refuses exhausted, mismatched or manually blocked coordinators', async () => {
+    const task = { id: 'sys-rl-original', taskType: 'internal', status: 'completed', metadata: {
+      reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/o/r/pull/7',
+      reviewLoopPRBranch: 'feature', totalSpawnCount: '1',
+    } };
+    getTaskById.mockResolvedValue(task);
+    const request = { originalTask: { id: task.id }, prUrl: task.metadata.reviewLoopPRUrl, prBranch: 'feature' };
+    readClaimOwnershipAgents.mockResolvedValue([{ taskId: task.id, status: 'running' }]);
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ deferred: true });
+    readClaimOwnershipAgents.mockResolvedValue(null);
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ deferred: true });
+    readClaimOwnershipAgents.mockResolvedValue([]);
+    task.metadata.totalSpawnCount = '5';
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ blocked: expect.stringContaining('budget') });
+    task.metadata.totalSpawnCount = '1';
+    task.status = 'blocked';
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ blocked: expect.stringContaining('blocked') });
+    expect(await spawnReviewLoopFollowUp({ ...request, prBranch: 'other' })).toMatchObject({ blocked: expect.stringContaining('identity') });
+    task.status = 'completed';
+    task.metadata.prCompletion = 'leave-open';
+    expect(await spawnReviewLoopFollowUp(request)).toMatchObject({ blocked: expect.stringContaining('human owner') });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('preserves resolved provider pins and explicit clears in the queued review procedure', async () => {

@@ -34,6 +34,12 @@ jobs:
     # Still live despite the removed push trigger: a called workflow inherits
     # the caller's event, and release.yml calls this one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
+    # `statuses: read` lets the planner read the head's `pregate` commit status
+    # (docs/GITHUB_ACTIONS.md "Pregate attestation"). Read only: nothing in
+    # this job may create a status, and a fork's token could not anyway.
+    permissions:
+      contents: read
+      statuses: read
     outputs:
       full: ${{ steps.plan.outputs.full }}
       reason: ${{ steps.plan.outputs.reason }}
@@ -50,6 +56,10 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       smoke: ${{ steps.plan.outputs.smoke }}
       slashdo: ${{ steps.plan.outputs.slashdo }}
+      # Path-gated single-purpose jobs: true on a forced-full run, else only
+      # when the diff reaches the job's import closure (scripts/ci-test-plan.js).
+      prompt_history: ${{ steps.plan.outputs.prompt_history }}
+      linux_containment: ${{ steps.plan.outputs.linux_containment }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -62,6 +72,12 @@ jobs:
       client_shards: ${{ steps.plan.outputs.client_shards }}
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
+      # The pregate attestation honored for this head (JSON), and the stages it
+      # let the plan skip. Informational: every leaf job already gates on the
+      # mode/flag outputs above, which the planner cleared for attested stages.
+      attestation: ${{ steps.plan.outputs.attestation }}
+      attested_stages: ${{ steps.plan.outputs.attested_stages }}
+      node_minimum: ${{ steps.node-minimum.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +86,11 @@ jobs:
           # planner (a three-dot diff against the base parent) and `git
           # ls-files` need. Cloning every commit in the repo buys nothing more.
           fetch-depth: 2
+
+      # A red impact job keeps CI Gate red; skipped test jobs are not evidence.
+      # Re-running this run is GitHub's writer-only, exact-SHA release control.
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
 
       # Reads the base commit off HEAD^1 rather than the event payload, so a
       # depth-2 clone is enough for every three-dot diff downstream. Exports
@@ -85,6 +106,13 @@ jobs:
       - name: Scan the diff for hidden content
         run: node scripts/scan-diff-hidden-content.js
 
+      # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not. A
+      # pregate attestation lets a macOS run stand in for the Linux test jobs,
+      # so the one Linux-only failure it cannot see is checked here, on every
+      # pull request, before any job is skipped on its strength.
+      - name: Check relative imports match the tracked path case
+        run: node scripts/check-import-case.js
+
       - name: Select affected test surfaces
         id: plan
         env:
@@ -96,7 +124,34 @@ jobs:
           # The planner turns a PR into `release` into a full plan: that PR is
           # the single gate a release ships behind, so it never runs scoped.
           CI_BASE_REF: ${{ github.base_ref }}
+          # Pregate attestation inputs. The planner honors a `pregate` commit
+          # status on the head only for a same-repository, non-bot pull request
+          # whose status the repository owner created and whose attested tree
+          # is the head's tree; everything else leaves the plan as computed.
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_REPOSITORY: ${{ github.repository }}
+          CI_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CI_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/ci-test-plan.js
+
+      # The Node-minimum job proves the lockfiles install and the runtime gate
+      # loads on the oldest supported Node. Only these files can change that
+      # answer, so a PR that touches none of them skips it; non-PR runs always
+      # run it.
+      - name: Decide whether the Node minimum check applies
+        id: node-minimum
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          pattern='^((server/|client/|autofixer/)?(package(-lock)?\.json|\.npmrc)|\.nvmrc|scripts/checkNodeVersion(\.test)?\.js|scripts/lib/directInvocation\.js|scripts/node-version-drift\.test\.js|\.github/workflows/ci\.yml)$'
+          if [ "$CI_EVENT" != pull_request ] || git diff --name-only "$CI_BASE_SHA"...HEAD | grep -qE "$pattern"; then
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish plan summary
         env:
@@ -109,12 +164,16 @@ jobs:
           BUILD_MODE: ${{ steps.plan.outputs.build }}
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
           SLASHDO_MODE: ${{ steps.plan.outputs.slashdo }}
+          PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
+          LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
+          NODE_MINIMUM_MODE: ${{ steps.node-minimum.outputs.run }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
           SERVER_SHARDS: ${{ steps.plan.outputs.server_shards }}
           CLIENT_SHARDS: ${{ steps.plan.outputs.client_shards }}
           WINDOWS_SHARDS: ${{ steps.plan.outputs.windows_shards }}
           SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
+          ATTESTATION: ${{ steps.plan.outputs.attestation }}
         run: |
           {
             echo "### CI impact plan"
@@ -128,9 +187,61 @@ jobs:
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
             echo "- Slashdo submodule: \`${SLASHDO_MODE}\`"
+            echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
+            echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
+            echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
+            echo "- Pregate attestation: \`${ATTESTATION}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # `autofixer/` is a real install target — its own package.json, its own
+      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
+      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
+      # it, so a lockfile that no longer installs (a yanked version, a corrupted
+      # integrity hash, a manifest/lockfile mismatch) would ship green and only
+      # break on a user's machine at setup time. The parity assertions in
+      # server/dependency-overrides.test.js are static — they parse the JSON;
+      # only `npm ci` proves the tree still resolves.
+      #
+      # Here rather than on the server job because this job always runs: a
+      # pregate attestation can skip the server job, and this check must never
+      # go with it. Deliberately uncached and ungated: a cache hit that skipped
+      # the install would skip the very check this step exists for. 67
+      # packages, well under a second, on the runner's own Node (no setup-node
+      # in this job; the lockfile resolves the same on any supported major).
+      #
+      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
+      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
+      # workspace, because nothing it depends on ships a native addon.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
+
+      # Same reason: the entry-point syntax check must not ride a skippable job.
+      - name: Check server entry-point syntax
+        run: node --check server/index.js
+
+  prompt-history:
+    name: Shipped prompt history
+    needs: impact
+    if: needs.impact.outputs.prompt_history == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+
+      - name: Check shipped stage-prompt history
+        run: node scripts/migrations/check-shipped-prompt-history.js
 
   server:
     # Sharded on a full plan — see docs/GITHUB_ACTIONS.md "Full-suite sharding".
@@ -142,11 +253,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.server_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -218,6 +331,12 @@ jobs:
         if: steps.server-modules-usable.outcome != 'success'
         run: npm ci --prefix server
 
+      # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
+      # express, resolved from autofixer/node_modules). Shards are separate
+      # checkouts, so the impact job's resolution check does not reach them.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
+
       # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
       # this explicit rebuild. Same condition as the install: whenever this job
       # builds the tree it will cache, it must build a rebuilt one — and the
@@ -261,33 +380,6 @@ jobs:
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
 
-      # `autofixer/` is a real install target — its own package.json, its own
-      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
-      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
-      # it, so a lockfile that no longer installs (a yanked version, a corrupted
-      # integrity hash, a manifest/lockfile mismatch) would ship green and only
-      # break on a user's machine at setup time. The parity assertions in
-      # server/dependency-overrides.test.js are static — they parse the JSON;
-      # only `npm ci` proves the tree still resolves.
-      #
-      # Deliberately uncached and deliberately ungated within the job: a cache
-      # hit that skipped the install would skip the very check this step exists
-      # for, and the job as a whole already gates on the planner's server_mode
-      # (autofixer/ is one of the server runner's roots in ci-test-plan.js, so a
-      # change here selects this job). Unlike the once-only steps that pin to
-      # shard 1, it runs on every shard: autofixer/*.test.js is globbed by the
-      # server runner, and which shard picks up a file that imports `express` is
-      # not knowable from here. 67 packages, well under a second.
-      #
-      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
-      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
-      # workspace, because nothing it depends on ships a native addon.
-      - name: Install autofixer dependencies
-        run: npm ci --prefix autofixer
-
-      - name: Check server entry-point syntax
-        run: node --check server/index.js
-
       # The submodule ships no source into this checkout by default (see
       # AGENTS.md "Slashdo Commands"), so the planner's `slashdo` output is
       # the only signal that the selected tests need it — an unrelated scoped
@@ -298,9 +390,26 @@ jobs:
         if: needs.impact.outputs.slashdo == 'true'
         run: git submodule update --init lib/slashdo
 
+      # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): the runner skips a
+      # selected test file whose every input — loaded modules, fixtures,
+      # package versions, Node/platform, gating env — is byte-identical to one
+      # a trusted green run verified. Pull requests only read. The scheduled,
+      # dispatched and called full runs save, so the cache holds nothing a PR
+      # branch wrote. Each job and shard keeps its own lineage under the key
+      # prefix; a restore takes the newest.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run server tests
+        id: server-tests
         if: needs.impact.outputs.server_mode != 'skip'
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_BROWSER_OWNER: unit
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
@@ -315,22 +424,22 @@ jobs:
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
+      # Only trusted full runs on the default/release branches seed the memo,
+      # and only from a green test step: the runner writes no entry from a
+      # red process, and a step that never ran has nothing to save.
+      - name: Save the test memo
+        if: steps.server-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+
       # Smoke-boot does not need Postgres: NODE_ENV=test selects the file
       # backend. It does need the native rebuild (server boot loads node-pty),
       # which is why it lives on this job rather than a third installer.
       - name: Smoke-boot server
         if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
         run: npm run smoke
-
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
 
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
@@ -341,11 +450,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.client_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -408,14 +519,33 @@ jobs:
         if: needs.impact.outputs.client_mode != 'skip'
         run: bash scripts/ci-warm-test-chrome.sh
 
+      # Same contract as the server job's memo steps.
+      - name: Restore the test memo
+        if: needs.impact.outputs.client_mode != 'skip'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run client tests
+        id: client-tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: node scripts/run-ci-tests.js client
+
+      - name: Save the test memo
+        if: steps.client-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       - name: Build client
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
@@ -427,16 +557,6 @@ jobs:
       - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
-
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
 
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
@@ -461,7 +581,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: write
     steps:
       # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
       # test jobs: the linter's file list arrives from the impact plan, so this
@@ -509,28 +628,17 @@ jobs:
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
         run: node scripts/run-ci-lint.js
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   database:
-    # Owns the registered browser suites; the Linux unit job excludes that
-    # exact registry. PRs run smoke here and require exact-head fidelity evidence
-    # at the gate. Scheduled/release runs retain the complete browser profile.
+    # The serial Postgres suite. The browser suites used to run after it on
+    # this job; they are now the `browser` job beside it, because together they
+    # set the run's length more often than any other job.
     name: DB tests
     needs: impact
-    if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'
+    if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-      actions: write
     services:
       postgres:
         image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
@@ -645,8 +753,156 @@ jobs:
             vitest-server-${{ runner.os }}-
 
       - name: Provision test database (portos_test)
-        if: needs.impact.outputs.db == 'true'
         run: npm run setup:db:test --prefix server
+
+      # Backup restore coverage takes a real pg_dump. The runner's default
+      # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
+      #
+      # The pull is ~95 ffmpeg dependency packages from the runner's mirror, and
+      # a slow mirror has eaten this job's budget before any test ran (#10369,
+      # #10562): apt's retries and timeouts cannot bound a connection that
+      # trickles bytes. The script bounds the download, falls back from the
+      # runner mirror to the official Ubuntu archive with signing intact, and
+      # fails with an installation-failure annotation once its budget is spent.
+      # The step timeout stays as a backstop above the script's own budget.
+      - name: Install PostgreSQL client and audio verification tools
+        timeout-minutes: 9
+        env:
+          PG_MAJOR: '17'
+        run: bash scripts/ci-install-db-tools.sh
+
+      # Same contract as the server job's memo steps. The Postgres schema is
+      # not visible to a key; scripts/lib/testMemo.js lists the tracked files
+      # that build it as db base inputs.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-db-
+
+      # Full mode: the runner subtracts what the memo verified and records the
+      # `⏱ db full suite` duration line itself.
+      - name: Run DB-backed tests (portos_test)
+        id: db-tests
+        env:
+          PGDATABASE: portos_test
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: full
+        run: node scripts/run-ci-tests.js db
+
+      - name: Save the test memo
+        if: steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
+
+  browser:
+    # Owns the registered browser suites; the Linux unit job excludes that
+    # exact registry. PRs run the smoke profile; scheduled, release and
+    # dispatched runs run the complete profile. No Postgres: the suites run on
+    # the file backend under NODE_ENV=test.
+    name: Browser suites
+    needs: impact
+    if: needs.impact.outputs.browser_files != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # Same entry and same contract as the server job — see it for the key, and
+      # for why the install and rebuild below are gated on the mark rather than
+      # on the cache hit.
+      - name: Cache server node_modules
+        id: server-modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: server/node_modules
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      # A restored tree is only reusable if it was rebuilt before it was saved,
+      # and that is not answerable by looking at the tree — with today's
+      # versions the rebuild is nearly a no-op, so every allowlisted package
+      # imports fine on a never-rebuilt one. The rebuild step below leaves an
+      # explicit mark; this reads it back.
+      #
+      # `continue-on-error` on purpose: a bad entry must not wedge every PR
+      # until a human clears the cache by hand. It fails, the two steps below
+      # see a non-success outcome, and the job builds the tree it needs. It does
+      # not *replace* the bad entry — cache keys are immutable and actions/cache
+      # skips the save on an exact hit — so that entry keeps costing each run a
+      # reinstall until the key moves or it ages out. That is precisely the
+      # pre-cache cost: the worst case degrades to the old behaviour, never to a
+      # red repo.
+      #
+      # `outcome != 'success'` covers all three cases in one expression: on a
+      # cache miss this step is skipped (outcome `skipped`), on a hit it is
+      # `success` or `failure`.
+      - name: Check the restored node_modules was rebuilt
+        id: server-modules-usable
+        if: steps.server-modules.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: node scripts/trusted-rebuild-stamp.js check server
+
+      - name: Install server dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        run: npm ci --prefix server
+
+      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
+      # this explicit rebuild. Same condition as the install: whenever this job
+      # builds the tree it will cache, it must build a rebuilt one — and the
+      # mark is written in the same block, so a failed rebuild cannot leave one
+      # behind for a later job to trust.
+      #
+      # `shell: bash` is load-bearing, not style. windows-server would default
+      # to pwsh, where a *native* command's non-zero exit neither throws nor
+      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
+      # and only the last command's code becomes the step result — so a failed
+      # rebuild would run the mark anyway, reset the exit code to 0, and publish
+      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
+      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
+      # never saves it.
+      - name: Rebuild trusted native dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        shell: bash
+        env:
+          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
+          # downloads it on linux-x64 whenever the .so is absent — several
+          # hundred MB, on two jobs, every run — and no hosted runner has an
+          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
+          # inference still works; this is the single largest cost in the job.
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        run: |
+          node scripts/trusted-rebuilds.js server
+          node scripts/trusted-rebuild-stamp.js write server
+
+      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+      # node_modules (which may be shared by worktrees). Unlike the installed
+      # dependency tree above, these artifacts can safely use a near-miss
+      # restore and stay warm across a lockfile bump.
+      - name: Cache Vitest transform artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            server/.cache/vitest
+            server/.cache/vitest-db
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}-browser
+          restore-keys: |
+            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+            vitest-server-${{ runner.os }}-
 
       # Backup restore coverage takes a real pg_dump. The runner's default
       # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
@@ -675,42 +931,39 @@ jobs:
       - name: Warm the Chrome install
         run: bash scripts/ci-warm-test-chrome.sh
 
-      - name: Run DB-backed tests (portos_test)
-        if: needs.impact.outputs.db == 'true'
-        run: |
-          set +e
-          start=$(date +%s)
-          npm run test:db:ci --prefix server
-          status=$?
-          elapsed=$(( $(date +%s) - start ))
-          echo "⏱ server db suite: ${elapsed}s" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit $status
-        env:
-          PGDATABASE: portos_test
-
       # Same client cache entry as the `client` job (see it for the key and why
       # an exact hit needs no rebuild).
       - name: Cache client node_modules
         id: client-modules
-        if: needs.impact.outputs.browser_files != '[]'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
           key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
-        if: needs.impact.outputs.browser_files != '[]' && steps.client-modules.outputs.cache-hit != 'true'
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
+
+      # Same contract as the server job's memo steps. The browser profile is
+      # part of every key, so a smoke verdict never stands in for a full one.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-browser-
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
-        if: needs.impact.outputs.browser_files != '[]'
+        id: browser-tests
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: files
@@ -719,23 +972,20 @@ jobs:
           PORTOS_TEST_QUIET: 1
         run: node scripts/watch-ci-tests.js server
 
+      - name: Save the test memo
+        if: steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
+
       - name: Preserve browser test failure diagnostics
-        if: failure() && needs.impact.outputs.browser_files != '[]'
+        if: failure()
         continue-on-error: true
         timeout-minutes: 1
         env:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
-
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
 
   windows-server:
     # Sharded like the server job.
@@ -745,11 +995,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
+      # A failing shard must not cancel its siblings: "Re-run failed jobs"
+      # then repeats only the red shard instead of the whole matrix.
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.windows_shards) }}
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -852,12 +1104,24 @@ jobs:
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
+      # Same contract as the server job's memo steps; the platform is part of
+      # every key, so Windows reads only Windows verdicts.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+
       - name: Run server tests on Windows
+        id: windows-tests
         # A step timeout FAILS the step (log kept, `if: failure()` reporting
         # runs); the job-level timeout would cancel the job and lose the log
         # (#10415). Observed healthy runs take 2-10 minutes.
         timeout-minutes: 15
         env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           # Outside the launcher's disposable temp root; recoverable after exit.
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
@@ -869,7 +1133,16 @@ jobs:
           # Windows runners lose Vitest workers at startup with 0xC0000142
           # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
           PORTOS_CI_MAX_WORKERS: 2
+          # Opts nativeTrash.smoke.test.js into the runner's real Recycle Bin (#12325).
+          PORTOS_NATIVE_TRASH_SMOKE: 1
         run: node scripts/run-ci-tests.js server
+
+      - name: Save the test memo
+        if: steps.windows-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       - name: Preserve Windows test failure diagnostics
         if: failure()
@@ -879,18 +1152,10 @@ jobs:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
 
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          # Actions exposes no variable for the matrix leg, and the annotation
-          # has to name the shard even when the API lookup behind it fails.
-          # Empty on the unsharded jobs, which the script treats as absent.
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
-
   node-minimum:
     name: Node minimum compatibility
+    needs: impact
+    if: needs.impact.outputs.node_minimum == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -925,14 +1190,13 @@ jobs:
   linux-containment:
     name: Linux worker containment
     needs: impact
-    if: needs.impact.outputs.server_mode != 'skip'
+    if: needs.impact.outputs.linux_containment == 'true'
     # 22.04 allows unprivileged user namespaces without changing the runner's
     # AppArmor policy. Restricted hosts must remain fail-closed in the product.
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -951,28 +1215,21 @@ jobs:
       - name: Exercise real namespaces, seccomp, limits and cancellation
         env:
           PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
+        # Keep this list equal to the impact planner's LINUX_CONTAINMENT_TESTS:
+        # the job is gated on those files' import closure.
         run: npm test --prefix server -- --run lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
-
-      - name: Report the failure, then cancel sibling CI jobs
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          CI_FAILED_SHARD: ${{ matrix.shard }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/cancel-current-ci-run.js
 
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, windows-server, node-minimum, linux-containment]
+    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # READ, not write: the reporter only lists this run's jobs, to name the one
-    # whose STEP failed when the fail-fast cancel beat GitHub to writing the job
-    # conclusion. Cancelling the run stays a leaf-job privilege.
+    # READ only: the reporter lists this run's jobs to name the one whose STEP
+    # failed when a mid-step cancel hid the job's `failure` conclusion.
     permissions:
       contents: read
       actions: read
-      statuses: read
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
       # imports Node builtins only — no dependency install, no setup-node.
@@ -997,23 +1254,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_GATE_LABEL: CI Gate
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
+          CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
+          CI_GATE_RESULT_BROWSER: ${{ needs.browser.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
         run: node scripts/ci-gate-report.js
-
-      - name: Require current browser fidelity evidence
-        if: github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI_BROWSER_FILES: ${{ needs.impact.outputs.browser_files }}
-          CI_PULL_REQUEST: ${{ github.event.pull_request.number }}
-          CI_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/verify-browser-fidelity.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete

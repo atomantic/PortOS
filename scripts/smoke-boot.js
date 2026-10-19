@@ -20,8 +20,9 @@
 //   - a test-only database name, so even a reachable Postgres is never the
 //     install's real one;
 //   - PORTOS_SMOKE_BOOT=1, which makes boot skip schedulers, agent
-//     spawning/recovery, crash-recovery passes, peer polling/sync, and other
-//     external integrations (SMOKE_BOOT_DISABLED_STEPS in bootstrapSequence.js).
+//     spawning/recovery, crash-recovery passes (including the LoRA run
+//     reconcile), peer polling/sync, and other external integrations
+//     (SMOKE_BOOT_DISABLED_STEPS in bootstrapSequence.js).
 // The root is removed on every exit path, success or failure.
 
 import { spawn } from 'child_process';
@@ -32,7 +33,7 @@ import { dirname, join } from 'path';
 import { DATA_ROOT_ENV, DISPOSABLE_ROOT_MARKER } from '../server/lib/dataRoot.js';
 import { SMOKE_BOOT_ENV } from '../server/lib/runtimeEnv.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
+import { seedDataDir } from './lib/seedDataDir.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +70,7 @@ export function createSmokeRoot({ codeRoot = CODE_ROOT, tmpBase = tmpdir() } = {
     const referenceDir = join(root, 'data.reference');
     const dataDir = join(root, 'data');
     cpSync(join(codeRoot, 'data.reference'), referenceDir, { recursive: true, dereference: true });
-    cpSync(referenceDir, dataDir, { recursive: true, filter: isSeedableReferencePath(referenceDir) });
+    seedDataDir({ referenceDir, dataDir });
     rewriteAppsPortosRoot(dataDir, codeRoot);
   } catch (err) {
     rmSync(root, { recursive: true, force: true });

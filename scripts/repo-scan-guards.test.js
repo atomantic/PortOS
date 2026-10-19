@@ -62,6 +62,7 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/globalShadowConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/headingTruncationConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/hooks/mountedRefConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/listFetchConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/moduleContractConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/numberFormattingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/pageShellConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
@@ -100,7 +101,7 @@ const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?trackedFiles\.js['"]/;
  * Matched against comment-stripped source so a comment describing a walk
  * does not register one.
  */
-const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(/;
+const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(|\bread(?:Server|Client)Source\s*\(\s*[^'"`)\s]/;
 const RECURSIVE_READDIR = /readdirSync\s*\([^)]*\brecursive\s*:\s*true/;
 const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm, '');
 

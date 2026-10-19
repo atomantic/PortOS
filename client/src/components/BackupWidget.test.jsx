@@ -269,6 +269,38 @@ describe('BackupWidget snapshots', () => {
     ));
   });
 
+  it('warns when a folder restore installs files older than the applied migrations', async () => {
+    mockRestoreBackup.mockResolvedValue({
+      dryRun: true,
+      changedFiles: ['cos/quota-burn.json'],
+      ledgerGap: { count: 1, names: ['359-example.js'] },
+    });
+    renderWidget();
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'cos' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /predates 1 data migration this install has applied \(359-example\.js\).*full restore/,
+    );
+    // A warning, not a refusal: a folder no migration touched restores legitimately.
+    expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+  });
+
+  it('shows no migration warning for a gap that is empty or unknown', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['cos/quota-burn.json'], ledgerGap: { count: 0, names: [] } })
+      .mockResolvedValueOnce({ changedFiles: ['cos/quota-burn.json'], ledgerGap: null });
+    renderWidget();
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'cos' } });
+    for (let i = 0; i < 2; i += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+      await screen.findByRole('button', { name: 'Restore 1 file(s)' });
+      expect(screen.queryByRole('alert')).toBeNull();
+    }
+  });
+
   it('reports execution verification even when the preview was verified', async () => {
     mockRestoreBackup
       .mockResolvedValueOnce({

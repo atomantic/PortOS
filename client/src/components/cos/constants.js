@@ -19,7 +19,7 @@ import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
-import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE } from '../../../../server/lib/prDisposition.js';
+import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE, DEFAULT_PR_COMPLETION } from '../../../../server/lib/prDisposition.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
@@ -256,14 +256,15 @@ export const AGENT_OPTIONS = [
 ];
 
 export const PR_COMPLETION_OPTIONS = [
-  { value: 'review-then-merge', label: 'Review then merge', description: 'Run the configured reviewer chain, then merge when it is clean.' },
-  { value: 'merge-on-green', label: 'Merge on green CI', description: 'Skip external review and merge after required checks pass.' },
-  { value: 'leave-open', label: 'Leave PR open', description: 'Open the PR and stop so you can inspect and merge it yourself.' }
+  { value: 'review-then-merge', label: 'Review then merge', description: 'PortOS automatically merges after configured reviewers and required checks pass for the current PR head. CI waits use the pending-merge coordinator without keeping an agent running.' },
+  { value: 'merge-on-green', label: 'Merge on green CI', description: 'PortOS automatically merges after required checks pass for the current PR head, without external review. Repository admission checks still apply.' },
+  { value: 'leave-open', label: 'Leave PR open', description: 'Open the PR and stop so you can inspect and merge it yourself.' },
+  { value: 'draft', label: 'Leave a draft PR', description: 'Open a draft PR and leave it for you to review and merge.' }
 ];
 
 export const prCompletionOption = (value) => PR_COMPLETION_OPTIONS.find(option => option.value === value);
 
-export const DEFAULT_PR_COMPLETION = 'review-then-merge';
+export { DEFAULT_PR_COMPLETION };
 
 // WHO reviews a PR action's change — orthogonal to `PR_COMPLETION_OPTIONS`
 // above, which decides whether a review happens at all. The values come from
@@ -286,11 +287,9 @@ export const prReviewModeOption = (value) => PR_REVIEW_MODE_OPTIONS.find(option 
 
 export { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE };
 
-// The policy a task falls back to when nothing pins `prCompletion` — mirrors the
-// `resolvePrCompletion` fallback in server/lib/prDisposition.js (legacy
-// `reviewLoop` records aside). Scheduled tasks inherit their app's
-// `defaultPrCompletion` first, so this is only the floor.
-export const IMPLICIT_PR_COMPLETION = 'merge-on-green';
+// New scheduled PR tasks inherit the managed app's completion policy, falling
+// back to reviewed automatic merge when that app has no explicit preference.
+export const IMPLICIT_PR_COMPLETION = DEFAULT_PR_COMPLETION;
 
 // Which option a stored taskMetadata pins, or '' when nothing does (inherit).
 // Legacy `reviewLoop` records are the pre-`prCompletion` spelling of
@@ -300,7 +299,8 @@ export const IMPLICIT_PR_COMPLETION = 'merge-on-green';
 // IMPLICIT_PR_COMPLETION floor — that floor is what "inherit" resolves to.
 export function pinnedPrCompletion(metadata) {
   if (prCompletionOption(metadata?.prCompletion)) return metadata.prCompletion;
-  return metadata?.reviewLoop === true || metadata?.reviewLoop === 'true' ? 'review-then-merge' : '';
+  if (metadata?.reviewLoop === true || metadata?.reviewLoop === 'true') return 'review-then-merge';
+  return metadata?.reviewLoop === false || metadata?.reviewLoop === 'false' ? 'merge-on-green' : '';
 }
 
 // UI copy for each reviewer in the Review Loop picker. `copilot` requests a
@@ -438,6 +438,18 @@ export const RELEASE_OPTIONS = [
   { field: 'resolveBlockers', label: 'Resolve blockers', description: 'Fix failing tests, red CI, and blocking bugs (delegating to a sub-agent) instead of stopping to report them' },
   { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
 ];
+
+// better-dependency-freedom's removal bar — the slashdo `/do:depfree` modes.
+// Values mirror DEPFREE_MODES in server/lib/cosValidation.js; the server drops
+// anything else, and an absent key means the default bar.
+export const DEPFREE_MODE_DEFAULT = 'default';
+export const DEPFREE_MODE_TASK_TYPES = new Set(['better-dependency-freedom']);
+export const DEPFREE_MODE_OPTIONS = [
+  { value: 'default', label: 'Default — small and wrapper packages', description: 'Keep large, widely audited libraries; replace micro-packages, native-API wrappers, and one-function imports' },
+  { value: 'heavy', label: 'Heavy — everything but foundations', description: 'Only frameworks, runtimes, and core platform tooling are exempt; popularity does not protect a library' },
+  { value: 'extreme', label: 'Extreme — toward zero dependencies', description: 'Only the runtime, security-sensitive protocols, native bindings, and CI-required tooling are exempt; large libraries are replaced when their used surface can be rebuilt behind parity tests. Pair with the strongest model at max effort' },
+];
+export const depfreeModeOption = (value) => DEPFREE_MODE_OPTIONS.find((o) => o.value === (value || DEPFREE_MODE_DEFAULT));
 
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)

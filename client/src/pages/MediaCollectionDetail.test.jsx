@@ -1,5 +1,7 @@
+const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
+vi.mock('../services/apiMedia', () => batchApi);
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -496,4 +498,47 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     await user.click(screen.getByRole('button', { name: /copy 1 to this machine/i }));
     await waitFor(() => expect(mockLocalizeMediaCollection).toHaveBeenCalledWith(REAL_COLLECTION.id, ['image:hosted-on-peer.png'], { silent: true }));
   });
+});
+
+it('uploads image and video files into the selected collection without replacing existing membership', async () => {
+  let collection = { ...REAL_COLLECTION, items: [...REAL_COLLECTION.items] };
+  const uploaded = [
+    { kind: 'image', ref: 'new.png', data: { filename: 'new.png', prompt: 'Imported image' } },
+    { kind: 'video', ref: 'new-video', data: { id: 'new-video', filename: 'new.mp4', prompt: 'Imported video' } },
+  ];
+  batchApi.importGalleryFile.mockReset().mockResolvedValueOnce(uploaded[0]).mockResolvedValueOnce(uploaded[1]);
+  batchApi.assignImportedMedia.mockReset().mockImplementation(async (_id, item) => {
+    collection = { ...collection, items: [...collection.items, { kind: item.kind, ref: item.ref }] };
+    return { collection };
+  });
+  mockGetMediaCollection.mockImplementation(async () => collection);
+  mockListImageGallery.mockResolvedValue([IMAGE_A, uploaded[0].data]);
+  mockListVideoHistory.mockResolvedValue([uploaded[1].data]);
+  renderReal();
+  const input = await screen.findByLabelText('Upload / import');
+  expect(input.multiple).toBe(true);
+  fireEvent.change(input, { target: { files: [new File(['png'], 'new.png'), new File(['mp4'], 'new.mp4')] } });
+  expect(await screen.findByText('2 of 2 imported')).toHaveClass('sr-only');
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+  expect(batchApi.assignImportedMedia.mock.calls.map(call => call[0])).toEqual(['col-real', 'col-real']);
+  expect(collection.items).toEqual([REAL_COLLECTION.items[0], { kind: 'image', ref: 'new.png' }, { kind: 'video', ref: 'new-video' }]);
+});
+
+it('preserves peer-only image locations when assigning an uploaded file', async () => {
+  const remote = { kind: 'image', ref: 'remote.png', location: 'remote', hostPeerId: 'peer-example', hostPeerName: 'Example Peer' };
+  const imported = { kind: 'image', ref: 'local-upload.png', data: { filename: 'local-upload.png' } };
+  mockGetMediaCollection.mockResolvedValue({ ...REAL_COLLECTION, items: [remote] });
+  mockListImageGallery.mockResolvedValue([]);
+  mockListVideoHistory.mockResolvedValue([]);
+  batchApi.importGalleryFile.mockReset().mockResolvedValue(imported);
+  batchApi.assignImportedMedia.mockReset().mockResolvedValue({ collection: { ...REAL_COLLECTION, items: [
+    { kind: 'image', ref: remote.ref }, { kind: 'image', ref: imported.ref },
+  ] } });
+  renderReal();
+  await screen.findByText('remote.png');
+  fireEvent.change(screen.getByLabelText('Upload / import'), { target: { files: [new File(['png'], 'local-upload.png')] } });
+  await screen.findByText('1 of 1 imported');
+  expect(screen.getByText('remote.png')).toBeInTheDocument();
+  expect(screen.getByTitle('Hosted by Example Peer — streamed on demand, not stored on this machine')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Copy 1 to this machine/ })).toBeInTheDocument();
 });

@@ -34,7 +34,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
   if (typeof stdout !== 'string') throw new Error('unreadable git fixture');
   return { stdout, exitCode: 0 };
 } }));
-vi.mock('./git.js', () => ({ parsePullRequestUrl, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
+vi.mock('./git.js', () => ({ parsePullRequestUrl, isRepo: async () => true, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
 vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktreeDirt: vi.fn(),
   listWorktrees: async () => [], findAdoptableWorktreeForBranch: async () => null, releaseIdleSiblingNextHolder: async () => null,
   createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: options.existingBranch })),

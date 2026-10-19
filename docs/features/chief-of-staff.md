@@ -82,6 +82,92 @@ and reports progress every minute; after 10 minutes the reviewed PR (and any
 claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
 holds the lease only around its own read → assess → pinned merge.
 
+### Pending-merge handoff (#12247)
+
+A participant that has pushed a head and satisfied its configured reviews may
+hand the CI wait to the server instead of holding its session open:
+`POST /api/cos/merge-handoff` (host-control gated) takes the registered agent
+ID, the PR URL, the full head SHA and — for a claim run, which cuts its own
+checkout — the worktree path. The server binds everything else itself: the
+repository from the run's registration, the PR branch it must own (a bound
+claim branch, `reviewLoopMergeTarget` or `prDeliveryTarget`), a same-repository
+open non-draft PR whose live head equals the SHA, a checkout of this repository
+on that branch at that SHA, a merging completion policy (not leave-open, a JIRA
+handoff or read-only), and the worktree's `portos-review-status`:
+`REVIEW_STATUS=clean` with `REVIEW_HEAD=<sha>` naming that same head for a
+review-then-merge run; merge-on-green accepts no file or a clean one. Fork
+targets are refused. The binding is persisted on the app's `pendingMergePrs`
+entry, an unbound duplicate queue write never replaces it, and the response
+carries a receipt.
+
+The pr-watcher pending-merge sweep then merges only the recorded head, under
+its own admission lease, once the PR is `CLEAN` with every reported check
+green; GitHub auto-merge is never enabled. A head that moved invalidates the
+binding and dispatches recovery with the recorded review roster; a failed
+check or conflict does the same. Once a review task exists, recovery resumes
+that same task, retaining its lifetime spawn budget and target instead of
+creating nested `[Review Loop]` descendants. A live owner keeps its receipt
+until it releases the branch. Unreadable ownership defers; a changed target,
+manual hold or exhausted retry budget remains blocked even if CI later turns
+green. A new verified handoff is needed to replace that binding. An unreadable binding never merges and is
+handed to the operator by notification; a PR that never settles times out to a
+notification as before.
+
+Immediately before merging under admission, the coordinator re-reads its owning
+task. A new manual hold or changed completion policy blocks the old receipt;
+an unreadable owner or queued recovery defers without consuming a worker slot.
+
+The merge-admission prompt section offers this handoff to every participant
+before its CI wait. When a local review round returns clean, the run records
+`REVIEW_HEAD=$(git rev-parse HEAD)` beside `REVIEW_STATUS` (one line, replacing
+any earlier one); a later commit means that head was not reviewed. On
+`queued: true` with a receipt for its head, the run stops: it does not wait for
+CI, merge, enable auto-merge, close the issue or remove its branch or worktree,
+and it reports the PR as handed off and not yet merged. Any other answer keeps
+the run on the in-session CI wait and admission-gated merge.
+
+A receipt is a pending end state. `probePrForBranch` reports
+`mergeHandoffQueued` only when the queue holds a binding for that PR, branch and
+the published local head, so the merge-gate check finalizes without a nudge
+(`merge-handoff-queued`), worktree cleanup keeps the branch, and the repo-state
+audit treats the queued entry as the branch's owner. The receipt starts one
+immediate sweep of the app, which merges a head whose CI already settled
+without waiting for the 30-minute timer and spends no tick budget. Overlapping
+sweeps of one app (timer, task generator, receipt) join a single pass; a receipt
+that lands during a pass which already read the queue gets one follow-up pass
+after it settles.
+
+When that immediate pass leaves the receipt's entry queued (CI still running,
+admission deferred, the forge briefly unreadable), the receipt arms a bounded
+follow-up poll for the app so a head whose CI turns green a minute later does
+not wait out the rest of the 30-minute timer. It re-runs the receipt sweep
+every 60 seconds for the first five polls, then every 120 seconds
+(`HANDOFF_FOLLOW_UP_*` in `server/services/prWatcher.js`), and stops once
+every receipt it tracks has merged, escalated, timed out to a notification or
+left the queue. An app has at most one poller: a receipt that lands while one
+is active joins it with its own 45-minute cap, after which the 30-minute timer
+sweep owns the entry exactly as before. Polls spend no tick budget, so
+`MAX_PENDING_MERGE_TICKS` still measures wall-clock hours on the timer. Each
+poll passes the timer's own gate — daemon running, not paused, CoS auto-run set
+to `execute` — and is skipped otherwise; stopping the daemon cancels every
+poller, and a receipt accepted while the daemon is stopped arms none.
+
+New managed-app PR tasks default to **PortOS auto-merge after review**. The app's
+PR completion setting can select automatic merge after checks, leave-open or
+draft instead; an explicit per-run choice wins. This does not enable GitHub's
+native auto-merge, which cannot acquire PortOS's local merge admission. Existing
+explicit app and task policies remain unchanged.
+
+New receipts also retain the verified checkout path. After a confirmed merge,
+and after releasing merge admission, the coordinator archives unique contents
+and Git metadata before retiring that exact checkout and local branch. A
+cleanup refusal remains on the receipt as `cleanup.status`, `reason` and any
+`archiveDir`; transient failures retry every 30 minutes, at most 12 times.
+Locks, initialized submodules, changed checkout identity and supersession need
+explicit recovery and remain held. No worker waits for this cleanup, no lock is
+silently released, and no initialized submodule is discarded. Older receipts
+without a checkout binding retain the existing branch-reconciliation fallback.
+
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
 seed, migration, or federation payload. Admission waits at most 15 seconds to
@@ -236,7 +322,7 @@ Nothing picks a tier automatically — not the description, priority, context si
 
 ### Temporary thinking sessions in the Mind UI
 
-Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PATCH /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. A list PATCH replaces the whole array, because a merge cannot express "remove this one entry" and would resurrect a deleted preset.
+Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PUT /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. Sending the list replaces the whole array (PUT merges top-level keys only), because a merge cannot express "remove this one entry" and would resurrect a deleted preset.
 
 The composer's **Send with another model** picker arms one preset for the **next single message**, and nothing else:
 

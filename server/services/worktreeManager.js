@@ -209,7 +209,7 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
 }
 
 // Per-source-repo serialization tail for worktree-creating git operations —
-// the issueWriteTail pattern (see server/services/pipeline/issues.js). Git
+// the createKeyCachedQueue pattern (see server/services/pipeline/issuesShared.js). Git
 // serializes its own worktree bookkeeping behind a per-repo lock, so two
 // `git worktree add` calls in the same evaluation tick race and the loser is
 // blocked with `blockedCategory: worktree-failed` (#2193). A single promise
@@ -457,10 +457,11 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *   statically, notably one run's own `.agent-done-<agentId>` sentinel. Matched
  *   as roots: a directory entry also covers everything under it. They are still
  *   removed only when the rest of the tree is safe to remove.
- * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
+ * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], untrackedLockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
  *   - clean: no changes at all
  *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
  *   - lockfilePaths: paths of those lockfiles (strip the porcelain `XY ` status prefix)
+ *   - untrackedLockfilePaths: the subset of lockfilePaths that is untracked (`??`)
  *   - realChangePaths: paths of the NON-lockfile changes, same prefix stripping.
  *     Branch reconciliation intersects these with what the default branch has
  *     touched since the branch diverged, to spot work that may have been
@@ -475,7 +476,7 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     .filter(Boolean)
     .filter(line => !matchesScratchRoot(toPath(line), ignored));
   if (lines.length === 0) {
-    return { clean: true, lockfileOnly: false, lockfilePaths: [], realChangePaths: [], hasRealChanges: false };
+    return { clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
   const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f));
   // `R old -> new` (rename) names two paths; the post-rename path is the one
@@ -486,9 +487,27 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     clean: false,
     lockfileOnly,
     lockfilePaths: lockfileLines.map(toPath),
+    // Untracked (`??`) lockfiles have no index entry, so `git checkout --` cannot
+    // restore them; discardLockfileChanges deletes these instead.
+    untrackedLockfilePaths: lockfileLines.filter(line => line.startsWith('??')).map(toPath),
     realChangePaths: lines.filter((line) => !isLockfile(line)).map(toPath),
     hasRealChanges: !lockfileOnly
   };
+}
+
+/**
+ * Discard the auto-generated lockfile churn that `classifyWorktreeDirt` reported.
+ * Untracked lockfiles are deleted (git cannot restore what it does not track);
+ * tracked ones are restored from the index. Rejects if either step fails, so the
+ * caller decides whether the tree is still safe to remove.
+ */
+async function discardLockfileChanges(worktreePath, dirt) {
+  const untracked = new Set(dirt.untrackedLockfilePaths);
+  for (const path of untracked) {
+    await rm(join(worktreePath, path), { force: true });
+  }
+  const tracked = dirt.lockfilePaths.filter(path => !untracked.has(path));
+  if (tracked.length) await execGit(['checkout', '--', ...tracked], worktreePath);
 }
 
 /** A proven-absent directory is empty; an existing tree must identify itself.
@@ -1043,7 +1062,7 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   const dirt = classifyWorktreeDirt(porcelain);
   if (dirt.lockfileOnly) {
     console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in adopted worktree ${agentId}`);
-    await execGit(['checkout', '--', ...dirt.lockfilePaths], targetPath).catch(err => {
+    await discardLockfileChanges(targetPath, dirt).catch(err => {
       console.log(`⚠️ Lockfile discard failed in adopted worktree ${agentId}: ${err.message}`);
     });
   }
@@ -1211,7 +1230,13 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     // (e.g., npm install resolving ^version to exact version in package-lock.json)
     if (dirt.lockfileOnly) {
       console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
-      await execGit(['checkout', '--', ...dirt.lockfilePaths], worktreePath);
+      // Never throws past removeWorktree: an undiscardable lockfile keeps the tree.
+      const discarded = await discardLockfileChanges(worktreePath, dirt).then(() => true, err => {
+        console.log(`⚠️ Lockfile discard failed in worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
+        warnings.push(`Worktree preserved — lockfile discard failed in ${worktreePath}: ${err.message}`);
+        return false;
+      });
+      if (!discarded) return { merged: false, removed: false, uncommittedSaved: false, warnings };
     } else {
       // NAME the dirty paths. The bare message reads as "your work was left
       // behind" with no way to tell real uncommitted work from a transient
@@ -1502,6 +1527,7 @@ export async function listWorktrees(sourceWorkspace) {
     } else if (line === 'locked' || line.startsWith('locked ')) {
       // `git worktree list --porcelain` emits a bare `locked` line, or `locked <reason>`.
       current.locked = true;
+      current.lockReason = line.startsWith('locked ') ? line.slice(7) : null;
     } else if (line === 'prunable' || line.startsWith('prunable ')) {
       // Same two spellings. Set when git considers the registration disposable —
       // its directory is gone, or its .git pointer no longer resolves.
@@ -1513,15 +1539,51 @@ export async function listWorktrees(sourceWorkspace) {
   return worktrees;
 }
 
+// Registry the destructive passes re-read under the claim-ownership lock.
+// Omitted reads state.json; `{ agents }` / `{ readAgents }` inject owners.
+function claimOwnerReader(claimOwners, readClaimOwnershipAgents) {
+  return claimOwners === undefined ? readClaimOwnershipAgents
+    : async () => claimOwners?.readAgents ? claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
+}
+
+// A liveness snapshot ages while the caller's earlier passes run, so the orphan
+// passes re-read it per tree (#11858). A bare Set/null is a fixed snapshot.
+function activeIdsReader(activeIds) {
+  return typeof activeIds === 'function' ? activeIds : () => activeIds;
+}
+
+/**
+ * Remove an orphan only if it is STILL unowned: liveness re-read and the agent
+ * registry checked inside the lock a claim bind takes, so neither an agent
+ * dispatched since the caller's last check nor a registered claim/agent owner
+ * can be removed out from under it. Resolves `remove()`'s result, or null when held.
+ */
+async function removeIfStillOrphaned({ isOwned, branchName, holderPath, sourceWorkspace, readOwners }, remove) {
+  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  return withClaimOwnershipLock(async () => {
+    if (isOwned()) return null;
+    const agents = await readOwners();
+    if (claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace, agents })) return null;
+    return remove();
+  });
+}
+
 /**
  * Clean up any orphaned worktrees (worktrees whose agent no longer exists)
  *
  * @param {string} sourceWorkspace - The original git repository path
- * @param {Set<string>} activeAgentIds - Set of currently active agent IDs
+ * @param {(() => Set<string>|null)|Set<string>|null} getActiveIds - live agent ids, re-read
+ *   for every worktree. Anything but a Set reads as "liveness unknown" and holds every `agent-*` tree.
+ * @param {object} [options]
+ * @param {{agents?: object[]|null, readAgents?: () => Promise<object[]|null>}} [options.claimOwners] -
+ *   agent registry override (tests); omitted reads state.json
  */
-export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) {
+export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { claimOwners } = {}) {
   if (!existsSync(WORKTREES_DIR)) return 0;
 
+  const readActiveIds = activeIdsReader(getActiveIds);
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const readOwners = claimOwnerReader(claimOwners, readClaimOwnershipAgents);
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
   let cleaned = 0;
 
@@ -1529,32 +1591,37 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
   const handledAgentIds = new Set();
 
   for (const wt of worktrees) {
-    const ownershipReason = worktreeOwnershipReason({
+    const ownershipReason = () => worktreeOwnershipReason({
       path: wt.path,
       locked: wt.locked,
-      activeAgentIds,
+      activeAgentIds: readActiveIds(),
       roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
       requireKnownLiveness: true,
     });
-    if (ownershipReason === 'worktree-unmanaged-location') continue;
+    const initialReason = ownershipReason();
+    if (initialReason === 'worktree-unmanaged-location') continue;
     const agentId = worktreeAgentId(wt.path);
     handledAgentIds.add(agentId);
-    if (ownershipReason) continue;
+    if (initialReason) continue;
+    // A detached HEAD has no branch to merge or measure; force-removing it would drop commits only its reflog holds.
+    if (wt.detached || !wt.branch) continue;
 
-    const branchName = wt.branch?.replace('refs/heads/', '') || '';
+    const branchName = wt.branch.replace('refs/heads/', '');
     // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
     // If merge fails, the branch is preserved for manual recovery.
-    const result = await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
-      .catch(err => {
-        console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
-        return { removed: false };
-      });
+    const result = await removeIfStillOrphaned(
+      { isOwned: ownershipReason, branchName, holderPath: wt.path, sourceWorkspace, readOwners },
+      () => removeWorktree(agentId, sourceWorkspace, branchName, { merge: true }),
+    ).catch(err => {
+      console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
+      return { removed: false };
+    });
     if (result?.removed) cleaned++;
   }
 
   // Scan for external-repo worktrees (directories whose .git points to a different repo).
   // These are invisible to `git worktree list` run against PortOS.
-  cleaned += await cleanupExternalRepoWorktrees(activeAgentIds, handledAgentIds);
+  cleaned += await cleanupExternalRepoWorktrees(readActiveIds, handledAgentIds, readOwners);
 
   if (cleaned > 0) {
     console.log(`🌳 Cleaned ${cleaned} orphaned worktree(s)`);
@@ -1606,8 +1673,9 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
  *
  * @param {string} sourceWorkspace - repo root
  * @param {object} [options]
- * @param {Set<string>} [options.activeAgentIds] - CoS agents currently running (never reaped).
- *   Anything but a Set reads as "liveness unknown" and holds every `agent-*` tree.
+ * @param {Set<string>|(() => Set<string>)} [options.activeAgentIds] - CoS agents currently running
+ *   (never reaped), or a getter re-read per tree and again before removal. Anything but a
+ *   Set reads as "liveness unknown" and holds every `agent-*` tree.
  * @param {Set<string>} [options.excludeBranches] - branch names never reaped, whatever their tree
  * @param {boolean} [options.includeClaudeTrees=true] - also reap `.claude/worktrees/`
  * @param {boolean} [options.includeUnmanagedTrees=false] - consider worktrees outside the managed roots
@@ -1626,12 +1694,12 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   dryRun = false
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled, reconcile, operator cleanup) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
-  const readOwners = claimOwners === undefined ? readClaimOwnershipAgents
-    : async () => claimOwners?.readAgents ? claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
+  const readOwners = claimOwnerReader(claimOwners, readClaimOwnershipAgents);
+  const readActiveIds = activeIdsReader(activeAgentIds);
 
   const defaultBranch = knownDefaultBranch || await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
@@ -1671,7 +1739,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     const ownershipReason = worktreeOwnershipReason({
       path: wt.path,
       locked: wt.locked,
-      activeAgentIds,
+      activeAgentIds: readActiveIds(),
       roots: managedRoots,
       requireKnownLiveness: true,
     });
@@ -1704,7 +1772,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         if (ownerReason) return ownerReason;
         const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
         if (policyHold) return policyHold;
-        const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds, roots: managedRoots, requireKnownLiveness: true });
+        const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds: readActiveIds(), roots: managedRoots, requireKnownLiveness: true });
         if (reason) return reason;
         const freshStatus = await readWorktreeStatus(wt.path);
         if (freshStatus === null) return 'worktree-status-unavailable';
@@ -1744,7 +1812,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  * These are created when agents work on apps outside PortOS but use the shared
  * worktrees directory. They're invisible to PortOS's `git worktree list`.
  */
-async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
+async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
   let cleaned = 0;
@@ -1752,13 +1820,14 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
   for (const entry of entries) {
     if (!entry.isDirectory() || alreadyHandled.has(entry.name)) continue;
     const worktreePath = join(WORKTREES_DIR, entry.name);
-    const ownership = {
+    const ownership = (extra = {}) => worktreeOwnershipReason({
       path: worktreePath,
-      activeAgentIds,
+      activeAgentIds: readActiveIds(),
       roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
       requireKnownLiveness: true,
-    };
-    if (worktreeOwnershipReason(ownership)) continue;
+      ...extra,
+    });
+    if (ownership()) continue;
     const gitFile = await lstat(join(worktreePath, '.git')).catch(() => null);
     if (!gitFile?.isFile()) continue;
 
@@ -1778,7 +1847,7 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
     const primary = registrations[0];
     if (!wt || wt.bare || wt.detached || wt.prunable || !wt.branch) continue;
     if (!primary || primary.bare || pathsEqual(primary.path, gitWorktreePath)) continue;
-    if (worktreeOwnershipReason({ ...ownership, locked: wt.locked })) continue;
+    if (ownership({ locked: wt.locked })) continue;
 
     const parentRepo = primary.path;
     const parentCommonDir = await execGit(['rev-parse', '--git-common-dir'], parentRepo)
@@ -1796,15 +1865,25 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
 
     // Non-force removal is a final Git guard against newly dirty or locked
     // trees. A refusal must never fall through to recursive filesystem removal.
-    const removed = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
+    const removed = await removeIfStillOrphaned(
+      { isOwned: () => ownership({ locked: wt.locked }), branchName, holderPath: worktreePath, sourceWorkspace: parentRepo, readOwners },
+      async () => {
+        const ok = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
+          console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
+          return false;
+        });
+        if (ok) {
+          await execGit(['branch', '-D', branchName], parentRepo).catch(err => {
+            console.warn(`⚠️ External branch cleanup failed for ${branchName}: ${err.message}`);
+          });
+        }
+        return ok;
+      },
+    ).catch(err => {
       console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
       return false;
     });
-    if (!removed) continue;
-    await execGit(['branch', '-D', branchName], parentRepo).catch(err => {
-      console.warn(`⚠️ External branch cleanup failed for ${branchName}: ${err.message}`);
-    });
-    cleaned++;
+    if (removed) cleaned++;
   }
 
   return cleaned;

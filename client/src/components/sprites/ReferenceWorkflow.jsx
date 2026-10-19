@@ -20,6 +20,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import FilePickerButton from '../ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../../utils/fileUpload';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
+import ListLoadError from '../ui/ListLoadError.jsx';
 
 // Reference workflow (issues #2896, #2979): three ordered steps — generate a
 // turnaround sheet from text + an optional design image and freeze it, derive
@@ -198,7 +199,10 @@ function StageHeading({ id, number, title, status, statusTone = 'text-gray-500' 
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, renders, corrections, onCorrectionChange, backends, trackDefinitions, mode, onModeChange, onChanged, onForked }) {
+export default function ReferenceWorkflow({
+  record, reference, renders, corrections, onCorrectionChange, backends, trackDefinitions, mode, onModeChange, onChanged, onForked,
+  backendsError = null, onRetryBackends = null,
+}) {
   const recordId = record.id;
   // Local shadow of record.imageModelId (#3231 Phase 3) — pin PATCHes update
   // this directly instead of refetching the whole detail payload; re-seeded
@@ -537,7 +541,10 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           {manifest.chromaKeyWarning}
         </p>
       )}
-      {noBackend && (
+      {backendsError && (
+        <ListLoadError what="image backends" error={backendsError} onRetry={onRetryBackends} />
+      )}
+      {!backendsError && noBackend && (
         <p className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
           No image backend configured — enable Codex or Grok, or set a local Python path, in Settings → Image Gen to generate references.
         </p>

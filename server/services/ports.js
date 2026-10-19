@@ -1,9 +1,11 @@
 import { getListeningPorts, findAvailablePorts } from '../lib/platform.js';
 import { getReservedPorts } from './apps.js';
 
-// Default port range for new apps
-const DEFAULT_PORT_RANGE_START = 6000;
-const DEFAULT_PORT_RANGE_END = 6099;
+// Managed-app band from docs/PORTS.md; 5553-5569 belongs to PortOS itself.
+// Allocation overflows past the end (see allocatePorts) but never below the start.
+export const DEFAULT_PORT_RANGE_START = 5570;
+export const DEFAULT_PORT_RANGE_END = 5599;
+const PORT_OVERFLOW = 100;
 
 /**
  * Scan system for used ports and compute available ranges
@@ -22,7 +24,7 @@ export async function scanPorts() {
   const freeRanges = computeFreeRanges(allOccupied, DEFAULT_PORT_RANGE_START, DEFAULT_PORT_RANGE_END);
 
   // Find suggested next available ports
-  const suggestedPorts = await findAvailablePorts(DEFAULT_PORT_RANGE_START, DEFAULT_PORT_RANGE_END, 2);
+  const suggestedPorts = await findAvailablePorts(DEFAULT_PORT_RANGE_START, DEFAULT_PORT_RANGE_END, 2, undefined, reservedPorts);
 
   return {
     usedPorts,
@@ -76,20 +78,16 @@ export async function checkPortsAvailable(ports) {
 }
 
 /**
- * Allocate N ports from the available range
+ * Allocate N ports, preferring the managed band and overflowing just past it.
+ * Skips listeners, ports reserved by registered apps, and browser-blocked ports.
  */
 export async function allocatePorts(count = 1) {
-  const scan = await scanPorts();
-
-  if (scan.suggestedPorts.length < count) {
-    const needed = count - scan.suggestedPorts.length;
-    const additional = await findAvailablePorts(
-      DEFAULT_PORT_RANGE_START,
-      DEFAULT_PORT_RANGE_END + 100,
-      needed
-    );
-    return [...scan.suggestedPorts, ...additional].slice(0, count);
-  }
-
-  return scan.suggestedPorts.slice(0, count);
+  const reservedPorts = await getReservedPorts();
+  return findAvailablePorts(
+    DEFAULT_PORT_RANGE_START,
+    DEFAULT_PORT_RANGE_END + PORT_OVERFLOW,
+    count,
+    undefined,
+    reservedPorts
+  );
 }

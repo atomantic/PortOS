@@ -371,7 +371,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: worktreePath, reason: 'worktree-unmanaged-location' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
@@ -398,7 +398,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2196', reason: 'worktree-dirty' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2196', path: '/repo/.claude/worktrees/next-2196', reason: 'worktree-dirty' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
@@ -420,9 +420,9 @@ describe('cleanupMerged', () => {
     ], { activeAgentIds, claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([
-      { branch: 'locked-b', reason: 'worktree-locked' },
-      { branch: 'claim-b', reason: 'worktree-human-claim' },
-      { branch: 'active-b', reason: 'worktree-active-agent' }
+      { branch: 'locked-b', path: '/repo/data/cos/worktrees/locked', reason: 'worktree-locked' },
+      { branch: 'claim-b', path: '/repo/data/cos/worktrees/claim-foo', reason: 'worktree-human-claim' },
+      { branch: 'active-b', path: '/repo/data/cos/worktrees/agent-abc12345', reason: 'worktree-active-agent' }
     ]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
@@ -525,7 +525,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
     const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }], { claimOwners: { agents: [] } });
     expect(dirty.cleaned).toEqual([]);
-    expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', reason: 'worktree-dirty' }]);
+    expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', path: '/repo/data/cos/worktrees/claim-x', reason: 'worktree-dirty' }]);
 
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     // No completion proof — never pushed, remote ref still on origin, or the
@@ -556,8 +556,8 @@ describe('cleanupMerged', () => {
     // A lock and a running agent both end at a time nothing here can predict —
     // inventing one would park the drain past a hold that may already be gone.
     expect(res.skipped).toEqual([
-      { branch: 'locked-b', reason: 'worktree-locked' },
-      { branch: 'active-b', reason: 'worktree-active-agent' }
+      { branch: 'locked-b', path: '/repo/data/cos/worktrees/locked', reason: 'worktree-locked' },
+      { branch: 'active-b', path: '/repo/data/cos/worktrees/agent-abc12345', reason: 'worktree-active-agent' }
     ]);
   });
 });
@@ -1409,7 +1409,7 @@ describe('reconcile', () => {
       const result = await cleanupMerged('/repo', 'main', [{
         branch: 'claim/issue-101', worktreePath: '/repo/data/cos/worktrees/claim-issue-101', worktreeAgeMs: 0,
       }], { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
-      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', reason: 'worktree-dirty' }]);
+      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', path: '/repo/data/cos/worktrees/claim-issue-101', reason: 'worktree-dirty' }]);
       expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
       expect(git.deleteBranch).not.toHaveBeenCalled();
     });
@@ -1655,7 +1655,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
     }]);
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
@@ -1985,7 +1985,7 @@ describe('filterActionable', () => {
 
 describe('desiredEndState', () => {
   it('tells IN_REVIEW to merge only when autoMerge is on', () => {
-    expect(desiredEndState('IN_REVIEW', {})).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(desiredEndState('IN_REVIEW', {})).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(desiredEndState('IN_REVIEW', { autoMerge: false })).toContain('Do NOT merge');
   });
 
@@ -2005,7 +2005,7 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('SUPERSEDED');
     expect(instruction).toContain('still needed');
     expect(instruction).toMatch(/[\\/]repo[\\/]data[\\/]cos[\\/]branch-reconcile-verdicts\.json/);
-    expect(instruction).toContain('immediately-following drain pass');
+    expect(instruction).toContain('without waiting for another scheduled run');
     expect(instruction).toContain('ledger inside the abandoned worktree is invisible');
     // Ordering: the gate precedes any instruction to commit/rebase/resolve.
     const gateAt = instruction.indexOf('still needed');
@@ -2044,7 +2044,7 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('Do not merely inventory unfinished work');
     expect(instruction).toContain('exceptional blocked outcome');
     expect(instruction).toContain('/do:pr --no-merge');
-    expect(instruction).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
   });
 
   it('tells NEEDS_PR to finish incomplete work instead of leaving it for another run', () => {
@@ -2071,7 +2071,7 @@ describe('desiredEndState', () => {
   // IN_REVIEW, contradicting driveToMerge's own "opening the PR is NOT the end
   // state" principle.
   it('tells CONFLICTED to merge only when autoMerge is on', () => {
-    expect(desiredEndState('CONFLICTED', {})).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(desiredEndState('CONFLICTED', {})).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(desiredEndState('CONFLICTED', { autoMerge: false })).toContain('Do NOT merge');
     expect(desiredEndState('CONFLICTED', { autoMerge: false })).not.toContain('gh pr merge');
   });
@@ -2082,7 +2082,7 @@ describe('desiredEndState', () => {
   it('drives NEEDS_PR past the PR to a merge when autoMerge is on', () => {
     const instruction = desiredEndState('NEEDS_PR', {});
     expect(instruction).toContain('gh pr checks <num> --required');
-    expect(instruction).toContain('gh pr merge <num> --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge <num> --merge --match-head-commit <verified-head>');
     expect(instruction).toContain('NOT the end state');
   });
 
@@ -2104,29 +2104,41 @@ describe('desiredEndState', () => {
     }
   });
 
-  it('makes both merge-bound states wait for CI in-session and forbid queued auto-merge', () => {
+  it('offers verified auto-merge before the fallback CI wait in both merge-bound states', () => {
     for (const state of ['NEEDS_PR', 'IN_REVIEW']) {
       const instruction = desiredEndState(state, {});
       expect(instruction).toContain('gh pr checks <num> --required');
-      expect(instruction).toContain('Never `--auto`');
+      expect(instruction).toContain('--auto --merge --match-head-commit <published-head>');
+      expect(instruction).toContain('autoMergeRequest.enabledAt');
     }
   });
 
   // branch-reconcile runs against ANY managed app; a repo that disallows merge
   // commits would strand the branch on a hardcoded `--merge`.
-  it('gives the merge a method fallback and keeps it out of the branch worktree', () => {
+  it('pins every method fallback and preserves the worktree through archive checks', () => {
     const instruction = desiredEndState('IN_REVIEW', {});
-    expect(instruction).toContain('`--squash`');
-    expect(instruction).toContain('`--rebase`');
-    expect(instruction).toContain('NOT from inside the branch\'s worktree');
-    // Worktree first, then the branch — the delete fails while it's checked out.
-    expect(instruction).toContain('remove the branch\'s worktree first, then delete the local branch');
+    expect(instruction).toContain('--squash --match-head-commit <verified-head>');
+    expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
+    expect(instruction).not.toContain('--delete-branch');
+    expect(instruction).toContain('Archive failure');
+    // Prove preservation and default-branch ancestry before removing the
+    // checkout; delete the named branch only after it is no longer checked out.
+    const cleanupSteps = [
+      'Archive failure',
+      'Fetch the verified remote’s intended default branch explicitly',
+      'git merge-base --is-ancestor <exact-local-tip> <fetched-intended-default>',
+      'Then remove only the authorized worktree',
+      'git branch -d <branch>',
+    ].map(step => instruction.indexOf(step));
+    expect(cleanupSteps.every(position => position >= 0)).toBe(true);
+    expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
+    expect(instruction).toContain('If ancestry is unproven, preserve both checkout and branch');
   });
 
   it('names the real PR number when the branch already has one', () => {
     const instruction = desiredEndState('IN_REVIEW', {}, { prNumber: 42 });
     expect(instruction).toContain('gh pr checks 42 --required');
-    expect(instruction).toContain('gh pr merge 42 --merge --delete-branch');
+    expect(instruction).toContain('gh pr merge 42 --merge --match-head-commit <verified-head>');
     expect(instruction).not.toContain('<num>');
   });
 
@@ -2634,7 +2646,7 @@ describe('describeIdleReconcilePark', () => {
 
   it('reports a quiet repo when nothing is held', () => {
     expect(describeIdleReconcilePark([], [])).toEqual({
-      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, skipCauses: null, notLaterThan: null
+      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, skipCauses: null, remaining: [], notLaterThan: null
     });
     expect(describeIdleReconcilePark()).toMatchObject({ reason: 'no-in-flight-branches' });
   });
@@ -2661,14 +2673,14 @@ describe('describeIdleReconcilePark', () => {
   });
 
   it('reports disabled cleanup and deletion failure as blockers', () => {
-    // A branch no longer merged is reclassified next pass. Disabled cleanup
-    // and a failed deletion still leave concrete work that must remain visible.
+    // A failed merge recheck leaves a surviving branch, just like disabled
+    // cleanup and a failed deletion. A one-shot sweep must report all three.
     const out = describeIdleReconcilePark([
       { branch: 'a', reason: 'cleanup-disabled' },
       { branch: 'b', reason: 'not-merged-on-recheck' },
       { branch: 'c', reason: 'delete-failed: boom' }
     ], []);
-    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 2, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'branch-delete-failed': 1 }, notLaterThan: null });
+    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 3, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'not-merged-on-recheck': 1, 'branch-delete-failed': 1 }, remaining: [{ branch: 'a', reason: 'cleanup-disabled' }, { branch: 'b', reason: 'not-merged-on-recheck' }, { branch: 'c', reason: 'branch-delete-failed' }], notLaterThan: null });
   });
 
   it('ignores an unreadable retryAt rather than parking on NaN', () => {

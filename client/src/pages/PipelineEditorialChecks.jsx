@@ -23,7 +23,9 @@ import SeriesSeverityConfig from '../components/pipeline/editorial/SeriesSeverit
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import ListLoadError from '../components/ui/ListLoadError';
 import { groupChecksByScope, groupFindingsByCheck, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
+import useListResource from '../hooks/useListResource';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -62,7 +64,9 @@ export default function PipelineEditorialChecks() {
   // presentation toggle that doesn't exist on desktop.
   const [mobileTab, setMobileTab] = useState('findings');
 
-  const [series, setSeries] = useState([]);
+  const fetchSeries = useCallback(() => listPipelineSeries({ silent: true }), []);
+  const seriesResource = useListResource(fetchSeries);
+  const { items: series, setItems: setSeries } = seriesResource;
   // Per-series editorial-check config overrides (#1591) are saved through the
   // series PATCH; track in-flight saves per checkId so the run buttons gate on the
   // override landing (the runner reads the persisted series record).
@@ -160,13 +164,9 @@ export default function PipelineEditorialChecks() {
   // ---- Load the global catalog + series list once. ----
   useEffect(() => {
     let canceled = false;
-    Promise.all([
-      getEditorialChecks().catch(() => ({ checks: [] })),
-      listPipelineSeries().catch(() => []),
-    ]).then(([catalog, list]) => {
+    getEditorialChecks().catch(() => ({ checks: [] })).then((catalog) => {
       if (canceled) return;
       setChecks(Array.isArray(catalog?.checks) ? catalog.checks : []);
-      setSeries(Array.isArray(list) ? list : []);
       setLoadingCatalog(false);
     });
     return () => { canceled = true; };
@@ -683,6 +683,9 @@ export default function PipelineEditorialChecks() {
           </>
         )}
       />
+      {seriesResource.state === 'error' ? (
+        <div className="px-4 pt-3"><ListLoadError what="series" error={seriesResource.error} onRetry={seriesResource.retry} /></div>
+      ) : null}
       <div className="flex-1 min-h-0 overflow-auto p-4">
         <div className="mx-auto max-w-6xl space-y-4">
         {/* AI provider/model override for the editorial pass. Empty = use the

@@ -148,7 +148,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // second clobber the first. The tail awaits the prior save, then rebuilds the
   // patch from the FRESHEST cues (`latestCuesRef`, updated every render from the
   // lifted issue) so each edit merges against the latest persisted list.
-  // Mirrors the server-side `issueWriteTail` "collapse to one tail per shared
+  // Mirrors the server-side `queueSeriesIssuesWrite` "collapse to one tail per shared
   // file" rule. `savingCueIdxs` is reactive state (not a ref) so the per-row
   // Render gate updates live and recovers if a save fails.
   const cueSaveTailRef = useRef(Promise.resolve());

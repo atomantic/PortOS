@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { NotebookPen, PanelLeftOpen, BookOpen, ChevronUp, ChevronDown } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
@@ -14,14 +14,18 @@ import {
 } from '../services/apiWritersRoom';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { usePagedCollection } from '../hooks/usePagedCollection';
+import useListResource from '../hooks/useListResource';
 import useMounted from '../hooks/useMounted';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
 
 export default function WritersRoom() {
   const { workId } = useParams();
   const navigate = useNavigate();
-  const [folders, setFolders] = useState([]);
+  const fetchFolders = useCallback(() => listWritersRoomFolders({ silent: true }), []);
+  const foldersResource = useListResource(fetchFolders);
+  const { items: folders, setItems: setFolders } = foldersResource;
   const fetchWorks = useCallback(({ cursor, signal }) =>
     listWritersRoomWorks({ limit: 50, cursor }, { signal, silent: true }), []);
   const worksPage = usePagedCollection(fetchWorks);
@@ -31,6 +35,15 @@ export default function WritersRoom() {
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [draftMutation, setDraftMutation] = useState(null);
+  const draftMutationRef = useRef(null);
+  const activeWorkRef = useRef(activeWork);
+  activeWorkRef.current = activeWork;
+  const editorDirtyRef = useRef(editorDirty);
+  const handleEditorDirty = useCallback((dirty) => {
+    editorDirtyRef.current = dirty;
+    setEditorDirty(dirty);
+  }, []);
   const [headerCollapsed, , toggleHeader] = useLocalStorageBool('wr.headerCollapsed', false);
   // Opening a work collapses the library on mobile and desktop. Header
   // controls have their own persisted disclosure for focused writing.
@@ -43,13 +56,25 @@ export default function WritersRoom() {
   // page unmounts (rapid nav across pages).
   const mountedRef = useMounted();
 
-  const refreshLibrary = useCallback(async () => {
-    const foldersList = await listWritersRoomFolders().catch(() => []);
-    if (!mountedRef.current) return;
-    setFolders(foldersList);
+  // The editor and its exercise sibling both write the active draft. Admission
+  // is synchronous; the state mirror only renders the pending controls. Keep
+  // ownership here so dismissing the exercise panel cannot release its write.
+  const beginDraftMutation = useCallback((ownerKey, kind) => {
+    const current = activeWorkRef.current;
+    if (draftMutationRef.current || !current || `${current.id}:${current.activeDraftVersionId || ''}` !== ownerKey) return null;
+    if (kind === 'exercise' && editorDirtyRef.current) return null;
+    const transaction = { ownerKey, kind };
+    draftMutationRef.current = transaction;
+    setDraftMutation(transaction);
+    return transaction;
   }, []);
+  const endDraftMutation = useCallback((transaction) => {
+    if (draftMutationRef.current !== transaction) return;
+    draftMutationRef.current = null;
+    if (mountedRef.current) setDraftMutation(null);
+  }, [mountedRef]);
 
-  useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
+  const refreshLibrary = useCallback(() => foldersResource.retry(), [foldersResource.retry]);
 
   // Load the active work when the URL changes
   useEffect(() => {
@@ -85,19 +110,22 @@ export default function WritersRoom() {
     if (!workId) setLibraryCollapsed(false);
   }, [workId, setLibraryCollapsed]);
 
-  const handleWorkChange = (updated) => {
-    // Caller (WorkEditor) hands us the freshest manifest + activeDraftBody —
-    // the server-side endpoints (PUT draft, POST snapshot, PATCH version,
-    // PATCH work) all return the full shape now, so no separate reload is
-    // required and there's no inconsistency window between server pointer
-    // and client view.
+  const handleWorkChange = (updated, patch) => {
+    // Draft operations replace the owned record; metadata responses merge only
+    // their canonical fields so an older manifest cannot restore saved prose.
     if (!mountedRef.current) return;
-    setActiveWork(updated);
+    const fields = patch?.fields && Object.fromEntries(patch.fields.map((field) => [field, updated[field]]));
+    setActiveWork((current) => {
+      if (current?.id !== updated.id) return current;
+      if (patch?.ownerKey && `${current.id}:${current.activeDraftVersionId || ''}` !== patch.ownerKey) return current;
+      return fields ? { ...current, ...fields } : updated;
+    });
     // Splice the updated row into the library list (title / status / word
     // count) without refetching N manifests on every save.
     setWorks((prev) => {
       const activeDraft = (updated.drafts || []).find((d) => d.id === updated.activeDraftVersionId);
-      const summary = {
+      const idx = prev.findIndex((w) => w.id === updated.id);
+      const summary = (idx >= 0 && fields) || {
         id: updated.id,
         folderId: updated.folderId,
         title: updated.title,
@@ -109,7 +137,6 @@ export default function WritersRoom() {
         createdAt: updated.createdAt,
         updatedAt: updated.updatedAt,
       };
-      const idx = prev.findIndex((w) => w.id === updated.id);
       const merged = idx < 0 ? summary : { ...prev[idx], ...summary };
       const others = idx < 0 ? prev : [...prev.slice(0, idx), ...prev.slice(idx + 1)];
       // Library is sorted by updatedAt desc — re-sort after the merge so a
@@ -179,6 +206,9 @@ export default function WritersRoom() {
           <div className="hidden md:block overflow-hidden min-w-0" />
         ) : (
           <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
+            {foldersResource.state === 'error' ? (
+              <ListLoadError what="folders" error={foldersResource.error} onRetry={foldersResource.retry} className="mb-3" />
+            ) : null}
             <LibraryPane
               folders={folders}
               works={works}
@@ -237,7 +267,10 @@ export default function WritersRoom() {
                 onChange={handleWorkChange}
                 onToggleExercise={() => setShowExercise((s) => !s)}
                 exerciseOpen={showExercise}
-                onDirtyChange={setEditorDirty}
+                onDirtyChange={handleEditorDirty}
+                draftMutation={draftMutation}
+                beginDraftMutation={beginDraftMutation}
+                endDraftMutation={endDraftMutation}
               />
             </>
           )}
@@ -245,7 +278,15 @@ export default function WritersRoom() {
 
         {showExercise && (
           <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/30 p-3 min-h-0 lg:overflow-y-auto">
-            <ExercisePanel activeWork={activeWork} editorDirty={editorDirty} onWorkChange={handleWorkChange} onClose={() => setShowExercise(false)} />
+            <ExercisePanel
+              activeWork={activeWork}
+              editorDirty={editorDirty}
+              draftMutation={draftMutation}
+              beginDraftMutation={beginDraftMutation}
+              endDraftMutation={endDraftMutation}
+              onWorkChange={handleWorkChange}
+              onClose={() => setShowExercise(false)}
+            />
           </aside>
         )}
       </div>

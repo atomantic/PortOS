@@ -110,6 +110,15 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     expect(afterRemove.items).toHaveLength(0);
   });
 
+  it('serializes concurrent pins of the same saved upload into one board item', async () => {
+    const board = await db.createBoard({ name: 'Upload retry fixture' });
+    created.push(board.id);
+    const input = { type: 'video', mediaKey: 'video:upload-fixture.mp4', prompt: 'Clouds' };
+    const [first, repeated] = await Promise.all([db.addBoardItem(board.id, input), db.addBoardItem(board.id, input)]);
+    expect(repeated.id).toBe(first.id);
+    expect((await db.getBoard(board.id)).items).toEqual([first]);
+  });
+
   it('removeBoardItem is a no-op for an unknown item id', async () => {
     const board = await db.createBoard({ name: 'Noop' });
     created.push(board.id);

@@ -72,11 +72,13 @@ export const shellSessionIdSchema = z.object({
 // shell:start — every field optional. `providerId` is resolved server-side to a
 // launch command; `cwd` / `initialCommand` must be strings so a malformed
 // payload never reaches createShellSession or the deferred submit.
+// Socket.IO encodes an explicit undefined argument as null. Normalize both
+// before validateSocketData uses null to signal a validation failure.
 export const shellStartSchema = z.object({
   cwd: z.string().max(1000).optional(),
   initialCommand: z.string().max(10000).optional(),
   providerId: z.string().max(200).optional()
-}).nullish();
+}).nullish().transform(options => options ?? {});
 
 // shell:attach — session id + optional claim flag.
 // `claim: true` means "attach only if currently unattached or already mine" — used by

@@ -20,6 +20,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   return {
     ...actual,
     mkdir: vi.fn((...args) => actual.mkdir(...args)),
+    open: vi.fn((...args) => actual.open(...args)),
     readFile: vi.fn((...args) => actual.readFile(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
     writeFile: vi.fn((...args) => actual.writeFile(...args)),
@@ -102,7 +103,7 @@ describe('importFileToDir', () => {
 });
 
 const restoreFsMocks = () => {
-  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat', 'writeFile', 'chmod']) {
+  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat', 'writeFile', 'chmod', 'open']) {
     fsPromises[name].mockReset();
     fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
   }
@@ -1356,6 +1357,54 @@ describe('fileUtils', () => {
       expect(await readFile(target, 'utf8')).toBe('{"x":1}\n');
     });
 
+    // Crash durability (#12025): the bytes reach the disk before the rename
+    // publishes them, and the directory entry reaches the disk after. The
+    // ordering is observed through the fs seam because a real power loss
+    // cannot be staged in a unit test.
+    it('fsyncs the temp file before the rename and the parent directory after it', async () => {
+      const target = join(tmpRoot, 'durable.json');
+      const calls = [];
+      fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+        calls.push(['writeFile', options?.flush]);
+        return realFsPromises.writeFile(path, data, options);
+      });
+      fsPromises.rename.mockImplementationOnce(async (...args) => {
+        calls.push(['rename']);
+        return realFsPromises.rename(...args);
+      });
+      fsPromises.open.mockImplementationOnce(async (path, flags) => {
+        const handle = await realFsPromises.open(path, flags);
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { calls.push(['dirSync', path]); return sync(); };
+        return handle;
+      });
+
+      await atomicWrite(target, { durable: true });
+
+      // Windows cannot open a directory for fsync, so syncDirectory skips it there.
+      const expectedCalls = [['writeFile', true], ['rename'], ...(process.platform === 'win32' ? [] : [['dirSync', tmpRoot]])];
+      expect(calls).toEqual(expectedCalls);
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ durable: true });
+    });
+
+    it.skipIf(process.platform === 'win32')('keeps a published write when the directory cannot be fsynced, warning once per directory', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const target = join(tmpRoot, 'netfs.json');
+        const failure = Object.assign(new Error('synthetic directory fsync failure'), { code: 'EINVAL' });
+        fsPromises.open.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+
+        await atomicWrite(target, { v: 1 });
+        await atomicWrite(target, { v: 2 });
+
+        expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('EINVAL');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('removes a partially written temp file after ENOSPC and allows a later retry', async () => {
       const target = join(tmpRoot, 'state.json');
       writeFileSync(target, 'original');
@@ -1413,6 +1462,30 @@ describe('fileUtils', () => {
         const { statSync } = await import('fs');
         expect(statSync(target).mode & 0o777).toBe(0o600);
         expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ token: 'new' });
+      }
+    );
+
+    it.skipIf(process.platform === 'win32')(
+      'creates the temp file with the destination\'s mode so a secret is never briefly world-readable',
+      async () => {
+        const target = join(tmpRoot, 'secret.json');
+        writeFileSync(target, '{"token":"old"}', { mode: 0o600 });
+        await realFsPromises.chmod(target, 0o600); // independent of the creation umask
+        let modeAtCreation = null;
+        let tempPath = null;
+        // The final chmod would mask a missing creation mode, so observe the
+        // temp file straight after its first write, before chmod/rename run.
+        fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+          await realFsPromises.writeFile(path, data, options);
+          tempPath = path;
+          modeAtCreation = (await realFsPromises.stat(path)).mode & 0o777;
+        });
+
+        await atomicWrite(target, { token: 'new' });
+
+        expect(tempPath).not.toBe(target);
+        expect(modeAtCreation).toBe(0o600);
+        expect((await realFsPromises.stat(target)).mode & 0o777).toBe(0o600);
       }
     );
 
@@ -1487,6 +1560,18 @@ describe('Windows swap-window retries (#4095)', () => {
   });
 
   describe('atomicWrite', () => {
+    it('fsyncs the temp file but skips the directory sync, which Windows cannot open a handle for (#12025)', async () => {
+      const target = join(tmpRoot, 'state.json');
+      fakePlatform('win32');
+      fsPromises.open.mockClear();
+
+      await atomicWrite(target, { v: 1 });
+
+      expect(fsPromises.writeFile).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ flush: true }));
+      expect(fsPromises.open).not.toHaveBeenCalled();
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
+    });
+
     it('retries the atomic rename on a transient lock instead of opening the destination-missing window', async () => {
       const target = join(tmpRoot, 'state.json');
       writeFileSync(target, JSON.stringify({ v: 1 }));
@@ -1686,6 +1771,71 @@ describe('createCachedStore', () => {
     );
     expect((await store.load()).n).toBe(N);
     expect(JSON.parse(await readFile(file, 'utf-8')).n).toBe(N);
+  });
+
+  it('does not let an in-flight stale read replace a persisted mutation', async () => {
+    const file = join(dir, 'feed-state.json');
+    const store = createCachedStore(file, { items: [] }, { ttl: 60_000 });
+    await store.save({ items: [] });
+    store.invalidateCache();
+
+    let releaseRead;
+    let signalReadStarted;
+    const heldRead = new Promise((resolve) => { releaseRead = resolve; });
+    const readStarted = new Promise((resolve) => { signalReadStarted = resolve; });
+    fsPromises.readFile.mockImplementationOnce(async (...args) => {
+      const bytes = await realFsPromises.readFile(...args);
+      signalReadStarted();
+      await heldRead;
+      return bytes;
+    });
+
+    const staleRead = store.load();
+    await readStarted;
+    try {
+      await store.mutate((data) => { data.items.push('first'); });
+      releaseRead();
+      await expect(staleRead).resolves.toEqual({ items: ['first'] });
+
+      await store.mutate((data) => { data.items.push('second'); });
+      expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ items: ['first', 'second'] });
+    } finally {
+      releaseRead();
+      restoreFsMocks();
+    }
+  });
+
+  it('re-reads after an in-flight stale read races a persist and cache invalidation', async () => {
+    const file = join(dir, 'invalidated-state.json');
+    const store = createCachedStore(file, { items: [] }, { ttl: 60_000 });
+    await store.save({ items: [] });
+    store.invalidateCache();
+
+    let releaseRead;
+    let signalReadStarted;
+    const heldRead = new Promise((resolve) => { releaseRead = resolve; });
+    const readStarted = new Promise((resolve) => { signalReadStarted = resolve; });
+    fsPromises.readFile.mockImplementationOnce(async (...args) => {
+      const bytes = await realFsPromises.readFile(...args);
+      signalReadStarted();
+      await heldRead;
+      return bytes;
+    });
+
+    const staleRead = store.load();
+    await readStarted;
+    try {
+      await store.mutate((data) => { data.items.push('first'); });
+      store.invalidateCache();
+      releaseRead();
+      await expect(staleRead).resolves.toEqual({ items: ['first'] });
+
+      await store.mutate((data) => { data.items.push('second'); });
+      expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ items: ['first', 'second'] });
+    } finally {
+      releaseRead();
+      restoreFsMocks();
+    }
   });
 
   it('mutate that returns undefined persists the mutated input', async () => {

@@ -14,6 +14,8 @@ import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { removeByMetadata } from './notifications.js';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 vi.mock('./prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
 import { persistPrWatcherState } from './prWatcher.js';
@@ -30,6 +32,7 @@ const mock = vi.hoisted(() => ({
   parseCalls: 0,
   // When set, atomicWrite rejects with it (a write that dies before the rename).
   atomicFailure: null,
+  afterWrite: null,
   state: null,
   events: [],
   // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
@@ -61,6 +64,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
       if (mock.atomicFailure) throw mock.atomicFailure;
       mock.files.set(p, content);
       mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+      // Lets a test mutate the file between two reaper flips (snapshot race).
+      if (mock.afterWrite && mock.afterWrite(p)) mock.afterWrite = null;
     })
   };
 });
@@ -87,9 +92,9 @@ vi.mock('../lib/taskParser.js', async (importOriginal) => {
   };
 });
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cosState.js', async () => ({
   loadState: vi.fn(async () => mock.state),
-  withStateLock: async (fn) => fn(),
+  withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
   ROOT_DIR: '/root'
 }));
 
@@ -148,7 +153,7 @@ import {
   __resetTaskCache
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
-import { PRIORITY_VALUES, generateTasksMarkdown } from '../lib/taskParser.js';
+import { PRIORITY_VALUES, generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
@@ -162,6 +167,7 @@ const baseState = () => ({
 
 beforeEach(() => {
   mock.atomicFailure = null;
+  mock.afterWrite = null;
   mock.files = new Map();
   mock.mtimes = new Map();
   mock.parseCalls = 0;
@@ -392,6 +398,101 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     const second = await getUserTasks();
     expect(mock.parseCalls).toBe(1); // no re-parse — the file did not move
     expect(second.tasks).toEqual(first.tasks);
+  });
+
+  it('coalesces concurrent task views after cold and externally changed files', async () => {
+    await addTask({ description: 'user task' }, 'user');
+    await addTask({ description: 'internal task' }, 'internal');
+    __resetTaskCache();
+    mock.parseCalls = 0;
+    vi.mocked(readFile).mockClear();
+
+    const views = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
+    expect(mock.parseCalls).toBe(2);
+    expect(readFile).toHaveBeenCalledTimes(2);
+    views[0].user.tasks[0].description = 'caller mutation';
+    expect(views[1].user.tasks[0].description).toBe('user task');
+
+    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('user task', 'edited task'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+    const changed = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
+    expect(mock.parseCalls).toBe(3);
+    expect(readFile).toHaveBeenCalledTimes(3);
+    expect(changed.every(view => view.user.tasks[0].description === 'edited task')).toBe(true);
+  });
+
+  it('retries shared read failures on the next task view request', async () => {
+    await addTask({ description: 'readable again' }, 'user');
+    __resetTaskCache();
+    vi.mocked(readFile).mockClear().mockRejectedValueOnce(new Error('temporary read failure'));
+    const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => getUserTasks()));
+    expect(attempts.every(result => result.status === 'rejected' && result.reason.message === 'temporary read failure')).toBe(true);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect((await getUserTasks()).tasks[0].description).toBe('readable again');
+    expect(readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves an external edit when an update starts after an older read captured the file', async () => {
+    const created = await addTask({ description: 'original', metadata: { context: 'before edit' } }, 'user');
+    __resetTaskCache();
+    const oldContent = mock.files.get(USER_FILE);
+    const reading = Promise.withResolvers();
+    const finishRead = Promise.withResolvers();
+    vi.mocked(readFile).mockImplementationOnce(async () => {
+      reading.resolve();
+      await finishRead.promise;
+      return oldContent;
+    });
+    const olderRead = getUserTasks();
+    await reading.promise;
+    mock.files.set(USER_FILE, oldContent.replace('before edit', 'external edit'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+
+    const update = updateTask(created.id, { description: 'API edit' }, 'user');
+    // Releasing the old read must not make a newer update overwrite the editor.
+    finishRead.resolve();
+    expect((await olderRead).tasks[0].metadata.context).toBe('before edit');
+    expect((await update).metadata.context).toBe('external edit');
+    expect((await getUserTasks()).tasks[0]).toMatchObject({
+      description: 'API edit', metadata: { context: 'external edit' }
+    });
+  });
+
+  it('keeps a read overlapping a write from capturing or poisoning post-write readers', async () => {
+    const created = await addTask({ description: 'original' }, 'user');
+    await getUserTasks();
+    const originalContent = mock.files.get(USER_FILE);
+    const originalMtime = mock.mtimes.get(USER_FILE);
+    const writing = Promise.withResolvers();
+    const finishWrite = Promise.withResolvers();
+    const originalWrite = vi.mocked(atomicWrite).getMockImplementation();
+    vi.mocked(atomicWrite).mockImplementationOnce(async (...args) => {
+      writing.resolve();
+      await finishWrite.promise;
+      await originalWrite(...args);
+      // A length-neutral edit on a coarse-mtime filesystem has the same stamp.
+      mock.files.set(USER_FILE, originalContent.replace('original', 'REWRITTN'));
+      mock.mtimes.set(USER_FILE, originalMtime);
+    });
+    const write = updateTask(created.id, { description: 'REWRITTN' }, 'user');
+    await writing.promise;
+
+    const reading = Promise.withResolvers();
+    const finishRead = Promise.withResolvers();
+    vi.mocked(readFile).mockImplementationOnce(async () => {
+      reading.resolve();
+      await finishRead.promise;
+      return originalContent;
+    });
+    const overlappingRead = getUserTasks();
+    await reading.promise;
+    finishWrite.resolve();
+    await write;
+    // This must neither join the old flight nor consume its eventual snapshot.
+    expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
+    finishRead.resolve();
+    expect((await overlappingRead).tasks[0].description).toBe('original');
+    expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
   });
 
   it('re-parses after an external edit bumps mtime', async () => {
@@ -1278,11 +1379,11 @@ describe('cosTaskStore.addTask', () => {
     expect(second.duplicate).toBe(true);
   });
 
-  it('emits tasks:changed action "unblocked" on a blocked → pending flip (#2614)', async () => {
+  it.each(['blocked', 'completed'])('emits tasks:changed action "unblocked" on a %s → pending flip (#2614, #12058)', async (status) => {
     // cos.init re-runs the dequeue on 'unblocked' (like 'approved') so a
     // revived task spawns without waiting for an unrelated event or timer.
     const task = await addTask({ description: 'revive me', app: 'portos', id: 'sys-revive' }, 'internal');
-    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    await updateTask(task.id, { status, metadata: { blockedCategory: 'max-retries' } }, 'internal');
     mock.events.length = 0;
     await updateTask(task.id, { status: 'pending' }, 'internal');
     const evt = mock.events.find(e => e.name === 'tasks:changed');
@@ -1291,6 +1392,21 @@ describe('cosTaskStore.addTask', () => {
     mock.events.length = 0;
     await updateTask(task.id, { priority: 'HIGH' }, 'internal');
     expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
+  });
+
+  it('atomically resumes one completed coordinator and preserves its lifetime spawn budget', async () => {
+    const task = await addTask({ id: 'sys-rl-owner', description: 'Review existing PR', metadata: {
+      app: 'example', reviewLoopFollowUp: true, reviewLoopPRBranch: 'feature', totalSpawnCount: '2',
+    } }, 'internal', { raw: true });
+    await updateTask(task.id, { status: 'completed' }, 'internal');
+    const current = await getTaskById(task.id);
+    const resume = () => updateTask(task.id, { status: 'pending' }, 'internal', {
+      expectedStatus: 'completed', expectedMetadata: { totalSpawnCount: current.metadata.totalSpawnCount },
+    });
+    const results = await Promise.all([resume(), resume()]);
+    expect(results.filter(result => result.statusChanged)).toHaveLength(1);
+    const resumed = await getTaskById(task.id);
+    expect(resumed).toMatchObject({ status: 'pending', metadata: { totalSpawnCount: '2', reviewLoopPRBranch: 'feature' } });
   });
 
   it('emits tasks:changed action "requeued" on an in_progress → pending flip (#3373)', async () => {
@@ -2323,6 +2439,11 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(isReapableInvestigation(investigation(), new Map())).toBe(true);
     });
 
+    it('never reaps an in-progress investigation, even when its origins are all completed', () => {
+      const byId = new Map([['task-a', { id: 'task-a', status: 'completed' }]]);
+      expect(isReapableInvestigation(investigation({ status: 'in_progress' }), byId)).toBe(false);
+    });
+
     it('does not reap while any originating task is still live', () => {
       const byId = new Map([['task-a', { id: 'task-a', status: 'blocked' }]]);
       expect(isReapableInvestigation(investigation(), byId)).toBe(false);
@@ -2419,6 +2540,102 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(res.reaped).toBe(0);
       const after = await getCosTasks();
       expect(after.tasks.find(t => t.id === 'sys-inv2').status).toBe('pending');
+    });
+
+    it('leaves an in-progress investigation running even after its origin completes', async () => {
+      await addTask({ description: 'origin fixed by hand', id: 'task-origin3', priority: 'HIGH' }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [fp]: running',
+        id: 'sys-running',
+        isInvestigation: true,
+        affectedTasks: ['task-origin3']
+      }, 'internal', { now: NOW });
+      await updateTask('sys-running', { status: 'in_progress' }, 'internal', { now: NOW });
+      await updateTask('task-origin3', { status: 'completed' }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      const after = await getCosTasks();
+      expect(after.tasks.find(t => t.id === 'sys-running').status).toBe('in_progress');
+    });
+
+    it('does not auto-expire a target that was revived between the snapshot and its flip', async () => {
+      await addTask({ description: 'stale one', id: 'task-race1', priority: 'HIGH' }, 'user', { now: NOW });
+      await addTask({ description: 'stale two', id: 'task-race2', priority: 'HIGH' }, 'user', { now: NOW });
+      for (const id of ['task-race1', 'task-race2']) {
+        await updateTask(id, { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) } }, 'user', { now: NOW });
+      }
+      // After the first flip lands, the user revives the second target (Resume
+      // → in_progress). Its flip was planned from the pre-revive snapshot.
+      mock.afterWrite = (p) => {
+        if (p !== USER_FILE) return false;
+        // Revive whichever target the sweep has not flipped yet.
+        mock.files.set(p, mock.files.get(p).replace(/^(- )\[!\](.*#task-race)/m, '$1[~]$2'));
+        mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+        return true;
+      };
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res).toMatchObject({ reaped: 1, staleBlocks: 1 });
+      const after = await getUserTasks();
+      const statuses = after.tasks.filter(t => t.id.startsWith('task-race')).map(t => t.status).sort();
+      expect(statuses).toEqual(['completed', 'in_progress']);
+    });
+
+    it('does not reap an investigation after its completed origin is resumed between flips', async () => {
+      await addTask({ description: 'stale failure', id: 'task-race-origin-block', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-race-origin-block', {
+        status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
+      }, 'user', { now: NOW });
+      await addTask({ description: 'completed origin', id: 'task-race-origin', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-race-origin', { status: 'completed' }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [race]: origin was completed',
+        id: 'sys-race-origin-investigation',
+        isInvestigation: true,
+        affectedTasks: ['task-race-origin'],
+      }, 'internal', { now: NOW });
+
+      // The first user-queue flip lands before the investigation's planned
+      // internal-queue flip. Resume the origin in that gap; the investigation
+      // must be checked against this fresh origin state, not the sweep snapshot.
+      mock.afterWrite = (path) => {
+        if (path !== USER_FILE) return false;
+        const tasks = parseTasksMarkdown(mock.files.get(path));
+        tasks.find(task => task.id === 'task-race-origin').status = 'pending';
+        mock.files.set(path, generateTasksMarkdown(tasks));
+        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+        return true;
+      };
+
+      const result = await sweepResolvedFailureTasks({ now: NOW });
+      expect(result).toMatchObject({ reaped: 1, staleBlocks: 1, investigations: 0 });
+      expect((await getCosTasks()).tasks.find(task => task.id === 'sys-race-origin-investigation').status).toBe('pending');
+    });
+
+    it.each([
+      ['blockedAt', new Date(NOW).toISOString()],
+      ['blockedCategory', 'provider-config'],
+    ])('preserves a new blocked episode when %s changes after the reaper snapshot', async (key, value) => {
+      for (const id of ['task-episode1', 'task-episode2']) {
+        await addTask({ description: `failure episode ${id}`, id, priority: 'HIGH' }, 'user', { now: NOW });
+        await updateTask(id, {
+          status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
+        }, 'user', { now: NOW });
+      }
+      mock.afterWrite = (path) => {
+        if (path !== USER_FILE) return false;
+        // Model a fresh failure or user-decision hold after the snapshot, with
+        // the same status as before. The completed first row stays untouched.
+        const tasks = parseTasksMarkdown(mock.files.get(path));
+        tasks.find(task => task.status === 'blocked').metadata[key] = value;
+        mock.files.set(path, generateTasksMarkdown(tasks));
+        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+        return true;
+      };
+      expect(await sweepResolvedFailureTasks({ now: NOW })).toMatchObject({ reaped: 1, staleBlocks: 1 });
+      const tasks = (await getUserTasks()).tasks;
+      const held = tasks.find(task => task.status === 'blocked');
+      expect(held.metadata[key]).toBe(value);
+      expect(held.metadata.resolution).toBeUndefined();
     });
 
     it('bounds the number of flips per sweep to the limit', async () => {

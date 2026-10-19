@@ -3,6 +3,40 @@
 PortOS uses a test-impact-aware CI workflow plus a release workflow that cannot
 publish until the complete CI suite has passed on the exact tree being released.
 
+## Release Dependabot CI after review
+
+Dependabot pull requests start with a small checkout/admission check only.
+`Plan test impact` fails with a maintainer-release message before dependency
+installation or tests, so the required `CI Gate` remains red. The optional
+SuperCollider workflow uses the same check before installing or building.
+Other pull requests, scheduled checks, releases and manual dispatches retain
+their existing behavior. No schedule or repository security setting changes.
+
+After reviewing the dependency diff, open the **current commit's** CI workflow
+run and choose **Re-run all jobs**, or run `gh run rerun RUN_ID`. GitHub permits
+reruns only to repository writers. If SuperCollider also ran, release that
+workflow's current run separately. Re-running failed jobs also reruns their
+dependents; re-running only CI Gate cannot release a failed impact check.
+Tests still have to pass before merging.
+
+This approval is **commit-bound**: GitHub preserves the original SHA and ref
+when rerunning. An older run cannot validate a newer commit. Every subsequent
+commit, including a maintainer fix or Dependabot rebase, starts a new run at
+attempt 1 and needs review/release again. Repeated reruns are still subject to
+the same writer-only GitHub control. Labels and PR approval reviews do not
+release CI. Automated bot reruns (including cancellation recovery) cannot
+release held updates. Existing runs created before this workflow change keep
+the workflow version with which they started.
+
+The existing **Run workflow** dispatch remains an explicit writer-controlled
+way to run the full suite on a selected branch/ref. Inspect its exact SHA:
+a dispatch on `main` says nothing about a dependency PR, and a later commit
+needs its own validation. The normal dependency workflow is the PR rerun above.
+No privileged `pull_request_target` execution, writable test token or secrets
+are introduced; reruns retain the original actor's restricted token.
+
+See [GitHub's rerun permissions and revision semantics](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+
 ## Where the suite actually runs
 
 Every change reaches `main` through a pull request, and `main` reaches
@@ -31,8 +65,8 @@ A release therefore pays for one full run (on its PR), not three.
 
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
 before installing dependencies. Directory-scoped features add their server and
-client feature tests, and every behavioral source (nested or flat) uses
-Vitest's import-graph-aware `related` mode, fed the changed behavioral source
+client feature tests, and every behavioral source (nested or flat) uses the
+runner's import-graph-aware `related` mode, fed the changed behavioral source
 paths plus the planner's explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
 unknown artifacts, or wide diffs.
@@ -131,6 +165,125 @@ nothing for the fetch. When the output is true, the two contract suites fail
 the job instead of silently skipping if the submodule still isn't there
 (`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
 CI run that never needed it — they keep the documented skip.
+
+### Local equivalent: `npm run pregate`
+
+`scripts/pregate.js` runs the same planner over the committed and uncommitted
+diff and hands its plan to the same runners, so a scoped plan is reproduced
+locally stage for stage: hidden-content scan, lint, server and client tests,
+the client build and its API Explorer bundle pin, the boot smoke, the browser
+suites (smoke profile, prerequisites required rather than skipped), and the
+serial `portos_test` DB suite last and alone. Each stage receives the
+environment the matching job sets. A full plan runs only the always-run guards
+unless `--full` is passed. A suite the machine cannot run (no reachable test
+Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
+`--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
+as not run — in the summary and in the receipt `.cache/pregate/report.json`,
+which records the plan, stage outcomes and durations, the skipped suites, the
+base and HEAD SHAs, and the hash of the exact working tree validated. The
+shipped prompt-history guard runs locally when selected; the Windows job and
+the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
+contract: `docs/CONTRIBUTING.md`.
+
+### Pregate attestation
+
+A green pregate on this machine runs the same planner, runners, environment
+and `portos_test` database the Linux jobs do, so repeating those stages in CI
+for the install's own pull requests buys queue time and nothing else (design
+record: `docs/plans/2026-10-18-ci-local-first-merge-gate.md`). After the push,
+`node scripts/pregate-attest.js` turns the receipt into a commit status on the
+pushed head, and the impact planner skips what it attests to:
+
+- **What is attested.** Only receipt stages that ran and passed: the
+  hidden-content scan, lint, server and client tests, the client build and its
+  bundle pin, the boot smoke, the browser suites and the DB suite, and the
+  shipped prompt-history guard. A suite pregate reported as not run — skipped
+  by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
+  prerequisite — is not attested, and a downgraded full plan never attests
+  its server or client stage (it ran the always-run guards, not CI's
+  selection). A receipt planned with `--base` against anything other than the
+  default branch's merge base attests no server, client or lint stage either:
+  its diff-selected plan was narrower than CI's. The vocabulary is
+  `ATTESTABLE_STAGES` in `scripts/lib/pregateAttestation.js`.
+- **The tree binding.** The status description is
+  `tree=<40-hex> os=<platform> node=<major> stages=<list>`: the receipt's
+  `git write-tree` hash of the exact working tree pregate validated, untracked
+  and uncommitted files included, plus the platform and Node major the stages
+  ran on. `pregate-attest.js` refuses unless `<commit>^{tree}` equals the
+  receipt's tree — anything changed after pregate means a rerun — and the
+  planner compares it with the head commit's tree on the PR. A SHA is never
+  compared, for the same reason `scripts/verify-ci-status.js` compares trees:
+  the content is what was tested. The commit must already be on the upstream
+  remote (the one `branch.<name>.remote` names); GitHub only accepts a status
+  on a commit it has, which is why attesting is a step after `git push`, not a
+  pregate flag.
+- **The merge ref is not the head tree.** The receipt vouches for the head
+  commit's tree; CI tests the merge ref, that tree plus whatever `main`
+  gained since the branch forked. The planner reads that base-side diff
+  (`git diff --name-only HEAD^2 HEAD`) and refuses the attestation **per
+  stage** when it contains a test file the plan selected for that runner, a
+  non-test source under the runner's roots (`server/`, `scripts/`, `lib/`,
+  `autofixer/` for the server stages; `client/src/` for the client ones), or a
+  runner config, setup, workflow or dependency-manifest file (which refuses
+  every stage). Docs-only movement, or movement in the other runner, keeps
+  the attestation. Each refusal names the path in `suite_reasons` and in the
+  `attestation` output's `driftRefused`. In practice the local workflow
+  re-syncs the branch onto `main` before pregate, so the drift is usually
+  empty.
+- **Who can post one.** A commit status on this repository can only be created
+  by an actor with write access, and the planner honors only the newest
+  `pregate` status — of any state — when it is a success whose
+  `creator.login` is the repository owner. The `GITHUB_TOKEN` of a
+  `pull_request` run from a fork is read-only and cannot create one; a
+  Dependabot pull request is refused by author; a status by anyone else is
+  ignored, and a newer one by anyone else blocks the owner's older success.
+  The impact job holds `statuses: read` and nothing more (`release.yml`
+  grants the same scope to the called workflow). CI is still the authority
+  for every outsider.
+- **Revocation.** `node scripts/pregate-attest.js --revoke "<reason>"` posts a
+  `failure` status on the commit; because the newest status decides, every
+  earlier attestation on that commit is withdrawn and the next run plans as
+  if none existed. Use it when a local result turns out to be wrong (a flaky
+  pass, a suite that was not really run).
+- **Platform.** A macOS pregate may attest the Linux jobs: per the project's
+  policy, other platforms are checked only when a change could plausibly
+  break them, and the Windows job is the one platform-specific proof CI keeps.
+  The one Linux-only failure a case-insensitive filesystem cannot see — a
+  relative import whose case differs from the tracked path — is closed by
+  `scripts/check-import-case.js`, which the impact job runs on every pull
+  request before any stage can be skipped (it resolves every relative
+  `import`, `import()` literal and `new URL(…, import.meta.url)` in the
+  changed modules against `git ls-files` with exact spelling). The platform
+  and Node major of the attesting run are in the status and in the plan
+  summary's `Pregate attestation` line.
+- **When it applies.** Only a same-repository pull request into a non-`release`
+  base that was not forced full. The planner verifies the merge-ref checkout's
+  second parent is the event's head (so the attested tree is compared with
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. A head
+  committed less than five minutes ago with no `pregate` status yet is re-read
+  for up to 90 seconds (10-second interval; the summary says how long it
+  waited), because the status is posted after the push that started the run.
+  When you open the pull request yourself, the order is push, attest, then
+  `gh pr create`, so the status precedes the `pull_request` event. Any
+  failure — API error, unreadable description, tree mismatch, wrong creator,
+  a non-success newest status — leaves the plan exactly as computed and
+  records the reason.
+- **What CI still runs.** The impact job — its hidden-content scan, the
+  import-case check, `npm ci --prefix autofixer` and the `node --check` of
+  the server entry point (both moved here from the server job so an attested
+  run cannot skip them) — the Windows job, the Linux worker-containment job,
+  the Node-minimum check and the `CI Gate` itself always run as planned. The
+  server job stays when its boot smoke is selected but not attested, because
+  the smoke runs on that job. An attested run reports `full: false`, so
+  `Full CI Gate` is never published on the strength of a receipt.
+- **How to inspect it.** The impact job's summary prints a `Pregate
+  attestation` line (`attested`, the head and tree, the platform and Node,
+  the stages, `driftRefused`, or the reason none applied) and `suite_reasons`
+  names each skipped suite as attested and each refused one with its path.
+  On the commit: `gh api repos/<owner>/<repo>/commits/<sha>/statuses` lists
+  every `pregate` status with its creator, state, description and timestamp;
+  `node scripts/pregate-attest.js --dry-run` shows what would be posted for
+  the current receipt and HEAD without posting it.
 
 ### Vitest runner tuning
 
@@ -286,8 +439,8 @@ nothing for this workspace, so a restored tree is usable as-is.
 
 ### Reusing the server install
 
-Three jobs install the server workspace — `server`, `database`, and
-`windows-server`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
+Four jobs install the server workspace — `server`, `database`, `browser`,
+and `windows-server`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
 tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
 `node_modules` on each of them. Two changes cut that.
 
@@ -295,7 +448,7 @@ tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
 in the npm tarball, but its postinstall *downloads* the CUDA EP — several
 hundred MB — on linux-x64 whenever `libonnxruntime_providers_cuda.so` is
 absent. `server/.npmrc` pins `ignore-scripts=true`, so that runs inside
-`scripts/trusted-rebuilds.js`, on the `server` and `database` jobs, every run.
+`scripts/trusted-rebuilds.js`, on the Linux server-installing jobs, every run.
 No hosted runner has an NVIDIA GPU to use it with. Setting
 `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` on the rebuild step removes the download
 outright, and inference is unaffected. This is the largest single saving here,
@@ -379,7 +532,7 @@ a cache written by a pull request is visible only to that branch — so the 09:1
 UTC schedule is what seeds the entries on the default branch, the one scope every
 PR branch can read. A PR that changes the lockfile misses by design.
 
-Two entries exist per key state (Linux, shared by `server` and `database`, plus
+Two entries exist per key state (Linux, shared by `server`, `database` and `browser`, plus
 Windows) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
 Eviction is LRU, so the constantly-read `main` entries outlive the PR-scoped ones
 — but a burst of lockfile-churning PRs can still push out the transform caches
@@ -389,7 +542,8 @@ own.
 
 ### Shallow checkouts
 
-No job clones full history. `actions/checkout` runs at `fetch-depth: 2`
+Only the path-gated **Shipped prompt history** job clones full history (it
+reads every past stage-prompt body). `actions/checkout` runs at `fetch-depth: 2`
 in every job that diffs against the base. The two gate jobs set no depth at all
 (the action's own default is 1) and pass `sparse-checkout: scripts` instead:
 they check out only to run `scripts/ci-gate-report.js`, never look at history,
@@ -398,8 +552,9 @@ pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
-deeper history. The planner passes the resulting source paths directly to
-`vitest related`; Vitest no longer performs its own Git diff.
+deeper history. The planner passes the resulting source paths to the runner,
+which resolves them through its own module graph; Vitest no longer performs
+its own Git diff.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -428,13 +583,15 @@ The selected work is split across parallel jobs:
   `PORTOS_SMOKE_BOOT=1` so no scheduler, agent recovery, or peer sync starts —
   `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
-  restored and its trusted-rebuild mark checks out. This job also runs
+  restored and its trusted-rebuild mark checks out. The impact job (which
+  always runs, even when a pregate attestation skips this one) runs
   `npm ci --prefix autofixer` — uncached and never skipped, because resolving
-  that workspace's tracked lockfile *is* the check. It is the only CI step that
-  installs `autofixer/`, which `npm run setup` and `scripts/ensure-deps.js`
-  install on every user's machine; without it a lockfile that stopped resolving
-  shipped green and failed at setup time. (`browser/` gets no such step: zero
-  dependencies, and its lockfile is deliberately gitignored.)
+  that workspace's tracked lockfile *is* the check — and `node --check
+  server/index.js`. It is the only CI step that installs `autofixer/`, which
+  `npm run setup` and `scripts/ensure-deps.js` install on every user's
+  machine; without it a lockfile that stopped resolving shipped green and
+  failed at setup time. (`browser/` gets no such step: zero dependencies, and
+  its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests, plus the production build
   whenever client source changed. Build and the Scalar-removal bundle pin run on
   shard 1 only.
@@ -448,9 +605,10 @@ The selected work is split across parallel jobs:
   `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
-- **Cross-workspace browser suites** (same `database` job) — the exact
+- **Browser suites** (their own `browser` job, beside DB tests) — the exact
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
-  Linux server shards exclude that registry with `PORTOS_CI_BROWSER_OWNER=unit`;
+  Server unit runs exclude that registry whenever `PORTOS_CI_BROWSER_OWNER=unit`
+  is exported (Linux server shards, and `npm run pregate` on every platform);
   other browser files, including `overlayTextService`, keep their existing owner.
   The planner selects affected registered files and the browser job requires
   Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
@@ -461,8 +619,9 @@ The selected work is split across parallel jobs:
   hosted CI selects `full`. Hosted profiles retain generated Three render/export
   and owned cleanup coverage. Profiles do not change pixels,
   render settings, tolerances, or cleanup assertions.
-  A PR selecting a fidelity-owning file also requires the exact-head receipt
-  described below; a smoke pass alone cannot admit it.
+  They ran after the DB suite on one job until that job set the run's length
+  more often than any other; split, each finishes in about the time of its own
+  steps.
 - **Windows server tests** — the same server selection, but only on full CI
   (the `main` → `release` PR, nightly, release, workflow dispatch) or when a
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
@@ -470,48 +629,59 @@ The selected work is split across parallel jobs:
   Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
   Linux. A full plan does not automatically mean a full *Windows* run — see
   "What a full plan costs the Windows job" below.
+- **Node minimum compatibility** — installs every workspace and runs the
+  runtime gate on the oldest supported Node. On a pull request it runs only
+  when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
+  always run it.
+- **Shipped prompt history** — the one job with a full-history clone; it checks
+  that every stage-prompt body ever shipped is accepted by a prompt migration.
+  On a pull request it runs only when the impact planner's `prompt_history`
+  output is true: the diff touches `scripts/migrations/`,
+  `data.reference/prompts/`, `server/services/taskPromptDefaults`, the
+  integrity-snapshot regenerator, `ci.yml`, or any module the guard or a
+  hash-declaring migration statically imports (`PROMPT_HISTORY_PATH_RE` and
+  `collectPromptHistoryInputs()` in `scripts/ci-test-plan.js`). Non-PR runs
+  and pull requests into `release` always run it, and `npm run pregate` runs
+  it locally when selected.
+- **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
+  bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
+  the `linux_containment` output is true: the diff touches the static import
+  closure of those tests and the server Vitest harness, `server/package.json`,
+  `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
+  head tree on every run, so a new dependency is gated without a list edit.
+  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
   cancelled jobs when nothing actually failed — as far as the gate job itself
   runs, which a run-wide cancel prevents. See "External cancellation and one
-  automatic retry" below.
+  automatic retry" below. A job the planner skipped on a pregate attestation
+  counts as passing here like any other skipped job; the impact summary and
+  `suite_reasons` say which ones, and why (see "Pregate attestation").
 - **Full CI Gate** — published only when the plan chose the complete suite and
   full Windows coverage, with the full browser profile executed in hosted CI.
-  Ordinary PR smoke runs cannot publish it, even with a local fidelity receipt.
-  It mirrors `CI Gate`'s result. This is the check the release workflow looks for;
-  see "Reusing the release PR's CI run" below.
+  Ordinary PR smoke runs cannot publish it, and neither can a run that skipped
+  any stage on a pregate attestation — the planner reports `full: false` for
+  those. It mirrors `CI Gate`'s result. This is the check the release workflow
+  looks for; see "Reusing the release PR's CI run" below.
 
-### Browser fidelity evidence
+### Browser fidelity cases
 
-After publishing a relevant PR, run `node scripts/browser-fidelity.js --pr NUMBER`
-from its clean checkout using existing `gh` authentication. This command runs the
-four registered fidelity cases automatically, retains a local receipt, and publishes
-an exact-commit status only after complete passing assertions and unchanged-source
-verification. It binds the PR head and that commit's source tree. It does not
-provision a runner, install credentials, or start PortOS.
+Pull requests run the browser suites' smoke profile, which skips the
+`[fidelity]` grading cases. Those cases run in hosted CI on the nightly
+schedule, on the `main` -> `release` pull request and on dispatched full runs,
+so a fidelity regression shows up there rather than blocking the PR that
+caused it. The `[local-performance]` playback case runs only locally.
 
-The required CI gate checks the current head and its source tree, profile digest,
-trusted repository-owner publisher and latest status. Missing, stale, skipped, failed or incomplete
-results block admission. Local receipt JSON is an audit record; the trusted
-publisher's status attests execution, not a cryptographic proof of test behavior.
-Keep credentials outside the test subprocess.
-
-If evidence finishes after CI Gate failed only for missing fidelity evidence,
-rerun that gate job on the unchanged run once its other required jobs have passed.
-A receipt cannot turn a cancelled or failed browser, Windows, or containment job
-green. A changed PR head requires new evidence; base-only movement does not. Hosted smoke tests the merge checkout; local fidelity proves the PR head only,
-not native integration of subsequent base changes. Scheduled/release full coverage
-remains the integration check for the ordinary fidelity cases; hardware-sensitive
-`[local-performance]` acceptance stays local. Default
-pregate is not a substitute for this command or required CI.
-
-The local playback case preserves full-resolution transport, frame freshness,
-preview/export parity and lens-coordinate regressions. Creative quality receives
-human review; hosted acceptance does not impose this playback performance budget.
-Software WebGL results do not certify physical-GPU performance, and
-Mac-local results cannot replace Windows compatibility or Linux containment.
-The profile split does not explain or repair previously unidentified hosted stalls.
+To check the fidelity cases on a PR before merging, run
+`node scripts/browser-fidelity.js --pr NUMBER` from its clean checkout with
+existing `gh` authentication. It runs the registered fidelity cases, keeps a
+local receipt, and publishes an exact-commit status for the PR head. That
+status is informational: no required check reads it. Software WebGL results do
+not certify physical-GPU performance, and Mac-local results cannot replace
+Windows compatibility or Linux containment.
 
 ### Full-suite sharding
 
@@ -536,9 +706,19 @@ extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
 Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete selected suite. Windows
 related plans retain the same source graph and explicit contracts on every
-shard; only execution is partitioned. Exact-file plans stay on one runner
-(their handful of files can trip Vitest's shard-count guard), and scoped Linux
-plans also retain one runner. Once-only steps — smoke boot, the client build, the
+shard; only execution is partitioned. Scoped Linux plans fan out the same way
+(`fansOut()` in the planner): a server `related` plan always does, because its
+import-graph reach is unbounded by the explicit selector count (scoped server
+runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
+its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap used to
+force a full plan for the whole repository; it now keeps the scoped selection
+and only partitions it, so a server-only overflow no longer starts three client
+shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
+under the cap and client `related` plans stay on one runner. Vitest refuses a
+shard count above the number of files it resolved, so a runner fans out only
+when at least that many explicit selectors are files the Linux job actually
+runs (DB and browser suites have their own jobs); each shard repeats Vitest's
+related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot, the client build, the
 Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
@@ -579,10 +759,10 @@ reason `windows-server` cannot observe:
 
 | Full-plan reason | Runs | Windows-relevant? |
 | --- | --- | --- |
-| targeted test set exceeded safety cap | 17 | no — capacity, not risk |
+| targeted test set exceeded safety cap (no longer full; see "Full-suite sharding") | 17 | no — capacity, not risk |
 | wide change (>30 executable files) | 6 | no — capacity, not risk |
 | client composition root / build config / lint config / test setup | 1 | no — client-only |
-| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
+| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes at the time — manifests and server contracts are now narrowed (below) |
 
 So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
 and `fullPlan()` escalates Windows to the complete server suite only when **any**
@@ -594,6 +774,45 @@ edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **o
 `WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
 Windows-risk scoped PR already gets.
 
+**Dependency manifests decide per package.** The planner's 32-PR sample in
+October 2026 traced every full plan to a lockfile/manifest change (4),
+`server/lib/validation.js` (2) or `.github/workflows/ci.yml` (2). A lockfile
+bump that swapped one pure-JS Gmail client still ran the whole suite on three
+Windows shards (~11 min each), although nothing it installs differs by
+platform. A changed `package.json`/`package-lock.json` (root, `server`,
+`client`, `autofixer`) therefore still forces a full plan, but its trigger
+carries `windowsEscalates: 'dependencies'`: `collectPlanInputs()` reads each
+file at `CI_BASE_SHA` (`git show`; the base is inside the depth-2 checkout)
+and in the tree under test, and `classifyDependencyChange()` diffs them.
+Only manifests (and `.npmrc`) of workspaces in `WINDOWS_INSTALLED_WORKSPACES`
+(`server`, pinned to the `windows-server` install steps by a test) are diffed;
+root, client and autofixer changes keep the Windows baseline.
+Windows escalates when any added, removed or changed lockfile entry (either
+side) has `hasInstallScript`, `os`, `cpu`, `libc`, `optional` or
+`devOptional`, or matches `PLATFORM_PACKAGE_RES` — every `TRUSTED_REBUILDS`
+package (mirrored rather than imported, so the pre-install planner does not
+load the rebuild script's spawn helpers; a test fails on drift) plus the
+native/platform families (`sharp`,
+`@img/*`, `esbuild`, `@rollup/rollup-*`, `rolldown`, `@biomejs/*`,
+`playwright*`, …: dispatchers whose own entry carries no platform
+metadata); when the lockfile's top-level fields or its root entry's non-dependency
+fields (`engines`) change; when a `package.json` field other than metadata
+and the dependency maps changes (`engines`, `overrides`,
+`optionalDependencies`, `scripts`, …); and whenever a version cannot be read
+or parsed (fail closed: a new or deleted manifest, an unavailable base, or no
+verdict at all). Any `.npmrc` change escalates on its own trigger. Otherwise
+Windows runs the contract baseline, and `suite_reasons.windows` names the
+decision and the packages behind it. Replayed against recent server bumps:
+zod, express, undici and the Gmail swap keep the baseline; playwright-core
+and Vitest (rolldown bindings) escalate.
+
+`server/lib/validation.js` and `server/lib/schemaVersions.js` stay full-plan
+triggers for their import fan-out but no longer escalate Windows: they are pure
+schema logic with no spawn, path or filesystem semantics, and neither is in
+`WINDOWS_RISK_RULES`. `Full CI Gate` still requires `windows_mode == 'full'`,
+so none of these baseline plans can stand in for the complete Windows suite a
+release relies on.
+
 **Measured full trigger: `server/services/worktreeManager.js` (#9999).** A
 two-file change to this module expanded through Vitest's import-consumer
 traversal to 57 explicit selectors and a ~941-file, ~40-minute local run
@@ -601,7 +820,8 @@ traversal to 57 explicit selectors and a ~941-file, ~40-minute local run
 because `MAX_TARGETED_TEST_FILES` counts only explicit selectors. It now plans
 full (Windows escalates, since the module owns cross-platform worktree
 lifecycle). Default `npm run pregate` therefore runs only its always-run guards
-for it, `--full` runs everything, and CI runs the full sharded suite. Its test
+for it, `--full` runs everything (the build, smoke, browser and DB suites
+included), and CI runs the full sharded suite. Its test
 file alone stays scoped; the #9673 consumer traversal is unchanged elsewhere.
 
 Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
@@ -661,13 +881,135 @@ failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
 
 Targeted `files` plans run the planner's exact test files once. `related` plans
-run `vitest related` once with changed behavioral source paths and the cheap
-structural/repository contract files as inputs. Vitest treats a test-file input
-as directly selected, so contracts and changed tests share the import-graph run
-without being repeated in a second process.
+resolve the changed behavioral source paths through the runner's own module
+graph (`scripts/lib/testMemo.js`: static, dynamic and `vi.mock` edges, the
+same edges `vitest related` follows): a test is selected when a changed
+source is in its closure or when one of its edges cannot be resolved, plus
+the cheap structural/repository contract files, in one Vitest invocation.
+The exact list reaches Vitest through a selection file
+(`PORTOS_CI_TEST_SELECTION`, read by both workspace configs) rather than
+command-line selectors, because a related set can exceed the Windows
+command-line limit. Computing the set in the runner is what lets the test
+memo below subtract the files a trusted green run already verified.
 There is no buffered discovery pass: the old `vitest list --changed` path could
 spend minutes printing every test name, overflow Node's buffer, discard the
 result, and rerun the same graph.
+
+### Test memo
+
+`scripts/run-ci-tests.js` skips a selected test file whose every input is
+byte-identical to one a trusted green run already verified, locally under
+`npm run pregate` and in CI through the same code path. Each selected file
+gets two content-addressed keys (`scripts/lib/testMemo.js`):
+
+- the **floor** key hashes the working-tree bytes of the file's static +
+  dynamic module closure (`import`/`export … from`, `require()`, `import()`,
+  `vi.mock`/`vi.doMock`/`vi.importActual`/`vi.importMock`/`vi.unmock`, all
+  with literal specifiers);
+- the **recorded** key hashes the modules the file actually loaded in the
+  green run that produced its entry (Vitest's
+  `experimental.recordDependencies` depfile, cleared before each run so only
+  this run's records count). A module the test mocks away or never reaches
+  cannot change its outcome, so a change to the lazily imported server
+  cluster invalidates only the suites that loaded it; a new edge still
+  invalidates because the importer's own bytes changed. Only plain import
+  edges are narrowed this way: JS a member reads as text, spawns, loads
+  with `require()`/`createRequire` or runs as a worker, and JS named through
+  `readServerSource`/`readClientSource`, is a side module that stays in
+  every key together with its own closure.
+
+Both keys also cover: every non-JS file a member names through a literal path
+anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
+bound to one of those (a literal directory contributes its whole tree, up to
+400 files; snapshot files and the planner's `FIXTURE_OWNERS` directories are
+added for the test itself); the installed version of every package the
+members reach (so a lockfile bump invalidates exactly the suites that reach
+the bumped packages); a Python sidecar's resolvable sibling imports; the
+version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
+python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
+interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
+the browser suites, found with the suites' own candidate list,
+`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
+handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
+`scripts/vitestCiPool.js`, `package.json` and lockfile; the full Node
+version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
+`NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
+`PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
+`PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
+`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
+
+The recorded key takes the setup phase from the record too. Vitest's depfile
+lists, in every test file's record, the modules its custom environment and
+`setupFiles` loaded, so for the setup entries the config reaches
+(`WORKSPACE_SETUP_ENTRIES`: `server/vitest.setup.js` and
+`server/test/mediaRegistryEnvironment.js`, `client/src/test/setup.js`) the
+recorded key's workspace base stops the static walk at them: a module the
+setup files only mock or never load (`services/instances.js` and its
+closure) no longer invalidates every recorded key. A record that does not
+name every setup entry (a per-file environment pragma) keeps the full static
+base, and a setup-phase problem the static walk finds still fails both keys
+closed. The floor key always walks the setup closure.
+
+**Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
+or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
+file whose closure contains the `// test-memo: never` marker; a test file or
+`scripts/` module that spawns `git` (repository state is not in the key —
+product modules that run git on their own targets are under the test's
+control); a test file or `scripts/` member that reads machine-local state
+(`data/`, the home directory); a member that reads a path the analyzer
+cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
+`readServerSource`/`readClientSource`, a literal directory with more than
+400 files); a bare specifier that resolves to no installed package; and, for
+the floor key only, a non-literal `import()`/`require()` or an unparseable
+member. Two non-literal `require()` shapes are keyed instead: `require(CONST)`
+with a module-level string is that bare specifier (package version), and
+`require(join(<unknown dir>, 'name.cjs'))` keys every tracked file of that
+basename. A Python `importlib.import_module('x')` follows like `import x`; a
+computed name is not memoizable. `import(variable)` stays outside the
+recorded key by design: only what the green run loaded is keyed. A recorded set that reaches outside the repository is not memoizable
+either. Every unknown construct lands in one of those buckets rather than
+silently narrowing the key.
+
+**Store.** `~/.portos/test-memo/` (override with `PORTOS_TEST_MEMO_DIR`):
+`entries/<key[0..2]>/<key>.json` holds `{ test, workspace, verifiedAt,
+source: 'local'|'ci', commit }`, `records/<workspace>/<sha256(test)>.json`
+the loaded-module list. Writes are temp-file-plus-rename so concurrent
+worktree pregates never tear a file; any read error is a miss, and so is an
+entry older than 14 days, so the nightly re-verifies what it keeps skipping.
+Entries are written only from a Vitest process that exited 0 whose run-level
+report (`scripts/vitestRunDiagnostics.js`) ended `passed` with no unhandled
+error — a rejection after the last test still marks every file `passed` in
+the JSON report — and only for files that report shows passed with no failed
+and no skipped case (a browser profile's name pattern is the one accepted
+skip reason). Every key is recomputed after the run and written only when it
+still matches, so a file edited while Vitest ran is never attributed to the
+verdict. The runner prints one line —
+`🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
+— and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
+selected file is memoized nothing is launched and the job exits 0.
+
+**Shards.** A matrix shard takes its slice of the FULL selected list with
+Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
+against a real `vitest run --shard`) before the memo subtracts anything, so
+every file lands in exactly one shard whatever each shard's store holds;
+Vitest itself is never given `--shard`.
+
+**CI seeding.** The server, client, browser and Windows jobs restore
+`${{ runner.temp }}/portos-test-memo` with `actions/cache/restore` under a
+per-job, per-shard key prefix (`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
+Pull requests only read. The scheduled nightly, `workflow_dispatch` and
+`workflow_call` runs on the default/release branches save a new entry keyed
+by run id, and only when the test step itself succeeded, so the cache holds
+nothing a pull-request branch or a red run wrote and every PR restores the
+newest trusted lineage. The DB job runs the `db` scope
+(`node scripts/run-ci-tests.js db`, the serial `portos_test` suite) and keeps
+its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
+`server/scripts/setup-db-test.mjs` are base inputs (a schema change
+invalidates every key) and `PGDATABASE` is a keyed env var.
+
+**Disable.** `PORTOS_TEST_MEMO=off` turns reads and writes off together and
+restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
+never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.
 
 No third-party change-filter action is used. The planner passes test paths as a
 JSON argument array to `spawnSync`, never through shell interpolation.
@@ -689,69 +1031,20 @@ green PRs, and the `main` → `release` PR catches it before a release ships.
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
 
-### Fail-fast sibling cancellation
+### Failures do not cancel other jobs
 
-Each selected leaf job (`server`, `client`, `lint`, `database`, and
-`windows-server`) ends with an `if: failure() && github.event_name ==
-'pull_request'` step that asks GitHub to cancel the current pull-request
-workflow run. The event guard is important because the same workflow is reused
-by the release workflow: a failing reusable `full-ci` job must not cancel its
-parent release run before that workflow can report the release failure. The
-request uses the repository-owned
-`scripts/cancel-current-ci-run.js` helper and the standard workflow-run cancel
-endpoint. The helper accepts no repository or run arguments: it validates and
-uses only `GITHUB_REPOSITORY` and `GITHUB_RUN_ID` supplied by Actions, with the
-step-scoped `GITHUB_TOKEN`.
+A failing job does not cancel its siblings, and every matrix sets
+`fail-fast: false`. The run finishes with the failing job concluded `failure`
+and the rest concluded on their own results, so **Re-run failed jobs** repeats
+only the red shard. Runners on this public repository are not billed, so the
+siblings that keep running cost concurrency, not money.
 
-The leaf jobs request only `contents: read` and `actions: write`, and check
-out with `persist-credentials: false` so a token that can now cancel runs is
-not left in `.git/config` for the test suite's own subprocesses to read. The
-token is present in the environment only for the cancellation step, and no
-third-party action or long-lived secret is involved. The failing test/build
-step runs before cancellation, so its annotations and logs remain the evidence
-for the failure. A successful cancellation returns `202`; a `409` means the run
-is already terminal and is treated as a no-op.
-
-`release.yml`'s `full-ci` job must grant `actions: write` to the workflow it
-calls even though the cancellation step never fires there — a called workflow's
-jobs cannot hold a permission the calling job lacks. See the comment on that
-job; `scripts/ci-fail-fast.test.js` pins it.
-
-Cancellation is deliberately best-effort. Fork pull requests and other
-read-only-token runs may receive a permission failure, and transient API or
-network failures are also possible. The helper logs the unavailable
-cancellation and exits normally, preserving the original failed step and its
-failed job result when the API is unavailable. It imports only Node builtins,
-so it still runs from a job that failed before `npm ci`
-(`scripts/pre-install-entrypoints.test.js` enforces that).
-
-**Canceled is not mergeable.** A run-wide cancellation lands on the requesting
-job and on `CI Gate`, which is usually still waiting on its `needs` and so ends
-`cancelled` rather than running its comparison. Every consumer treats that as a
-non-pass, by allowlisting the green results rather than denylisting the red
-ones:
-
-- Branch protection requires the `CI Gate` context to conclude `success`;
-  `cancelled` does not satisfy it, and a gate that never publishes leaves the
-  required context unreported, which also blocks.
-- If the gate job does run, it accepts only `success` or `skipped` per job, so
-  the failed leaf (or its own `cancelled` result) fails the gate. It reports a
-  cancel and a failure differently — see the next section — but neither passes.
-- `scripts/verify-ci-status.js` accepts a `Full CI Gate` only at
-  `conclusion === 'success'`, so a canceled run can never let a release skip
-  the full suite.
-- PortOS's own auto-merge watcher (`server/services/prWatcher.js`) counts only
-  `SUCCESS`/`NEUTRAL`/`SKIPPED` as green.
-
-The consequence to expect in the UI: on a fail-fast run the required check
-reads *canceled*, not *failed*. The failing step's log and annotations are
-still the diagnosis. The target is for siblings to become canceled within 30
-seconds of the first failing job completing, while the existing workflow-level
-`concurrency.cancel-in-progress` continues to handle superseded runs
-independently — the two are orthogonal, one canceling this run by id and the
-other canceling an older run when a newer commit arrives. Scheduled, manually
-dispatched, and release-called runs skip this sibling cancellation so their
-aggregate diagnostics and cache post-steps can complete normally.
+**Cancelled is not mergeable.** Every consumer allowlists green results:
+branch protection requires `CI Gate` to conclude `success`; the gate accepts
+only `success` or `skipped` per job; `scripts/verify-ci-status.js` accepts a
+`Full CI Gate` only at `success`; and PortOS's auto-merge watcher
+(`server/services/prWatcher.js`) counts only `SUCCESS`/`NEUTRAL`/`SKIPPED` as
+green.
 
 ### Windows native worker crash evidence
 
@@ -774,8 +1067,7 @@ handling (#8152). Microsoft documents these fields in its
 ### External cancellation and one automatic retry
 
 Not every cancel comes from this repository. When several PRs build at once,
-GitHub itself cancels in-flight runs — no job fails, the fail-fast step above
-stays `skipped`, and **no successor run exists for the branch** (issue 7437).
+GitHub itself cancels in-flight runs — no job fails, and **no successor run exists for the branch** (issue 7437).
 That last property is the whole diagnosis: a `cancel-in-progress` supersession
 always leaves a newer run for the same PR, and an external cancel leaves none.
 
@@ -788,7 +1080,8 @@ retries only when every one of these holds:
 | conclusion is `cancelled` | A failure is a failure. |
 | event is `pull_request` | Nightly, dispatch, and release-called runs are not ours to re-drive. |
 | `run_attempt == 1` | The retry budget. `POST /rerun` makes attempt 2, whose cancel sees attempt 2 and stops — one retry per run, and a PR run is one run per head SHA. |
-| no job concluded `failure`/`timed_out` | Fail-fast cancellation makes a genuinely red run *look* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no job concluded `failure`/`timed_out` | A run cancelled while one job was already red *looks* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no job hit its own `timeout-minutes` | GitHub reports a timed-out job as `cancelled`; only its check-run annotation ("exceeded the maximum execution time") tells it from an external cancel (#11910). A re-run would time out again, so it skips as `job-timed-out`. |
 | no newer run for the branch | That is a supersession; the newer run already covers this code. |
 
 Any API lookup that cannot be completed skips the retry rather than assuming a
@@ -810,8 +1103,7 @@ raising the delay fails the build rather than quietly eating the margin.
 Every API-backed guard in the table is evaluated **twice**: once before the wait
 and once after it. A push or a human re-run that lands during the delay
 therefore still wins, and the post-wait job listing is the more reliable one —
-a failing job's step records can still be settling when the run's own fail-fast
-cancel lands.
+a failing job's step records can still be settling when a cancel lands.
 
 The two passes are **not** equal in authority. The post-wait pass is the reading
 the re-dispatch is made on, and it fails CLOSED as before. The pre-wait pass is
@@ -832,14 +1124,9 @@ retrying only once the repository is quiet. On a busy repo that can mean never
 retrying, which is worse than retrying into a cancel.
 
 **Why the failing-job guard reads the jobs' own conclusions** rather than a
-marker written by the fail-fast step: a marker fails OPEN. It would be written
-by a job that is already failing, on a run about to be cancelled out from under
-it, so a lost write makes a red run look externally cancelled — and get
-retried. Reading conclusions fails CLOSED: an unreadable listing is
+marker a failing job writes: a marker fails OPEN. A lost write makes a red run
+look externally cancelled, and it gets retried. Reading conclusions fails CLOSED: an unreadable listing is
 `jobs-unavailable` and skips the retry. Do not "simplify" this into a marker.
-The ambiguity itself is the price of cancelling the run on first failure rather
-than letting the remaining jobs fail naturally; that trade buys the 30-second
-fail-fast above and is not on the table.
 
 **This is also the only layer that can explain a run-wide cancel.** `if:
 always()` on the gate defeats an upstream failure, not a cancellation of the
@@ -851,7 +1138,7 @@ That summary lives on the recovery run, which nobody finds from the pull
 request, so the workflow also **publishes the verdict back onto the cancelled
 head SHA as a check run** named `CI cancel recovery` (issue #7438). It carries
 the same fixed reason code the step summary renders — `superseded`,
-`job-failed`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
+`job-failed`, `job-timed-out`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
 or one of the `*-unavailable` lookup failures — plus one sentence saying what
 to do about it.
 
@@ -908,9 +1195,16 @@ successor run".
   case fails closed to the complete suite.
 - Database adapters, DB scripts, and relevant migrations add the complete
   serial DB suite.
+- A changed source's basename lookup (`git grep` of test files, #6363) keeps
+  every hit for a unique basename. For a basename several tracked sources
+  share (`index.js`, `providers.js`), it keeps only tests inside the source's
+  directory subtree or whose text also names its parent directory, so a
+  `server/cos-runner/index.js` edit no longer selects every test naming any
+  `index.js` (#11870). Import-graph selection still reaches real importers.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
-  shared roots/config, more than 30 executable changes, or more than 125
-  selected tests fail safe to full CI.
+  shared roots/config, or more than 30 executable changes fail safe to full
+  CI. More than 125 selected tests on one runner keeps the scoped selection
+  and shards that runner instead.
 
 ## Release Workflow (`release.yml`)
 

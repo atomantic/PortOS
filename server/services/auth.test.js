@@ -3,6 +3,7 @@ import { rmSync } from 'fs';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-auth-' });
+const { authTestHooks } = vi.hoisted(() => ({ authTestHooks: { hashGate: null } }));
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
@@ -16,8 +17,11 @@ vi.mock('../lib/fileUtils.js', async () => {
 vi.mock('../../lib/portosAuthCore.js', async () => {
   const actual = await vi.importActual('../../lib/portosAuthCore.js');
   const testParams = { N: 1024, r: 8, p: 1, maxmem: 8 * 1024 * 1024 };
-  const hashPassword = (password, salt) =>
-    actual.__hashPasswordWithParamsForTests(password, salt, testParams);
+  const hashPassword = async (password, salt) => {
+    const hash = await actual.__hashPasswordWithParamsForTests(password, salt, testParams);
+    if (authTestHooks.hashGate) await authTestHooks.hashGate();
+    return hash;
+  };
   return {
     ...actual,
     hashPassword,
@@ -43,6 +47,7 @@ const resetSettings = () => {
 
 beforeEach(() => {
   vi.resetModules();
+  authTestHooks.hashGate = null;
   resetSettings();
 });
 
@@ -128,6 +133,81 @@ describe('auth service', () => {
       code: 'AUTH_BAD_CURRENT',
     });
     await auth.clearPassword({ currentPassword: 'correct-horse' });
+    expect(await auth.isAuthEnabled()).toBe(false);
+  });
+
+  it('preserves a concurrent credential write when setting the password', async () => {
+    const auth = await import('./auth.js');
+    const { getSettings, updateSettingsWith } = await import('./settings.js');
+    let releaseWrite;
+    let writeStarted;
+    const started = new Promise((resolve) => { writeStarted = resolve; });
+    const heldWrite = updateSettingsWith(async (settings) => {
+      writeStarted();
+      await new Promise((resolve) => { releaseWrite = resolve; });
+      return {
+        ...settings,
+        secrets: { ...(settings.secrets || {}), integration: { apiKey: 'example-key' } },
+      };
+    });
+    await started;
+
+    let releaseHash;
+    let notifyHashStarted;
+    const hashStarted = new Promise((resolve) => { notifyHashStarted = resolve; });
+    authTestHooks.hashGate = () => {
+      notifyHashStarted();
+      return new Promise((resolve) => { releaseHash = resolve; });
+    };
+    const passwordChange = auth.setPassword({ newPassword: 'correct-horse' });
+    await hashStarted;
+    authTestHooks.hashGate = null;
+    releaseHash();
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseWrite();
+    await Promise.all([heldWrite, passwordChange]);
+
+    const settings = await getSettings();
+    expect(settings.secrets.integration.apiKey).toBe('example-key');
+    expect(settings.secrets.auth.enabled).toBe(true);
+  });
+
+  it('preserves a concurrent credential write when clearing the password', async () => {
+    const auth = await import('./auth.js');
+    const { getSettings, updateSettingsWith } = await import('./settings.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+
+    let releaseWrite;
+    let writeStarted;
+    const started = new Promise((resolve) => { writeStarted = resolve; });
+    const heldWrite = updateSettingsWith(async (settings) => {
+      writeStarted();
+      await new Promise((resolve) => { releaseWrite = resolve; });
+      return {
+        ...settings,
+        secrets: { ...(settings.secrets || {}), integration: { apiKey: 'example-key' } },
+      };
+    });
+    await started;
+
+    let releaseHash;
+    let notifyHashStarted;
+    const hashStarted = new Promise((resolve) => { notifyHashStarted = resolve; });
+    authTestHooks.hashGate = () => {
+      notifyHashStarted();
+      return new Promise((resolve) => { releaseHash = resolve; });
+    };
+    const passwordClear = auth.clearPassword({ currentPassword: 'correct-horse' });
+    await hashStarted;
+    authTestHooks.hashGate = null;
+    releaseHash();
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseWrite();
+    await Promise.all([heldWrite, passwordClear]);
+
+    const settings = await getSettings();
+    expect(settings.secrets.integration.apiKey).toBe('example-key');
+    expect(settings.secrets.auth).toBeUndefined();
     expect(await auth.isAuthEnabled()).toBe(false);
   });
 
@@ -307,6 +387,28 @@ describe('auth service', () => {
     const raw = readFileSync(join(tempRoot, 'auth-sessions.json'), 'utf8');
     expect(raw).not.toContain(token);
     expect(raw).toContain('tokenHash');
+  });
+
+  it('revokes old sessions when a step after the hash write fails (#12018)', async () => {
+    const auth = await import('./auth.js');
+    const { settingsEvents, readSettingsStrict } = await import('./settings.js');
+    const first = await auth.setPassword({ newPassword: 'correct-horse' });
+    const before = (await readSettingsStrict()).settings.secrets.auth.passwordHash;
+    // settings:updated fires after settings.json is replaced; a listener that
+    // throws is the post-write failure (the ledger used to be another).
+    const explode = () => { throw new Error('post-write listener failed'); };
+    settingsEvents.on('settings:updated', explode);
+    try {
+      await expect(auth.setPassword({ newPassword: 'second-attempt', currentPassword: 'correct-horse' }))
+        .rejects.toThrow('post-write listener failed');
+    } finally {
+      settingsEvents.off('settings:updated', explode);
+    }
+    // The hash changed on disk, so the session minted under the old password
+    // must be gone even though the call reported failure.
+    expect((await readSettingsStrict()).settings.secrets.auth.passwordHash).not.toBe(before);
+    expect(await auth.verifySession(first.token)).toBe(false);
+    expect(await auth.verifyPassword('second-attempt')).toBe(true);
   });
 
   it('emits sessions:revoked-all on every auth-state change so the socket layer can kick connections', async () => {

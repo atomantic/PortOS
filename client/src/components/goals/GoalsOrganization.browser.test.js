@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,13 +7,11 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../test/browserFixture.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from '../../test/timeouts.js';
+import { resolveTestChrome } from '../../../../scripts/lib/testChrome.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 
 describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () => {
   let browser;

@@ -23,11 +23,58 @@ const mocks = vi.hoisted(() => ({
   ensureInstanceId: vi.fn(),
   delegateSandbox: vi.fn(),
   interactRiddle: vi.fn(),
+  // Characterization handlers for the per-kind dispatch cases below.
+  adapter: Object.fromEntries([
+    'describeSandbox', 'auditFix', 'auditNext', 'auditRead', 'auditRecord', 'assertAuditAccess',
+    'thinkingCatalog', 'requestThinking', 'localContextCatalog', 'adjustLocalContext', 'maintenanceContext',
+    'recipeManagement', 'executeRecipe', 'getRecipeByName', 'resolveRecipeInvocation',
+    'worldChat', 'inspectScene', 'destinations', 'visit', 'visitChat', 'leave',
+    'listControllers', 'describeControllers', 'getControllerInstall', 'armController', 'installController', 'retireController',
+  ].map((name) => [name, vi.fn()])),
 }));
 
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
 
-vi.mock('./sandboxDelegation.js', () => ({ delegateSandbox: (...args) => mocks.delegateSandbox(...args) }));
+vi.mock('./sandboxDelegation.js', () => ({
+  delegateSandbox: (...args) => mocks.delegateSandbox(...args),
+  describeSandboxDelegation: (...args) => mocks.adapter.describeSandbox(...args),
+}));
+vi.mock('./persistentMindProcessAudit.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  assertProcessAuditAccess: (...args) => mocks.adapter.assertAuditAccess(...args),
+  recordProcessAuditFix: (...args) => mocks.adapter.auditFix(...args),
+  nextProcessAuditBatch: (...args) => mocks.adapter.auditNext(...args),
+  readProcessAuditExcerpt: (...args) => mocks.adapter.auditRead(...args),
+  recordProcessAuditOutcome: (...args) => mocks.adapter.auditRecord(...args),
+}));
+vi.mock('./persistentMindThinkingRequests.js', () => ({
+  getPersistentMindThinkingRequestCatalog: (...args) => mocks.adapter.thinkingCatalog(...args),
+  requestPersistentMindThinkingPreset: (...args) => mocks.adapter.requestThinking(...args),
+}));
+vi.mock('./persistentMindLocalContext.js', () => ({
+  getPersistentMindLocalContextCatalog: (...args) => mocks.adapter.localContextCatalog(...args),
+  adjustPersistentMindLocalContext: (...args) => mocks.adapter.adjustLocalContext(...args),
+}));
+vi.mock('./persistentMindMaintenanceContext.js', () => ({
+  readPersistentMindMaintenanceContext: (...args) => mocks.adapter.maintenanceContext(...args),
+}));
+vi.mock('./mindToolRecipeRuntime.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  currentMindAuthority: async (authority) => authority,
+  executeRecipeManagement: (...args) => mocks.adapter.recipeManagement(...args),
+  executeRecipe: (...args) => mocks.adapter.executeRecipe(...args),
+  resolveRecipeInvocation: (...args) => mocks.adapter.resolveRecipeInvocation(...args),
+}));
+vi.mock('./mindToolRecipes.js', () => ({ getRecipeByName: (...args) => mocks.adapter.getRecipeByName(...args) }));
+vi.mock('./eidoverseTravel.js', () => ({
+  listEidoverseDestinations: (...args) => mocks.adapter.destinations(...args),
+  visitEidoversePeer: (...args) => mocks.adapter.visit(...args),
+  eidoverseVisitChat: (...args) => mocks.adapter.visitChat(...args),
+  leaveEidoversePeer: (...args) => mocks.adapter.leave(...args),
+}));
+vi.mock('./eidoverseControllerRegistry.js', () => ({
+  describeControllerDefinitions: (...args) => mocks.adapter.describeControllers(...args),
+}));
 
 const specs = [
   {
@@ -80,10 +127,17 @@ vi.mock('./eidoverseWorld.js', () => ({
   projectEidoverseWorld: (...args) => mocks.worldProject(...args),
   augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
+  readEidoverseWorldChat: (...args) => mocks.adapter.worldChat(...args),
+  inspectEidoverseScene: (...args) => mocks.adapter.inspectScene(...args),
 }));
 vi.mock('./eidoverseControllerRuntime.js', async () => ({
   summarizeControllerInstall: (await import('../lib/eidoverseControllers.js')).summarizeControllerInstall,
   interactEidoverseRiddleLedger: (...args) => mocks.interactRiddle(...args),
+  listEidoverseControllers: (...args) => mocks.adapter.listControllers(...args),
+  getEidoverseControllerInstall: (...args) => mocks.adapter.getControllerInstall(...args),
+  setEidoverseControllerArmed: (...args) => mocks.adapter.armController(...args),
+  installEidoverseController: (...args) => mocks.adapter.installController(...args),
+  retireEidoverseController: (...args) => mocks.adapter.retireController(...args),
 }));
 vi.mock('./eidoverseFoundationLedger.js', () => ({
   adoptEidoverseFoundation: (...args) => mocks.adoptFoundation(...args),
@@ -756,6 +810,94 @@ describe('cosToolRegistry', () => {
       state: 'failed',
       error: 'Queue unavailable',
       result: { ok: false, state: 'failed', error: 'Queue unavailable' },
+    });
+  });
+
+  // Characterization of the per-kind dispatch (#12358): each adapter kind not
+  // pinned by a dedicated case above reaches its lazily imported handler with
+  // the validated arguments and call context, and its response shape is kept.
+  describe('adapter dispatch', () => {
+    const hex = (length) => 'a'.repeat(length);
+    const ctx = (requestId) => expect.objectContaining({ requestId });
+    const recipeTool = {
+      type: 'portos_tool', name: 'recipe.example', version: 1, providerName: 'recipe_example', aliases: [],
+      description: 'Example recipe.', input_schema: { type: 'object', properties: {}, additionalProperties: false },
+      output_schema: { type: 'object', additionalProperties: true },
+      policy: { scopes: ['mind'], requiredCapabilities: ['manageToolRecipes'], sideEffect: 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
+      adapter: { kind: 'recipe', recipe: { id: 'example-recipe', activeRevision: 1 } },
+    };
+    const cases = [
+      { name: 'sandbox.models', caps: ['delegateSandbox'], mock: 'describeSandbox', calledWith: () => [] },
+      { name: 'reports.next', caps: ['auditReports', 'readPortos'], args: { appId: 'example' }, mock: 'auditNext',
+        calledWith: (args, id) => [args, ctx(id)] },
+      { name: 'reports.read', caps: ['auditReports', 'readPortos'], args: { appId: 'example', receiptId: hex(64) }, mock: 'auditRead',
+        calledWith: (args, id) => [{ ...args, offset: 0 }, ctx(id)] },
+      { name: 'reports.record', caps: ['auditReports', 'readPortos'], args: { appId: 'example', receiptId: hex(64), outcome: 'clean' },
+        mock: 'auditRecord', calledWith: (args, id) => [args, ctx(id)] },
+      { name: 'reports.fix', caps: ['auditReports', 'readPortos'], args: { appId: 'example', fingerprint: hex(64), revision: hex(40) },
+        mock: 'auditFix', calledWith: (args, id) => [args, ctx(id)] },
+      { name: 'mind.thinking-presets', caps: ['chooseThinkingPreset'], mock: 'thinkingCatalog', calledWith: () => [] },
+      { name: 'mind.request-thinking-preset', caps: ['chooseThinkingPreset'], args: { presetId: 'local', reason: 'Try a focused pass' },
+        mock: 'requestThinking', calledWith: (args, id) => [args, ctx(id)] },
+      { name: 'mind.local-context', caps: ['adjustLocalContext'], mock: 'localContextCatalog', calledWith: () => [] },
+      { name: 'mind.adjust-local-context', caps: ['adjustLocalContext'], args: { numCtx: 8192, reason: 'Longer context' },
+        mock: 'adjustLocalContext', calledWith: (args, id) => [args, ctx(id)] },
+      { name: 'issues.list', caps: ['fileIssues'], args: { appId: 'demo-app' }, mock: () => mocks.listIssues, calledWith: (args) => [args] },
+      { name: 'maintenance.refresh', caps: ['readPortos'], mock: 'maintenanceContext', calledWith: () => [] },
+      { name: 'mind.recipes.list', caps: ['manageToolRecipes'], mock: 'recipeManagement',
+        calledWith: (args, id) => [expect.objectContaining({ name: 'mind.recipes.list' }), { limit: 10, offset: 0 }, ctx(id)] },
+      { name: 'recipe.example', caps: ['manageToolRecipes'], mock: 'executeRecipe',
+        setup: () => mocks.adapter.resolveRecipeInvocation.mockResolvedValue(recipeTool),
+        calledWith: (args, id) => [recipeTool, args, ctx(id), expect.objectContaining({ scope: 'mind' })] },
+      { name: 'eidoverse.chat', caps: ['readPortos'], mock: 'worldChat', calledWith: () => [-1] },
+      { name: 'eidoverse.destinations', caps: ['visitEidoversePeers'], mock: 'destinations', calledWith: () => [] },
+      { name: 'eidoverse.visit', caps: ['visitEidoversePeers'], args: { peerId: 'peer-example' }, mock: 'visit', calledWith: (args) => [args] },
+      { name: 'eidoverse.visit-chat', caps: ['visitEidoversePeers'], args: { visitId: hex(48), text: 'Hello' }, mock: 'visitChat',
+        calledWith: (args) => [{ ...args, after: -1 }] },
+      { name: 'eidoverse.leave', caps: ['visitEidoversePeers'], args: { visitId: hex(48) }, mock: 'leave', calledWith: (args) => [args] },
+      { name: 'eidoverse.inspect-scene', caps: ['manageEidoverse'], args: { anchor: [0, 0, 0], radius: 5 }, mock: 'inspectScene',
+        calledWith: (args) => [{ ...args, limit: 8 }, { signal: undefined }] },
+      { name: 'eidoverse.inspect-controller', caps: ['manageEidoverse'], args: { id: 'example-ctl' }, mock: 'getControllerInstall',
+        value: null, calledWith: (args) => [args.id],
+        result: { outcome: 'unknown-install', install: null, reasons: ['no controller is installed under "example-ctl"'] } },
+      { name: 'eidoverse.arm-controller', caps: ['manageEidoverse', 'installEidoverseControllers'], args: { id: 'example-ctl', armed: false },
+        mock: 'armController', value: { outcome: 'disarmed', install: null }, calledWith: (args) => [args.id, false],
+        result: { outcome: 'disarmed', install: null } },
+      { name: 'eidoverse.install-controller', caps: ['manageEidoverse', 'installEidoverseControllers'], args: { id: 'example-ctl', controllerId: 'example' },
+        mock: 'installController', value: { outcome: 'installed', install: null },
+        calledWith: (args) => [expect.objectContaining(args), { installedBy: 'mind' }], result: { outcome: 'installed', install: null } },
+      { name: 'eidoverse.retire-controller', caps: ['manageEidoverse', 'installEidoverseControllers'], args: { id: 'example-ctl' },
+        mock: 'retireController', value: { outcome: 'retired', install: null }, calledWith: (args) => [args.id],
+        result: { outcome: 'retired', install: null } },
+    ];
+
+    it.each(cases)('routes $name to its handler', async ({ name, caps, args = {}, mock, value = { ok: true, marker: name }, calledWith, result, setup }) => {
+      const handler = typeof mock === 'function' ? mock() : mocks.adapter[mock];
+      handler.mockResolvedValue(value);
+      setup?.();
+      const requestId = `dispatch-${name}`;
+      const authority = { scope: 'mind', capabilities: Object.fromEntries(caps.map((capability) => [capability, true])) };
+      const response = await executeCosToolCall({ call: { requestId, name, arguments: args }, authority });
+      expect(response).toMatchObject({ name, state: 'completed', result: result ?? value });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(...calledWith(args, requestId));
+      expect(mocks.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('lists controllers with the shipped definitions and state-free install summaries', async () => {
+      mocks.adapter.describeControllers.mockResolvedValue([{ id: 'example' }]);
+      mocks.adapter.listControllers.mockResolvedValue({ counts: { installed: 0 }, installs: [] });
+      const response = await executeCosToolCall({ call: { requestId: 'dispatch-controllers', name: 'eidoverse.controllers', arguments: {} },
+        authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
+      expect(response.result).toEqual({ available: [{ id: 'example' }], counts: { installed: 0 }, installs: [] });
+    });
+
+    it('checks report app authorization before dispatching a report tool', async () => {
+      mocks.adapter.assertAuditAccess.mockRejectedValue(Object.assign(new Error('App not authorized'), { code: 'TOOL_CAPABILITY_DENIED' }));
+      await expect(executeCosToolCall({ call: { requestId: 'dispatch-report-denied', name: 'reports.next', arguments: { appId: 'example' } },
+        authority: { scope: 'mind', capabilities: { auditReports: true, readPortos: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+      expect(mocks.adapter.assertAuditAccess).toHaveBeenCalledWith('example');
+      expect(mocks.adapter.auditNext).not.toHaveBeenCalled();
     });
   });
 

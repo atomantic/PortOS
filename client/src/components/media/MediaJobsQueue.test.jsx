@@ -188,6 +188,24 @@ describe('MediaJobsQueue — Creative Director renders', () => {
   });
 });
 
+describe('MediaJobsQueue — queued status', () => {
+  it('shows why a queued render is waiting', async () => {
+    listQueueMediaJobs.mockResolvedValue([{
+      id: 'quotawait0000beef',
+      kind: 'image',
+      status: 'queued',
+      position: 1,
+      statusMsg: 'Waiting for codex quota — resumes at 3:00 PM',
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'a fox', mode: 'codex' },
+    }]);
+
+    render(<MediaJobsQueue kind="image" />);
+
+    expect(await screen.findByText('Waiting for codex quota — resumes at 3:00 PM')).toBeInTheDocument();
+  });
+});
+
 describe('MediaJobsQueue — video render lanes', () => {
   it('files each job under the lane the server scheduled it into', async () => {
     // The lane comes from the server's own classifier (`executionLane`), so a

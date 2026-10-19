@@ -55,24 +55,12 @@ import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js
 import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
-// transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
-// lazily on the failure path keeps anything that imports promptRunner.js from
-// dragging the CoS stack along on the happy path. Node caches the module after
-// the first dynamic import, so the cost is one-time.
-let autoFixerLoadPromise;
-function loadAutoFixer() {
-  if (!autoFixerLoadPromise) {
-    autoFixerLoadPromise = import('./autoFixer.js').catch((err) => {
-      // Keep a failed optional load retryable for a later failure after a
-      // transient module-resolution problem.
-      autoFixerLoadPromise = null;
-      throw err;
-    });
-  }
-  return autoFixerLoadPromise;
-}
+// pulls in services/cos.js. initAutoFixer() registers them through this leaf;
+// neither a static nor a lazy import of autoFixer.js belongs here, because
+// `vitest related` follows both into the CoS cluster (#12285).
+import { getProviderRecoveryHandlers } from './providerRecoveryHooks.js';
 
-// Deferred for the same reason as loadAutoFixer above: `observedContextWindows.js`
+// Deferred so the static closure stays small: `observedContextWindows.js`
 // reaches `lib/localProviderRuntime.js` and the endpoint probe, which
 // promptRunner.js itself never needs, and ~160 suites only build or classify a
 // run. A static edge instantiated that subtree in every one of them and pushed
@@ -553,22 +541,9 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
 
 /** Own deferred investigations for one retry cascade, independently of retry policy. */
 function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
-  // Load the fallback-lifecycle notifiers lazily and once for the whole
-  // cascade. Lazy (see loadAutoFixer) so the happy path never drags in the
-  // CoS stack — and so a failure with NO recovery path (no tier applies)
-  // never loads it either, since none of the note* helpers below fire.
-  let autoFixerModule;
-  let autoFixerLoaded = false;
-  const getAutoFixer = async () => {
-    if (!autoFixerLoaded) {
-      autoFixerLoaded = true;
-      autoFixerModule = await loadAutoFixer().catch((err) => {
-        console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
-        return null;
-      });
-    }
-    return autoFixerModule;
-  };
+  // Handlers registered by initAutoFixer(); null when the auto-fixer is not
+  // running in this process, in which case it has no deferred tasks to settle.
+  const getAutoFixer = async () => getProviderRecoveryHandlers();
   // Keys must match what bootstrap.js's onRunFailed hook published
   // (metadata.providerName + metadata.model). Best-effort throughout: a
   // notifier failure must never turn a working retry into a user-visible error.
@@ -1210,15 +1185,18 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   for (const p of all.providers) providersMap[p.id] = p;
   // A composite (`harness.method@service`, #7564) never sits in the stored map;
   // the failed provider's own id may be one, and it must be in the map for the
-  // toolkit's self-loop guard and `fallbackProvider` read to see it. Lazy: the
-  // resolver's closure reaches the graph store, which this request-path module
-  // must not drag in for the preset-only common case.
-  if (isCompositeProviderId(failed.id)) {
-    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [failed.id]);
+  // toolkit's self-loop guard and `fallbackProvider` read to see it. The
+  // toolkit's boot-registered resolver already materializes composite ids;
+  // reusing it keeps the host resolver graph out of request-path CI selection.
+  if (isCompositeProviderId(failed.id) && !providersMap[failed.id]) {
+    const record = await getProviderById(failed.id);
+    if (record) providersMap[failed.id] = record;
   }
   const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
-  if (chainComposites.length) {
-    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+  for (const id of chainComposites) {
+    if (providersMap[id]) continue;
+    const record = await getProviderById(id);
+    if (record) providersMap[id] = record;
   }
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);

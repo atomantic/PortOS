@@ -61,7 +61,9 @@
  * keystroke from reaching the modal beneath it. Inner widgets that consume
  * Esc themselves (native <select> closing a dropdown, custom popovers) can
  * call event.preventDefault() — Modal honours `defaultPrevented` and skips
- * the close in that case.
+ * the close in that case. The stack is shared with `Drawer` through the
+ * exported `useEscLayer` hook, so a drawer over a modal (or vice versa)
+ * closes innermost-first.
  */
 
 import { useEffect, useId, useRef } from 'react';
@@ -223,6 +225,35 @@ function popModal(id) {
   if (idx >= 0) modalStack.splice(idx, 1);
 }
 
+/**
+ * Register an open overlay on the shared Esc stack. Any layered surface that
+ * owns the keyboard while open (Modal, Drawer) joins the SAME stack so nested
+ * surfaces close innermost-first and an inner widget's `preventDefault()`
+ * on Esc is honoured uniformly.
+ *
+ * `onEsc` is read through a ref: handler identity may change every render
+ * (inline arrows) but the stack push/pop must only happen when `open`
+ * toggles, or an unrelated render of one layer would pop+re-push it above a
+ * layer that opened later. Pass a handler that returns without dispatching
+ * when the surface opts out of Esc dismissal — the layer still registers so it
+ * absorbs the keystroke instead of letting it fall through to the layer below.
+ */
+export function useEscLayer(open, onEsc) {
+  const layerId = useId();
+  const onEscRef = useRef(onEsc);
+  onEscRef.current = onEsc;
+  useEffect(() => {
+    if (!open) return;
+    const id = layerId;
+    escHandlers.set(id, () => onEscRef.current?.());
+    pushModal(id);
+    return () => {
+      escHandlers.delete(id);
+      popModal(id);
+    };
+  }, [open, layerId]);
+}
+
 export default function Modal({
   open,
   onClose,
@@ -248,45 +279,16 @@ export default function Modal({
   // focusable descendant — usually a header Close button, which is wrong for a
   // dialog whose own content owns the keyboard: pass `initialFocusRef` to aim it.
   useFocusTrap(open, dialogRef, { initialFocusRef });
-  // `useId()` is React's render-safe stable id source — survives StrictMode's
-  // double-invoke without allocating extra ids the way a `modalIdSeq++`
-  // module-scope counter would.
-  const modalId = useId();
-  // Latest handler refs — kept fresh on every render without re-running the
-  // stack-registration effect. This decouples handler identity (which
-  // changes every render when callers use inline arrow functions, e.g.
-  // DeployPanel during streaming output) from stack push/pop, which must
-  // only happen when `open` toggles. Otherwise an unrelated render of one
-  // modal would pop+re-push it and accidentally move it above another
-  // modal that opened later.
-  const onCloseRef = useRef(onClose);
-  const onEscRef = useRef(onEsc);
-  const closeOnEscRef = useRef(closeOnEsc);
-  onCloseRef.current = onClose;
-  onEscRef.current = onEsc;
-  closeOnEscRef.current = closeOnEsc;
-
-  // Push/pop only on open toggle + unmount. Handler indirection through
-  // refs lets us absorb prop changes (new onClose / onEsc / closeOnEsc)
-  // without touching the stack. The dispatched handler is one of:
+  // The dispatched handler is one of:
   //   - onEsc, if provided (caller wants custom Esc semantics — e.g.
   //     LayoutEditor cancels an inline mode instead of closing).
   //   - onClose, if closeOnEsc is true (the common case).
-  //   - undefined → no dispatch, but Esc is still swallowed at this layer
+  //   - nothing → no dispatch, but Esc is still swallowed at this layer
   //     so it can't fall through to an underlying modal.
-  useEffect(() => {
-    if (!open) return;
-    const id = modalId;
-    escHandlers.set(id, () => {
-      if (onEscRef.current) { onEscRef.current(); return; }
-      if (closeOnEscRef.current) onCloseRef.current?.();
-    });
-    pushModal(id);
-    return () => {
-      escHandlers.delete(id);
-      popModal(id);
-    };
-  }, [open]);
+  useEscLayer(open, () => {
+    if (onEsc) { onEsc(); return; }
+    if (closeOnEsc) onClose?.();
+  });
 
   if (!open) return null;
 

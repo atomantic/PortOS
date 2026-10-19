@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
@@ -47,6 +47,17 @@ function iframeCsp() {
 }
 
 describe('MessageDetail SafeHtmlBody remote content blocking', () => {
+  beforeEach(() => {
+    // Happy DOM 21 disables iframe loading, including the blank document.
+    // Supply only an inert writable document; keep remote frame loading disabled.
+    const documents = new WeakMap();
+    vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get').mockImplementation(function () {
+      if (!documents.has(this)) documents.set(this, document.implementation.createHTMLDocument(''));
+      return documents.get(this);
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   it('blocks remote images by default via a restrictive CSP and shows the opt-in notice', async () => {
     renderMessage({
       ...baseMessage,

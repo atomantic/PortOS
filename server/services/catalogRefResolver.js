@@ -2,14 +2,15 @@
  * Catalog ref resolver + dangling-ref integrity (#1018).
  *
  * `catalog_ingredient_refs` records which app-native record (universe / series /
- * issue / work / creative-director) consumes a catalog ingredient, by a
+ * issue / work / creative-director / music-video) consumes a catalog ingredient, by a
  * `(ref_kind, ref_id)` STRING tuple with NO database foreign key — deliberately
  * (design #999, decision D3): a ref can federate to a peer BEFORE its target
  * arrives, and a hard FK would make catalog sync FAIL on out-of-order apply.
  *
- * Now that all five target kinds are DB-native (universes #1014, pipeline
+ * Now that every target kind is DB-native (universes #1014, pipeline
  * series/issues #1015, writers_room_works #1017, creative_director_projects
- * #997), this module delivers the integrity #999 asked for WITHOUT a constraint:
+ * #997, music_video_projects), this module delivers the integrity #999 asked
+ * for WITHOUT a constraint:
  *
  *   - resolveRefs(tuples)          → which tuples point at a LIVE target
  *   - listDanglingRefs()           → live refs whose target no longer resolves
@@ -23,7 +24,7 @@
 import { query } from '../lib/db.js';
 
 // ref_kind → the DB table its ref_id points at, plus the predicate that makes a
-// row a LIVE target. All five target kinds soft-delete (a `deleted` column;
+// row a LIVE target. Every target kind soft-deletes (a `deleted` column;
 // creative_director_projects gained one in #1564 so its deletion federates), so
 // a live target is `deleted = FALSE` in every case. This map is the single
 // source of truth for the resolver — adding a new referenceable record kind
@@ -34,6 +35,7 @@ export const REF_TARGET_TABLES = Object.freeze({
   issue: { table: 'pipeline_issues', liveClause: 'deleted = FALSE' },
   work: { table: 'writers_room_works', liveClause: 'deleted = FALSE' },
   'creative-director': { table: 'creative_director_projects', liveClause: 'deleted = FALSE' },
+  'music-video': { table: 'music_video_projects', liveClause: 'deleted = FALSE' },
 });
 
 /** The ref kinds this resolver can resolve (those with a known target table). */

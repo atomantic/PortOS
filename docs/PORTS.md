@@ -125,7 +125,8 @@ module.exports = {
 ### Port Detection
 
 PortOS automatically detects ports from env vars:
-- `PORT` → labeled as `api` (or `ui` for `-ui`/`-client` processes, `health` for `-browser` processes with CDP)
+- A process's `ports: { ui: N }` object wins when present. The PM2 Standardizer writes one for every process, labeling HTML-serving processes `ui` so the app gets an Open button
+- `PORT` → labeled as `api` (or `ui` for `-ui`/`-client` processes, `health` for `-browser` processes with CDP) when the process has no `ports` object
 - `CDP_PORT` → labeled as `cdp`
 - `VITE_PORT` → labeled as `ui`
 - `--port` in args → labeled as `ui`
@@ -144,7 +145,8 @@ PortOS automatically detects ports from env vars:
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
 | 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
-| 5570-5599 | User applications — **put managed apps here** |
+| 5570-5599 | User applications — **put managed apps here**. `GET /api/ports/scan`, `POST /api/ports/allocate` (`server/services/ports.js`) and the PM2 Standardizer's collision reassignment (`server/services/pm2Standardizer.js`) all allocate from this band, overflowing just past 5599 when it is full |
+| 6000 and other browser-blocked ports | Never allocated. Chrome and Firefox refuse to connect to the WHATWG Fetch "bad ports" (`ERR_UNSAFE_PORT`; 6000 is X11), so a managed app there has no reachable UI. `server/lib/browserUnsafePorts.js` holds the list and every allocator skips it |
 
 > **A collision inside `5553-5569` is silent, not loud.** The natural assumption is
 > that a second listener on a taken port fails with `EADDRINUSE`, so an accidental

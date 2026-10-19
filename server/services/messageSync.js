@@ -24,7 +24,7 @@ const syncLocks = new Map();
 // `updateMessageEvaluations` all share the one `${accountId}.json` cache file, so
 // two that interleave their load/save would clobber each other's writes. The tail
 // makes each one await the previous and re-read the freshest persisted state
-// inside its serialized region — mirroring `issueWriteTail` in pipeline/issues.js.
+// inside its serialized region — mirroring `queueSeriesIssuesWrite` in pipeline/issuesShared.js.
 const accountWriteQueue = createKeyCachedQueue();
 const summarySnapshots = createBoundedStateMap({ maxSize: 8 });
 const summaryReads = new Map();
@@ -253,215 +253,220 @@ export async function getThread(accountId, threadId) {
 export async function syncAccount(accountId, io, options = {}) {
   if (syncLocks.has(accountId)) return { error: 'Sync already in progress', status: 409 };
 
-  const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found' };
-  if (!account.enabled) return { error: 'Account is disabled', status: 400 };
-
-  // Reject an explicit mode the provider cannot honor BEFORE taking the lock, emitting
-  // events, or touching the browser/cache. An omitted mode takes the account's default.
-  const mode = options.mode || defaultSyncModeForAccountType(account.type);
-  if (!syncModesForAccountType(account.type).includes(mode)) {
-    return { error: `${account.type} accounts do not support ${mode} sync`, status: 400 };
-  }
-
+  // Hold the lock before the first await. A second request that arrives while
+  // `getAccount` is in flight must not pass `has()` and start another full sync.
+  // Early refusals and thrown reads release it in the `finally` below.
   syncLocks.set(accountId, true);
-  io?.emit('messages:sync:started', { accountId, mode });
-  console.log(`📧 Starting ${mode} sync for account ${account.id} (${account.type})`);
+  try {
+    const account = await getAccount(accountId);
+    if (!account) return { error: 'Account not found' };
+    if (!account.enabled) return { error: 'Account is disabled', status: 400 };
 
-  const providerSync = async () => {
-    // The initial read may predate queued deletion. Recheck under the cache
-    // queue before a stale sync can write after cleanup.
-    const currentAccount = await getAccount(accountId);
-    if (!currentAccount) return { error: 'Account not found' };
-    if (!currentAccount.enabled) return { error: 'Account is disabled', status: 400 };
-    const cache = await loadCache(accountId);
-    let providerResult;
-    if (account.type === 'gmail') {
-      const { syncGmail } = await import('./messageGmailSync.js');
-      providerResult = await syncGmail(account, cache, io, { mode });
-    } else if (account.type === 'outlook') {
-      // Try API sync first (fast), fall back to Playwright (slow)
-      const { syncOutlookApi } = await import('./messageApiSync.js');
-      providerResult = await syncOutlookApi(account, cache, io, { mode }).catch(err => {
-        console.log(`📧 API sync error, falling back to Playwright: ${messageLogError(err)}`);
-        return null;
-      });
-      if (!providerResult) {
-        console.log(`📧 Falling back to Playwright sync for account ${account.id}`);
+    // Reject an explicit mode the provider cannot honor before emitting events or
+    // touching the browser/cache. An omitted mode takes the account's default.
+    const mode = options.mode || defaultSyncModeForAccountType(account.type);
+    if (!syncModesForAccountType(account.type).includes(mode)) {
+      return { error: `${account.type} accounts do not support ${mode} sync`, status: 400 };
+    }
+
+    io?.emit('messages:sync:started', { accountId, mode });
+    console.log(`📧 Starting ${mode} sync for account ${account.id} (${account.type})`);
+
+    const providerSync = async () => {
+      // The initial read may predate queued deletion. Recheck under the cache
+      // queue before a stale sync can write after cleanup.
+      const currentAccount = await getAccount(accountId);
+      if (!currentAccount) return { error: 'Account not found' };
+      if (!currentAccount.enabled) return { error: 'Account is disabled', status: 400 };
+      const cache = await loadCache(accountId);
+      let providerResult;
+      if (account.type === 'gmail') {
+        const { syncGmail } = await import('./messageGmailSync.js');
+        providerResult = await syncGmail(account, cache, io, { mode });
+      } else if (account.type === 'outlook') {
+        // Try API sync first (fast), fall back to Playwright (slow)
+        const { syncOutlookApi } = await import('./messageApiSync.js');
+        providerResult = await syncOutlookApi(account, cache, io, { mode }).catch(err => {
+          console.log(`📧 API sync error, falling back to Playwright: ${messageLogError(err)}`);
+          return null;
+        });
+        if (!providerResult) {
+          console.log(`📧 Falling back to Playwright sync for account ${account.id}`);
+          const { syncPlaywright } = await import('./messagePlaywrightSync.js');
+          providerResult = await syncPlaywright(account, cache, io, { mode });
+        }
+      } else if (account.type === 'teams') {
+        // Teams v2 uses service workers + WebSocket — no usable REST API yet
         const { syncPlaywright } = await import('./messagePlaywrightSync.js');
         providerResult = await syncPlaywright(account, cache, io, { mode });
-      }
-    } else if (account.type === 'teams') {
-      // Teams v2 uses service workers + WebSocket — no usable REST API yet
-      const { syncPlaywright } = await import('./messagePlaywrightSync.js');
-      providerResult = await syncPlaywright(account, cache, io, { mode });
-    } else {
-      throw new Error(`Unsupported account type: ${account.type}`);
-    }
-
-    // Support structured result { messages, status } or plain array
-    const newMessages = Array.isArray(providerResult) ? providerResult : providerResult?.messages ?? [];
-    const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
-    const providerReason = typeof providerResult?.error === 'string' ? { reason: providerResult.error } : {};
-    // Sent mail (Gmail reply-detection ingest, #2796) is activity-only: recorded to
-    // the timeline but never added to the inbox cache/eval/trim. Kept separate here.
-    const sentMessages = Array.isArray(providerResult) ? [] : (providerResult?.sentMessages ?? []);
-    // Whether the sent window truncated at its ceiling this sync (#2820) — coverage
-    // is then partial, so the reply-detection watermark is marked partial (fail closed).
-    const sentTruncated = Array.isArray(providerResult) ? false : Boolean(providerResult?.sentTruncated);
-    // Gmail send-as aliases fetched this sync (#2831). `null` = fetch failed/not supplied
-    // (keep the stored set); an array = authoritative refresh. Applied in-memory below so
-    // the SAME sync's activity ingest excludes every owner address, and persisted for the
-    // next sync + the outreach detector's own reads.
-    const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
-
-    // Preserve the DB identity of unambiguous pre-upgrade cache entries.
-    retainLegacyActivityIdentities(cache.messages);
-    const matcher = createBrowserMessageMatcher(cache.messages, newMessages);
-    const uniqueNew = [];
-    for (const msg of newMessages) {
-      const existing = matcher.match(msg);
-      if (!msg.externalId || !existing) {
-        uniqueNew.push(msg);
       } else {
-        // A row that becomes one unambiguous child keeps its already-recorded event.
-        existing.activityIdentity ||= messageIngestionIdentity(existing);
-        // Adopt canonical identity without replacing local ID or evaluation.
-        for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject']) {
-          if (msg[key] !== undefined && (key !== 'providerMessageId' || msg[key])) existing[key] = msg[key];
-        }
-        // Update flags and provider identity on existing message
-        if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
-        if (msg.isUnread !== undefined) existing.isUnread = msg.isUnread;
-        if (msg.isRead !== undefined) existing.isRead = msg.isRead;
-        if (msg.isPinned !== undefined) existing.isPinned = msg.isPinned;
-        if (msg.isFlagged !== undefined) existing.isFlagged = msg.isFlagged;
-        if (msg.isReplied !== undefined) existing.isReplied = msg.isReplied;
-        if (msg.hasMeetingInvite !== undefined) existing.hasMeetingInvite = msg.hasMeetingInvite;
-        // Upgrade body if new sync fetched full content
-        if (msg.bodyFull && msg.bodyText) {
-          existing.bodyText = msg.bodyText;
-          existing.bodyFull = true;
-          if (msg.bodyHtml) existing.bodyHtml = msg.bodyHtml;
-        }
-        // Set threadId if newly available
-        if (msg.threadId && !existing.threadId) existing.threadId = msg.threadId;
-        matcher.refresh(existing);
+        throw new Error(`Unsupported account type: ${account.type}`);
       }
-    }
-    cache.messages.push(...uniqueNew);
 
-    // Only explicit, exhaustive inbox coverage authorizes membership deletion.
-    // Legacy arrays and bounded/partial successes still merge, but never prune.
-    let pruned = 0;
-    if (mode === 'full' && providerStatus === 'success' && providerResult?.inboxComplete === true) {
-      const fetchedIds = new Set(newMessages.filter(m => m.externalId).map(m => m.externalId));
-      const before = cache.messages.length;
-      cache.messages = cache.messages.filter(m => !m.externalId || fetchedIds.has(m.externalId));
-      pruned = before - cache.messages.length;
-      if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale messages from account ${account.id}`);
-    }
+      // Support structured result { messages, status } or plain array
+      const newMessages = Array.isArray(providerResult) ? providerResult : providerResult?.messages ?? [];
+      const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
+      const providerReason = typeof providerResult?.error === 'string' ? { reason: providerResult.error } : {};
+      // Sent mail (Gmail reply-detection ingest, #2796) is activity-only: recorded to
+      // the timeline but never added to the inbox cache/eval/trim. Kept separate here.
+      const sentMessages = Array.isArray(providerResult) ? [] : (providerResult?.sentMessages ?? []);
+      // Whether the sent window truncated at its ceiling this sync (#2820) — coverage
+      // is then partial, so the reply-detection watermark is marked partial (fail closed).
+      const sentTruncated = Array.isArray(providerResult) ? false : Boolean(providerResult?.sentTruncated);
+      // Gmail send-as aliases fetched this sync (#2831). `null` = fetch failed/not supplied
+      // (keep the stored set); an array = authoritative refresh. Applied in-memory below so
+      // the SAME sync's activity ingest excludes every owner address, and persisted for the
+      // next sync + the outreach detector's own reads.
+      const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
 
-    // Trim to maxMessages
-    if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
-      cache.messages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
-      cache.messages = cache.messages.slice(0, account.syncConfig.maxMessages);
-    }
+      // Preserve the DB identity of unambiguous pre-upgrade cache entries.
+      retainLegacyActivityIdentities(cache.messages);
+      const matcher = createBrowserMessageMatcher(cache.messages, newMessages);
+      const uniqueNew = [];
+      for (const msg of newMessages) {
+        const existing = matcher.match(msg);
+        if (!msg.externalId || !existing) {
+          uniqueNew.push(msg);
+        } else {
+          // A row that becomes one unambiguous child keeps its already-recorded event.
+          existing.activityIdentity ||= messageIngestionIdentity(existing);
+          // Adopt canonical identity without replacing local ID or evaluation.
+          for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject']) {
+            if (msg[key] !== undefined && (key !== 'providerMessageId' || msg[key])) existing[key] = msg[key];
+          }
+          // Update flags and provider identity on existing message
+          if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
+          if (msg.isUnread !== undefined) existing.isUnread = msg.isUnread;
+          if (msg.isRead !== undefined) existing.isRead = msg.isRead;
+          if (msg.isPinned !== undefined) existing.isPinned = msg.isPinned;
+          if (msg.isFlagged !== undefined) existing.isFlagged = msg.isFlagged;
+          if (msg.isReplied !== undefined) existing.isReplied = msg.isReplied;
+          if (msg.hasMeetingInvite !== undefined) existing.hasMeetingInvite = msg.hasMeetingInvite;
+          // Upgrade body if new sync fetched full content
+          if (msg.bodyFull && msg.bodyText) {
+            existing.bodyText = msg.bodyText;
+            existing.bodyFull = true;
+            if (msg.bodyHtml) existing.bodyHtml = msg.bodyHtml;
+          }
+          // Set threadId if newly available
+          if (msg.threadId && !existing.threadId) existing.threadId = msg.threadId;
+          matcher.refresh(existing);
+        }
+      }
+      cache.messages.push(...uniqueNew);
 
-    await saveCache(accountId, cache);
-    await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
+      // Only explicit, exhaustive inbox coverage authorizes membership deletion.
+      // Legacy arrays and bounded/partial successes still merge, but never prune.
+      let pruned = 0;
+      if (mode === 'full' && providerStatus === 'success' && providerResult?.inboxComplete === true) {
+        const fetchedIds = new Set(newMessages.filter(m => m.externalId).map(m => m.externalId));
+        const before = cache.messages.length;
+        cache.messages = cache.messages.filter(m => !m.externalId || fetchedIds.has(m.externalId));
+        pruned = before - cache.messages.length;
+        if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale messages from account ${account.id}`);
+      }
 
-    // Auto-log Tribe touchpoints from the cached messages (#2033) — secondary
-    // effect, must not fail the sync. Scans the full (maxMessages-capped) cache
-    // rather than only the newly-added batch, mirroring the calendar path: so
-    // adding a person's email AFTER their messages synced still backfills, and a
-    // prior auto-log failure self-heals on the next sync. Deduped per thread+day
-    // (partial unique index), so re-scanning already-logged messages is a no-op.
-    await logMessageTouchpoints(account, cache.messages).catch((err) =>
-      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${messageLogError(err)}`));
+      // Trim to maxMessages
+      if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
+        cache.messages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
+        cache.messages = cache.messages.slice(0, account.syncConfig.maxMessages);
+      }
 
-    // Apply + persist the owner's Gmail send-as aliases (#2831) BEFORE the activity
-    // ingest below, so THIS sync's `messageActivityCandidates` already excludes every
-    // owner address (not just the primary email) from received-message participants.
-    // Best-effort: a `null` sentinel (fetch failed / non-Gmail provider) leaves the
-    // stored set untouched; persist failure must not fail the sync.
-    if (Array.isArray(sendAsAliases)) {
-      // Aliases learned for the FIRST time this sync (#2855). Rows recorded before
-      // the alias set was known still carry the alias as a participant, and the
-      // `ON CONFLICT DO NOTHING` insert contract means they never self-correct —
-      // so repair exactly those rows once, right when the set changes.
-      const previousAliases = account.sendAsAliases;
-      account.sendAsAliases = sendAsAliases;
-      // ORDER IS LOAD-BEARING: repair BEFORE persisting the new set. The repair is
-      // triggered by the delta between the stored set and this sync's set, so if we
-      // persisted first and the repair then failed transiently, the next sync would
-      // see an UNCHANGED set, compute an empty delta, and never retry — the stale
-      // rows would stay broken forever. Leaving the old set stored on failure means
-      // the next sync recomputes the same delta and tries again. The cost is that a
-      // failed repair also defers the persist by one sync interval; the in-memory
-      // set is already updated above, so THIS sync's activity ingest still excludes
-      // every owner address either way.
-      let repaired = true;
-      await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) => {
-        repaired = false;
-        console.error(`🗓️  Activity alias backfill failed for account ${accountId} — deferring alias persist so the next sync retries: ${messageLogError(err)}`);
+      await saveCache(accountId, cache);
+      await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
+
+      // Auto-log Tribe touchpoints from the cached messages (#2033) — secondary
+      // effect, must not fail the sync. Scans the full (maxMessages-capped) cache
+      // rather than only the newly-added batch, mirroring the calendar path: so
+      // adding a person's email AFTER their messages synced still backfills, and a
+      // prior auto-log failure self-heals on the next sync. Deduped per thread+day
+      // (partial unique index), so re-scanning already-logged messages is a no-op.
+      await logMessageTouchpoints(account, cache.messages).catch((err) =>
+        console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${messageLogError(err)}`));
+
+      // Apply + persist the owner's Gmail send-as aliases (#2831) BEFORE the activity
+      // ingest below, so THIS sync's `messageActivityCandidates` already excludes every
+      // owner address (not just the primary email) from received-message participants.
+      // Best-effort: a `null` sentinel (fetch failed / non-Gmail provider) leaves the
+      // stored set untouched; persist failure must not fail the sync.
+      if (Array.isArray(sendAsAliases)) {
+        // Aliases learned for the FIRST time this sync (#2855). Rows recorded before
+        // the alias set was known still carry the alias as a participant, and the
+        // `ON CONFLICT DO NOTHING` insert contract means they never self-correct —
+        // so repair exactly those rows once, right when the set changes.
+        const previousAliases = account.sendAsAliases;
+        account.sendAsAliases = sendAsAliases;
+        // ORDER IS LOAD-BEARING: repair BEFORE persisting the new set. The repair is
+        // triggered by the delta between the stored set and this sync's set, so if we
+        // persisted first and the repair then failed transiently, the next sync would
+        // see an UNCHANGED set, compute an empty delta, and never retry — the stale
+        // rows would stay broken forever. Leaving the old set stored on failure means
+        // the next sync recomputes the same delta and tries again. The cost is that a
+        // failed repair also defers the persist by one sync interval; the in-memory
+        // set is already updated above, so THIS sync's activity ingest still excludes
+        // every owner address either way.
+        let repaired = true;
+        await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) => {
+          repaired = false;
+          console.error(`🗓️  Activity alias backfill failed for account ${accountId} — deferring alias persist so the next sync retries: ${messageLogError(err)}`);
+        });
+        if (repaired) {
+          await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
+            console.error(`📧 Send-as alias persist failed for account ${accountId}: ${messageLogError(err)}`));
+        }
+      }
+
+      // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+      // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
+      // cache each sync is a no-op for already-recorded messages. Machine-local.
+      // Sent mail (activity-only, #2796) is fed IN ADDITION to the cached inbox mail
+      // so it records `message.sent` events without ever entering the inbox cache.
+      let activityIngestFailed = false;
+      await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) => {
+        activityIngestFailed = true;
+        console.error(`🗓️  Activity ingest failed for account ${accountId}: ${messageLogError(err)}`);
       });
-      if (repaired) {
-        await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
-          console.error(`📧 Send-as alias persist failed for account ${accountId}: ${messageLogError(err)}`));
-      }
-    }
 
-    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
-    // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
-    // cache each sync is a no-op for already-recorded messages. Machine-local.
-    // Sent mail (activity-only, #2796) is fed IN ADDITION to the cached inbox mail
-    // so it records `message.sent` events without ever entering the inbox cache.
-    let activityIngestFailed = false;
-    await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) => {
-      activityIngestFailed = true;
-      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${messageLogError(err)}`);
+      // Reply-detection watermark (#2796): stamp when a Gmail account with sent-ingest
+      // enabled completes a successful sync, so the outreach detector only trusts an
+      // account whose sent history is actually present and recent. Without this, an
+      // account default-on at upgrade (or after an OAuth/sync failure) would be trusted
+      // before any reply evidence exists, producing false "unanswered" nudges.
+      if (providerStatus === 'success' && account.type === 'gmail' && account.syncConfig?.ingestSent !== false) {
+        // `partial` fails the account closed for the outreach detector when reply
+        // evidence for this sync is incomplete: either the sent window truncated at
+        // its ceiling (#2820) OR activity ingestion itself failed — in which case the
+        // freshly-fetched `message.sent` rows never reached the timeline, so trusting a
+        // full watermark (or a stale recent one) would let a replied thread look
+        // unanswered. Stamping partial keeps the account fail-closed until a clean sync.
+        await markSentIngested(accountId, { partial: sentTruncated || activityIngestFailed }).catch((err) =>
+          console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${messageLogError(err)}`));
+      }
+
+      io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus, ...providerReason });
+      if (providerStatus === 'success') {
+        io?.emit('messages:changed', {});
+      }
+      console.log(`📧 Sync complete for account ${account.id}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
+
+      return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus, ...providerReason };
+    };
+
+    // Serialize the load→mutate→save region against `refreshMessage` /
+    // `updateMessageEvaluations` on the same account (#2537). `syncLocks` already
+    // blocks a second concurrent sync; the tail additionally orders the sync's
+    // write against the other cache mutators so none clobbers the others.
+    const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
+      console.error(`📧 Sync failed for account ${account.id} (${account.type}): ${messageLogError(error)}`);
+      await updateSyncStatus(accountId, 'error').catch(() => {});
+      io?.emit('messages:sync:failed', { accountId, error: error.message });
+      return { error: error.message, status: 502 };
     });
 
-    // Reply-detection watermark (#2796): stamp when a Gmail account with sent-ingest
-    // enabled completes a successful sync, so the outreach detector only trusts an
-    // account whose sent history is actually present and recent. Without this, an
-    // account default-on at upgrade (or after an OAuth/sync failure) would be trusted
-    // before any reply evidence exists, producing false "unanswered" nudges.
-    if (providerStatus === 'success' && account.type === 'gmail' && account.syncConfig?.ingestSent !== false) {
-      // `partial` fails the account closed for the outreach detector when reply
-      // evidence for this sync is incomplete: either the sent window truncated at
-      // its ceiling (#2820) OR activity ingestion itself failed — in which case the
-      // freshly-fetched `message.sent` rows never reached the timeline, so trusting a
-      // full watermark (or a stale recent one) would let a replied thread look
-      // unanswered. Stamping partial keeps the account fail-closed until a clean sync.
-      await markSentIngested(accountId, { partial: sentTruncated || activityIngestFailed }).catch((err) =>
-        console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${messageLogError(err)}`));
-    }
-
-    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus, ...providerReason });
-    if (providerStatus === 'success') {
-      io?.emit('messages:changed', {});
-    }
-    console.log(`📧 Sync complete for account ${account.id}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
-
-    return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus, ...providerReason };
-  };
-
-  // Serialize the load→mutate→save region against `refreshMessage` /
-  // `updateMessageEvaluations` on the same account (#2537). `syncLocks` already
-  // blocks a second concurrent sync; the tail additionally orders the sync's
-  // write against the other cache mutators so none clobbers the others.
-  const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
-    console.error(`📧 Sync failed for account ${account.id} (${account.type}): ${messageLogError(error)}`);
-    await updateSyncStatus(accountId, 'error').catch(() => {});
-    io?.emit('messages:sync:failed', { accountId, error: error.message });
-    return { error: error.message, status: 502 };
-  }).finally(() => {
+    return result;
+  } finally {
     syncLocks.delete(accountId);
-  });
-
-  return result;
+  }
 }
 
 function mergeRefreshedMessage(cache, accountId, source, message, detail) {

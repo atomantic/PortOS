@@ -8,13 +8,13 @@ import { request } from './apiCore.js';
 
 // ---- Datasets ----
 
-export const listLoraDatasets = (filters = {}) => {
+export const listLoraDatasets = (filters = {}, options = {}) => {
   const params = new URLSearchParams();
   for (const key of ['universeId', 'entryKind', 'entryId', 'ingredientId']) {
     if (filters[key]) params.set(key, filters[key]);
   }
   const qs = params.toString();
-  return request(`/lora-datasets${qs ? `?${qs}` : ''}`);
+  return request(`/lora-datasets${qs ? `?${qs}` : ''}`, options);
 };
 
 export const createLoraDataset = ({

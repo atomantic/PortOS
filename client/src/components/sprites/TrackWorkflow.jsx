@@ -30,6 +30,7 @@ import AnimationProviderPicker from './AnimationProviderPicker.jsx';
 export default function TrackWorkflow({
   record, reference, state, onGenerate, onChanged, corrections = null, onCorrectionChange = null,
   providers = null, provider = 'grok', onProviderChange = () => {},
+  providersError = null, onRetryProviders = null,
 }) {
   const definition = state?.definition || null;
   const runs = state?.runs || [];
@@ -94,6 +95,8 @@ export default function TrackWorkflow({
             provider={provider}
             onChange={onProviderChange}
             disabled={finalized}
+            error={providersError}
+            onRetry={onRetryProviders}
           />
           <span className="text-[11px] text-gray-500">
             directly requested {provider === 'local' ? 'local' : 'Grok'} render; local deterministic packing

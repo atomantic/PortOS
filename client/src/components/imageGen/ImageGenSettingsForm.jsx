@@ -130,7 +130,12 @@ export default function ImageGenSettingsForm({
     />
   );
 
-  const loraPicker = showLoras && isLocal ? (
+  const loraPicker = showLoras && isLocal && models.find(model => model.id === cfg.modelId)?.supportsLoras === false && cfg.loras?.length ? (
+    <p className="text-xs text-port-warning">
+      This model cannot use the selected LoRAs.
+      <button type="button" disabled={disabled} className="ml-2 min-h-[44px] text-port-accent" onClick={() => merge({ loras: [] })}>Remove selected LoRAs</button>
+    </p>
+  ) : showLoras && isLocal && models.find(model => model.id === cfg.modelId)?.supportsLoras !== false ? (
     <LoraPicker
       availableLoras={availableLoras}
       selected={Array.isArray(cfg.loras) ? cfg.loras : []}

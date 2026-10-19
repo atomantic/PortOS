@@ -10,14 +10,12 @@
  * plated data readout included.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/usr/bin/google-chrome', '/usr/bin/chromium',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('mv-overlay-text-') }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));

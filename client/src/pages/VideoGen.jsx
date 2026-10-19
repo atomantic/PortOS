@@ -82,6 +82,8 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
@@ -103,6 +105,10 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, getFalVideoModel, falVideoResolutions, estimateFalVideoCostUsd,
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
+import {
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
+  runwayVideoLengths, runwayVideoResolutions,
+} from '../lib/runwayVideoModels.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
@@ -123,6 +129,9 @@ const MODES = [
   // remix mode appears in the mode bar automatically.
   ...IC_LORA_MODES.map((m) => ({ id: m.mode, label: m.label, icon: SlidersHorizontal, desc: m.description })),
 ];
+
+// Stable fetcher for useListResource — the hook re-runs on identity change.
+const loadLoraLibrary = () => listLorasFull({ silent: true });
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -193,6 +202,7 @@ export default function VideoGen() {
   // entry) still surfaces the backend switcher below.
   const falEnabled = status?.falEnabled === true;
   const reactorEnabled = status?.reactorEnabled === true;
+  const runwayEnabled = status?.runwayEnabled === true;
   const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
@@ -211,9 +221,10 @@ export default function VideoGen() {
   }, []);
 
   // Installed LoRA library — the picker filters this to the current model's
-  // video family. Silent: a failure just hides the picker.
-  const [availableLoras, setAvailableLoras] = useState([]);
-  useEffect(() => { listLorasFull().then((l) => setAvailableLoras(Array.isArray(l) ? l : [])).catch(() => {}); }, []);
+  // video family. A failed read is shown as such, with Retry, never as an
+  // empty library.
+  const loraLibrary = useListResource(loadLoraLibrary);
+  const availableLoras = loraLibrary.items;
 
   // Federated render target (#4348). Picking a peer replaces the local runtime
   // outright — the clip is rendered there and imported back — so it feeds the
@@ -229,7 +240,8 @@ export default function VideoGen() {
   // Every field the form submits, plus the payload builder both submit paths
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
-    backend, isGrok, isFal, isReactor, handleBackendChange, grokDuration, setGrokDuration,
+    backend, isGrok, isFal, isReactor, isRunway, handleBackendChange, grokDuration, setGrokDuration,
+    runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution,
     falDuration, setFalDuration, falModelId, setFalModelId,
     falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId, reactorSeconds, setReactorSeconds, reactorSeed, setReactorSeed,
@@ -270,7 +282,7 @@ export default function VideoGen() {
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
-    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled,
+    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled, runwayEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
     displaySleepEnabled,
   });
@@ -305,6 +317,7 @@ export default function VideoGen() {
       ['the Grok backend', isGrok],
       ['the fal.ai backend', isFal],
       ['the reactor.inc backend', isReactor],
+      ['the Runway backend', isRunway],
       // Each remaining pipeline semantic has its own input listed below, but the
       // mode can be set before that input is filled — so gate the mode too
       // rather than letting an a2v render reach the peer as plain text-to-video.
@@ -331,7 +344,7 @@ export default function VideoGen() {
       return `${model?.modelName || 'The selected peer model'} renders only from a source image — add a start frame, or pick a text-to-video model.`;
     }
     return null;
-  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, mode, sourceImageFile, sourceImageUpload,
+  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, isRunway, mode, sourceImageFile, sourceImageUpload,
     lastImageFile, lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
     icReferenceVideoId, icReferenceImageFiles, selectedLoras, chunks]);
   // One reading for the Generate button, the enqueue guard and the caption.
@@ -349,7 +362,7 @@ export default function VideoGen() {
   // short submit / render / fetch ladder instead. A federated PEER is
   // deliberately excluded: it really does load the weights and run the sampler,
   // it just does so out of view.
-  const rendersOffMachine = isGrok || isFal || isReactor;
+  const rendersOffMachine = isGrok || isFal || isReactor || isRunway;
   const rendersOnThisMachine = !rendersOffMachine && !remoteTarget.isRemote;
 
   // Can THIS render put the display to sleep at all? The model says whether
@@ -954,6 +967,8 @@ export default function VideoGen() {
   const modelFieldVisible = !modelsLoading || modelContextLoading;
   const falModel = getFalVideoModel(falModelId);
   const falResolutions = falVideoResolutions(falModel);
+  const runwayModel = getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+  const runwayResolutions = runwayVideoResolutions(runwayModel);
 
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
@@ -962,13 +977,17 @@ export default function VideoGen() {
   // the counter measures the same string buildVideoGenSubmission builds rather
   // than the textarea. Gating Generate on it turns a post-click 400 into a
   // number the user can watch while writing.
+  // Runway caps the prompt per model; the server refuses an over-cap prompt
+  // with its count rather than shortening it.
+  const promptCap = isReactor ? REACTOR_MAX_PROMPT_LENGTH : isRunway ? runwayModel?.promptMaxChars ?? null : null;
+  const promptCapLabel = isReactor ? 'Reactor' : 'Runway';
   const submittedPromptLength = useMemo(
-    () => (isReactor
+    () => (promptCap != null
       ? styledVideoPrompt(prompt, { negativePrompt, stylePreset, selectedUniverse }).length
       : prompt.length),
-    [isReactor, prompt, negativePrompt, stylePreset, selectedUniverse],
+    [promptCap, prompt, negativePrompt, stylePreset, selectedUniverse],
   );
-  const promptOverLimit = isReactor && submittedPromptLength > REACTOR_MAX_PROMPT_LENGTH;
+  const promptOverLimit = promptCap != null && submittedPromptLength > promptCap;
 
   // Budget the AI enhancer writes inside. It's the backend cap MINUS the style
   // preset / universe prefix, because that prefix is part of what PortOS
@@ -977,11 +996,11 @@ export default function VideoGen() {
   // degenerate case where the prefix alone already fills the allowance, which
   // the counter above is already flagging).
   const enhancePromptBudget = useMemo(() => {
-    if (!isReactor) return undefined;
+    if (promptCap == null) return undefined;
     const overhead = submittedPromptLength - prompt.length;
-    const budget = REACTOR_MAX_PROMPT_LENGTH - Math.max(0, overhead);
+    const budget = promptCap - Math.max(0, overhead);
     return budget > 0 ? budget : undefined;
-  }, [isReactor, submittedPromptLength, prompt]);
+  }, [promptCap, submittedPromptLength, prompt]);
 
   // Only grok folds a negative prompt into its request (as an "Avoid:" line);
   // fal's queue body and reactor's enqueue command have no such field, and a
@@ -989,7 +1008,7 @@ export default function VideoGen() {
   // dead field that quietly does nothing. A federated render is the PEER's
   // model to judge, so the local selection's gate must not take away a field
   // that lane does submit.
-  const negativePromptSupported = isGrok || remoteTarget.isRemote
+  const negativePromptSupported = isGrok || isRunway || remoteTarget.isRemote
     || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
 
   // Every completed reactor render stamps its fast-h3 clip id on the history
@@ -1127,13 +1146,14 @@ export default function VideoGen() {
           cloud backend's image-to-video only supports text (image-first) and
           image modes, so switching to one snaps an unsupported mode back to
           the nearest one. */}
-      {(grokEnabled || falEnabled || reactorEnabled) && (
+      {(grokEnabled || falEnabled || reactorEnabled || runwayEnabled) && (
         <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
           {[
             { id: 'local', label: 'Local' },
             ...(grokEnabled ? [{ id: 'grok', label: 'Grok' }] : []),
             ...(falEnabled ? [{ id: 'fal', label: 'fal.ai' }] : []),
             ...(reactorEnabled ? [{ id: 'reactor', label: 'Reactor.inc' }] : []),
+            ...(runwayEnabled ? [{ id: 'runway', label: 'Runway' }] : []),
           ].map(({ id, label }) => (
             <button
               key={id}
@@ -1149,7 +1169,9 @@ export default function VideoGen() {
                   ? 'Render via the fal.ai queue API. Counts against your fal.ai balance.'
                   : id === 'reactor'
                     ? 'Render via the reactor.inc fast-h3 API. Counts against your reactor.inc balance.'
-                    : 'Render on this machine with the local runtimes.'}
+                    : id === 'runway'
+                      ? 'Animate a start frame via the Runway API. Counts against your Runway credits.'
+                      : 'Render on this machine with the local runtimes.'}
             >
               {label}
             </button>
@@ -1163,7 +1185,8 @@ export default function VideoGen() {
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {(rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
+        {(isRunway ? MODES.filter((m) => m.id === 'image')
+          : rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -1271,21 +1294,21 @@ export default function VideoGen() {
                 pushes a short-looking prompt past reactor's cap is visible
                 here instead of surfacing as a 400 after Generate. */}
             <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
-              {isReactor
-                ? `${formatCount(submittedPromptLength)} / ${formatCount(REACTOR_MAX_PROMPT_LENGTH)} characters`
+              {promptCap != null
+                ? `${formatCount(submittedPromptLength)} / ${formatCount(promptCap)} characters`
                 : `${formatCount(submittedPromptLength)} characters`}
             </p>
             {/* Only crossing the cap is worth announcing; the count itself
                 changes on every keystroke and would be pure noise. */}
             {promptOverLimit && (
               <p className="mt-1 text-[11px] text-port-error leading-snug" role="status">
-                Reactor will reject this — shorten the prompt. Style presets count toward the limit.
+                {promptCapLabel} will reject this — shorten the prompt. Style presets count toward the limit.
               </p>
             )}
             <div className="mt-2">
               <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
             </div>
-            {!negativePromptSupported && !isFal && !isReactor && (
+            {!negativePromptSupported && !isFal && !isReactor && !isRunway && (
               <p className="mt-1 text-[11px] text-gray-500 leading-snug">
                 This model does not use a negative prompt.
               </p>
@@ -1635,6 +1658,65 @@ export default function VideoGen() {
                 })()}
               </p>
             </div>
+          ) : isRunway ? (
+            <div className="grid grid-cols-2 gap-3">
+              <FormField className="col-span-2" label="Runway model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <select
+                  id="runway-video-model"
+                  value={runwayModel?.id || runwayModelId}
+                  onChange={(e) => setRunwayModelId(e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                >
+                  {RUNWAY_VIDEO_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {`${m.label} · ${describeRunwayVideoRate(m.id)}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <select
+                  id="runway-video-length"
+                  value={runwayDuration}
+                  onChange={(e) => setRunwayDuration(e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                >
+                  <option value="">{`${runwayModel?.duration.defaultSec}s (default)`}</option>
+                  {runwayVideoLengths(runwayModel).map((sec) => <option key={sec} value={String(sec)}>{sec} seconds</option>)}
+                </select>
+              </FormField>
+              <ResolutionField
+                presets={VIDEO_RESOLUTIONS}
+                width={width}
+                height={height}
+                onChange={handleResolutionChange}
+                {...VIDEO_EDGE_BOUNDS}
+                snapOnBlur
+                note="Sets the shape: Runway renders the closest aspect ratio it offers."
+              />
+              {runwayResolutions.length > 1 && (
+                <FormField label="Output size" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                  <select
+                    id="runway-video-resolution"
+                    value={runwayResolution}
+                    onChange={(e) => setRunwayResolution(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                  >
+                    <option value="">{`${runwayModel.size.default} (default)`}</option>
+                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>)}
+                  </select>
+                </FormField>
+              )}
+              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
+                Animates your start frame on the Runway API. Counts against your Runway credits
+                {(() => {
+                  const estimate = estimateRunwayVideoCostUsd({
+                    modelId: runwayModel?.id, seconds: runwayDuration === '' ? null : Number(runwayDuration), resolution: runwayResolution,
+                  });
+                  return estimate == null ? ' — cost unknown for this model.' : ` — about ${formatUsd(estimate)} at list price.`;
+                })()}
+              </p>
+            </div>
           ) : isReactor ? (
             <ReactorPanel
               clipId={reactorClipId}
@@ -1739,6 +1821,17 @@ export default function VideoGen() {
             {/* Video LoRAs — only on runtimes with a compatible video family
                 (loraFamily non-null) and when at least one matching LoRA is
                 installed (videoLoras is the strict family subset; see hook). */}
+            {loraFamily && loraLibrary.state === 'error' && (
+              <ListLoadError
+                className="col-span-2 sm:col-span-3"
+                what="the LoRA library"
+                error={loraLibrary.error}
+                onRetry={loraLibrary.retry}
+              />
+            )}
+            {loraFamily && loraLibrary.state === 'ready' && videoLoras.length === 0 && (
+              <p className="col-span-2 sm:col-span-3 text-xs text-gray-500">No installed LoRAs match this model&apos;s video family.</p>
+            )}
             {loraFamily && videoLoras.length > 0 && (
               <div className="col-span-2 sm:col-span-3">
                 <LoraPicker

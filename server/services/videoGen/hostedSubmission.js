@@ -7,6 +7,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 
@@ -46,6 +47,33 @@ async function stageFalEndFrame({ body, uploads, sourceImagePath, stageUploadDur
     throw new ServerError('The end frame is missing or could not be resolved.', { status: 400, code: 'VALIDATION_ERROR' });
   }
   return { path: resolved, owned: false };
+}
+
+// Stage an end frame durably (an upload) or resolve a gallery pick.
+async function stageEndFrame({ body, uploads, stageUploadDurable }) {
+  if (uploads.lastImage) return { path: await stageUploadDurable(uploads.lastImage, 'last'), owned: true };
+  const resolved = resolveGalleryImage(body.lastImageFile);
+  if (!resolved) {
+    throw new ServerError('The end frame is missing or could not be resolved.', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return { path: resolved, owned: false };
+}
+
+// Runway renders from a start frame only, with an end frame on the models that take one.
+async function stageRunwayInputs(ctx) {
+  const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
+  const refuse = async (message) => {
+    await cleanupStaged();
+    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+  };
+  if (uploads.audioFile) await refuse('Runway renders cutaways only; it takes no source audio.');
+  if (!sourceImagePath) await refuse('Runway renders from a start frame — supply a source image.');
+  const model = getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+  if (!model) await refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
+  if (!uploads.lastImage && !body.lastImageFile) return {};
+  if (!model.endImage) await refuse(`${model.label} takes no end frame`);
+  const endFrame = await stageEndFrame(ctx);
+  return { lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
 }
 
 // A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
@@ -128,6 +156,27 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       duration: body.falDuration,
       ...(body.falResolution ? { resolution: body.falResolution } : {}),
       ...(body.falGenerateAudio === true ? { generateAudio: true } : {}),
+    }),
+  },
+  [VIDEO_GEN_MODE.RUNWAY]: {
+    prepare: (settings) => ({
+      usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.RUNWAY),
+      extras: {},
+    }),
+    stageInputs: stageRunwayInputs,
+    validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.RUNWAY, params),
+    errorCode: 'RUNWAY_NOT_CONFIGURED',
+    errorMessage: 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first',
+    // The model, length and size are resolved against the curated catalog by videoGen/runway.js.
+    buildParams: (body, prepared) => ({
+      modelId: body.runwayModelId,
+      ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
+      ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
+      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
+      width: body.width,
+      height: body.height,
+      duration: body.runwayDuration,
+      ...(body.runwayResolution ? { resolution: body.runwayResolution } : {}),
     }),
   },
   [VIDEO_GEN_MODE.REACTOR]: {

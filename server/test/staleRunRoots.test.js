@@ -8,6 +8,10 @@ let host;
 beforeEach(() => { host = mkdtempSync(join(tmpdir(), 'srr-test-')); });
 afterEach(() => { rmSync(host, { recursive: true, force: true }); vi.restoreAllMocks(); });
 
+// A complete synthetic snapshot makes the age-policy contract independent of
+// native process-list support (Windows deliberately has no such reader).
+const read = () => [{ pid: process.pid, ppid: process.ppid }];
+
 const makeRoot = (name, { owner, ageMs = 0 } = {}) => {
   const root = join(host, name);
   mkdirSync(root);
@@ -28,7 +32,7 @@ describe.each(['pvt-', 'portos-vitest-'])('sweepStaleRunRoots (%s)', (prefix) =>
 
     const otherPrefix = makeRoot(prefix === 'pvt-' ? 'portos-vitest-dead' : 'pvt-dead', { owner: '111 1000' });
 
-    sweepStaleRunRoots(host, { prefix, probe: ({ pid }) => pid === 222 });
+    sweepStaleRunRoots(host, { prefix, read, probe: ({ pid }) => pid === 222 });
 
     expect(existsSync(dead)).toBe(false);
     expect(existsSync(live)).toBe(true);
@@ -42,9 +46,15 @@ describe.each(['pvt-', 'portos-vitest-'])('sweepStaleRunRoots (%s)', (prefix) =>
   it('falls back to the age rule when liveness is undeterminable (probe returns null)', () => {
     const fresh = makeRoot(prefix + 'unknown-fresh', { owner: '5 1' });
     const old = makeRoot(prefix + 'unknown-old', { owner: '5 1', ageMs: STALE_ROOT_AGE_MS + 60_000 });
-    sweepStaleRunRoots(host, { prefix, probe: () => null });
+    sweepStaleRunRoots(host, { prefix, read, probe: () => null });
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(old)).toBe(false);
+  });
+
+  it('preserves pid-less old roots when process inspection is unavailable', () => {
+    const root = makeRoot(prefix + 'uninspected', { ageMs: STALE_ROOT_AGE_MS * 2 });
+    sweepStaleRunRoots(host, { prefix, read: () => null });
+    expect(existsSync(root)).toBe(true);
   });
 
   it('keeps a root owned by this very process (real probe, real owner file)', () => {
@@ -75,5 +85,11 @@ describe('isOwnerAlive', () => {
   it('does not throw on win32 and treats a signalable pid as alive', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     expect(isOwnerAlive({ pid: process.pid, startMs: 1 })).toBe(true);
+  });
+
+  it('treats a zombie process as dead', () => {
+    if (process.platform === 'win32') return;
+    const exec = () => 'Z+   Sun Oct 18 02:55:38 2026\n';
+    expect(isOwnerAlive({ pid: process.pid, startMs: Date.now() }, { exec })).toBe(false);
   });
 });

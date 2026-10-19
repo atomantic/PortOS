@@ -282,6 +282,30 @@ describe('runCliProviderPrompt', () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it('settles a refused Windows batch launch as an error result, never a rejection (#12346)', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { pinPlatform } = await import('./testHelper.js');
+    const dir = await mkdtemp(join(tmpdir(), 'cli-run-batch-'));
+    const batch = join(dir, 'custom.bat');
+    await writeFile(batch, '@echo off\r\necho %*\r\n');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(batch);
+    const restorePlatform = pinPlatform('win32');
+    try {
+      const result = await runCliProviderPrompt({
+        provider: { id: 'gemini-cli', type: 'cli', command: 'custom', args: [] },
+        prompt: 'ignored',
+        extraArgs: ['--note', 'a " & calc & " b'],
+      });
+      expect(result.error).toContain('WINDOWS_BATCH_ARG_UNSAFE');
+      expect(result.exitCode).toBe(1);
+    } finally {
+      restorePlatform();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // #5302: a non-zero exit that still printed is returned for parsing, but the
   // text may be truncated — callers gate destructive use on `partial === false`.
   describe('non-zero exit agreement', () => {

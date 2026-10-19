@@ -20,6 +20,7 @@ import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWo
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, stat } from 'fs/promises';
 import { atomicWrite } from '../lib/fileUtils.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
@@ -168,15 +169,18 @@ function isContentEdit(updates, existingMetadata = {}) {
 // Cache the parsed array per file so an unchanged file costs one `stat` plus a
 // structured clone instead of a read + full parse.
 //
-// One server process, one user (AGENTS.md trust model) — no locking, no atomic
-// write dance. Correctness rests on two independent invalidation signals:
+// Concurrent API/daemon readers share the read/parse operation for each stamp.
+// Otherwise a cold cache multiplies whole-file strings and parsed task arrays
+// by the number of readers (#12225). Correctness rests on two signals:
 //
 //   1. The stamp (`mtimeMs` + `size`) catches writes this module did NOT make —
 //      a user editing `TASKS.md` in an editor, a restore, a peer's direct write.
-//   2. Every write through `writeTaskFile` DROPS the entry outright. mtime can
+//   2. Every write through `writeTaskFile` DROPS the entry before AND after the
+//      write, including reads started while the rename was pending. mtime can
 //      be as coarse as one second on some filesystems, so a write-then-read in
 //      the same tick must not depend on the stamp having moved.
-const parsedTaskCache = new Map(); // filePath -> { stamp, tasks, byId? }
+const parsedTaskCache = new Map(); // filePath -> generation { stamp, snapshot? }
+const taskSnapshotReads = createSingleFlight();
 
 // `null` = could not stat (missing/unreadable) → do not cache, distinct from a
 // legitimately empty file, which stamps normally and caches its empty parse.
@@ -188,14 +192,26 @@ const taskFileStamp = async (filePath) => {
 // Private snapshots never leave this module: list readers clone the array,
 // while ID lookups clone only the matching task. Both share invalidation.
 async function readTaskSnapshot(filePath) {
+  // Every caller checks external edits before joining a flight: a new writer
+  // must not consume a read that captured the file before an editor's change.
   const stamp = await taskFileStamp(filePath);
-  const cached = parsedTaskCache.get(filePath);
-  if (stamp && cached?.stamp === stamp) return cached;
+  let generation = parsedTaskCache.get(filePath);
+  if (!generation || generation.stamp !== stamp) {
+    generation = { stamp };
+    parsedTaskCache.set(filePath, generation);
+  }
+  // The entry identity is the flight key: invalidation detaches older reads
+  // without letting them repopulate the cache or capture post-write callers.
+  return taskSnapshotReads.run(generation, async () => {
+    if (stamp && generation.snapshot) return generation.snapshot;
 
-  const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
-  if (stamp) parsedTaskCache.set(filePath, snapshot);
-  else parsedTaskCache.delete(filePath);
-  return snapshot;
+    const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
+    if (parsedTaskCache.get(filePath) === generation) {
+      if (stamp) generation.snapshot = snapshot;
+      else parsedTaskCache.delete(filePath);
+    }
+    return snapshot;
+  });
 }
 
 async function readTaskFile(filePath) {
@@ -226,7 +242,7 @@ async function writeTaskFile(filePath, markdown) {
   // task list, and a plain writeFile killed mid-write (PM2 restart, crash, full
   // disk) leaves it empty or half-written — which parses as "no tasks" and is
   // then persisted by the next write.
-  await atomicWrite(filePath, markdown);
+  await atomicWrite(filePath, markdown).finally(() => parsedTaskCache.delete(filePath));
 }
 
 /** Test hook: forget every cached parse. */
@@ -444,17 +460,29 @@ export const getTasks = getUserTasks;
 /**
  * Get a specific task by ID from any task source
  */
-export async function getTaskById(taskId) {
+/**
+ * One task and the queue it lives in: `{ task, source: 'user' | 'internal' }`,
+ * or null. The record is returned as stored (its own `taskType` intact), which
+ * is what a client merging it into a list it already holds needs.
+ */
+export async function findTaskWithSource(taskId) {
   const { config } = await loadState();
   // Keep user-first precedence, including legacy/custom IDs. Do not infer the
   // source from a prefix or prepare grouped copies of both queues for one ID.
   const userTask = await findTaskInFile(join(ROOT_DIR, config.userTasksFile), taskId);
-  if (userTask) return { ...userTask, taskType: 'user' };
+  if (userTask) return { task: userTask, source: 'user' };
 
   const cosTask = await findTaskInFile(join(ROOT_DIR, config.cosTasksFile), taskId);
-  if (cosTask) return { ...cosTask, taskType: 'internal' };
+  if (cosTask) return { task: cosTask, source: 'internal' };
 
   return null;
+}
+
+// Legacy shape: the source overwrites the record's `taskType`. Callers that
+// need the record as stored use findTaskWithSource.
+export async function getTaskById(taskId) {
+  const found = await findTaskWithSource(taskId);
+  return found ? { ...found.task, taskType: found.source } : null;
 }
 
 /**
@@ -1169,6 +1197,9 @@ export function isReapableBlockedFailure(task, { now = Date.now(), maxAgeMs = DE
 export function isReapableInvestigation(task, tasksById) {
   if (!isInvestigationTask(task)) return false;
   if (task.status === 'completed') return false; // already terminal
+  // An in-progress investigation has a live agent diagnosing it; reaping it
+  // would let a later finalize regress the status or spawn a second run (#12059).
+  if (task.status === 'in_progress') return false;
   const affected = Array.isArray(task.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
   if (affected.length === 0) return false;
   return affected.every((id) => {
@@ -1218,11 +1249,38 @@ export async function sweepResolvedFailureTasks({
   let staleBlocks = 0;
   let investigations = 0;
   for (const { task, type, reason } of targets) {
-    const updated = await updateTask(task.id, {
-      status: 'completed',
-      metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-    }, type, { now });
-    if (updated?.error) continue;
+    // Re-read BOTH queues and re-evaluate the reason under the same lock as the
+    // write. Status/metadata pins protect a target from its own stale snapshot,
+    // but an investigation also depends on its origins: one can be resumed after
+    // this sweep's snapshot while the investigation itself stays pending (#12059).
+    const updated = await withStateLock(async () => {
+      const current = await getAllTasks();
+      const currentTask = (type === 'user' ? current.user.tasks : current.cos.tasks)
+        .find((candidate) => candidate.id === task.id);
+      if (!currentTask) return { statusChanged: true };
+      const currentById = new Map([...current.user.tasks, ...current.cos.tasks].map((candidate) => [candidate.id, candidate]));
+      const currentReason = isReapableBlockedFailure(currentTask, { now, maxAgeMs })
+        ? 'stale-failure-block'
+        : (isReapableInvestigation(currentTask, currentById) ? 'investigation-resolved' : null);
+      if (currentReason !== reason) return { statusChanged: true, task: currentTask };
+
+      return writeTaskUpdateLocked(task.id, {
+        status: 'completed',
+        metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
+      }, type, {
+        now,
+        expectedStatus: task.status,
+        // A revived task can fail again before this write and return to blocked.
+        // Preserve the category and every age fallback that justified this sweep.
+        expectedMetadata: reason === 'stale-failure-block' ? {
+          blockedCategory: task.metadata?.blockedCategory,
+          blockedAt: task.metadata?.blockedAt,
+          lastFailureAt: task.metadata?.lastFailureAt,
+          updatedAt: task.metadata?.updatedAt,
+        } : null,
+      });
+    });
+    if (updated?.error || updated?.statusChanged) continue;
     if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
   }
 

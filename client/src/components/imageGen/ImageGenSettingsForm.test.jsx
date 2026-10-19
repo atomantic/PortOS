@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import ImageGenSettingsForm from './ImageGenSettingsForm';
 
 // Stub the heavy child pickers so the test pins ONLY this form's own
@@ -24,6 +24,14 @@ const renderForm = (props) =>
   render(<ImageGenSettingsForm value={{ mode: 'local' }} onChange={vi.fn()} {...props} />);
 
 describe('ImageGenSettingsForm layout', () => {
+  it('offers removal of retained LoRAs when a text-only model replaces the prior selection', () => {
+    const onChange = vi.fn();
+    renderForm({ value: { mode: 'local', modelId: 'moss', loras: [{ filename: 'example.safetensors' }] },
+      models: [{ id: 'moss', supportsLoras: false }], showLoras: true, onChange });
+    expect(screen.queryByTestId('lora-picker')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove selected LoRAs' }));
+    expect(onChange).toHaveBeenCalledWith({ mode: 'local', modelId: 'moss', loras: [] });
+  });
   it('flat mode (default) renders no section headings but keeps all controls', () => {
     renderForm({ availableBackends: BACKENDS });
     SECTION_TITLES.forEach((title) => expect(screen.queryByRole('heading', { name: title })).toBeNull());

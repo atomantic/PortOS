@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAccess.js';
 /**
  * Image Generation Routes — works against the external SD API, local mflux,
  * or the Codex CLI built-in image_gen tool, depending on settings.imageGen.mode
@@ -20,7 +21,9 @@ import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { maxInputImages, resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
-import setupRouter from './imageGenSetup.js';
+import setupRouter, { streamMossAction } from './imageGenSetup.js';
+import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
+import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { recordUserAction } from '../services/userActions.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
@@ -106,13 +109,17 @@ const galleryImageFilenameSchema = (label) => z.string().max(256)
 
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
+// Rejected, never stripped: model input is not silently modified. spawn() also throws on NUL.
+const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
+  .refine((v) => !v.includes('\0'), { message: 'Prompt may not contain a NUL character' });
+
 const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
-  prompt: z.string().max(MAX_PROMPT_LENGTH).optional().default(''),
-  negativePrompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
+  prompt: noNulPrompt.optional().default(''),
+  negativePrompt: noNulPrompt.optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
@@ -476,6 +483,7 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
+  if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
     data,
     files: req.files,
@@ -786,6 +794,7 @@ router.get('/models', (_req, res) => {
 // `cached: null` so the UI can render "unknown" rather than a misleading
 // "not downloaded" state. Lazy generation still works regardless of badge.
 const imageModelCacheStatus = async (m) => {
+  if (usesMossSwift(m)) return mossModelCacheStatus(m.id);
   const required = requiredReposForModel(m);
   if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
   // Inspect every required repo (main + any aux text encoders). The badge
@@ -823,6 +832,7 @@ router.post('/models/verify', asyncHandler(async (req, res) => {
     throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
   }
   const results = await Promise.all(models.map(async (m) => {
+    if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
     const required = requiredReposForModel(m) || [];
     const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
     return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
@@ -840,6 +850,7 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
   const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
   if (!parsed.success) failValidation(parsed);
   const deep = parsed.data.deep || false;
+  if (usesMossSwift(model)) return res.json(await repairMossWeights({ deep }));
   const required = requiredReposForModel(model);
   if (!required) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
@@ -868,6 +879,7 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
 router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { force } = validateRequest(modelDownloadQuerySchema, req.query);
   const model = downloadableImageModel(req);
+  if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
   const repos = requiredReposForModel(model);
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {

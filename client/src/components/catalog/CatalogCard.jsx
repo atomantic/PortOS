@@ -13,6 +13,7 @@ import { Sparkles, Trash2 } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { payloadSnippet } from '../../lib/catalogTypes';
+import { ingredientPath, ingredientCoverUrl } from '../../lib/creativeLibraries';
 
 function TypeBadge({ type, getType }) {
   const meta = getType(type);
@@ -24,18 +25,18 @@ function TypeBadge({ type, getType }) {
   );
 }
 
-// Card thumbnail: the ingredient's portrait (or most recent reference image),
-// resolved from the media library at /data/images/<key>. With no image we show a
+// Card thumbnail: the ingredient's portrait (or most recent reference image)
+// from the media library, else its universe canon image (ingredientCoverUrl). With no image we show a
 // dimmed Sparkles placeholder; with one we render through <MediaImage>, which
 // tolerates a not-yet-arrived peer asset (shows "Syncing" and auto-swaps to the
 // live image on the asset-arrived event) instead of permanently breaking on a
 // transient 404. Either way the slot keeps a fixed footprint so the grid aligns.
-function CardThumb({ mediaKey, alt }) {
+function CardThumb({ src, alt }) {
   return (
     <div className="w-14 h-14 shrink-0 rounded-md overflow-hidden border border-port-border bg-port-bg flex items-center justify-center">
-      {mediaKey ? (
+      {src ? (
         <MediaImage
-          src={`/data/images/${mediaKey}`}
+          src={src}
           alt={alt}
           className="w-full h-full object-cover"
           loading="lazy"
@@ -96,10 +97,10 @@ export default function CatalogCard({
         />
       )}
       <Link
-        to={`/catalog/${encodeURIComponent(it.type)}/${encodeURIComponent(it.id)}`}
+        to={ingredientPath(it)}
         className="flex gap-3 p-3 pl-11 pr-11 min-h-[88px]"
       >
-        <CardThumb mediaKey={it.thumbnailKey} alt={name} />
+        <CardThumb src={ingredientCoverUrl(it)} alt={name} />
         <span className="flex flex-col gap-2 min-w-0 flex-1">
           <span className="block text-white font-medium truncate">{name}</span>
           <span className="flex items-center gap-1.5 flex-wrap">

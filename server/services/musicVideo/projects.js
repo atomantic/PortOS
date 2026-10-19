@@ -31,6 +31,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
 import { withStyleSnapshots } from './styleSnapshots.js';
+import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -182,12 +183,14 @@ export async function createProject(input) {
   const snapshotted = await withStyleSnapshots(seeded);
   const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
+  queueProjectCatalogLinkSync(project.id);
   return project;
 }
 
 export async function cloneProject(id, options = {}) {
   const project = await (await selectBackend()).cloneProject(id, options);
   announceNewProject(project.id);
+  queueProjectCatalogLinkSync(project.id);
   return project;
 }
 
@@ -197,13 +200,16 @@ export async function updateProject(id, patch) {
   const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
     || seeded?.visualSpec?.moodBoardId !== undefined;
   const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
+  const castChanged = resolved?.concept?.subjects !== undefined;
   if (!Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
+    if (castChanged) queueProjectCatalogLinkSync(id);
     return next;
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
+  if (castChanged) queueProjectCatalogLinkSync(id);
   return project;
 }
 
@@ -226,6 +232,7 @@ export async function deleteProject(id) {
   const result = await (await selectBackend()).deleteProject(id);
   // Soft-delete tombstone — push the deletion to subscribed peers immediately.
   emitRecordDeleted('musicVideoProject', id);
+  queueProjectCatalogLinkSync(id);
   // Its cached shot segments are regenerable, and only this machine's.
   await import('./shotSegments.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
     console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);
@@ -511,19 +518,21 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * write tail / PG row lock). `transform(project)` returns `{ project, ...result }`;
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
+ * `options.source` marks an automation write for preserveAutomatedShotLocks;
+ * `options.runId` names the autonomous run behind an `orchestrator` write.
  */
 export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
-async function mutateProjectRecordAdmitted(id, transform, { source = null } = {}, mutate = null) {
+async function mutateProjectRecordAdmitted(id, transform, { source = null, runId = null } = {}, mutate = null) {
   const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   let dropped = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const outcome = await write(id, async (current) => {
     const outcome = transform(current);
     if (source) {
-      const guarded = preserveAutomatedShotLocks(current, outcome.project, source);
+      const guarded = preserveAutomatedShotLocks(current, outcome.project, source, { runId });
       outcome.project = guarded.project;
       if (guarded.rejected) {
         outcome.rejected = true;

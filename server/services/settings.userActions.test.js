@@ -29,9 +29,16 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-const { saveSettings, updateSettings, updateSettingsWith, reloadSettings, __resetSettingsCache } =
+const { saveSettings, updateSettings, updateSettingsWith, reloadSettings, flushSettingsLedger, __resetSettingsCache } =
   await import('./settings.js');
 const { listUserActions } = await import('./userActions.js');
+
+// The ledger row is detached bookkeeping (#12018): a resolved save does not
+// mean the row has landed, so drain the in-flight writes before reading back.
+const listSettingsUpdates = async () => {
+  await flushSettingsLedger();
+  return listUserActions({ type: 'settings.update' });
+};
 
 const SETTINGS_FILE = join(tempRoot, 'settings.json');
 const seed = (settings) => writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
@@ -49,7 +56,7 @@ describe('settings save → user_action_events (#5594)', () => {
   it('records the changed keys with before/after and the caller-supplied actor', async () => {
     await updateSettingsWith((current) => ({ ...current, timezone: 'America/Los_Angeles' }), { actor: 'user' });
 
-    const [event] = await listUserActions({ type: 'settings.update' });
+    const [event] = await listSettingsUpdates();
     expect(event).toMatchObject({ type: 'settings.update', actor: 'user', success: true });
     expect(event.payload.keysChanged).toEqual(['timezone']);
     expect(event.payload.changes.timezone).toEqual({ from: 'UTC', to: 'America/Los_Angeles' });
@@ -61,7 +68,7 @@ describe('settings save → user_action_events (#5594)', () => {
 
   it('defaults to actor "system" for every non-route caller', async () => {
     await updateSettings({ theme: 'dark' });
-    const [event] = await listUserActions({ type: 'settings.update' });
+    const [event] = await listSettingsUpdates();
     expect(event.actor).toBe('system');
     expect(event.payload.keysChanged).toEqual(['theme']);
   });
@@ -69,7 +76,7 @@ describe('settings save → user_action_events (#5594)', () => {
   it('threads the actor through saveSettings and updateSettings too', async () => {
     await saveSettings({ timezone: 'UTC', theme: 'dark' }, { actor: 'user' });
     await updateSettings({ theme: 'light' }, { actor: 'user' });
-    const events = await listUserActions({ type: 'settings.update' });
+    const events = await listSettingsUpdates();
     expect(events).toHaveLength(2);
     expect(events.every((e) => e.actor === 'user')).toBe(true);
   });
@@ -77,7 +84,7 @@ describe('settings save → user_action_events (#5594)', () => {
   it('lists a secret-shaped key as changed but withholds its value', async () => {
     await updateSettings({ civitaiApiKey: 'EXAMPLE-not-a-real-key' }, { actor: 'user' });
 
-    const [event] = await listUserActions({ type: 'settings.update' });
+    const [event] = await listSettingsUpdates();
     expect(event.payload.keysChanged).toEqual(['civitaiApiKey']);
     expect(event.payload.redactedKeys).toEqual(['changes.civitaiApiKey']);
     expect(event.payload.changes).not.toHaveProperty('civitaiApiKey');
@@ -87,18 +94,18 @@ describe('settings save → user_action_events (#5594)', () => {
   it('records the fact of a change for a non-scalar slice without copying it in', async () => {
     await updateSettings({ backup: { enabled: true, destination: '/example/backups' } }, { actor: 'user' });
 
-    const [event] = await listUserActions({ type: 'settings.update' });
+    const [event] = await listSettingsUpdates();
     expect(event.payload.changes.backup).toEqual({ changed: true });
   });
 
   it('writes nothing for a no-op save', async () => {
     await updateSettings({ timezone: 'UTC' }, { actor: 'user' });
-    expect(await listUserActions({ type: 'settings.update' })).toEqual([]);
+    expect(await listSettingsUpdates()).toEqual([]);
 
     // Bypass probe: the same call with a real change DOES record, so the
     // assertion above is about the no-op, not about the hook being dead.
     await updateSettings({ timezone: 'Europe/Berlin' }, { actor: 'user' });
-    expect(await listUserActions({ type: 'settings.update' })).toHaveLength(1);
+    expect(await listSettingsUpdates()).toHaveLength(1);
   });
 
   it('keeps two same-millisecond saves apart in the dedupe key', async () => {
@@ -108,7 +115,7 @@ describe('settings save → user_action_events (#5594)', () => {
     await updateSettings({ theme: 'dark' }, { actor: 'user' });
     await updateSettings({ locale: 'en-GB' }, { actor: 'user' });
 
-    const events = await listUserActions({ type: 'settings.update' });
+    const events = await listSettingsUpdates();
     expect(events).toHaveLength(2);
     expect(new Set(events.map((e) => e.dedupeKey)).size).toBe(2);
     expect(events.every((e) => e.dedupeKey.startsWith('settings.update:'))).toBe(true);
@@ -116,12 +123,12 @@ describe('settings save → user_action_events (#5594)', () => {
 
   it('skipUserAction suppresses the generic settings.update row', async () => {
     await updateSettings({ timezone: 'Europe/Berlin' }, { actor: 'user', skipUserAction: true });
-    expect(await listUserActions({ type: 'settings.update' })).toEqual([]);
+    expect(await listSettingsUpdates()).toEqual([]);
   });
 
   it('records nothing for reloadSettings — a restore is not an operator edit', async () => {
     seed({ timezone: 'Asia/Tokyo', theme: 'dark' });
     await reloadSettings();
-    expect(await listUserActions({ type: 'settings.update' })).toEqual([]);
+    expect(await listSettingsUpdates()).toEqual([]);
   });
 });

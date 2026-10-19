@@ -63,7 +63,7 @@ export async function applyProjectRenderPool(body) {
         || capability.memory.requiredGb > capability.memory.freeGb || !capability.inputAssets?.roles?.includes('sourceImage')
         || !capability.supportedModes?.includes(requestedMode)
         || (suppliedAudio && !capability.sourceAudio)) reasons.push('This Mac: model, memory capacity or supplied-audio support is unavailable');
-      else candidates.push({ modelId, peerId: null, load: jobs.filter((job) => !job.params?.remoteMedia && !['grok', 'fal', 'reactor', 'codex', 'agy'].includes(job.params?.mode)).length });
+      else candidates.push({ modelId, peerId: null, load: jobs.filter((job) => !job.params?.remoteMedia && !['grok', 'fal', 'reactor', 'runway', 'codex', 'agy'].includes(job.params?.mode)).length });
     }
   }
   // Probe only explicitly selected and already allowlisted peers. Status alone

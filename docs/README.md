@@ -8,11 +8,14 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 | Doc | Covers |
 |-----|--------|
+| [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [SUPERCOLLIDER.md](./SUPERCOLLIDER.md) | Managed SuperCollider Docker runtime: `setup:supercollider`, readiness states, containment policy and platform evidence |
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
+| [CATALOG_LOCAL_MERGE.md](./CATALOG_LOCAL_MERGE.md) | Local catalog consolidation, preserved identities and assets, conflict review, and guarded recovery |
+| [CATALOG_SHARED_IDENTITY.md](./CATALOG_SHARED_IDENTITY.md) | Two-owner canonical identity agreements, preparation, adoption, owner refresh, and coordinated recovery |
 | [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
 | [API_TOOL_CONTRACT.md](./API_TOOL_CONTRACT.md) | Unified semantic tool, Persistent Mind, and Agent Tools MCP contract |
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |
@@ -21,15 +24,22 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio provider wire contract and setup |
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
 | [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps, restore semantics |
-| [PORTS.md](./PORTS.md) | Port allocation (5553–5561) and how 5555/5553/5554 relate |
+| [BACKUP_PUBLICATION_ADMISSION.md](./BACKUP_PUBLICATION_ADMISSION.md) | Shared admission lease between the server and `portos-cos`, and how snapshot and restore cuts drain in-flight asset publications |
+| [PORTS.md](./PORTS.md) | Port allocation (5553–5569) and how 5555/5553/5554 relate |
 | [ITERM.md](./ITERM.md) | The Shell page's iTerm2 view — requirements, status states and their fixes, why iTerm2 sessions stay separate from PortOS shells, the clean-room protocol rule |
 | [INSTANCE_FEATURES.md](./INSTANCE_FEATURES.md) | Optional per-install features — registry, client-side nav gating, feature groups, reconcile-at-toggle |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
 | [DEEP-AUDITS.md](./DEEP-AUDITS.md) | Persistent audit coverage, independent passes, checkpoint/resume and completion rules |
+| [DEEP-AUDITS-LEGACY.md](./DEEP-AUDITS-LEGACY.md) | Legacy (historical) exhaustive Deep audit records and their stored evidence format; new launches no longer run this workflow |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
 | [AI_PROVIDERS.md](./AI_PROVIDERS.md) | The AI Providers page: a run composed from Harness × Method × Service × Model × Effort, its Presets / Harnesses / Services views, compatibility matrix, derived vs legacy presets, and what federates (nothing) |
 | [PROVIDER_COMPOSITION.md](./PROVIDER_COMPOSITION.md) | Composite provider ids (`harness.method@service[+bootstrap]`): the grammar, per-harness enablement, bootstrap apps, how every run path resolves one, and the preset-only surfaces |
 | [MODEL_ACCESS.md](./MODEL_ACCESS.md) | Scoping a provider to the models your plan entitles you to — free tiers, allow/deny globs, gateway inheritance |
+| [MODEL_TIERS.md](./MODEL_TIERS.md) | Light / Medium / Heavy / Ultra tiers as per-preset routing configuration, and how a task or stage names a tier |
+| [JEV_SETUP.md](./JEV_SETUP.md) | Optional local jev entailment scorer: installing, the pinned model and runtime, and recovery |
+| [PROMPT_GUARD_SETUP.md](./PROMPT_GUARD_SETUP.md) | Abuse Guard (Prompt Guard) runtime: status and install commands, repair behavior, and diagnosing a failed install |
+| [PERSISTENT_MIND_MAINTAINER.md](./PERSISTENT_MIND_MAINTAINER.md) | Opt-in, machine-local development maintainer role for the persistent mind: setup, grants, and activation |
+| [IMAGE_GALLERY.md](./IMAGE_GALLERY.md) | Image gallery reads: legacy full-array response, paged and filtered envelope, and `media_assets` search semantics |
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
@@ -59,16 +69,18 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 Start with the [product surface map](./features/product-surfaces.md) for a complete, user-facing inventory of the application. The focused guides below explain the features with their own operating contracts.
 
-App management: [app-wizard](./features/app-wizard.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
+App management: [app-wizard](./features/app-wizard.md) · [app-quality](./features/app-quality.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
 
-Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [cos-enhancement](./features/cos-enhancement.md) · [self-improvement-audits](./features/self-improvement-audits.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [grok-box-local-mind](./features/grok-box-local-mind.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [slotstream](./features/slotstream.md) · [dflash2](./features/dflash2.md) ([DSpark vs DFlash 2](./research/2026-08-19-dspark-vs-dflash2.md), [Ternary Bonsai 2 27B](./research/2026-09-18-ternary-bonsai-2-27b.md)) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) ([3090 bring-up](./research/2026-08-21-qwen38-rtx3090-vllm.md)) · [sglang-qwen38](./features/sglang-qwen38.md) ([SGLang Hopper/Blackwell evaluation](./research/2026-08-21-sglang-qwen38-27b.md)) · [prompt-manager](./features/prompt-manager.md)
+Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [branch-reconciliation](./features/branch-reconciliation.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [cos-enhancement](./features/cos-enhancement.md) · [self-improvement-audits](./features/self-improvement-audits.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [grok-box-local-mind](./features/grok-box-local-mind.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [slotstream](./features/slotstream.md) · [dflash2](./features/dflash2.md) ([DSpark vs DFlash 2](./research/2026-08-19-dspark-vs-dflash2.md), [Ternary Bonsai 2 27B](./research/2026-09-18-ternary-bonsai-2-27b.md)) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) ([3090 bring-up](./research/2026-08-21-qwen38-rtx3090-vllm.md)) · [sglang-qwen38](./features/sglang-qwen38.md) ([SGLang Hopper/Blackwell evaluation](./research/2026-08-21-sglang-qwen38-27b.md)) · [prompt-manager](./features/prompt-manager.md) · [development-watchdog](./features/development-watchdog.md) · [review-queue](./features/review-queue.md) · [scheduled-audit-organization](./features/scheduled-audit-organization.md)
+
+Federation: [peer-administration](./features/peer-administration.md) · [tailcat-peers](./features/tailcat-peers.md) · Models: [decision-classifiers](./features/decision-classifiers.md)
 - [Persistent Mind continuous play + local context](./features/persistent-mind-continuous-play.md) — explore/invent playbook and mind-adjustable `numCtx` clamps
 
 Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [privacy-center](./features/privacy-center.md) · [post](./features/post.md) (insights design spike: [plans/2026-06-03](./plans/2026-06-03-cross-domain-insights-engine.md))
 
 Knowledge: [brain-system](./features/brain-system.md) · [untrusted messages and GitHub automation](./features/messages-security.md) · [scope adherence](./features/scope-adherence.md)
 
-Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [Eidoverse music-video renderer](./EIDOVERSE_VIDEO.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
+Create: [writers-room](./features/writers-room.md) · [creative-director-video](./features/creative-director-video.md) · [apple-video-options](./features/apple-video-options.md) · [qwen-image-21](./features/qwen-image-21.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [Eidoverse music-video renderer](./EIDOVERSE_VIDEO.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
 
 Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./features/messages-browser-send.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md) ([Jev feasibility](./research/2026-09-30-jev-voice-feasibility.md))
 
@@ -77,6 +89,8 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - [Music Video render-grade validation](validation/9302-music-video-grade.md) — synthetic encoder parity, visual references, and remaining generated-shot acceptance.
 - [Explicit Music Video render pools](decisions/2026-10-04-music-video-render-pools.md) — proposed initial shot placement and supplied-audio conditioning; final composition export remains local.
 - [CoS agent permission posture](decisions/2026-10-06-cos-agent-permission-posture.md) — why unattended agents keep full-bypass instead of vendor auto-approve modes, and where stricter modes apply.
+- [Native trash feasibility study](research/2026-10-18-native-trash-feasibility.md) — can PortOS recycle media without the `trash` package: per-platform comparison, executed macOS/Linux proofs, the Windows acceptance checks, and the regression matrix.
+- [Recycle media through OS facilities PortOS owns](decisions/2026-10-18-native-trash-without-dependency.md) — replace `trash@10.1.1` with `osascript`/JXA, PowerShell + `SHFileOperationW`, and an owned XDG adapter; implementation plan and Windows validation gate.
 
 - **[plans/](./plans/README.md)** — dated design plans (`YYYY-MM-DD-<slug>.md`), archived on approval before implementation. Historical records, not living docs. See [provider connections and harnesses](./plans/2026-09-06-provider-connections-and-harnesses.md) for stable executable routes, migration and management flows.
 - **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([user-controlled federation](./decisions/2026-09-19-user-controlled-federation.md), [Privacy Center storage](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md), [AI usage metrics federate on by default](./decisions/2026-09-01-federated-usage-metrics.md), [Eidoverse guest chat](./decisions/2026-09-05-eidoverse-guest-chat.md), [numeric PortOS quality federation](./decisions/2026-09-10-portos-quality-federation.md), [federated Eidoverse foundations](./decisions/2026-09-18-federated-eidoverse-foundations.md)), why H3 [ships the draft-decode gates without an asset](./decisions/2026-08-30-h3-draft-decoder-asset.md), and why closed-set decisions run on a [local entailment model that abstains](./decisions/2026-09-18-local-jev-decision-service.md).

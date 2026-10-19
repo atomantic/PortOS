@@ -17,6 +17,7 @@ import { getBuildIdentity } from './lib/buildIdentity.js';
 import { httpCompression } from './lib/httpCompression.js';
 import { PORTS } from './lib/ports.js';
 import { isSmokeBoot } from './lib/runtimeEnv.js';
+import { installUpgradeFallback } from './lib/upgradeFallback.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -59,6 +60,7 @@ import featureAgentsRoutes from './routes/featureAgents.js';
 import feedsRoutes from './routes/feeds.js';
 import gsdRoutes from './routes/gsd.js';
 import catalogRoutes from './routes/catalog.js';
+import catalogSheetRoutes from './routes/catalogSheets.js';
 import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
 import userActionsRoutes from './routes/userActions.js';
@@ -215,6 +217,7 @@ setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
+  destroyUpgrade: false,
   maxHttpBufferSize: SOCKET_MAX_PAYLOAD_BYTES,
   // CORS headers are reflected only for handshakes allowRequest admits: the
   // same browser-relay guard as the HTTP gate refuses a foreign Origin or a
@@ -238,6 +241,11 @@ remoteDesktopBroker.mountWebSocket(localHttpServer);
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
+
+// Close unclaimed upgrade sockets after a bounded timeout (replaces engine.io's
+// destroyUpgrade timer so reverse proxies with slow upstreams aren't cut short).
+installUpgradeFallback(httpServer);
+installUpgradeFallback(localHttpServer);
 
 // Auth gate for Socket.IO — when settings.secrets.auth.enabled is true the
 // handshake must carry a valid token cookie or Authorization: Bearer header
@@ -290,6 +298,14 @@ app.use(authGate);
 // Host-executing routes (lib/hostControlRoutes.js) additionally need operator
 // authority: a session, or a local connection on a password-free install.
 app.use(hostControlRouteGate);
+
+// Eidoverse same-origin reverse-proxy (`/eidoverse-host` + root allowlist while
+// the host is active). Must sit above express.json() / express.urlencoded() so
+// mutating POST/PUT request body streams are not consumed before proxyHttpToEidoverse
+// pipes them upstream (#12068), above mountAssetRoutes so the `/eidoverse-host`
+// SERVER_OWNED terminator cannot 404 proxied paths, and above the SPA fallback
+// so `/version` / `/ws` are not answered with PortOS index.html.
+mountEidoverseOnServer(app);
 
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
@@ -378,6 +394,7 @@ app.use('/api/cos', cosRoutes);
 app.use('/api/feature-agents', featureAgentsRoutes);
 app.use('/api/feeds', feedsRoutes);
 app.use('/api/catalog', catalogRoutes);
+app.use('/api/catalog', catalogSheetRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/user-actions', userActionsRoutes);
@@ -488,11 +505,6 @@ app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 
-// Eidoverse same-origin reverse-proxy (`/eidoverse-host` + root allowlist while
-// the host is active). Must sit above mountAssetRoutes so the `/eidoverse-host`
-// SERVER_OWNED terminator cannot 404 proxied paths, and above the SPA fallback
-// so `/version` / `/ws` are not answered with PortOS index.html.
-mountEidoverseOnServer(app);
 
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through

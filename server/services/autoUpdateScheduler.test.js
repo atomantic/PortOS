@@ -232,6 +232,51 @@ describe('checkout readiness gate', () => {
     expect(deps.queueRepair).not.toHaveBeenCalled();
   });
 
+  // #12227: a live owner makes the repair agent stand down, so dispatching it
+  // would only burn the cooldown. Defer, and repair on the first tick after
+  // the owners release the checkout.
+  describe('active checkout owners', () => {
+    const owned = { ...notReady, reasons: ['agent-at-work', 'unpushed-commits'], summary: 'a CoS agent is working in this checkout' };
+
+    it('neither queues a repair nor stamps the cooldown while an agent holds the checkout', async () => {
+      deps.readRepo.mockResolvedValue(owned);
+      deps.queueRepair.mockResolvedValue({ id: 'task-1' });
+      await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'repo-not-ready' });
+      expect(deps.queueRepair).not.toHaveBeenCalled();
+      expect(deps.recordRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ repairQueuedAt: expect.any(String) }));
+      expect(deps.prepareRepo).not.toHaveBeenCalled();
+      expect(deps.selfUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not dispatch repair or update when agent ownership is unreadable', async () => {
+      deps.readRepo.mockResolvedValue({ ...owned, reasons: ['agent-check-unreadable', 'unpushed-commits'] });
+      await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'repo-not-ready' });
+      expect(deps.queueRepair).not.toHaveBeenCalled();
+      expect(deps.appUpdate).not.toHaveBeenCalled();
+    });
+
+    it('dispatches exactly one repair once ownership clears, then honours the cooldown', async () => {
+      deps.queueRepair.mockResolvedValue({ id: 'task-1' });
+      deps.readRepo.mockResolvedValue(owned);
+      await runAutoUpdateTick({ io: {} });
+      expect(deps.queueRepair).not.toHaveBeenCalled();
+
+      deps.readRepo.mockResolvedValue({ ...notReady, reasons: ['unpushed-commits'] });
+      await runAutoUpdateTick({ io: {} });
+      expect(deps.queueRepair).toHaveBeenCalledTimes(1);
+      const [[{ repairQueuedAt }]] = deps.recordRuntime.mock.calls.filter(([patch]) => typeof patch.repairQueuedAt === 'string');
+
+      deps.queueRepair.mockClear();
+      deps.gateState.mockResolvedValue({
+        runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt },
+        lastUpdateResult: null,
+        updateInProgress: false,
+      });
+      await runAutoUpdateTick({ io: {} });
+      expect(deps.queueRepair).not.toHaveBeenCalled();
+    });
+  });
+
   // The core regression (#7468): a repair agent that stands down without
   // fixing the tree must not be re-queued every 5-minute tick forever.
   // `addTask`'s dedup only holds while that task stays open, and
@@ -586,6 +631,10 @@ describe('updater status invalidation', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(io.emit).toHaveBeenCalledTimes(1);
     expect(deps.watch.mock.calls[0][0].every(path => !path.endsWith('index'))).toBe(true);
+    // chokidar guards the native watch handle against Windows EPERM only for
+    // persistent watchers; a non-persistent one crashes the server when git
+    // prunes a watched refs/ subdirectory.
+    expect(deps.watch.mock.calls[0][1]).toMatchObject({ persistent: true });
     __resetAutoUpdateSchedulerForTests();
     expect(watcher.close).toHaveBeenCalledTimes(1);
   });

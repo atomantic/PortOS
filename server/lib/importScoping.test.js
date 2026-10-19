@@ -26,7 +26,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { dirname, join, relative, sep } from 'path';
+import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { staticImportClosure } from './staticImportGraph.js';
 import {
@@ -35,6 +35,7 @@ import {
   measureClosures,
   measureWorkingTree,
 } from '../../scripts/lib/importGrowth.js';
+import { importSpecifiersFromSource } from '../../scripts/lib/importReach.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -140,6 +141,10 @@ const NARROWED = [
     'needs isStr / trimTo, which textUtils.js declares'],
   ['services/review.js', 'services/reviewActionAdapters.js',
     'owns source-owned completion policy without the queue action adapters'],
+  // A runner-only change selected ~1,100 suites through vitest related, which
+  // also walks peerExecutionAdapters' lazy import of installState.js.
+  ['services/installState.js', '../scripts/run-migrations.js',
+    'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -174,6 +179,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
+    expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
+    expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
   });
 
   it('keeps the process-type vocabulary dependency-free', () => {
@@ -323,6 +330,51 @@ describe('deferred imports stay deferred (#6156)', () => {
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
+  });
+});
+
+// `vitest related` follows dynamic imports, so a lazy import() narrows the
+// static closure above but not CI selection. Each row is an edge cut from the
+// dynamically connected CoS cluster (#12285): the entry must import its target
+// neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
+const SELECTION_CUTS = [
+  ['services/cosClaimOwnershipState.js', 'services/cosClaimOwnership.js',
+    'owns the shared state fence without importing its reconciliation consumers'],
+  ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
+    'never re-exports boot observers into notification producers'],
+  ['services/memoryConfig.js', 'services/cos.js',
+    'updates memory approval counts through the declaring agent lifecycle module'],
+  ['services/worktreeManager.js', 'services/cosClaimOwnership.js',
+    'shares the ownership fence and trusted reader without reconciliation dependencies'],
+  ['services/promptRunner.js', 'services/compositeProviders.js',
+    'uses the toolkit resolver already registered before runners start'],
+  ['services/systemActivityNotify.js', 'services/mediaJobQueue/index.js',
+    'keeps boot subscriptions in systemActivityWatchers.js'],
+  ['services/pm2.js', 'services/readinessNotify.js',
+    'notifies readiness subscribers through the readinessSignal.js leaf'],
+  ['services/promptRunner.js', 'services/autoFixer.js',
+    'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
+];
+
+const importTargets = (entry) => {
+  const { static: eager, dynamic: lazy } = importSpecifiersFromSource(readFileSync(abs(entry), 'utf-8'));
+  return [...eager, ...lazy].filter((spec) => spec.startsWith('.'))
+    .map((spec) => posix.normalize(posix.join(posix.dirname(entry), spec)));
+};
+
+describe('CI-selection cuts stay cut (#12285)', () => {
+  it.each(SELECTION_CUTS)('%s imports %s neither statically nor dynamically — it %s', (entry, target) => {
+    expect(importTargets(entry)).not.toContain(target);
+  });
+
+  it('the leaves the cut entries import stay import-free', () => {
+    expect(importTargets('services/readinessSignal.js')).toEqual([]);
+    expect(importTargets('services/providerRecoveryHooks.js')).toEqual([]);
+  });
+
+  // Positive control: the scanner sees the observer's own lazy imports.
+  it('still sees the dynamic edges readinessNotify.js keeps', () => {
+    expect(importTargets('services/readinessNotify.js')).toContain('services/systemHealthSnapshot.js');
   });
 });
 

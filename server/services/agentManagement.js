@@ -26,7 +26,7 @@ import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAg
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -1228,6 +1228,7 @@ async function runCleanupOrphanedAgents() {
 
   for (const agent of agents) {
     if (agent.status === 'running') {
+      if (completingAgents.has(agent.id)) continue;
       const inRemoteRunner = await runnerEntryShieldsRunningRecord(
         runnerById.get(agent.id),
         isPidAlive,
@@ -1259,7 +1260,10 @@ async function runCleanupOrphanedAgents() {
       // completes a run that goes on to launch — its claim ownership bind then
       // fails with owner-not-running. Mirrors the zombie sweep's guards.
       if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
-      if (!agent.pid) {
+      // A shutdown-marked dispatch cannot still be initializing in this process.
+      // Retire it now; otherwise the grace skips it and we consume its marker,
+      // so the next sweep charges a genuine host interruption as an orphan.
+      if (!agent.pid && !interruptedByRestart.has(agent.id)) {
         const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
         if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
       }
@@ -1278,6 +1282,9 @@ async function runCleanupOrphanedAgents() {
           continue;
         }
       }
+
+      // Recheck after the awaited pid probes: completion owns its terminal write.
+      if (completingAgents.has(agent.id)) continue;
 
       const interrupted = interruptedByRestart.has(agent.id);
       const errorMessage = interrupted

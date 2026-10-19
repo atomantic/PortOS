@@ -10,7 +10,7 @@
  * reports a cancel as if the tests were red (issue 7437). The same SHA passes
  * on the next attempt once the queue drains, so one re-dispatch clears it.
  *
- * Five guards keep that from becoming a retry loop or from re-running work
+ * Six guards keep that from becoming a retry loop or from re-running work
  * somebody deliberately stopped — the reasoning for each is the table under
  * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
  * The two least obvious, stated here because the code alone does not show them:
@@ -21,9 +21,11 @@
  *     event payload, because the payload is a snapshot: a human can re-run
  *     the same run, or the event can be redelivered, while this job is
  *     still queued behind the very backlog it exists to survive.
- *   - No job may have concluded `failure`/`timed_out`. This repository cancels
- *     its own run from a failing job (scripts/cancel-current-ci-run.js), which
- *     makes the RUN read `cancelled` while a job really did fail.
+ *   - No job may have concluded `failure`/`timed_out`, or carry a failed step.
+ *     A run cancelled while one job was already red reads `cancelled` too.
+ *   - No job may have hit its own `timeout-minutes`. GitHub reports such a
+ *     job as `cancelled`, so only its check-run annotation tells it apart
+ *     from an external cancel (#11910).
  *
  * An API call that cannot be completed is NOT treated as "guard passed": every
  * lookup failure returns without re-dispatching, because the cost of missing a
@@ -84,7 +86,18 @@ export const RETRY_DELAY_MS = 5 * 60_000;
  * quietly eating the margin.
  */
 export const MAX_RUNTIME_MS = RETRY_DELAY_MS
-  + 2 * (MAX_JOB_PAGES + 2) * REQUEST_TIMEOUT_MS;
+  // +3: the live-run and sibling lookups, plus one round of annotation reads
+  // (issued in parallel, so one request timeout however many jobs it covers).
+  + 2 * (MAX_JOB_PAGES + 3) * REQUEST_TIMEOUT_MS;
+
+/**
+ * GitHub's annotation on a job killed by its own `timeout-minutes`. The jobs
+ * API reports that job as `cancelled`, not `timed_out` — a run cancelled only
+ * because a job timed out otherwise reads exactly like queue contention, and
+ * re-running it just times out again (#11910). The captured duration is a
+ * strict token (e.g. `20m0s`), so it is safe to render on the check.
+ */
+const JOB_TIMEOUT_PATTERN = /exceeded the maximum execution time(?: of ([0-9hms]{1,16}))?/i;
 
 /** Real elapsed time. Injected in tests so no suite ever sleeps. */
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
@@ -116,6 +129,7 @@ const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const CHECK_REASON_TEXT = {
   're-dispatched': 'This run was cancelled with no successor run and no failing job, so CI was re-dispatched automatically — once. Watch the new run for the real result.',
   superseded: 'This run was cancelled because a newer CI run started for the same pull request. That newer run carries the real result, so this one was deliberately not retried.',
+  'job-timed-out': 'A job in this run exceeded its own `timeout-minutes`, which GitHub reports as cancelled rather than failed. That is a real red, not queue contention — a re-run would time out again — so it was not retried.',
   'job-failed': 'This run was cancelled by CI itself after a job genuinely failed, which is why the run reads cancelled rather than failure. That is a real red, not queue contention, so it was not retried.',
   'retry-budget-exhausted': 'This run is already a retry attempt, and recovery re-dispatches a run at most once. Re-run it manually if it was cancelled externally again.',
   'run-state-moved-on': 'The run changed state after the cancellation event — it has already been re-run, or is no longer a completed cancellation — so the one-retry budget was left unspent.',
@@ -205,6 +219,31 @@ async function fetchAttemptJobs(fetchImpl, target, logger) {
 }
 
 /**
+ * The cancelled jobs that were really killed by their own `timeout-minutes`,
+ * as `{name, limit}`, or null when any of their annotations could not be read
+ * — "we could not tell" must never read as "no job timed out".
+ *
+ * A job's id is its check-run id. The reads run in parallel so a pass costs
+ * one request timeout of wall clock however many jobs were cancelled.
+ */
+async function fetchTimedOutJobs(fetchImpl, target, jobs, logger) {
+  const verdicts = await Promise.all(jobs
+    .filter((job) => job?.conclusion === 'cancelled')
+    .map(async (job) => {
+      if (!/^\d+$/.test(String(job?.id ?? ''))) return null;
+      const url = `${target.repoPath}/check-runs/${job.id}/annotations?per_page=100`;
+      const annotations = await readJson(fetchImpl, url, target.token, logger);
+      if (!Array.isArray(annotations)) return null;
+      const match = annotations
+        .map((annotation) => JOB_TIMEOUT_PATTERN.exec(String(annotation?.message ?? '')))
+        .find(Boolean);
+      return match ? { name: safeJobName(job), limit: match[1] || 'its limit' } : {};
+    }));
+  if (verdicts.includes(null)) return null;
+  return verdicts.filter((verdict) => verdict.name);
+}
+
+/**
  * The run's state as GitHub holds it NOW, or null when it cannot be read.
  *
  * Everything else here comes from the `workflow_run` payload, which is a
@@ -275,6 +314,22 @@ async function evaluateApiGuards(fetchImpl, target, logger) {
       level: 'log',
       message: `ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`,
       result: { outcome: 'skipped', reason: 'job-failed' },
+    };
+  }
+  const timedOutJobs = await fetchTimedOutJobs(fetchImpl, target, jobs, logger);
+  if (!timedOutJobs) {
+    return {
+      level: 'error',
+      message: `⚠️ CI retry skipped: could not read the cancelled jobs' annotations for run ${target.runId}`,
+      result: { outcome: 'unavailable', reason: 'jobs-unavailable' },
+    };
+  }
+  if (timedOutJobs.length) {
+    const named = timedOutJobs.map(({ name, limit }) => `${name} after ${limit}`);
+    return {
+      level: 'log',
+      message: `ℹ️ CI retry skipped: run ${target.runId} had a job exceed its timeout (${named.join(', ')})`,
+      result: { outcome: 'skipped', reason: 'job-timed-out', timedOutJobs },
     };
   }
 
@@ -350,6 +405,11 @@ async function publishRecoveryCheck(fetchImpl, target, result, logger) {
           + `- outcome: \`${result.outcome}\`\n`
           + `- reason: \`${reason}\`\n\n`
           + `${CHECK_REASON_TEXT[reason] || CHECK_REASON_FALLBACK}\n\n`
+          // Job names come from the PR's own workflow file: a code span with
+          // its backticks removed renders them inert.
+          + (result.timedOutJobs || []).map(({ name, limit }) =>
+            `- \`${name.replace(/`/g, "'")}\` exceeded its timeout of \`${limit}\`\n`).join('')
+          + (result.timedOutJobs?.length ? '\n' : '')
           + 'This check is informational and always neutral — it never blocks a merge.',
       },
     }),

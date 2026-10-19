@@ -910,6 +910,40 @@ it('conditions the character, expressions and looks sheets on the director\'s ow
   expect(refs('set:lab')).toBeUndefined();
 });
 
+it('keeps catalog-linked cast and places as fixed casting, conditioned on their images', async () => {
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast: [{ id: 'mate', name: 'Mate', role: 'deckhand', description: 'young', face: 'freckles', hair: 'red', wardrobe: 'peacoat' }] }) });
+  const project = await seed({
+    concept: { prompt: 'a vigil', subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Keeper', role: 'protagonist', description: 'grey braid', ingredientId: 'cat-chr-1' },
+      { id: 'mvc-2', kind: 'character', name: 'Mate', role: 'supporting', ingredientId: 'cat-chr-2' },
+      { id: 'mvc-3', kind: 'place', name: 'Harbor', description: 'stone quay', ingredientId: 'cat-plc-1' },
+      { id: 'mvc-4', kind: 'place', name: 'Cliff' },
+    ] },
+    visualSpec: { references: [
+      { id: 'mvr-pull-1', imageId: 'keeper.png', role: 'character', label: 'Keeper', condition: false },
+      { id: 'mvr-pull-2', imageId: 'mate.png', role: 'character', label: 'Mate', condition: false },
+      { id: 'mvr-pull-3', imageId: 'harbor.png', role: 'set', label: 'Harbor', condition: false },
+      { id: 'mvr-pull-4', imageId: 'cliff.png', role: 'set', label: 'Cliff', condition: false },
+    ] },
+  });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const prompt = runPrompt.mock.calls[0][0].prompt;
+  expect(prompt).toContain('FIXED CASTING');
+  expect(prompt).toContain('- character (protagonist): Keeper — grey braid');
+  expect(prompt).toContain('- place: Harbor — stone quay');
+  expect(prompt).not.toContain('- place: Cliff');
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  expect(refs('character')).toEqual(['keeper.png']);
+  expect(refs('cast:mate')).toEqual(['mate.png']);
+  expect(job('cast:mate').params.prompt).toContain('SAME person as the reference image');
+  expect(refs('set:harbor')).toEqual(['harbor.png']);
+  expect(job('set:harbor').params.prompt).toContain('The same location as the reference image');
+  // An unlinked place is designed fresh.
+  expect(refs('set:roof')).toBeUndefined();
+});
+
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {
   const personBoard = { ...board, style: { prompt: 'An adult woman with tousled curls sits alone beside a rain-speckled window. Amber haze.' } };
   service.__setCastAndSetsDepsForTests(testDeps({ loadBoard: async () => personBoard }));

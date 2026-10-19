@@ -9,6 +9,9 @@ import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { PATHS } from '../lib/paths.js';
+// The leaf, not readinessNotify.js: its observer's lazy imports would join
+// pm2.js's ~280 suites to the CoS cluster's CI selection (#12285).
+import { noteReadinessChanged } from './readinessSignal.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -23,22 +26,14 @@ const cacheKey = (pm2Home) => pm2Home || '_default';
 
 // Track PM2 read failures per home so we log only on state change or reason change
 const jlistFailureState = new Map(); // home -> { lastError: string }
-let readinessChangedLoader;
-
-function notifyReadinessChanged(kind) {
-  readinessChangedLoader ??= import('./readinessNotify.js').then(({ noteReadinessChanged }) => noteReadinessChanged);
-  void readinessChangedLoader
-    .then(noteReadinessChanged => noteReadinessChanged(kind))
-    .catch(error => console.error(`❌ Readiness invalidation failed: ${error.message}`));
-}
 
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
  * @param {string|null} [pm2Home=null]
  */
 export function clearJlistCache(pm2Home = null) {
-  notifyReadinessChanged('health');
-  notifyReadinessChanged('capabilities');
+  noteReadinessChanged('health');
+  noteReadinessChanged('capabilities');
   if (pm2Home !== undefined && pm2Home !== null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {
@@ -83,6 +78,8 @@ function logJlistRecovery(pm2Home) {
 // Resolve PM2 CLI binary path from our local dependency using require.resolve
 // to handle hoisted node_modules correctly.
 const require = createRequire(import.meta.url);
+const ECOSYSTEM_FILE = 'ecosystem.config.cjs';
+const LEGACY_ECOSYSTEM_FILE = 'ecosystem.config.js';
 const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 
 /**
@@ -812,7 +809,7 @@ export async function getSavedProcessNames(pm2Home = null) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function startFromEcosystem(cwd, processNames = [], pm2Home = null) {
-  const ecosystemFile = ['ecosystem.config.cjs', 'ecosystem.config.js']
+  const ecosystemFile = [ECOSYSTEM_FILE, LEGACY_ECOSYSTEM_FILE]
     .find(f => existsSync(`${cwd}/${f}`));
 
   if (!ecosystemFile) {
@@ -834,15 +831,16 @@ export async function startFromEcosystem(cwd, processNames = [], pm2Home = null)
  * try to require() .cmd batch files as JavaScript).
  */
 async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Home) {
-  const configPath = join(cwd, ecosystemFile);
+  // Each file name is a module-level literal joined at its own require() so the
+  // test memo can key every tracked ecosystem file (scripts/lib/testMemo.js).
+  const configPath = ecosystemFile === ECOSYSTEM_FILE ? join(cwd, ECOSYSTEM_FILE) : join(cwd, LEGACY_ECOSYSTEM_FILE);
 
   // Try to load and patch the config
   let config;
   try {
-    const require = createRequire(configPath);
     // Clear module cache to get fresh config on repeated starts
     try { delete require.cache[require.resolve(configPath)]; } catch {}
-    config = require(configPath);
+    config = ecosystemFile === ECOSYSTEM_FILE ? require(join(cwd, ECOSYSTEM_FILE)) : require(join(cwd, LEGACY_ECOSYSTEM_FILE));
   } catch (err) {
     // If we can't load the config (syntax error, missing deps, etc.),
     // fall back to unpatched start — PM2 may still handle it

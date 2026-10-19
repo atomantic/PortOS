@@ -6,7 +6,7 @@ import { join, resolve } from 'path';
 
 import {
   verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
-  probeVideoStreamInfo, findFfmpeg, installEncodedVideo,
+  probeVideoStreamInfo, findFfmpeg, installEncodedVideo, probeMediaTags,
   BT709_TAG_FILTER, BT709_CONTAINER_ARGS, bt709TagFilter, supportsSetparamsFilter, __resetSetparamsProbe,
 } from './ffmpeg.js';
 
@@ -85,11 +85,12 @@ describe('probeVideoStreamInfo', () => {
     const clip = join(tmpDir, 'probe.mp4');
     const made = await runFfmpegProcess({
       bin: ffmpeg,
-      args: ['-f', 'lavfi', '-i', 'testsrc=size=96x64:rate=10:duration=1', '-pix_fmt', 'yuv420p', '-y', clip],
+      args: ['-f', 'lavfi', '-i', 'testsrc=size=96x64:rate=10:duration=1', '-pix_fmt', 'yuv420p', '-metadata', 'comment={"prompt":"Paper boat","seed":42}', '-y', clip],
       stderrTailBytes: 0,
     });
     if (!made.ok) return;
     const info = await probeVideoStreamInfo(clip);
+    expect(await probeMediaTags(clip)).toMatchObject({ comment: '{"prompt":"Paper boat","seed":42}' });
     expect(info.width).toBe(96);
     expect(info.height).toBe(64);
     expect(info.fps).toBeCloseTo(10, 5);

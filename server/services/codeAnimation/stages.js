@@ -530,8 +530,14 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
     runId, projectId, project, state, deps: { ...defaultDeps, ...deps }, controller: new AbortController(),
     startedAt: Date.now(), prior: prior?.data.stages ?? [], resumedFrom: prior?.id ?? null,
   };
-  await store.startStageRun(runId, projectId, snapshot(ctx), activeStageRunIds());
+  // Registered before the insert so a concurrent start sees this run as live and cannot mark its fresh row interrupted.
   activeRuns.set(runId, { controller: ctx.controller, projectId });
+  try {
+    await store.startStageRun(runId, projectId, snapshot(ctx), activeStageRunIds);
+  } catch (error) {
+    activeRuns.delete(runId);
+    throw error;
+  }
   emitCodeAnimationChanged(projectId);
   console.log(`🎞️ Code Animation production run ${runId.slice(0, 8)} started on revision ${revision.id.slice(0, 8)}`);
   // Process boundary: nothing may reject unhandled out of the background run.

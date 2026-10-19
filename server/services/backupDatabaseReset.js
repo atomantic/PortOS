@@ -12,7 +12,12 @@ export async function getDatabaseResetPlan() {
   // the live database. Fail closed on objects not declared by this version.
   const names = (pattern) => [...new Set([...ddl.matchAll(pattern)].map(match => match[1]))];
   const tables = names(/CREATE TABLE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
-  const functions = names(/CREATE OR REPLACE FUNCTION ([a-z_][a-z_0-9]*)\(\)/g);
+  // Recognize only the signatures currently shipped by the schema: trigger
+  // functions without arguments and the catalog resolver's named TEXT input.
+  // Unsupported future declarations remain excluded and fail preflight closed.
+  const functions = names(/CREATE OR REPLACE FUNCTION ([a-z_][a-z_0-9]*\((?:[a-z_][a-z_0-9]* TEXT)?\))/g)
+    .map(signature => `public.${signature.replace(/\([a-z_][a-z_0-9]* TEXT\)/, '(text)')}`);
+  const views = names(/CREATE OR REPLACE VIEW ([a-z_][a-z_0-9]*)/g);
   const sequences = names(/CREATE SEQUENCE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
   const literals = values => values.map(value => `'${value}'`).join(', ');
   const preflight = `DO $portos_restore$
@@ -32,6 +37,7 @@ export async function getDatabaseResetPlan() {
         AND d.objid = c.oid AND d.deptype = 'e')
       AND (c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
         OR NOT ((c.relkind = 'r' AND c.relname IN (${literals(tables)}))
+          OR (c.relkind = 'v' AND c.relname IN (${literals(views)}))
           OR (c.relkind = 'S' AND (c.relname IN (${literals(sequences)}) OR EXISTS (
             SELECT 1 FROM pg_depend d JOIN pg_class t ON t.oid = d.refobjid
             WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
@@ -45,7 +51,8 @@ export async function getDatabaseResetPlan() {
       WHERE n.nspname = 'public'
       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
         AND d.objid = p.oid AND d.deptype = 'e')
-      AND (p.proname NOT IN (${literals(functions)}) OR p.pronargs <> 0
+      AND (NOT EXISTS (SELECT 1 FROM unnest(ARRAY[${literals(functions)}]) AS allowed(signature)
+          WHERE p.oid = to_regprocedure(allowed.signature))
         OR p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user))
     ) THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema function or owner'; END IF;
 
@@ -84,8 +91,9 @@ export async function getDatabaseResetPlan() {
   // remains the database-enforced backstop for every unanticipated dependency,
   // including changes between preflight and replay. Never use CASCADE here.
   const reset = `${preflight}
+    DROP VIEW IF EXISTS ${views.map(name => `public.${name}`).join(', ')} RESTRICT;
     DROP TABLE IF EXISTS ${tables.map(name => `public.${name}`).join(', ')} RESTRICT;
-    DROP FUNCTION IF EXISTS ${functions.map(name => `public.${name}()`).join(', ')} RESTRICT;
+    DROP FUNCTION IF EXISTS ${functions.join(', ')} RESTRICT;
     DROP SEQUENCE IF EXISTS ${sequences.map(name => `public.${name}`).join(', ')} RESTRICT;
     CREATE SCHEMA IF NOT EXISTS public;
     CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;

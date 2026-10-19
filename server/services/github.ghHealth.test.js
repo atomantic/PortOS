@@ -259,6 +259,34 @@ describe('findPullRequestForBranch (#3358)', () => {
     await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7, body: 'Closes #1' });
   });
 
+  it.each([
+    ['pending', { __typename: 'CheckRun', status: 'IN_PROGRESS' }, true],
+    ['successful', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }, true],
+    ['failed', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }, false],
+    ['cancelled', { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'CANCELLED' }, false],
+    ['legacy pending', { __typename: 'StatusContext', state: 'PENDING' }, true],
+    ['legacy error', { __typename: 'StatusContext', state: 'ERROR' }, false],
+    ['unknown', {}, false],
+  ])('classifies a %s auto-merge handoff from live CI', async (_name, check, autoMergeEnabled) => {
+    const pr = { number: 7, state: 'OPEN', isDraft: false, headRefOid: 'published-head',
+      autoMergeRequest: { enabledAt: new Date().toISOString() }, statusCheckRollup: [check] };
+    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([pr]) }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled, headRefOid: 'published-head' });
+  });
+
+  it.each(['draft', 'missing request', 'malformed date', 'stalled', 'missing checks', 'empty checks'])('rejects a %s auto-merge handoff', async (kind) => {
+    const pr = { number: 7, state: 'OPEN', isDraft: kind === 'draft',
+      autoMergeRequest: { enabledAt: new Date().toISOString() },
+      statusCheckRollup: [{ __typename: 'CheckRun', status: 'IN_PROGRESS' }] };
+    if (kind === 'missing request') pr.autoMergeRequest = null;
+    if (kind === 'malformed date') pr.autoMergeRequest.enabledAt = 'invalid';
+    if (kind === 'stalled') pr.autoMergeRequest.enabledAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    if (kind === 'missing checks') delete pr.statusCheckRollup;
+    if (kind === 'empty checks') pr.statusCheckRollup = [];
+    spawnMock.mockImplementation(() => ghChild({ stdout: JSON.stringify([pr]) }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ autoMergeEnabled: false });
+  });
+
   it('reports `none` for an ANSWERED empty list', async () => {
     spawnMock.mockImplementation(() => ghChild({ stdout: '[]' }));
     await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'none', number: null });

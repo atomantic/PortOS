@@ -1,3 +1,5 @@
+const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
+vi.mock('../services/apiMedia', () => batchApi);
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -120,4 +122,24 @@ describe('bounded media history', () => {
     expect(await screen.findByRole('dialog')).toHaveTextContent('Picture 60');
     expect(fetchPage).toHaveBeenCalledWith({ limit: 1, kind: 'image', filename: '60.png' }, { silent: true });
   });
+});
+
+it('imports a mixed batch from History and inserts both returned records', async () => {
+  batchApi.importGalleryFile.mockImplementation(async file => {
+    const row = file.name.endsWith('.png')
+      ? { kind: 'image', ref: 'new.png', data: { filename: 'new.png', prompt: 'Imported image prompt' } }
+      : { kind: 'video', ref: 'new-video', data: { id: 'new-video', filename: 'new.mp4', prompt: 'Imported video prompt' } };
+    rows.unshift(row);
+    return row;
+  });
+  open();
+  await screen.findByText('Picture 0');
+  const input = screen.getByLabelText('Upload / import');
+  expect(input.multiple).toBe(true);
+  fireEvent.change(input, { target: { files: [new File(['png'], 'new.png'), new File(['mp4'], 'new.mp4')] } });
+  expect(await screen.findByText('2 of 2 imported')).toHaveClass('sr-only');
+  expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
+  expect(await screen.findByText('Imported image prompt')).toBeInTheDocument();
+  expect(await screen.findByText('Imported video prompt')).toBeInTheDocument();
+  expect(batchApi.assignImportedMedia).not.toHaveBeenCalled();
 });

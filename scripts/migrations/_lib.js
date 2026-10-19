@@ -40,6 +40,11 @@
  *      migration needs to honour an install-specific path, across both the
  *      pre- and post-339 layouts (`data/cos/state.json`'s `config` slice and
  *      `data/cos/config.json`).
+ *   9. Plain document reads — `readJsonOrNull` is the "absent or unparseable
+ *      → null, anything else throws" reader that thirty-odd applied migrations
+ *      each declared as a local `readJson`. Those stay frozen;
+ *      `migrationConventions.guard.test.js` stops a new migration from
+ *      declaring its own copy of any helper exported here.
  *
  * Families 5, 7, and 7b all target `data/providers.json` and share its
  * read → parse → shape-guard preamble via `readProvidersDoc`; each still owns
@@ -129,11 +134,34 @@ const splitReadJsonTolerant = async (path) => {
 // truncated record would forever load as null. rename() is atomic within one
 // filesystem, and tmp sits in the same dir as its target, so the swap is safe.
 // Also used by the provider-seed family, where a truncated `data/providers.json`
-// would cost the user every stored apiKey and provider customization.
-export const writeJsonAtomic = async (path, value) => {
+// would cost the user every stored apiKey and provider customization, and by
+// the prompt-replace family: a half-written stage prompt hashes as neither the
+// accepted-old nor the shipped body, so the next pass would classify it as
+// user-customized and leave the truncated prompt in place forever.
+export const writeTextAtomic = async (path, content) => {
   const tmp = `${path}.tmp-${process.pid}`;
-  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
+  await writeFile(tmp, content);
   await rename(tmp, path);
+};
+
+export const writeJsonAtomic = (path, value) =>
+  writeTextAtomic(path, JSON.stringify(value, null, 2) + '\n');
+
+/**
+ * Read a JSON document, or null when it is absent (ENOENT) or not valid JSON.
+ * Any other read error (EACCES, EISDIR, …) propagates: a store that exists
+ * but cannot be read is not "nothing to migrate", and treating it so would
+ * let a later write replace it. A migration that must tell "absent" from
+ * "unreadable" apart (to skip one and warn on the other) reads through
+ * `readJSONFileStrict` from `server/lib/fileUtils.js` instead.
+ */
+export const readJsonOrNull = async (path) => {
+  const raw = await readFile(path, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 };
 
 // Reserved keys a legacy `map`-shape doc can carry as own properties (JSON.parse
@@ -470,7 +498,7 @@ export async function applyPromptReplaceMigration({
   const counts = { updated: 0, alreadyCurrent: 0, skipped: 0, created: 0, retired: 0 };
   for (const plan of plans) {
     if (plan.unlink) await unlink(plan.unlink);
-    if (plan.write) await writeFile(plan.write.path, plan.write.content);
+    if (plan.write) await writeTextAtomic(plan.write.path, plan.write.content);
     if (plan.warn) console.warn(plan.warn);
     if (plan.log) console.log(plan.log);
     if (plan.counter) counts[plan.counter]++;
@@ -563,9 +591,64 @@ export async function readLayoutsDoc({ rootDir, label }) {
   return { ok: true, doc, path };
 }
 
-/** Persist a layouts doc with the canonical 2-space indentation. */
+/** Persist a layouts doc with the canonical 2-space indentation (no trailing newline, matching the store). */
 export async function writeLayoutsDoc(path, doc) {
-  await writeFile(path, JSON.stringify(doc, null, 2));
+  await writeTextAtomic(path, JSON.stringify(doc, null, 2));
+}
+
+// ---- dashboard-grid helpers ----
+//
+// Two grid shapes exist in `data/dashboard-layouts.json` history. Before
+// migration 269 every grid entry was a rectangle (`{ id, x, y, w, h }`) and a
+// seed had to find a free slot; 269 converted grids to a packing sequence
+// (`{ id, x, w, h, order }`) where a seed appends at `max(order) + 1`. The
+// rectangle helpers are kept for a migration that has to read or repair a
+// legacy rectangle grid; a new widget seed uses `applyToLayout` (or the
+// `makeWidgetSeedMigration` factory around it).
+
+/** Axis-aligned overlap of two `{ x, y, w, h }` rectangles. */
+export function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** Whether `candidate` overlaps any entry of a rectangle grid. */
+export function collidesWith(grid, candidate) {
+  return grid.some((item) => rectsOverlap(item, candidate));
+}
+
+/**
+ * Place `widgetId` at the preferred rectangle `slot` when it is free, else on
+ * a clean row below everything in the grid (a user rearranged the layout but
+ * kept the built-in id).
+ */
+export function pickGridEntry(grid, widgetId, slot) {
+  const candidate = { id: widgetId, ...slot };
+  if (!collidesWith(grid, candidate)) return candidate;
+  const bottom = grid.reduce((max, it) => Math.max(max, (it.y ?? 0) + (it.h ?? 0)), 0);
+  return { id: widgetId, x: 0, y: bottom, w: slot.w, h: slot.h };
+}
+
+/**
+ * Seed `widgetId` into one layout of the post-269 (`order`-packed) shape:
+ * append it to `widgets` when absent and to the end of the packing sequence
+ * when it has no grid entry. Returns whether the layout changed. `targets`
+ * (a Set of layout ids) limits the seed to built-in layouts; custom/user
+ * layouts are the layout editor's to manage. Idempotent — a rerun heals
+ * whichever of the two arrays is missing the widget.
+ */
+export function applyToLayout(layout, { widgetId, cell, targets }) {
+  if (!layout || !targets.has(layout.id) || !Array.isArray(layout.widgets)) return false;
+  const hasWidget = layout.widgets.includes(widgetId);
+  const hasGridEntry = Array.isArray(layout.grid) && layout.grid.some((item) => item?.id === widgetId);
+  if (hasWidget && hasGridEntry) return false;
+
+  if (!hasWidget) layout.widgets = [...layout.widgets, widgetId];
+  if (!hasGridEntry) {
+    const grid = Array.isArray(layout.grid) ? layout.grid : [];
+    const maxOrder = grid.reduce((max, item) => Math.max(max, Number.isFinite(item?.order) ? item.order : -1), -1);
+    layout.grid = [...grid, { id: widgetId, x: 0, w: cell.w, order: maxOrder + 1, h: cell.h }];
+  }
+  return true;
 }
 
 /**
@@ -591,21 +674,6 @@ export async function writeLayoutsDoc(path, doc) {
 export function makeWidgetSeedMigration({ label, widgetId, layoutIds = ['default', 'morning-review'], cell, logLine }) {
   const targets = new Set(layoutIds);
 
-  const applyToLayout = (layout) => {
-    if (!layout || !targets.has(layout.id) || !Array.isArray(layout.widgets)) return false;
-    const hasWidget = layout.widgets.includes(widgetId);
-    const hasGridEntry = Array.isArray(layout.grid) && layout.grid.some((item) => item?.id === widgetId);
-    if (hasWidget && hasGridEntry) return false;
-
-    if (!hasWidget) layout.widgets = [...layout.widgets, widgetId];
-    if (!hasGridEntry) {
-      const grid = Array.isArray(layout.grid) ? layout.grid : [];
-      const maxOrder = grid.reduce((max, item) => Math.max(max, Number.isFinite(item?.order) ? item.order : -1), -1);
-      layout.grid = [...grid, { id: widgetId, x: 0, w: cell.w, order: maxOrder + 1, h: cell.h }];
-    }
-    return true;
-  };
-
   return {
     async up({ rootDir }) {
       const result = await readLayoutsDoc({ rootDir, label });
@@ -613,7 +681,7 @@ export function makeWidgetSeedMigration({ label, widgetId, layoutIds = ['default
       const { doc, path } = result;
       let updated = 0;
       for (const layout of doc.layouts) {
-        if (applyToLayout(layout)) updated += 1;
+        if (applyToLayout(layout, { widgetId, cell, targets })) updated += 1;
       }
       if (updated === 0) return { updated: 0, reason: 'already-applied' };
       await writeLayoutsDoc(path, doc);
@@ -812,7 +880,7 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
         continue;
       }
       await mkdir(join(perRecordDir, id), { recursive: true });
-      await writeFile(recordPath, JSON.stringify(seedRecords[id], null, 2) + '\n');
+      await writeJsonAtomic(recordPath, seedRecords[id]);
       added += 1;
     }
 
@@ -833,7 +901,7 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
         live.records[id] = seedRecords[id];
         legacyAdded += 1;
       }
-      if (legacyAdded > 0) await writeFile(legacyPath, JSON.stringify(live, null, 2) + '\n');
+      if (legacyAdded > 0) await writeJsonAtomic(legacyPath, live);
     }
 
     if (added === 0 && legacyAdded === 0) {

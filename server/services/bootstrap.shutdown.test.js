@@ -10,7 +10,7 @@
  *      TreeKill signals the whole tree at once, so an agent PTY can exit during
  *      the very first await — and if the flag isn't latched yet, that exit is
  *      recorded as a completed run, which is the bug this issue is about.
- *   2. The marker is built from `activeAgents` (the agents THIS process owns),
+ *   2. The marker includes active agents and unfinished dispatches,
  *      not from `getActiveAgentIds()` — runner-mode agents live in portos-cos,
  *      survive the restart untouched, and must never be named as interrupted.
  */
@@ -51,8 +51,16 @@ describe('shutdown handler — host-restart bookkeeping (#3202)', () => {
     if (firstAwaitAt > -1) expect(latchAt).toBeLessThan(firstAwaitAt);
   });
 
-  it('snapshots the agent set from activeAgents only — runner agents survive the restart', () => {
-    expect(code).toMatch(/writeHostShutdownMarker\(\{\s*agentIds:\s*\[\.\.\.activeAgents\.keys\(\)\]/);
+  it('snapshots active agents and unfinished dispatches without adopted runner agents', () => {
+    const markerArgs = code.match(/writeHostShutdownMarker\((\{[^}]+\})\)/)?.[1];
+    expect(markerArgs).toBeTruthy();
+    const snapshot = runInNewContext(`(${markerArgs})`, {
+      activeAgents: new Map([['agent-active', {}]]),
+      dispatchingAgentIds: new Set(['agent-initializing']),
+      runnerAgents: new Map([['agent-survivor', {}]]),
+      signal: 'SIGTERM',
+    });
+    expect([...snapshot.agentIds]).toEqual(['agent-active', 'agent-initializing']);
     // getActiveAgentIds() folds in runnerAgents — naming those would tell the
     // next boot that portos-cos-owned agents were interrupted when they weren't.
     expect(code).not.toContain('getActiveAgentIds');

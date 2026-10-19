@@ -1,14 +1,15 @@
-import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../lib/sheetPointers.js';
 /**
  * CatalogIngredient — detail/editor for a single catalog ingredient. Loaded
- * via /catalog/:type/:id; the type from the loaded record is the source of
- * truth. Side panels surface source scraps and inbound refs (universes /
- * pipeline series / issues / writers-room). Full-width page; owns its scroll.
+ * via /catalog/:type/:id (one untabbed scroll) or a library route
+ * (/casting/:id/:tab?, /environments/…, /objects/…) where the library's
+ * `detailTabs` split it into Profile / Sheets / Looks|Plates / References|Images.
+ * The tab lives in the URL; form state lives here so switching tabs keeps an
+ * unsaved draft. Full-width page; owns its scroll.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
+import { useNavigate, useParams, useLocation, Link } from 'react-router';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
@@ -16,6 +17,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm.jsx';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import TabPills from '../components/ui/TabPills';
 import {
   getCatalogIngredientDetails,
   updateCatalogIngredient,
@@ -36,7 +38,12 @@ import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
-import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import socket from '../services/socket';
+import { previewImagePrompt } from '../services/apiImageVideo';
+import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
+import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
+import { useModelInputPreview } from '../hooks/useModelInputPreview';
+import ModelInputPreview from '../components/media/ModelInputPreview';
 import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
 import ThreadRefChip from '../components/brain/ThreadRefChip';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
@@ -45,13 +52,30 @@ import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
+import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
+import CatalogImagePreview, { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreview';
+import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
+import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
+import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
+import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
+import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
+import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
+import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
+import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
+import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import {
+  libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
+  isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
+} from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
+import { humanizeIntegrityField } from '../lib/characterIntegrity';
+import { listSheetPointers } from '../lib/sheetPointers';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -108,6 +132,19 @@ export function buildGenerationPromptSeed(payload, typeDef, tags = []) {
 // Compare JSON-shaped editor values by value while ignoring object-key order.
 // A catalog payload can arrive from a peer with the same fields in a different
 // order; that is not an edit the user needs to save.
+const DETAIL_TAB_ICONS = {
+  profile: UserRound,
+  sheets: LayoutGrid,
+  looks: Shirt,
+  plates: Clapperboard,
+  references: Images,
+  images: ImageIcon,
+};
+
+// Payload fields the universe sheet renderer writes (via the canon→catalog
+// projection); see lib/sheetPointers.js.
+const SHEET_POINTER_KEYS = ['referenceSheetImageRef', 'referenceSheets'];
+
 function stableSerialize(value) {
   return JSON.stringify(value, (_key, current) => {
     if (!current || typeof current !== 'object' || Array.isArray(current)) return current;
@@ -127,21 +164,34 @@ function ingredientPayload(value) {
 }
 
 export default function CatalogIngredient() {
-  const { id } = useParams();
+  const { id, tab: tabParam } = useParams();
   const activeVisitRef = useRef({ id, generation: 0 });
   if (activeVisitRef.current.id !== id) {
     activeVisitRef.current = { id, generation: activeVisitRef.current.generation + 1 };
   }
   const navigate = useNavigate();
+  // Opened from Casting / Environments / Objects → Back and post-delete return
+  // there; otherwise to the catalog.
+  const { pathname } = useLocation();
+  const library = libraryForPathname(pathname);
+  const backPath = library?.path || '/catalog';
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
   const [record, setRecord] = useState(null);
+  const [mergeVersion, setMergeVersion] = useState(0);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const identityReadOnly = record?.sharedIdentity?.writable === false;
+  const identityReason = identityReadOnly ? 'This shared identity is read-only here. Inspect its ownership notice and agreement.' : null;
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  // A Looks-tab wardrobe save in flight; the profile Save waits for it so its
+  // draft payload can't write back the previous wardrobes.
+  const [lookSaving, setLookSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
   // { outbound: [...], inbound: [...] } — relations are loaded separately from
   // the ingredient record so the panel can refresh independently after add/
@@ -169,17 +219,18 @@ export default function CatalogIngredient() {
     let cancelled = false;
     setLoading(true);
     setSaving(false);
+    setUnlocking(false);
     getCatalogIngredientDetails(id, { silent: true })
       .then((d) => {
         if (cancelled) return;
         if (!d?.ingredient) {
           setLoading(false);
           toast.error('Ingredient not found');
-          navigate('/catalog');
+          navigate(backPath);
           return;
         }
         const r = d.ingredient;
-        setRecord({ ...r, refs: d.refs, sources: d.sources });
+        setRecord({ ...r, refs: d.refs, sources: d.sources, sharedIdentity: d.sharedIdentity || null });
         setName(r.name || '');
         setTags(Array.isArray(r.tags) ? r.tags : []);
         setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
@@ -196,15 +247,35 @@ export default function CatalogIngredient() {
         if (cancelled) return;
         setLoading(false);
         toast.error(err?.message || 'Failed to load ingredient');
-        navigate('/catalog');
+        navigate(backPath);
       });
     return () => { cancelled = true; };
-  }, [id, navigate]);
+  }, [id, navigate, backPath, mergeVersion]);
+
+  // Keep ownership fences current without discarding an unsaved creative draft.
+  // The original route ID is intentional: a retained-source URL must stay read-only.
+  useEffect(() => {
+    let active = true;
+    let request = 0;
+    const refreshIdentity = () => {
+      const current = ++request;
+      getCatalogIngredientDetails(id, { silent: true }).then(details => {
+        if (!active || current !== request || !details?.ingredient) return;
+        setRecord(previous => previous ? { ...previous, sharedIdentity: details.sharedIdentity || null } : previous);
+      }).catch(() => { if (active) toast.error('Unable to refresh shared identity status. Reload before editing.'); });
+    };
+    const changed = event => {
+      if ([event?.sourceId, event?.survivorId].includes(id)) refreshIdentity();
+    };
+    socket.on('catalog:identity-changed', changed);
+    socket.on('connect', refreshIdentity);
+    return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('connect', refreshIdentity); };
+  }, [id]);
 
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
   const handleAddRelation = async (target, kind) => {
-    if (!record || !target?.id) return;
+    if (!record || identityReadOnly || !target?.id) return;
     if (target.id === record.id) { toast.error('Cannot relate an ingredient to itself'); return; }
     const ok = await linkCatalogIngredientRelation(record.id, { toId: target.id, kind }, { silent: true })
       .then(() => true)
@@ -228,7 +299,7 @@ export default function CatalogIngredient() {
   // Remove an outbound edge. Inbound edges are owned by the OTHER ingredient,
   // so the panel only deletes outbound ones (filter is by toId + kind).
   const handleRemoveRelation = async (toId, kind) => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     const ok = await unlinkCatalogIngredientRelation(record.id, { toId, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to remove relation'); return false; });
@@ -258,7 +329,7 @@ export default function CatalogIngredient() {
   // to 'reference' for drag-drop / picker; the "set portrait" path routes
   // through handleSetPortrait instead. Optimistic — prepend then reconcile.
   const handleAttachMedia = async (mediaKey, kind = 'reference') => {
-    if (!record || !mediaKey) return;
+    if (!record || identityReadOnly || !mediaKey) return;
     const ok = await attachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to attach media'); return false; });
@@ -268,7 +339,7 @@ export default function CatalogIngredient() {
   };
 
   const handleSetPortrait = async (mediaKey) => {
-    if (!record || !mediaKey) return;
+    if (!record || identityReadOnly || !mediaKey) return;
     const ok = await setCatalogIngredientPortrait(record.id, { mediaKey }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
@@ -278,7 +349,7 @@ export default function CatalogIngredient() {
   };
 
   const handleDetachMedia = async (mediaKey, kind) => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     const ok = await detachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to detach media'); return false; });
@@ -290,7 +361,7 @@ export default function CatalogIngredient() {
   // it onto this ingredient. First image becomes the portrait (so it shows as
   // the card thumbnail immediately); later ones attach as references.
   const handleGeneratedImage = useCallback(async (filename) => {
-    if (!record || !filename) return;
+    if (!record || identityReadOnly || !filename) return;
     const hasPortrait = media.some((m) => m.kind === 'portrait');
     const ok = await (hasPortrait
       ? attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference' }, { silent: true })
@@ -299,13 +370,13 @@ export default function CatalogIngredient() {
     if (!ok) return;
     refreshMedia();
     toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
-  }, [record, media, refreshMedia]);
+  }, [record, media, refreshMedia, identityReadOnly]);
 
   // Upload a dropped/picked file straight onto the ingredient. The server picks
   // the media kind (image→reference, audio, video) from the MIME and stores the
   // bytes in the matching federating library dir. Reconcile via refreshMedia.
   const handleUploadFile = useCallback(async (file) => {
-    if (!record || !file) return false;
+    if (!record || identityReadOnly || !file) return false;
     try {
       const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
       await uploadCatalogIngredientMediaFile(
@@ -320,12 +391,12 @@ export default function CatalogIngredient() {
       toast.error(err?.message || 'Upload failed');
       return false;
     }
-  }, [record, refreshMedia]);
+  }, [record, refreshMedia, identityReadOnly]);
 
   // Attach a recorded voice memo — the server transcribes it via Whisper and
   // stores the transcript in the audio row's caption.
   const handleRecordVoiceMemo = useCallback(async (clip) => {
-    if (!record || !clip?.audioBase64) return;
+    if (!record || identityReadOnly || !clip?.audioBase64) return;
     const ok = await recordCatalogIngredientVoiceMemo(
       record.id,
       { audioBase64: clip.audioBase64, mimeType: clip.mimeType },
@@ -334,10 +405,84 @@ export default function CatalogIngredient() {
     if (!ok) return;
     refreshMedia();
     toast.success('Voice memo attached');
-  }, [record, refreshMedia]);
+  }, [record, refreshMedia, identityReadOnly]);
+
+  // Re-attach an existing media row under a new role (mark/unmark a plate, add
+  // an image to a look). The attach endpoint upserts role/caption on the
+  // (ingredient, key, kind) row, so the caption is passed back unchanged.
+  const handleSetMediaRole = useCallback(async (m, role, message) => {
+    if (!record || identityReadOnly || m?.readOnly || !m?.mediaKey) return false;
+    const updated = await attachCatalogIngredientMedia(
+      record.id,
+      { mediaKey: m.mediaKey, kind: m.kind, role, caption: m.caption ?? null },
+      { silent: true },
+    ).catch((err) => { toast.error(err?.message || 'Failed to update media'); return null; });
+    if (!updated) return false;
+    setMedia((prev) => prev.map((row) => (
+      row.mediaKey === m.mediaKey && row.kind === m.kind ? { ...row, ...updated, role } : row
+    )));
+    toast.success(message || (role ? 'Marked as plate' : 'Plate unmarked'));
+    return true;
+  }, [record, identityReadOnly]);
+
+  // A finished catalog-only sheet render: attach it under its `sheet:<variant>`
+  // role right away (the server-side attach hook files the same row and is
+  // idempotent against this), then reconcile the media list.
+  const handleSheetFile = useCallback(async (filename, role, readyMessage = 'Reference sheet ready') => {
+    if (!record || identityReadOnly || !filename) return;
+    const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference', role }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to attach the rendered image'); return false; });
+    refreshMedia();
+    if (ok) toast.success(readyMessage);
+  }, [record, refreshMedia, identityReadOnly]);
+  const handleLookFile = useCallback((filename, role) => handleSheetFile(filename, role, 'Look ready'), [handleSheetFile]);
+
+  // Save the Looks tab's wardrobe list straight onto the SAVED payload, then
+  // copy just `wardrobes` into the draft so unsaved profile edits stay intact
+  // and exactly as dirty as they were.
+  const handleSaveWardrobes = useCallback(async (wardrobes) => {
+    if (!record || identityReadOnly) return false;
+    const submittedId = record.id;
+    const nextPayload = { ...ingredientPayload(record.payload), wardrobes };
+    setLookSaving(true);
+    const updated = await updateCatalogIngredient(submittedId, { payload: nextPayload }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to save looks'); return null; });
+    setLookSaving(false);
+    if (activeVisitRef.current.id !== submittedId || !updated) return false;
+    const persisted = Object.hasOwn(updated, 'payload') ? ingredientPayload(updated.payload) : nextPayload;
+    setRecord((prev) => (prev?.id === submittedId ? { ...prev, ...updated, payload: persisted } : prev));
+    setPayload((cur) => ({ ...cur, wardrobes: persisted.wardrobes }));
+    refreshRevisions();
+    return true;
+  }, [record, refreshRevisions, identityReadOnly]);
+
+  // A universe-delegated sheet landed as a canon pointer, which the canon→catalog
+  // projection already copied onto this row. Pull just the pointer fields into
+  // both the saved record and the draft, so an unsaved edit stays intact and
+  // stays exactly as dirty as it was.
+  const refreshSheetPointers = useCallback(() => {
+    if (!id) return;
+    const requestedId = id;
+    getCatalogIngredientDetails(id, { silent: true })
+      .then((d) => {
+        if (activeVisitRef.current.id !== requestedId || !d?.ingredient) return;
+        const fresh = ingredientPayload(d.ingredient.payload);
+        const pointers = {};
+        for (const key of SHEET_POINTER_KEYS) {
+          if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
+        }
+        setRecord((prev) => (prev?.id === requestedId
+          ? { ...prev, payload: { ...ingredientPayload(prev.payload), ...pointers } }
+          : prev));
+        setPayload((cur) => ({ ...cur, ...pointers }));
+        toast.success('Reference sheet ready');
+      })
+      .catch(() => { toast.error('Reference sheet rendered — reload to see it'); });
+  }, [id]);
 
   const handleSave = async () => {
-    if (!record) return;
+    if (!record || identityReadOnly || unlocking) return;
     const submittedId = record.id;
     const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
@@ -380,7 +525,7 @@ export default function CatalogIngredient() {
   };
 
   const handleRestore = async (revisionId) => {
-    if (!record) return false;
+    if (!record || identityReadOnly) return false;
     const updated = await restoreCatalogIngredientRevision(record.id, revisionId, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Restore failed'); return null; });
     if (!updated) return false;
@@ -396,14 +541,14 @@ export default function CatalogIngredient() {
   };
 
   const confirmDelete = async () => {
-    if (!record) return;
+    if (!record || identityReadOnly) return;
     setArmedDelete(false);
     const ok = await deleteCatalogIngredient(record.id, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Delete failed'); return false; });
     if (ok) {
       toast.success('Deleted');
-      navigate('/catalog');
+      navigate(backPath);
     }
   };
 
@@ -416,7 +561,11 @@ export default function CatalogIngredient() {
     || !sameValue(tags, Array.isArray(record.tags) ? record.tags : [])
     || !sameValue(payload, ingredientPayload(record.payload))
   ));
-  const routeGuard = useUnsavedChangesGuard(isDirty);
+  // Tab switches within this record change the pathname but not the editor;
+  // scope the guard to the record so only a real exit asks to discard.
+  const routeGuard = useUnsavedChangesGuard(isDirty, {
+    scopePath: library ? `${library.path}/${encodeURIComponent(id || '')}` : undefined,
+  });
   const discardAndExit = useCallback(() => {
     // The parked route is leaving, so unmounting discards the local draft. Do
     // not clear isDirty before proceeding: the shared guard auto-proceeds when
@@ -472,7 +621,33 @@ export default function CatalogIngredient() {
   // canon entry of any universe.
   const universeRef = (refsByKind.universe || [])[0] || null;
 
+  // Library routes split the page into the library's tabs; the plain
+  // /catalog/:type/:id route (and a record opened under the wrong library)
+  // keeps the single untabbed scroll, which renders as the 'profile' tab plus
+  // its media panel.
+  const tabs = library && library.type === record.type
+    ? library.detailTabs.map((t) => ({ ...t, icon: DETAIL_TAB_ICONS[t.id] }))
+    : null;
+  const activeTab = tabs ? resolveDetailTab(library, tabParam) : 'profile';
+  const wardrobes = record.type === 'character' && Array.isArray(ingredientPayload(record.payload).wardrobes)
+    ? record.payload.wardrobes
+    : [];
+  const protectMedia = (item) => ({ ...item, readOnly: identityReadOnly || item.retained === true || !!record.sharedIdentity && (item.ingredientId === record.sharedIdentity.sourceId || item.role?.startsWith('archive:identity')) });
+  const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
+  const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
+  const coverUrl = ingredientCoverUrl({
+    ...record,
+    thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || record.thumbnailKey,
+    payload,
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey });
+  const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
+    ? 'Unlock this record above before rendering.'
+    : saving
+    ? `Saving — the ${subject} renders from the saved record.`
+    : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
+
   return (
+    <CatalogImagePreviewProvider key={record.id} name={record.name}>
     <section className="h-full overflow-y-auto p-4 md:p-6">
       <UnsavedChangesConfirm
         guard={routeGuard}
@@ -481,7 +656,7 @@ export default function CatalogIngredient() {
         label={`Discard unsaved changes to ${record.name || 'this ingredient'}`}
         onDiscard={discardAndExit}
       />
-      <div className="max-w-4xl mx-auto space-y-5">
+      <fieldset disabled={mergeBusy} className="w-full min-w-0 space-y-5">
         <header className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-start gap-3 min-w-0">
             <Sparkles className="w-6 h-6 text-port-accent mt-1 flex-shrink-0" aria-hidden="true" />
@@ -497,14 +672,14 @@ export default function CatalogIngredient() {
                   {record.type}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mt-1 font-mono">{record.id}</p>
+              <p className="text-xs text-gray-500 mt-1 font-mono break-all">{record.id}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link to="/catalog" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
-            <button type="button" onClick={handleSave} disabled={saving}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -521,7 +696,7 @@ export default function CatalogIngredient() {
             {armedDelete ? (
               <span className="inline-flex items-center gap-1 text-sm">
                 <span className="text-gray-400 px-1">Delete this ingredient?</span>
-                <button type="button" onClick={confirmDelete}
+                <button type="button" onClick={confirmDelete} disabled={identityReadOnly}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-port-error/20 text-port-error hover:bg-port-error/30 font-medium">
                   <Trash2 size={14} aria-hidden="true" /> Yes, delete
                 </button>
@@ -531,7 +706,7 @@ export default function CatalogIngredient() {
                 </button>
               </span>
             ) : (
-              <button type="button" onClick={() => setArmedDelete(true)}
+              <button type="button" onClick={() => setArmedDelete(true)} disabled={identityReadOnly}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-400 hover:text-port-error"
                 aria-label="Delete ingredient" title="Delete">
                 <Trash2 size={14} /> Delete
@@ -540,90 +715,203 @@ export default function CatalogIngredient() {
           </div>
         </header>
 
-        <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
-          <div>
-            <label htmlFor="ingredient-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
-            <input id="ingredient-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={200}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
-          </div>
-          <div>
-            <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Tags
-            </label>
-            <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
-              placeholder="mentor, antagonist, season-1" />
-          </div>
-          {isUserType
-            ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
-            : sections
-            ? sections.map((section) => (
-                <SheetSection key={section.title} title={section.title}
-                  fields={section.fields} payload={payload} onChange={updatePayload} />
-              ))
-            : fields.map(([key, label, kind]) => (
-                <SheetField key={key} fieldKey={key} label={label} kind={kind}
-                  value={payload[key] ?? ''} onChange={updatePayload} />
-              ))}
+        <CatalogIdentityNotice identity={record.sharedIdentity} type={record.type} />
 
-          {/* Structured array-field editors (aliases / color palette / stats).
-              Driven by the type's registry-declared `editableListFields`; the
-              same durable catalog row the Universe Builder canon surface edits.
-              Light/user types declare none and skip this entirely. */}
-          {!isUserType && Array.isArray(typeDef.editableListFields) && typeDef.editableListFields.length > 0 && (
-            <EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} />
-          )}
-        </div>
+        {tabs && (
+          <TabPills
+            tabs={tabs}
+            activeTab={activeTab}
+            onChange={(tabId) => navigate(detailTabPath(library, record.id, tabId))}
+            mobileCompact
+            ariaLabel={`${library.label} record sections`}
+          />
+        )}
 
-        {record.type === 'character' && (
+        {activeTab === 'profile' && (
           <>
-            <ReferenceSheetPanel payload={payload} universeRef={universeRef} />
-            {/* Trained-LoRA link + dataset entry point. The catalog id IS the
-                ingredientId the trained sidecars carry; the universe entryId
-                isn't known on this surface, so the chip links an existing
-                dataset rather than offering find-or-create. */}
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
-              <CharacterLoraChip ingredientId={record.id} />
+            <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
+              <div className={coverUrl ? 'grid grid-cols-1 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] gap-5 items-start' : ''}>
+                {coverUrl && (
+                  <figure className="min-w-0 rounded-lg border border-port-border bg-port-bg overflow-hidden">
+                    <CatalogImagePreview key={coverUrl} src={coverUrl} fallbackSrc={coverUrl.replace('/data/images/', '/data/image-refs/')}
+                      alt={`${record.name || 'Ingredient'} cover`} className="w-full max-h-80 object-contain" loading="eager" />
+                    <figcaption className="text-xs text-gray-400 p-2">Cover image · select to enlarge</figcaption>
+                  </figure>
+                )}
+                <fieldset disabled={identityReadOnly} className="min-w-0 space-y-4">
+                  <div>
+                    <label htmlFor="ingredient-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
+                    <input id="ingredient-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={200}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+                  </div>
+                  <div>
+                    <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                      Tags
+                    </label>
+                    <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
+                      placeholder="mentor, antagonist, season-1" />
+                  </div>
+                </fieldset>
+              </div>
+              <fieldset disabled={identityReadOnly} className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+                {isUserType
+                  ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
+                  : sections
+                  ? sections.map((section) => (
+                      <SheetSection key={section.title} title={section.title}
+                        fields={section.fields} payload={payload} onChange={updatePayload} />
+                    ))
+                  : fields.map(([key, label, kind]) => (
+                      <SheetField key={key} fieldKey={key} label={label} kind={kind}
+                        value={payload[key] ?? ''} onChange={updatePayload} />
+                    ))}
+              </fieldset>
+
+              {/* Structured array-field editors (aliases / color palette / stats).
+                  Driven by the type's registry-declared `editableListFields`; the
+                  same durable catalog row the Universe Builder canon surface edits.
+                  Light/user types declare none and skip this entirely. */}
+              {!isUserType && Array.isArray(typeDef.editableListFields) && typeDef.editableListFields.length > 0 && (
+                <fieldset disabled={identityReadOnly}><EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} /></fieldset>
+              )}
             </div>
+
+            {record.type === 'character' && (
+              <>
+                <CatalogCharacterCanon payload={payload} />
+                {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
+                {/* Trained-LoRA link + dataset entry point. The catalog id IS the
+                    ingredientId the trained sidecars carry; the universe entryId
+                    isn't known on this surface, so the chip links an existing
+                    dataset rather than offering find-or-create. */}
+                <div className="bg-port-card border border-port-border rounded-lg p-4">
+                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
+                  <CharacterLoraChip ingredientId={record.id} />
+                </div>
+              </>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <SourcesPanel sources={record.sources} evidence={payload?.evidence} />
+              <RefsPanel refsByKind={refsByKind} />
+            </div>
+
+            <RelationsPanel
+              record={record}
+              relations={relations}
+              evidence={payload?.evidence}
+              readOnly={identityReadOnly} retainedSourceId={record.sharedIdentity?.sourceId}
+              onAdd={handleAddRelation}
+              onRemove={handleRemoveRelation}
+            />
           </>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <SourcesPanel sources={record.sources} evidence={payload?.evidence} />
-          <RefsPanel refsByKind={refsByKind} />
+        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
+          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || identityReadOnly} onPendingChange={setUnlocking}
+            onUnlocked={(updated) => {
+              setRecord((current) => current?.id === updated.id
+                ? { ...current, updatedAt: updated.updatedAt, payload: { ...current.payload, locked: false } } : current);
+              setPayload((current) => ({ ...current, locked: false }));
+            }} />
         </div>
 
-        <RelationsPanel
-          record={record}
-          relations={relations}
-          evidence={payload?.evidence}
-          onAdd={handleAddRelation}
-          onRemove={handleRemoveRelation}
-        />
+        {activeTab === 'sheets' && (
+          <CatalogSheetsPanel
+            ingredientId={record.id}
+            payload={payload}
+            universeRef={universeRef}
+            sheetMedia={media.filter(isSheetMedia).map(protectMedia)}
+            missingMedia={missingMedia}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
+            blockedReason={renderBlockedReason('sheet')}
+            savedStamp={record.updatedAt || null}
+            onSheetFile={handleSheetFile}
+            onPointerSheetReady={refreshSheetPointers}
+          />
+        )}
 
-        <MediaPanel
-          media={media}
-          missingMedia={missingMedia}
-          onAttach={handleAttachMedia}
-          onSetPortrait={handleSetPortrait}
-          onDetach={handleDetachMedia}
-          onUploadFile={handleUploadFile}
-          onRecordVoice={handleRecordVoiceMemo}
-          genIngredientId={record.id}
-          genName={name}
-          genDescription={genDescription}
-          genUniverseId={universeRef?.refId || null}
-          onGenerated={handleGeneratedImage}
-        />
+        {activeTab === 'looks' && (
+          <CatalogLooksPanel
+            ingredientId={record.id}
+            wardrobes={wardrobes}
+            lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
+            missingMedia={missingMedia}
+            editLocked={saving || unlocking || identityReadOnly}
+            blockedReason={renderBlockedReason('look')}
+            savedStamp={record.updatedAt || null}
+            onSaveWardrobes={handleSaveWardrobes}
+            onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
+            onLookFile={handleLookFile}
+          />
+        )}
 
-        <RevisionsPanel
-          revisions={revisions}
-          current={record}
-          fields={fields}
-          onRestore={handleRestore}
-        />
-      </div>
+        {activeTab === 'plates' && (
+          <CatalogPlatesPanel
+            plates={media.filter(isPlateMedia).map(protectMedia)}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
+            missingMedia={missingMedia}
+            onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
+          />
+        )}
+
+        {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
+          <MediaPanel
+            readOnly={identityReadOnly}
+            media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
+            canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
+              !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
+            primaryImageRef={payload.primaryImageRef}
+            missingMedia={missingMedia}
+            onAttach={handleAttachMedia}
+            onSetPortrait={handleSetPortrait}
+            onDetach={identityReadOnly ? undefined : handleDetachMedia}
+            onUploadFile={handleUploadFile}
+            onRecordVoice={handleRecordVoiceMemo}
+            genIngredientId={record.id}
+            genName={name}
+            genDescription={genDescription}
+            genUniverseId={universeRef?.refId || null}
+            onGenerated={handleGeneratedImage}
+          />
+        )}
+
+        {(activeTab === 'references' || activeTab === 'images' || (!tabs && activeTab === 'profile')) && (
+          <CatalogRelatedImages key={record.id} ingredientId={record.id} name={record.name}
+            excludedFilenames={[
+              payload.primaryImageRef,
+              ...listSheetPointers(payload).map(({ filename }) => filename),
+              ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : []),
+              ...media.filter((m) => m.kind === 'portrait' || m.kind === 'reference').map((m) => m.mediaKey),
+            ]} />
+        )}
+
+        {activeTab === 'profile' && (
+          <CatalogMergePanel record={record}
+            disabledReason={identityReason || (saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before consolidating.' : null)}
+            onPendingChange={setMergeBusy} onChanged={() => setMergeVersion((version) => version + 1)} />
+        )}
+
+        {activeTab === 'profile' && <CatalogIdentityPanel record={record}
+          disabledReason={saving || lookSaving || unlocking ? 'Wait for the current save to finish.' : isDirty ? 'Save or discard profile edits before managing identity.' : null}
+          onPendingChange={setMergeBusy} onChanged={() => setMergeVersion((version) => version + 1)} />}
+
+        {activeTab === 'profile' && (
+          <RevisionsPanel
+            readOnly={identityReadOnly}
+            retainedSourceId={record.sharedIdentity?.sourceId}
+            revisions={revisions}
+            current={record}
+            fields={fields}
+            onRestore={handleRestore}
+          />
+        )}
+      </fieldset>
     </section>
+    </CatalogImagePreviewProvider>
   );
 }
 
@@ -827,75 +1115,10 @@ function StatListEditor({ field, value, onChange }) {
   );
 }
 
-// "Reference sheet" panel — shows the rendered character turnaround sheet when
-// one exists (payload.referenceSheetImageRef / referenceSheets[]), served from
-// the /data/image-refs/ static prefix. When no sheet exists but the character
-// belongs to a universe, surfaces a deep-link to render one on the Universe
-// Builder surface, which carries the universe's full style data (styleNotes,
-// influences, palette, render settings) the renderer needs. Rendering inline
-// here would duplicate that heavy pipeline — the deep-link keeps one render
-// path. The link targets the universe's `#canon` section (the anchor the
-// Universe Builder hash-scroll resolves).
-function ReferenceSheetPanel({ payload, universeRef }) {
-  const legacy = readSheetPointer(payload, LEGACY_SHEET_VARIANT_ID);
-  // De-dup: the legacy pointer can duplicate a named variant's filename.
-  const variants = listSheetPointers(payload)
-    .filter(({ filename }, index) => typeof filename === 'string'
-      && (index === 0 && legacy || filename !== legacy))
-    .map(({ variant, filename }) => [variant, filename]);
-  const hasSheet = variants.length > 0;
-
-  // Deep-link to the universe's canon section (`id="canon"`, the one anchor the
-  // Universe Builder hash-scroll handler resolves) — a per-character anchor
-  // isn't rendered there, so #canon lands the user on the canon surface where
-  // the character + its render controls live.
-  const universePath = universeRef?.refId
-    ? `/universes/${encodeURIComponent(universeRef.refId)}#canon`
-    : null;
-
-  return (
-    <section className="bg-port-card border border-port-border rounded-lg p-4">
-      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-        <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
-          <ImageIcon size={14} aria-hidden="true" /> Reference sheet
-        </h2>
-        {universePath && (
-          <Link to={universePath}
-            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
-            <Sparkles size={12} aria-hidden="true" />
-            {hasSheet ? 'Re-render in Universe Builder' : 'Render in Universe Builder'}
-            <ExternalLink size={11} aria-hidden="true" />
-          </Link>
-        )}
-      </div>
-      {hasSheet ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {variants.map(([variant, filename]) => (
-            <figure key={variant} className="rounded border border-port-border overflow-hidden bg-port-bg">
-              <MediaImage src={`/data/image-refs/${filename}`} alt={`${variant} reference sheet`}
-                className="w-full object-contain max-h-[420px]" />
-              <figcaption className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border">
-                {variant}
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-gray-500">
-          No reference sheet rendered yet.
-          {universePath
-            ? ' Render one from the linked universe (it carries the style data the renderer needs).'
-            : ' Link this character to a universe to render a reference sheet from its style data.'}
-        </p>
-      )}
-    </section>
-  );
-}
-
 // "Relations" panel — ingredient↔ingredient edges. Outbound edges (this
 // ingredient → other) are user-editable here; inbound edges (other → this
 // ingredient) are read-only because the owning ingredient is the other end.
-function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
+function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly = false, retainedSourceId }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [kind, setKind] = useState(RELATION_KINDS[0].id);
   const [armedRelation, setArmedRelation] = useState(null);
@@ -915,7 +1138,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
   const chip = (other) => {
     const badge = CATALOG_BADGE_BY_ID[other?.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
     return (
-      <Link to={`/catalog/${encodeURIComponent(other?.type || 'idea')}/${encodeURIComponent(other?.id)}`}
+      <Link to={ingredientPath({ type: other?.type, id: other?.id })}
         className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
         <span className="truncate max-w-[16rem]">{other?.name || other?.id || '(unnamed)'}</span>
         <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{other?.type}</span>
@@ -929,11 +1152,11 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
         <h2 className="text-sm font-semibold text-white">Relations</h2>
         <div className="flex items-center gap-2">
           <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
-          <select id="relation-kind" value={kind} onChange={(e) => setKind(e.target.value)}
+          <select id="relation-kind" disabled={readOnly} value={kind} onChange={(e) => setKind(e.target.value)}
             className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
             {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
-          <button type="button" onClick={() => setPickerOpen(true)}
+          <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">
             <Plus size={12} aria-hidden="true" /> Add relation
           </button>
@@ -961,7 +1184,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
                         {chip(r.other)}
-                        {armedRelation === relationKey ? (
+                        {!readOnly && !(retainedSourceId && [r.fromId, r.toId].includes(retainedSourceId)) && (armedRelation === relationKey ? (
                           <ConfirmButtonPair
                             prompt="Remove?"
                             confirmText="Remove"
@@ -982,8 +1205,9 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
                             className="text-gray-500 hover:text-port-error">
                             <X size={12} aria-hidden="true" />
                           </button>
-                        )}
+                        ))}
                       </div>
+                      {retainedSourceId && [r.fromId, r.toId].includes(retainedSourceId) && <p className="text-xs text-gray-500">Retained source relation · read-only</p>}
                       {evidenceSnippet && (
                         <p className="text-[11px] text-gray-400 italic pl-3 border-l border-port-border">
                           “{evidenceSnippet}”
@@ -1056,34 +1280,52 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
 
-  // Open the editor and prefill the prompt with the composed default: the
-  // ingredient's visual seed + tags, layered on the linked universe's style
-  // preset (fetched lazily — the page deliberately doesn't load the universe up
-  // front). A failed/missing universe just omits the preset; the seed still
-  // renders. Don't clobber a prompt the user already edited (re-open keeps it).
+  // The linked universe's style preset travels BESIDE the prompt box, never in
+  // it (#11317): the box holds only the record's own words, the preset becomes
+  // a labeled "Universe style" addition, and the preview below shows the exact
+  // composed text the server will send. Fetched lazily on first open — the
+  // page deliberately doesn't load the universe up front; a failed/missing
+  // universe just omits the preset.
+  const [universe, setUniverse] = useState(null);
+  const universeRequestedRef = useRef(false);
+
+  // Open the editor and prefill the prompt with the record's own seed:
+  // "<name>: <visual description + tags>", with a dangling "Name:" trimmed when
+  // there is no description yet. Don't clobber a prompt the user already
+  // edited (re-open keeps it).
   const openEditor = async () => {
     setEditing(true);
-    if (prompt.trim()) return; // keep prior edits when re-opening
-    setPrefilling(true);
-    let universe = null;
-    if (universeId) {
-      universe = await getUniverse(universeId, { silent: true }).catch(() => null);
+    if (!prompt.trim()) {
+      const seed = `${name || 'Subject'}: ${description || ''}`.replace(/:\s*$/, '');
+      setPrompt(seed);
     }
-    const styled = composeCanonStyledPrompt({
-      name: name || 'Subject',
-      description: description || '',
-      universe,
-    });
+    if (!universeId || universeRequestedRef.current) return;
+    universeRequestedRef.current = true;
+    setPrefilling(true);
+    const loaded = await getUniverse(universeId, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
-    // The textarea is editable during the (awaited) universe fetch, so the user
-    // may have started typing before it resolved — apply the composed prefill
-    // only when the field is still empty, via a functional updater that reads
-    // the latest state (the closure's `prompt` is stale across the await).
-    // Trim a dangling "Name:" when the ingredient had no visual description yet.
-    setPrompt((cur) => (cur.trim() ? cur : (styled.prompt || name || '').replace(/:\s*$/, '')));
-    setNegativePrompt((cur) => (cur.trim() ? cur : (styled.negativePrompt || '')));
+    setUniverse(loaded || null);
     setPrefilling(false);
   };
+
+  // One request body for both the preview and Generate, so what the preview
+  // shows is what the render sends: the user's words composed with the
+  // universe preset (the same shared composer the Image Gen page uses), with
+  // the preset declared as `promptAdditions` so the server records/labels it.
+  const stylePreset = universe ? withUniverseLabel(universeStylePreset(universe)) : null;
+  const buildRequest = (userPrompt, userNegative) => {
+    const composed = composeStyledPrompt(userPrompt, userNegative, stylePreset);
+    const additions = stylePromptAdditions(stylePreset);
+    return {
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt || undefined,
+      ...(additions.length ? { promptAdditions: additions } : {}),
+    };
+  };
+  const previewBody = buildRequest(prompt.trim(), negativePrompt.trim());
+  const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
+    enabled: editing && !prefilling && prompt.trim().length > 0,
+  });
 
   const handleRender = async () => {
     const finalPrompt = prompt.trim();
@@ -1094,8 +1336,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
     setStarting(true);
     const queued = await generateImage(
       {
-        prompt: finalPrompt,
-        negativePrompt: negativePrompt.trim() || undefined,
+        ...buildRequest(finalPrompt, negativePrompt.trim()),
         // Durable attach (#1359): tag the queued job with the target ingredient
         // so the server-side completion hook files the render even if this page
         // unmounts before a long local/Codex render finishes. The onComplete
@@ -1166,7 +1407,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
       )}
 
       {editing && (
-        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] rounded-lg border border-port-border bg-port-card p-3 shadow-xl space-y-2"
+        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[calc(100vw-1rem)] max-h-[80vh] overflow-y-auto rounded-lg border border-port-border bg-port-card p-3 shadow-xl space-y-2"
           style={{ top: '100%' }}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-white">Generate image</span>
@@ -1193,6 +1434,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
               className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[44px]"
             />
           </label>
+          <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
           <div className="flex items-center justify-end gap-2 pt-1">
             <button type="button" onClick={() => setEditing(false)}
               className="text-xs px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white">
@@ -1212,7 +1454,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1220,10 +1462,18 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   const [armedDetach, setArmedDetach] = useState(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
-  const others = list.filter((m) => m.kind !== 'portrait');
+  const seenImageKeys = new Set(portrait ? [portrait.mediaKey] : []);
+  const others = list.filter((m) => {
+    if (m.kind === 'portrait') return false;
+    if (m.kind !== 'reference') return true;
+    if (seenImageKeys.has(m.mediaKey)) return false;
+    seenImageKeys.add(m.mediaKey);
+    return true;
+  });
+  const canonImages = [...new Set(canonImageRefs.filter((ref) => typeof ref === 'string' && ref.trim()))];
 
   const doUpload = async (file) => {
-    if (!file || busy) return;
+    if (!file || busy || readOnly) return;
     setBusy(true);
     try {
       await onUploadFile(file);
@@ -1234,6 +1484,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
 
   const onDrop = (e) => {
     e.preventDefault();
+    if (readOnly) return;
     setDragOver(false);
     // In-app gallery DnD: the dragged tile carries its filename as text.
     const key = (e.dataTransfer.getData('text/plain') || '').trim();
@@ -1274,7 +1525,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
-        <div className="flex items-center gap-2 flex-wrap">
+        {!readOnly && <div className="flex items-center gap-2 flex-wrap">
           <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
@@ -1295,10 +1546,10 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
               <Square size={12} aria-hidden="true" /> Stop &amp; transcribe
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
-      <div
+      {!readOnly && <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
@@ -1307,28 +1558,47 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         {busy
           ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Working…</span>)
           : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
-      </div>
+      </div>}
 
       {portrait && (
         <div className="mb-3">
           <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Portrait</div>
-          <MediaTile m={portrait} missing={missingMedia.has(portrait.mediaKey)} isPortrait
+          <CatalogMediaTile m={portrait} missing={missingMedia.has(portrait.mediaKey)} isPortrait
             onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
             onArmDetach={setArmedDetach} />
         </div>
       )}
 
       {others.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
           {others.map((m) => (
-            <MediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
+            <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
               onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
               onArmDetach={setArmedDetach} />
           ))}
         </div>
       )}
 
-      {list.length === 0 && (
+      {canonImages.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <h3 className="text-xs font-semibold text-gray-300">Canon images</h3>
+          <p className="text-xs text-gray-500">Existing canon references, shown read-only.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+            {canonImages.map((filename) => (
+              <figure key={filename} className="min-w-0 rounded border border-port-border overflow-hidden bg-port-bg">
+                <CatalogImagePreview src={`/data/images/${encodeURIComponent(filename)}`} alt={`${genName} canon reference`}
+                  fallbackSrc={`/data/image-refs/${encodeURIComponent(filename)}`}
+                  className="w-full aspect-square object-contain" />
+                <figcaption className="text-xs text-gray-400 p-2 break-words">
+                  {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {list.length === 0 && canonImages.length === 0 && (
         <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
@@ -1343,68 +1613,6 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         />
       )}
     </section>
-  );
-}
-
-// One media attachment tile. Images render via <MediaImage> (gracefully shows a
-// "syncing" placeholder when the asset hasn't arrived — the same surface the
-// `missing` integrity flag warns about). Audio/video render inline players
-// (their bytes are served from /data/audio and /data/videos); a voice memo's
-// transcript rides in `caption`. Other kinds render a labeled chip.
-function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach, armedDetach, onArmDetach }) {
-  const isImage = m.kind === 'portrait' || m.kind === 'reference';
-  const isAudio = m.kind === 'audio';
-  const isVideo = m.kind === 'video';
-  return (
-    <div className="relative group rounded border border-port-border overflow-hidden bg-port-bg">
-      {isImage && (
-        <MediaImage src={`/data/images/${m.mediaKey}`} alt={m.caption || m.kind}
-          className={isPortrait ? 'w-full max-w-[180px] aspect-square object-cover' : 'w-full aspect-square object-cover'} />
-      )}
-      {isAudio && (
-        <div className="p-2 flex flex-col gap-1">
-          <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-1">
-            <Mic size={10} aria-hidden="true" /> {m.role === 'voice-memo' ? 'voice memo' : 'audio'}
-          </div>
-          <audio controls preload="none" src={`/data/audio/${m.mediaKey}`} className="w-full" />
-          {m.caption && <p className="text-[11px] text-gray-300 whitespace-pre-wrap line-clamp-4">{m.caption}</p>}
-        </div>
-      )}
-      {isVideo && (
-        <video controls preload="none" src={`/data/videos/${m.mediaKey}`} className="w-full aspect-square object-cover bg-black" />
-      )}
-      {!isImage && !isAudio && !isVideo && (
-        <div className="w-full aspect-square flex items-center justify-center text-[10px] uppercase tracking-wider text-gray-400 px-1 text-center">
-          {m.kind}<br />{m.mediaKey}
-        </div>
-      )}
-      {missing && (
-        <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/40"
-          title="This asset isn't in your media library yet (received from a peer before the file arrived).">
-          missing
-        </span>
-      )}
-      <div className="absolute top-1 right-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-        {!isPortrait && isImage && (
-          <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait" aria-label="Set as portrait"
-            className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
-            <Star size={12} aria-hidden="true" />
-          </button>
-        )}
-        {armedDetach === `${m.mediaKey}:${m.kind}` ? (
-          <ConfirmButtonPair prompt="Detach?" confirmText="Detach" cancelText="Cancel"
-            ariaLabel="Confirm media detach" onConfirm={() => {
-              onArmDetach(null);
-              onDetach(m.mediaKey, m.kind);
-            }} onCancel={() => onArmDetach(null)} largeTouchTargets />
-        ) : (
-          <button type="button" onClick={() => onArmDetach(`${m.mediaKey}:${m.kind}`)} title="Detach" aria-label="Detach"
-            className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
-            <X size={12} aria-hidden="true" />
-          </button>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -1505,7 +1713,7 @@ function SourcesPanel({ sources, evidence }) {
                       {siblings.map((sib) => {
                         const badge = CATALOG_BADGE_BY_ID[sib.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
                         return (
-                          <Link key={sib.id} to={`/catalog/${encodeURIComponent(sib.type || 'idea')}/${encodeURIComponent(sib.id)}`}
+                          <Link key={sib.id} to={ingredientPath(sib)}
                             className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
                             <span className="truncate max-w-[12rem]">{sib.name || sib.id}</span>
                             <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{sib.type}</span>
@@ -1601,10 +1809,19 @@ function diffRevisionAgainstCurrent(revision, current, fields) {
     const to = curPayload[key] ?? '';
     if (String(from) !== String(to)) out.push({ key, label, from: String(from), to: String(to) });
   }
+  // Array editors and read-only/forward-compatible canon fields are not in
+  // editorFields. Their changes must never make a revision look identical.
+  const displayed = new Set(out.map((change) => change.key));
+  const additional = [...new Set([...Object.keys(revPayload), ...Object.keys(curPayload)])]
+    .filter((key) => !displayed.has(key) && !sameValue(revPayload[key], curPayload[key]));
+  if (additional.length > 0) out.push({
+    key: '__additional', label: 'Additional fields changed',
+    summary: additional.map(humanizeIntegrityField).join(', '),
+  });
   return out;
 }
 
-function RevisionsPanel({ revisions, current, fields, onRestore }) {
+function RevisionsPanel({ revisions, current, fields, onRestore, readOnly = false, retainedSourceId }) {
   const [openId, setOpenId] = useState(null);
   const [restoring, setRestoring] = useState(null);
   const [pendingRestore, setPendingRestore] = useState(null);
@@ -1651,7 +1868,7 @@ function RevisionsPanel({ revisions, current, fields, onRestore }) {
                     {rev.actor && <span className="text-[10px] text-gray-500 truncate">· {rev.actor}</span>}
                     <span className="text-[10px] text-gray-500 whitespace-nowrap ml-auto">{timeAgo(rev.createdAt)}</span>
                   </button>
-                  {!isLatest && (
+                  {!isLatest && !readOnly && !(retainedSourceId && rev.ingredientId === retainedSourceId) && (
                     pendingRestore === rev.id ? (
                       <ConfirmButtonPair
                         prompt="Replace current form?"
@@ -1689,14 +1906,14 @@ function RevisionsPanel({ revisions, current, fields, onRestore }) {
                         {diff.map((d) => (
                           <div key={d.key} className="text-[11px]">
                             <dt className="text-gray-500 uppercase tracking-wider text-[9px] mb-0.5">{d.label}</dt>
-                            <dd className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                            {d.summary ? <dd className="text-gray-300 break-words">{d.summary}</dd> : <dd className="grid grid-cols-1 sm:grid-cols-2 gap-1">
                               <span className="px-1.5 py-0.5 rounded bg-port-error/10 text-port-error/90 break-words">
                                 {d.from || <em className="text-gray-600">empty</em>}
                               </span>
                               <span className="px-1.5 py-0.5 rounded bg-port-success/10 text-port-success/90 break-words">
                                 {d.to || <em className="text-gray-600">empty</em>}
                               </span>
-                            </dd>
+                            </dd>}
                           </div>
                         ))}
                       </dl>

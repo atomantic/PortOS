@@ -27,6 +27,10 @@ export function useVideoGenFieldState({
   const [falModelId, setFalModelId] = useState('');
   const [falResolution, setFalResolution] = useState('');
   const [falGenerateAudio, setFalGenerateAudio] = useState(false);
+  // Runway: '' = the catalog default model / the model's default length and size.
+  const [runwayModelId, setRunwayModelId] = useState('');
+  const [runwayDuration, setRunwayDuration] = useState('');
+  const [runwayResolution, setRunwayResolution] = useState('');
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
@@ -100,6 +104,9 @@ export function useVideoGenFieldState({
     falModelId, setFalModelId,
     falResolution, setFalResolution,
     falGenerateAudio, setFalGenerateAudio,
+    runwayModelId, setRunwayModelId,
+    runwayDuration, setRunwayDuration,
+    runwayResolution, setRunwayResolution,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

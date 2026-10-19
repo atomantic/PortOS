@@ -2,13 +2,19 @@ vi.mock('../../services/appQualityFederation.js', () => ({ exportPortosQuality: 
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
 vi.mock('../../services/appQualitySnapshotFile.js', () => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234', path: '.quality.json' })) }));
+vi.mock('../../services/appLaneHealth.js', () => ({ getAppLaneHealth: vi.fn(async () => ({ available: true, windowDays: 60, lanes: [] })) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorEvents } from '../../lib/errorHandler.js';
 import crudRoutes from './crud.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
+import { getAppLaneHealth } from '../../services/appLaneHealth.js';
 
 // Mock the services this router (and its port-config service) touch.
 vi.mock('../../services/apps.js', () => ({
@@ -142,6 +148,29 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].overallStatus).toBe('online');
     });
 
+    it('flags non-git directories with isGitRepo and leaves a missing directory unknown', async () => {
+      const plainDir = mkdtempSync(join(tmpdir(), 'portos-plain-'));
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([
+          { id: 'plain', name: 'Plain', repoPath: plainDir, pm2ProcessNames: [] },
+          { id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [] },
+          { id: 'gone', name: 'Gone', repoPath: join(plainDir, 'missing'), pm2ProcessNames: [] },
+        ]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+
+        const response = await request(app).get('/api/apps');
+
+        const flags = Object.fromEntries(response.body.map(a => [a.id, a.isGitRepo]));
+        expect(flags).toEqual({ plain: false, repo: true, gone: undefined });
+      } finally {
+        rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
     it('returns the nav projection without invoking PM2 enrichment', async () => {
       const mockApps = [{
         id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
@@ -194,6 +223,13 @@ describe('Apps CRUD Routes', () => {
       expect(history.status).toBe(200);
       expect(getAppQualityHistory).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' }, 90);
       expect((await request(app).get('/api/apps/portos-default/quality-history?days=9999')).status).toBe(400);
+      // Lane health (#12088) is a forge read on request for the loaded app, never cached on the record.
+      const laneHealth = await request(app).get('/api/apps/portos-default/lane-health');
+      expect(laneHealth.status).toBe(200);
+      expect(laneHealth.body).toEqual({ available: true, windowDays: 60, lanes: [] });
+      expect(getAppLaneHealth).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
+      appsService.getAppById.mockResolvedValueOnce(null);
+      expect((await request(app).get('/api/apps/missing/lane-health')).status).toBe(404);
     });
 
     it('should handle apps with no PM2 processes', async () => {

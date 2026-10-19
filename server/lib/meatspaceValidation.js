@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 
+// GET /alcohol/daily and /nicotine/daily: entries compare these against their
+// YYYY-MM-DD date keys as strings, so any other shape silently filters wrong.
+const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
+export const dailyRangeQuerySchema = z.object({ from: dayKey.optional(), to: dayKey.optional() });
+
 // =============================================================================
 // LIFE CALENDAR ACTIVITIES
 // =============================================================================

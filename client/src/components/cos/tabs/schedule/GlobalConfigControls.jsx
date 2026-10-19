@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -221,6 +221,19 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     try {
       await onUpdate(taskType, {
         taskMetadata: { ...(config.taskMetadata || {}), branchesPerAgent: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  // The removal bar is stored explicitly even for 'default', so the persisted
+  // task states the bar it ran under rather than leaving readers to infer it.
+  const handleDepfreeModeChange = async (value) => {
+    setUpdating(true);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), depfreeMode: value }
       });
     } finally {
       setUpdating(false);
@@ -638,6 +651,27 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <p className="text-xs text-gray-500 mt-1">
             {BRANCHES_PER_AGENT_OPTIONS.find(o => o.value === (config.taskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT))?.description}.
             {' '}Branches are prioritized deterministically; the next drain picks up the remainder after this batch progresses.
+          </p>
+        </div>
+      )}
+
+      {DEPFREE_MODE_TASK_TYPES.has(taskType) && (
+        <div>
+          <label htmlFor={`depfree-mode-${taskType}`} className="text-sm text-gray-400 block mb-2">Removal bar</label>
+          <select
+            id={`depfree-mode-${taskType}`}
+            value={config.taskMetadata?.depfreeMode || DEPFREE_MODE_DEFAULT}
+            onChange={(e) => handleDepfreeModeChange(e.target.value)}
+            disabled={updating}
+            className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+          >
+            {DEPFREE_MODE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {depfreeModeOption(config.taskMetadata?.depfreeMode)?.description}.
+            {' '}Mirrors slashdo <code>/do:depfree</code> / <code>--heavy</code> / <code>--extreme</code>; the model and effort pins above decide what runs it.
           </p>
         </div>
       )}

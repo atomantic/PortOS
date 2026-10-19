@@ -1,7 +1,29 @@
 import { spawn } from './childProcess.js';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// The one Chrome resolver lives in scripts/lib so client tests can share it (#12315).
+export { resolveTestChrome } from '../../scripts/lib/testChrome.js';
+
+const CLIENT_BUNDLER_PACKAGES = Object.freeze(['vite', '@vitejs/plugin-react', '@tailwindcss/postcss']);
+
+/**
+ * The resolved paths of the client workspace's bundler packages (Vite, its
+ * React plugin, Tailwind's PostCSS plugin), or undefined when any is missing —
+ * the shape a `browserSuiteCanRun` prerequisite map treats as absent. Only
+ * MODULE_NOT_FOUND counts as missing; any other resolution error throws.
+ */
+export function resolveClientBundler(repoRoot) {
+  try {
+    const requireClient = createRequire(join(repoRoot, 'client', 'package.json'));
+    return CLIENT_BUNDLER_PACKAGES.map((name) => requireClient.resolve(name));
+  } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    return undefined;
+  }
+}
 
 /**
  * Keep cross-workspace browser suites as visible skips on machines without
@@ -13,19 +35,28 @@ import { join } from 'node:path';
  * also report `{ probeFailure }` for a probe that ran and failed). `onUnavailable` runs
  * before the skip or the throw: prerequisite discovery can initialize mocked
  * path fixtures, and Vitest runs no cleanup hooks for a skipped (or failed) file.
+ *
+ * `browserSuiteBlockReason` is the verdict alone (null when every prerequisite
+ * is present), so a caller that only reports — the local pregate — can share
+ * the exact wording the suites print without the skip/throw side effects.
  */
-export function browserSuiteCanRun(label, prerequisites, { onUnavailable } = {}) {
+export function browserSuiteBlockReason(prerequisites) {
   const entries = Object.entries(prerequisites);
   // A probe that ran but failed is a distinct verdict from an absent prerequisite.
   const failed = entries.filter(([, found]) => found?.probeFailure);
   const missing = entries.filter(([, found]) => !found).map(([name]) => name);
-  if (missing.length === 0 && failed.length === 0) return true;
-
-  onUnavailable?.();
-  const reason = [
+  if (missing.length === 0 && failed.length === 0) return null;
+  return [
     ...(missing.length ? [`missing ${missing.join(', ')}`] : []),
     ...failed.map(([name, found]) => `${name} probe failed (${found.probeFailure})`),
   ].join('; ');
+}
+
+export function browserSuiteCanRun(label, prerequisites, { onUnavailable } = {}) {
+  const reason = browserSuiteBlockReason(prerequisites);
+  if (reason === null) return true;
+
+  onUnavailable?.();
   if (process.env.PORTOS_REQUIRE_BROWSER_SUITES) {
     throw new Error(`${label}: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — ${reason}`);
   }
@@ -113,8 +144,14 @@ export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS
   if (!chromePath) return { ok: false, cause: 'missing-executable' };
   const profile = mkdtempSync(join(tmpdir(), 'portos-h264-probe-'));
   try {
-    const run = await runOwnedProbe(chromePath, ['--headless=new', '--disable-gpu', '--no-sandbox',
-      `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE], { timeoutMs, graceMs });
+    const run = await runOwnedProbe(chromePath, [
+      '--headless=new', '--disable-gpu', '--no-sandbox',
+      '--no-first-run', '--no-default-browser-check',
+      '--disable-background-networking', '--disable-component-update',
+      '--disable-sync', '--disable-breakpad',
+      '--password-store=basic', '--use-mock-keychain',
+      `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
+    ], { timeoutMs, graceMs });
     if (run.spawnErrorCode) {
       return { ok: false, cause: ['ENOENT', 'ENOTDIR'].includes(run.spawnErrorCode) ? 'missing-executable' : 'no-answer' };
     }

@@ -63,7 +63,7 @@ export function videoPromptAdditions({ prompt, negativePrompt, stylePreset, sele
   ];
 }
 
-// Hosted lanes (Grok, fal, reactor) take only text or image mode, and the
+// Hosted lanes (Grok, fal, reactor, Runway) take only text or image mode, and the
 // source pair is meaningful only in image mode. '' is the wire value otherwise.
 const hostedImageFields = (mode, sourceImageFile, sourceImageUpload) => {
   const isImage = mode === 'image';
@@ -110,6 +110,25 @@ function falVideoSubmission({
     falModelId: falModelId || undefined,
     ...(falResolution ? { falResolution } : {}),
     ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
+
+// Runway renders image-to-video only: a start frame is required (the form
+// offers Image mode alone). The negative prompt is sent; the server passes it
+// natively or as an "Avoid:" line, listed as a chip in the sent-prompt view.
+function runwayVideoSubmission({
+  composed, runwayModelId, runwayDuration, runwayResolution,
+  width, height, mode, sourceImageFile, sourceImageUpload,
+}) {
+  return {
+    backend: 'runway',
+    prompt: composed.prompt,
+    negativePrompt: composed.negativePrompt,
+    runwayModelId: runwayModelId || undefined,
+    ...(runwayDuration ? { runwayDuration: Number(runwayDuration) } : {}),
+    ...(runwayResolution ? { runwayResolution } : {}),
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
   };
@@ -305,7 +324,7 @@ const liveBeats = (chainingActive, chunkPrompts, chunks, withEnvelope) => (
 
 export function buildVideoGenSubmission(args) {
   const {
-    isGrok, isFal, isReactor, remoteSubmissionFields,
+    isGrok, isFal, isReactor, isRunway, remoteSubmissionFields,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     currentModel, disableAudio, noMusic, chainingActive, chunks, chunkPrompts,
   } = args;
@@ -315,11 +334,12 @@ export function buildVideoGenSubmission(args) {
   });
   const shared = { ...args, composed };
 
-  const isLocal = !isGrok && !isFal && !isReactor && !remoteSubmissionFields;
+  const isLocal = !isGrok && !isFal && !isReactor && !isRunway && !remoteSubmissionFields;
   const additions = videoPromptAdditions({ ...args, isLocal });
   const payload = isGrok ? grokVideoSubmission(shared)
     : isFal ? falVideoSubmission(shared)
     : isReactor ? reactorVideoSubmission(shared)
+    : isRunway ? runwayVideoSubmission(shared)
     : remoteSubmissionFields ? remoteVideoSubmission(shared)
     : localVideoSubmission(args, {
       composed,

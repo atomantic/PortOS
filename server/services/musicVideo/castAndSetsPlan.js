@@ -29,7 +29,7 @@ import { trimTo } from '../../lib/textUtils.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { songSections } from './castAndSetsDirection.js';
+import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, songSections } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
 // Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
@@ -37,7 +37,7 @@ const MAX_CONDITIONING = 4;
 const MAX_REFERENCES = 24;
 const MAX_SUBJECTS = 24;
 export const CAST_SETS_REF_PREFIX = 'mvr-cs-';
-export const CAST_SETS_SUBJECT_PREFIX = 'cs-';
+export { CAST_SETS_SUBJECT_PREFIX };
 
 // Only the medium is fixed; the look (film stock, light, texture) comes from
 // the project's own mood board / style via `direction.look`.
@@ -138,7 +138,8 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
  * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
  * other plan keys whose image is passed as a reference (in order), then
- * `refImages` (the director's character identity images) follow: only the
+ * `refImages` (the director's character identity images, or a linked catalog
+ * record's image) follow: only the
  * project's own images, never mood board images. A revision note for a key is
  * appended to its prompt.
  */
@@ -150,7 +151,14 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
   const firstLight = direction.sets?.[0]?.lighting || '';
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
-  const identities = identityImages(project);
+  // A linked catalog record's image conditions the sheet or plate of the
+  // protagonist, cast member or set the direction kept it as (by name).
+  const fixed = fixedCasting(project).filter((f) => f.imageId);
+  const fixedImage = (kind, name) => {
+    const key = String(name || '').trim().toLowerCase();
+    return fixed.find((f) => f.kind === kind && f.name.toLowerCase() === key)?.imageId || null;
+  };
+  const identities = [...new Set([fixedImage('character', p.name), ...identityImages(project)].filter(Boolean))].slice(0, MAX_CONDITIONING);
   const plan = {};
 
   plan.character = {
@@ -216,6 +224,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   // the same five views as the protagonist's, so shots naming them keep them.
   for (const c of direction.cast || []) {
     const key = `cast:${c.id}`;
+    const castImage = fixedImage('character', c.name);
     plan[key] = {
       key,
       kind: 'cast',
@@ -223,8 +232,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       castId: c.id,
       deps: [],
       refKeys: [],
+      ...(castImage ? { refImages: [castImage] } : {}),
       prompt: join(
         `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
+        castImage && 'The SAME person as the reference image: keep their face, hair and build exactly',
         identity(c),
         c.wardrobe && `Wearing ${c.wardrobe}`,
         p.name && `A different person from ${p.name}`,
@@ -240,6 +251,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const plateLight = withoutPeople(set.lighting, p.name);
+    const placeImage = fixedImage('place', set.name);
     plan[key] = {
       key,
       kind: 'plate',
@@ -247,8 +259,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       setId: set.id,
       deps: [],
       refKeys: [],
+      ...(placeImage ? { refImages: [placeImage] } : {}),
       prompt: join(
         'Empty set plate, no people',
+        placeImage && 'The same location as the reference image',
         withoutPeople(set.description, p.name) || set.name,
         plateLight && `Lighting: ${plateLight}`,
         plateStyle && `Look: ${plateStyle}`,
@@ -399,6 +413,14 @@ export function castAndSetsSubjects(project, stage) {
       description: trimTo([set.description, set.lighting && `Light: ${set.lighting}`].filter(Boolean).join(' '), 1000),
     });
   }
-  const fresh = ours.filter((s) => s.name && !taken.has(`${s.kind}:${s.name.toLowerCase()}`));
+  // A re-approval keeps each subject's catalog link and keep-local choice.
+  const previous = new Map((project?.concept?.subjects || []).map((s) => [s.id, s]));
+  const fresh = ours
+    .filter((s) => s.name && !taken.has(`${s.kind}:${s.name.toLowerCase()}`))
+    .map((s) => {
+      const prior = previous.get(s.id);
+      if (prior?.kind !== s.kind) return s;
+      return { ...s, ...(prior.ingredientId ? { ingredientId: prior.ingredientId } : {}), ...(prior.localOnly ? { localOnly: true } : {}) };
+    });
   return [...authored, ...fresh].slice(0, MAX_SUBJECTS);
 }

@@ -35,11 +35,11 @@ const DERIVED_FROM = Object.freeze(['server/index.js', 'server/routes/**/*.js', 
 const ROUTE_METHODS = Object.freeze(['delete', 'get', 'head', 'options', 'patch', 'post', 'put']);
 const ROUTE_METHOD_SET = new Set([...ROUTE_METHODS, 'all']);
 
-const DEFAULT_IMPORT_RE = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
+const DEFAULT_IMPORT_RE = /\bimport\s+([A-Za-z_$][\w$]*)(?:\s*,\s*\{[^}]*\})?\s+from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
 // `[^}]*` rather than a lazy `[\s\S]*?`: the lazy form can run from a bare
 // package import (`import { Router } from 'express'`) into the next relative
 // import and swallow that statement's first binding.
-const NAMED_IMPORT_RE = /\bimport\s*\{([^}]*)\}\s*from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
+const NAMED_IMPORT_RE = /\bimport\s*(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
 const ROUTER_DECL_RE = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\.)?Router\s*\(/g;
 const DEFAULT_EXPORT_RE = /\bexport\s+default\s+([A-Za-z_$][\w$]*)\s*;?/;
 const ROUTE_DECL_RE = /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options|all)\(\s*(['"])([^'"\n]*)\3/g;

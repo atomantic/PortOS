@@ -38,15 +38,16 @@ it('combines newest categories in app view and UTC history without changing othe
   const remote = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 80), row('performance', 60)]));
   const local = { ...deps([row('security', 20, '2026-09-09T10:00:00Z')]), peerFetch: vi.fn(async () => response(remote)) };
   const apps = await enrichAppsWithQuality([{ id: 'portos-default' }, { id: 'other' }], local);
-  expect(apps[0].quality).toMatchObject({ score: 70, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
+  // security rolls the peer's run (80) with the local one (20); performance is the peer's alone.
+  expect(apps[0].quality).toMatchObject({ score: 55, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
   expect(apps[0].quality.categories.find(c => c.id === 'security')).toMatchObject({ sourcePeerId: 'peer-a', agentId: null });
   expect(apps[1].quality.score).toBeNull();
   expect(local.peerFetch.mock.calls[0]).toEqual([expect.stringMatching(/^http:\/\/192\.0\.2\.1:5555\/api\/apps\/quality-federation\?days=30&categories=security%2C/),
     expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'error', maxBytes: 4194304 }), peer]);
   const history = await getAppQualityHistory({ id: 'portos-default' }, 30, local);
   expect(history.points.find(p => p.date === '2026-09-09').score).toBe(20);
-  expect(history.points.at(-1)).toMatchObject({ score: 70, ratedCategories: 2 });
-  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(70);
+  expect(history.points.at(-1)).toMatchObject({ score: 55, ratedCategories: 2 });
+  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(55);
   expect((await exportPortosQuality(peer.instanceId, 30, local)).measurements.map(m => m.report.score)).toEqual([20]);
 });
 
@@ -100,14 +101,17 @@ it('keeps local scores on old, offline, malformed, oversize or mismatched peers 
   expect((await collectPortosQuality(30, { ...local, peerFetch: async () => response(future) })).records).toEqual([]);
 });
 
-it('lets newer partial evidence supersede older broad scores and breaks ties consistently', async () => {
+it('keeps a fresh scored run in the window under newer partial evidence and breaks ties consistently', async () => {
   const partial = row('security', 80);
   partial.report.coverage = 'partial';
   partial.report.scannedFiles = 1;
   const payload = await exportPortosQuality(peer.instanceId, 30, deps([partial]));
   const partialDeps = { ...deps([row('security', 20, '2026-09-09T10:00:00Z')]), peerFetch: async () => response(payload) };
-  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], partialDeps))[0].quality.score).toBeNull();
-  expect((await getAppQualityHistory({ id: 'portos-default' }, 30, partialDeps)).points.at(-1).score).toBeNull();
+  // #12076: the partial run is the evidence row but the rolling figure still rests on the qualifying run.
+  const [partialApp] = await enrichAppsWithQuality([{ id: 'portos-default' }], partialDeps);
+  expect(partialApp.quality.score).toBe(20);
+  expect(partialApp.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 20, runScore: 80, coverage: 'partial', sourcePeerId: 'peer-a', window: { runs: 1 } });
+  expect((await getAppQualityHistory({ id: 'portos-default' }, 30, partialDeps)).points.at(-1).score).toBe(20);
   const a = row('security', 25, undefined, { agent_id: 'run-a' });
   const b = row('security', 75, undefined, { agent_id: 'run-b' });
   const scores = [];
@@ -135,6 +139,22 @@ it('matches managed repositories with different local ids and excludes other ori
   expect(await exportPortosQuality(peer.instanceId, 30, source, payload.repository)).toEqual(payload);
   expect(source.query.mock.calls.at(-1)[1][0]).toBe('remote-id');
   expect(await exportPortosQuality(peer.instanceId, 30, source, '0'.repeat(64))).toBeNull();
+});
+
+// #12076: the wire contract stays v1 numeric. A v2 (slice-scored) run exports
+// its run score where an older peer already reads one; the slice text, which
+// names repository paths, never leaves the machine.
+it('exports a slice-scored v2 record in the v1 numeric wire shape and reads it back into the window', async () => {
+  const v2 = row('security', null);
+  v2.report = { version: 2, category: 'security', slice: 'server/services/auth and /Users/person/private', sliceScore: 64, worstSeverity: 5,
+    coverage: 'broad', confidence: 'high', summary: 'Private narrative', scannedFiles: 12, totalFiles: 12 };
+  const payload = await exportPortosQuality(peer.instanceId, 30, deps([v2]));
+  expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { version: 1, category: 'security', score: 64, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 12, totalFiles: 12 } }] });
+  expect(JSON.stringify(payload)).not.toMatch(/slice|Users|narrative|summary/i);
+  expect(qualityFileFromWireSnapshot(payload)).toContain(',64,');
+  const local = { ...deps([v2]), peerFetch: async () => response({ ...payload, measurements: [{ ...payload.measurements[0], measurementId: 'a'.repeat(64), assessedAt: '2026-09-09T10:00:00Z' }] }) };
+  const [app] = await enrichAppsWithQuality([{ id: 'portos-default' }], local);
+  expect(app.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 64, runScore: 64, slice: v2.report.slice, window: { runs: 2 } });
 });
 
 // PortOS's own release evidence goes through the same `.quality.json` path as

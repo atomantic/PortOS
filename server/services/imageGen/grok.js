@@ -1,3 +1,4 @@
+import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
@@ -33,7 +34,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
-import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
+import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -115,10 +116,14 @@ const sigtermWithEscalation = (id, proc) => {
 // Cancel one specific grok render. jobId is required — with parallel renders
 // an "anonymous cancel" would nuke every in-flight render. Use `cancelAll()`
 // for the dispatcher's "stop everything" path.
+const preparations = createMediaJobPreparation();
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("grok.cancel requires a jobId — use grok.cancelAll() to terminate every in-flight render");
   }
+  const pending = preparations.cancel(jobId);
+  if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
   sigtermWithEscalation(jobId, proc);
@@ -128,9 +133,9 @@ export const cancel = (jobId) => {
 // Bulk terminate every in-flight grok render. Only used by the imageGen
 // dispatcher's "cancel everything" route.
 export const cancelAll = () => {
-  const entries = [...activeProcs.entries()];
-  if (entries.length === 0) return false;
-  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
+  const ids = [...preparations.ids(), ...activeProcs.keys()];
+  if (ids.length === 0) return false;
+  for (const id of ids) cancel(id);
   return true;
 };
 
@@ -238,7 +243,9 @@ export function grokSentPrompt({ prompt = '', negativePrompt, width, height, asp
 
 // `initImageStrength` maps to a fidelity phrase (grok's image_edit has no
 // numeric denoise knob, same constraint as codex).
-export async function generateImage({
+export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+
+async function generateImagePrepared({
   promptAdditions = [],
   grokPath, aspectRatio, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
@@ -291,6 +298,9 @@ export async function generateImage({
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.GROK,
+    inputProvenance: 'provider-inputs',
+    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
+    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentRecord,
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
@@ -348,6 +358,10 @@ function runGrok(job, jobId, bin, baseArgs, {
     console.error(`❌ grok scratch cleanup failed: ${err.message}`);
   });
 
+  if (preparations.take(jobId)) {
+    void removeScratch();
+    return finalizeJobFailure.canceled(job, jobId);
+  }
   let proc;
   let useStdin;
   try {

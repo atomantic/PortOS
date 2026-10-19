@@ -238,7 +238,7 @@ export async function pruneTombstonedBoards(olderThanMs) {
 export async function addBoardItem(id, itemInput) {
   const { result } = await withLockedBoard(id, (b) => {
     const { board, item } = addItem(b, itemInput);
-    return { board, result: item };
+    return { board, result: item, skipPersist: board === b };
   });
   return result;
 }

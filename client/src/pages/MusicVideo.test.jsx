@@ -66,7 +66,6 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   deleteMusicVideoProject: vi.fn(),
   analyzeMusicVideoProject: vi.fn(),
   prepareMusicVideoSong: vi.fn((id) => Promise.resolve({ project: { id }, analyzed: false, alignJobId: null })),
-  getMusicVideoLyricPlaythroughPreview: vi.fn(() => new Promise(() => {})),
   getMusicVideoLyricOverlayPreview: vi.fn(() => new Promise(() => {})),
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
@@ -152,9 +151,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   resolveMusicVideoDevArtifactNote: vi.fn(),
   reviewMusicVideoDevArtifact: vi.fn(),
   deleteMusicVideoDevArtifact: vi.fn(),
-  getMusicVideoCompositionPreview: vi.fn(async () => ({ html: '<!doctype html><p>preview</p>', assets: [], width: 1920, height: 1080, fps: 24, durationSec: 60 })),
   getMusicVideoCompositionDocument: vi.fn(),
-  fetchMusicVideoPreviewAsset: vi.fn(),
   startMusicVideoCompositionTemplate: vi.fn(),
   importMusicVideoCompositionZip: vi.fn(),
   importMusicVideoCompositionDirectory: vi.fn(),
@@ -202,7 +199,6 @@ vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: [] })),
   generateImage: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })),
   uploadGalleryImage: vi.fn(),
-  listImageModels: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({})),
 }));
 vi.mock('../services/apiMoodBoard.js', () => ({
@@ -219,6 +215,7 @@ vi.mock('../hooks/useMidiNotes.js', () => ({
   default: () => ({ status: 'idle', data: null, error: null, reload: vi.fn() }),
 }));
 vi.mock('../services/apiImageVideo.js', () => ({
+  listImageModels: vi.fn(async () => []),
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
   uploadGalleryVideo: vi.fn(),
@@ -357,6 +354,10 @@ const selectProject = async (projectId) => {
     fireEvent.change(picker, { target: { value: projectId } });
   });
   await waitFor(() => expect(picker).toHaveValue(projectId));
+  // The project workspace remounts per project, so its mount-time loads
+  // (publish platforms, drafts, the final-render lookup) are settled here
+  // rather than landing after the test body.
+  await settle();
   return picker;
 };
 
@@ -612,6 +613,53 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
   });
 });
 
+describe('MusicVideo per-project workspace (#12039)', () => {
+  it('remounts the workspace per project, so switching projects starts from fresh per-project state', async () => {
+    const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
+    renderMV();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('setup');
+    // Song is not reviewed by watching, so the preview starts folded; opening
+    // it is per-project state that used to be reset by a selection effect.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand preview' }));
+    expect(screen.getByRole('button', { name: 'Collapse preview' })).toBeInTheDocument();
+
+    await selectProject(other.id);
+    await openStage('setup');
+    expect(screen.getByRole('button', { name: 'Expand preview' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse preview' })).not.toBeInTheDocument();
+
+    // Coming back starts fresh too: nothing from the first visit is carried over.
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('setup');
+    expect(screen.getByRole('button', { name: 'Expand preview' })).toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo music library load state (#12040)', () => {
+  it('shows a failed library read with Retry in the create form, then the tracks once the retry lands', async () => {
+    listTracks.mockRejectedValueOnce(new Error('library offline'));
+    renderMV();
+    fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load the music library — library offline');
+    expect(screen.queryByText(/No tracks in the music library yet/)).not.toBeInTheDocument();
+
+    listTracks.mockResolvedValueOnce([{ id: 't-example', title: 'Example Track' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: /Example Track/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty copy for a genuinely empty library, not an error', async () => {
+    renderMV();
+    fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+    expect(await screen.findByText(/No tracks in the music library yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo project header', () => {
   it('keeps only the picker beside the page title inside a project; fork and delete live in Project settings', async () => {
     await openProject(PROJECT_WITH_CLIP);
@@ -724,6 +772,9 @@ describe('MusicVideo render control (#1760)', () => {
     expect(screen.getByText('Rendering 38%')).toBeInTheDocument();
     await selectProject(other.id);
     sseState.latest = { type: 'complete', result: { id: 'rh-9' } };
+    // The server persists the render result before it emits the terminal
+    // frame; the project is read back whole when it is next opened.
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, other]);
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Unrelated draft' } });
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
     await openStage('review');
@@ -2899,7 +2950,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
     const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };
     listMusicVideoProjects.mockResolvedValue([first, second]);
-    getMusicVideoPublishPlatforms.mockResolvedValueOnce({ platforms: { youtube: { enabled: true } } });
+    // Each opened project reads its own platform set.
+    getMusicVideoPublishPlatforms.mockResolvedValue({ platforms: { youtube: { enabled: true } } });
     draftMusicVideoPublishCopy.mockResolvedValueOnce({ project: second });
     render(<MemoryRouter initialEntries={['/music-video/mv-1/publish']}>
       <NavTo to="/music-video/mv-other/publish" />
@@ -3652,5 +3704,29 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     expect(await screen.findByRole('heading', { level: 2, name: 'New music video' })).toBeInTheDocument();
     act(() => routerNavigate(-1));
     await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'New music video' })).not.toBeInTheDocument());
+  });
+
+  it('renders ListLoadError with retry when universe names fail to load in create project drawer', async () => {
+    const { listUniverseNames } = await import('../services/apiUniverseBuilder.js');
+    listUniverseNames.mockReset();
+    listUniverseNames.mockRejectedValueOnce(new Error('Universes offline'));
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+
+    render(
+      <MemoryRouter initialEntries={['/music-video?new=project']}>
+        {MV_ROUTES}
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'New music video' })).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load universes/)).toBeInTheDocument();
+
+    listUniverseNames.mockResolvedValueOnce([{ id: 'u1', name: 'Cyberverse' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not load universes/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('option', { name: 'Cyberverse' })).toBeInTheDocument();
   });
 });

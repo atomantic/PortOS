@@ -487,6 +487,22 @@ describe('codeReview helpers', () => {
       })
     })
 
+    it('counts concurrent provider failures against the persisted record and pauses on the second', async () => {
+      const reviewer = 'provider:opencode-zen'
+      mockedSettings.current = { codeReview: { reviewerFallbackGroups: [[reviewer], ['claude']] } }
+      const transient = { error: 'Unexpected server error. Check server logs for details.' }
+      await Promise.all([
+        reportReviewerFailure(reviewer, transient, 1000),
+        reportReviewerFailure(reviewer, transient, 1000),
+      ])
+      expect(mockedSettings.current.codeReview.reviewerHealth[reviewer]).toMatchObject({
+        pausedUntil: 1000 + REVIEWER_PAUSE_MS,
+        reason: 'unavailable',
+        failureCount: 2,
+      })
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual(['claude'])
+    })
+
     it('recognizes free API quota limits and pauses provider for 24h', async () => {
       mockedSettings.current = { codeReview: {
         reviewerFallbackGroups: [['provider:opencode-orcarouter'], ['provider:nvidia-nim'], ['claude']],
@@ -1409,6 +1425,33 @@ describe('codeReview helpers', () => {
 
       expect(withJsx).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
       expect(helperOnly).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['rendered send buttons'] })
+    })
+
+    it('credits a prompt-text behavior fix plus its version bump and CI repair for an agent-stall diagnosis objective', async () => {
+      const objective = 'Figure out what was blocking agent-example from completing the release this run and fix it'
+      const promptDiff = [
+        'diff --git a/server/services/taskPromptDefaults/prompts.js b/server/services/taskPromptDefaults/prompts.js',
+        '+## Stay with the release PR',
+        '+Do not stop while CI is pending; wait until the PR is MERGED.',
+        'diff --git a/server/services/taskPromptDefaults/versions.js b/server/services/taskPromptDefaults/versions.js',
+        "+  'do-release': 18, // v18: agent-example stopped at CI pending",
+        'diff --git a/server/services/prWatcher.js b/server/services/prWatcher.js',
+        '-export function unusedHelper() {}',
+        '+function unusedHelper() {}',
+      ].join('\n')
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const creditsPromptFix = request.messages[0].content.includes('the prompt text IS the production behavior')
+          && request.messages[0].content.includes('a prompt edit with no version bump')
+        const hasBump = request.messages[1].content.includes("'do-release': 18")
+        return mockJsonResponse({ choices: [{ message: { content: JSON.stringify(creditsPromptFix && hasBump
+          ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'Prompt section and version bump deliver the behavior fix.' }
+          : { verdict: 'fix-first', missing: ['runtime code'], unrequested: ['prWatcher change'], evidence: 'No runtime change.' }) } }] })
+      })
+      const full = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: promptDiff })
+      const noBump = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: promptDiff.replace("'do-release': 18", "'do-release': 17") })
+      expect(full).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(noBump).toMatchObject({ ok: true, verdict: 'fix-first' })
     })
 
     // Transport/contract regression; the opt-in real-model test below checks judgement.

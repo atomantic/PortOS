@@ -432,7 +432,10 @@ describe('codex provider — image harvest', () => {
     const completedListener = vi.fn();
     imageGenEvents.on('completed', completedListener);
 
-    const job = await codex.generateImage({ prompt: 'a fox' });
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'source.png'), fakePngBytes);
+    await writeFile(join(FAKE_IMAGES_DIR, 'reference.png'), fakePngBytes);
+    const job = await codex.generateImage({ prompt: 'a fox', initImagePath: 'source.png', referenceImagePaths: ['reference.png', 'missing.png'] });
     const child = spawnCalls[0].child;
 
     // Drive the session id banner on stderr (codex prints it there).
@@ -462,6 +465,10 @@ describe('codex provider — image harvest', () => {
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
+    expect(JSON.parse(await readFile(sidecar, 'utf8'))).toMatchObject({
+      inputProvenance: 'provider-inputs',
+      initImageFilename: 'source.png', referenceImageFilenames: ['reference.png'],
+    });
   });
 
   it('crops an off-aspect frame to the requested ratio and records it in the sidecar', async () => {
@@ -898,12 +905,22 @@ describe('codex provider — launch refusal settlement', () => {
 });
 
 describe('codex provider — Windows shim lifecycle', () => {
+  // An npm cmd-shim, so a launch whose argv cmd.exe cannot carry (the image
+  // prompt always spans lines) bypasses cmd.exe for the shim's node target.
+  const writeCodexShim = async () => {
+    const cliDir = join(TEST_HOME, 'CLI shims');
+    const script = join(cliDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    await mkdir(join(cliDir, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+    await writeFile(script, '');
+    await writeFile(join(cliDir, 'node.exe'), '');
+    const shim = join(cliDir, 'codex.cmd');
+    await writeFile(shim, '@ECHO off\r\n"%dp0%\\node.exe"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n');
+    return { cliDir, shim, script, node: join(cliDir, 'node.exe') };
+  };
+
   it.each(['bare', 'explicit'])('prepares the %s shim for both probes and image launches without losing arguments', async kind => {
     setPlatform('win32');
-    const cliDir = join(TEST_HOME, 'CLI shims');
-    const shim = join(cliDir, 'codex.cmd');
-    await mkdir(cliDir, { recursive: true });
-    await writeFile(shim, '@echo off');
+    const { cliDir, shim, script, node } = await writeCodexShim();
     vi.stubEnv('PATH', cliDir);
     const codexPath = kind === 'explicit' ? shim : undefined;
 
@@ -922,11 +939,11 @@ describe('codex provider — Windows shim lifecycle', () => {
       prompt: 'a fox & tree | sky > clouds', initImagePath: image,
     });
     const call = spawnCalls[1];
-    expect(call.bin).toBe('cmd.exe');
+    expect(call.bin).toBe(node);
     expect(call.options.shell).toBe(false);
-    expect(call.args.slice(0, 3)).toEqual(['/c', shim, 'exec']);
+    expect(call.args.slice(0, 2)).toEqual([script, 'exec']);
     expect(call.args).toEqual(expect.arrayContaining([
-      'model_reasoning_effort=high', '-i', image, '-m', 'gpt-6.1-sol^&example', '--',
+      'model_reasoning_effort=high', '-i', image, '-m', 'gpt-6.1-sol&example', '--',
     ]));
     expect(call.args.at(-1)).toContain('a fox & tree | sky > clouds');
     expect(call.args.at(-1)).toMatch(/^\$imagegen /);
@@ -938,8 +955,9 @@ describe('codex provider — Windows shim lifecycle', () => {
 
   it.each(['win32', 'linux'])('terminates only the selected %s job, then cancel-all terminates the remaining job', async platform => {
     setPlatform(platform);
-    const first = await codex.generateImage({ prompt: 'first', codexPath: '/example/codex.cmd' });
-    const second = await codex.generateImage({ prompt: 'second', codexPath: '/example/codex.cmd' });
+    const { shim } = await writeCodexShim();
+    const first = await codex.generateImage({ prompt: 'first', codexPath: shim });
+    const second = await codex.generateImage({ prompt: 'second', codexPath: shim });
     const firstChild = spawnCalls[0].child;
     const secondChild = spawnCalls[1].child;
     firstChild.pid = 4242;
@@ -973,7 +991,8 @@ describe('codex provider — Windows shim lifecycle', () => {
   it.each(['win32', 'linux'])('uses the same platform termination path for the %s wall-clock limit', async platform => {
     setPlatform(platform);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const job = await codex.generateImage({ prompt: 'stalled synthetic render', codexPath: '/example/codex.cmd' });
+    const { shim } = await writeCodexShim();
+    const job = await codex.generateImage({ prompt: 'stalled synthetic render', codexPath: shim });
     const child = spawnCalls[0].child;
     child.pid = 4242;
     await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
@@ -983,7 +1002,7 @@ describe('codex provider — Windows shim lifecycle', () => {
       expect(child.kill).not.toHaveBeenCalled();
       expect(spawnCalls.filter(call => call.bin === 'taskkill')).toHaveLength(1);
     } else {
-      expect(spawnCalls[0].bin).toBe('/example/codex.cmd');
+      expect(spawnCalls[0].bin).toBe(shim);
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       await vi.advanceTimersByTimeAsync(4999);
       expect(child.kill).toHaveBeenCalledTimes(1);
@@ -1091,4 +1110,20 @@ describe('Codex cached defaults and isolated workspace', () => {
     expect(JSON.stringify(failed.mock.calls)).toContain('shell activity was recorded');
     expect(JSON.stringify(failed.mock.calls)).toContain('does not establish whether the tool is available');
   });
+});
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-imageGen-codex';
+  const pending = codex.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(codex.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(spawnCalls).toHaveLength(0);
+  expect(codex.cancel(jobId)).toBe(false);
 });

@@ -2,12 +2,16 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, posix } from 'path';
-import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
+import { join, posix, relative } from 'path';
+import { staticImportClosure, staticImportSpecifiersFromSource, toModuleKey } from '../server/lib/staticImportGraph.js';
+import { escapeRegExp } from '../server/lib/textUtils.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { ATTESTABLE_STAGES, selectAttestation } from './lib/pregateAttestation.js';
+import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
+import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -25,9 +29,12 @@ const SERVER_LINT_RE = /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\
 const isLintSurface = (path) => CLIENT_LINT_RE.test(path) || SERVER_LINT_RE.test(path);
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
-// 125, not 120: the always-run guards grew to the old edge, and the real-repo
-// editorial-leaf planner test sat exactly on it (#10312).
-const MAX_TARGETED_TEST_FILES = 125;
+// Explicit selectors one runner carries before its scoped plan fans out across
+// the full-suite shard matrix. It used to escalate the whole repository to a
+// full plan; over-selection is a capacity limit, not a risk signal, so the
+// selection now stays exactly as computed and only execution is partitioned
+// (#11871). 125 is that former full-plan threshold (#10312).
+export const MAX_TARGETED_TEST_FILES = 125;
 
 // Preserve the planner's public registry export for existing callers.
 export { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -62,6 +69,150 @@ export const shardIndexes = (mode, count) => (
   mode === 'full' ? Array.from({ length: count }, (_, index) => index + 1) : [1]
 );
 
+/**
+ * Whether a scoped Linux runner fans out across its full-suite shard count.
+ *
+ * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
+ * - Server `related` mode: always. Its import-graph fan-out is unbounded by the
+ *   explicit count (#9999: 57 selectors became ~941 files), and scoped server
+ *   runs took 6.1 min median / 9.4 p90 on one runner. Each shard repeats
+ *   Vitest's related-graph pass, which is the Windows job's existing trade.
+ *   Client related plans stay on one runner unless over the cap.
+ * - Exact-file plans under the cap stay on one runner: they run in seconds.
+ *
+ * Vitest throws when the shard count exceeds the files it resolved
+ * (`--shard <count> must be a smaller than count of test files`). Every
+ * explicit selector is in the resolved set — `vitest related` selects a test
+ * file passed as input — so the floor counts explicit files the Linux runner
+ * does not exclude (DB suites run in their own job, browser suites in theirs).
+ * Below the floor the runner stays on one shard.
+ */
+const fansOut = (runner, { mode, files }, excludedFiles) => {
+  if (mode === 'skip' || mode === 'full') return false;
+  const runnable = files.filter((path) => !excludedFiles.has(path));
+  if (runnable.length < FULL_SUITE_SHARDS[runner]) return false;
+  return files.length > MAX_TARGETED_TEST_FILES || (runner === 'server' && mode === 'related');
+};
+
+const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
+
+// Workspaces the windows-server job installs (`npm ci --prefix <dir>`). Only
+// their manifests and .npmrc can change what that job runs, so a dependency or
+// npm-config change elsewhere keeps the Windows baseline. ci-test-plan.test.js
+// pins this list to the job's install steps in ci.yml.
+export const WINDOWS_INSTALLED_WORKSPACES = ['server'];
+const windowsInstalls = (path) => WINDOWS_INSTALLED_WORKSPACES.some((dir) => path.startsWith(`${dir}/`));
+
+// Packages whose installed files differ per platform although their lockfile
+// entry may carry no os/cpu/install-script metadata: runtime dispatchers that
+// pick a prebuilt binary (their per-platform children ARE os/cpu-tagged, and
+// usually move with them), browser-binary downloaders, and native addons.
+//
+// The first row is every TRUSTED_REBUILDS package (scripts/trusted-rebuilds.js).
+// It is matched here rather than imported: that module's spawn helpers would
+// pull ~20 server modules into a planner that runs before any install.
+// ci-test-plan.test.js fails when the allowlist names a package this list misses.
+export const PLATFORM_PACKAGE_RES = [
+  /^node-pty$/, /^sharp$/, /^onnxruntime-/, /^protobufjs$/,
+  /^@img\//, /^esbuild$/, /^@esbuild\//,
+  /^rollup$/, /^@rollup\/rollup-/, /^rolldown$/, /^@rolldown\//, /^@biomejs\//,
+  /^lightningcss(?:-|$)/, /^@tailwindcss\/oxide/, /^playwright(?:-core)?$/, /^@playwright\//,
+  /^@swc\//, /^fsevents$/, /^bufferutil$/, /^utf-8-validate$/,
+];
+// Lockfile entry metadata npm uses to install a package conditionally per
+// platform, or to run code at install time.
+const PLATFORM_ENTRY_FIELDS = ['hasInstallScript', 'os', 'cpu', 'libc', 'optional', 'devOptional'];
+// package.json fields whose change installs the same files on every platform.
+// Dependency maps are checked per changed name; any other field (engines,
+// overrides, optionalDependencies, scripts, os, cpu, …) escalates.
+const PLATFORM_NEUTRAL_MANIFEST_FIELDS = new Set([
+  'name', 'version', 'description', 'keywords', 'author', 'license', 'homepage', 'repository', 'bugs', 'private',
+]);
+const MANIFEST_DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'];
+// Lockfile root entry ("") fields that mirror the dependency maps; the
+// node_modules/* entries carry the real change.
+const LOCKFILE_ROOT_NEUTRAL_FIELDS = new Set(['name', 'version', 'license', ...MANIFEST_DEPENDENCY_FIELDS]);
+
+const isPlatformPackageName = (name) => PLATFORM_PACKAGE_RES.some((re) => re.test(name));
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const changedKeys = (base = {}, head = {}) => uniqueSorted([...Object.keys(base), ...Object.keys(head)])
+  .filter((key) => !sameJson(base[key], head[key]));
+const packageNameFromLockKey = (key, entry) => entry?.name
+  ?? key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const escalated = (reason, packages = []) => ({ escalate: true, reason, packages: uniqueSorted(packages) });
+
+function classifyLockfile(base, head) {
+  if (!isPlainObject(base.packages) || !isPlainObject(head.packages)) {
+    return escalated('lockfile has no packages map to compare');
+  }
+  const topLevel = changedKeys(base, head).filter((key) => !['packages', 'name', 'version'].includes(key));
+  if (topLevel.length > 0) return escalated(`lockfile ${topLevel.join(', ')} changed`);
+  const rootFields = changedKeys(base.packages[''], head.packages[''])
+    .filter((key) => !LOCKFILE_ROOT_NEUTRAL_FIELDS.has(key));
+  if (rootFields.length > 0) return escalated(`root ${rootFields.join(', ')} changed`);
+
+  const changed = changedKeys(base.packages, head.packages).filter((key) => key !== '').map((key) => {
+    const entries = [base.packages[key], head.packages[key]].filter(isPlainObject);
+    const name = packageNameFromLockKey(key, head.packages[key] ?? base.packages[key]);
+    const sensitive = isPlatformPackageName(name) || entries.some((entry) => PLATFORM_ENTRY_FIELDS
+      .some((field) => entry[field] !== undefined && entry[field] !== false));
+    return { name, sensitive };
+  });
+  const sensitive = changed.filter((pkg) => pkg.sensitive).map((pkg) => pkg.name);
+  if (sensitive.length > 0) return escalated('platform-sensitive package changed', sensitive);
+  return { escalate: false, reason: 'no platform-sensitive package changed', packages: uniqueSorted(changed.map((pkg) => pkg.name)) };
+}
+
+function classifyManifest(base, head) {
+  const fields = changedKeys(base, head).filter((key) => !PLATFORM_NEUTRAL_MANIFEST_FIELDS.has(key));
+  const unsafe = fields.filter((key) => !MANIFEST_DEPENDENCY_FIELDS.includes(key));
+  if (unsafe.length > 0) return escalated(`${unsafe.join(', ')} changed`);
+  const names = uniqueSorted(fields.flatMap((field) => changedKeys(
+    isPlainObject(base[field]) ? base[field] : {},
+    isPlainObject(head[field]) ? head[field] : {},
+  )));
+  const sensitive = names.filter(isPlatformPackageName);
+  if (sensitive.length > 0) return escalated('platform-sensitive package changed', sensitive);
+  return { escalate: false, reason: 'no platform-sensitive package changed', packages: names };
+}
+
+/**
+ * Should a change to one dependency manifest run the complete Windows suite?
+ *
+ * `baseText`/`headText` are the file's contents at the diff base and in the
+ * tree under test; null means unavailable (new, deleted, or unreadable). Any
+ * input the planner cannot read and compare fails closed to escalation, so
+ * only a proven platform-neutral change downgrades Windows.
+ *
+ * Returns { escalate, reason, packages } — `packages` names what drove the
+ * decision: the platform-sensitive packages when escalating, every changed
+ * package otherwise.
+ */
+export function classifyDependencyChange(path, baseText, headText) {
+  if (baseText == null) return escalated('base version unavailable');
+  if (headText == null) return escalated('removed or unreadable in the tree under test');
+  let base;
+  let head;
+  try {
+    base = JSON.parse(baseText);
+    head = JSON.parse(headText);
+  } catch {
+    return escalated('could not be parsed');
+  }
+  if (!isPlainObject(base) || !isPlainObject(head)) return escalated('could not be parsed');
+  return path.endsWith('-lock.json') ? classifyLockfile(base, head) : classifyManifest(base, head);
+}
+
+const MAX_NAMED_PACKAGES = 8;
+const describeDependencyVerdict = (path, { escalate, reason, packages }) => {
+  const named = packages.length > MAX_NAMED_PACKAGES
+    ? `${packages.slice(0, MAX_NAMED_PACKAGES).join(', ')} and ${packages.length - MAX_NAMED_PACKAGES} more`
+    : packages.join(', ');
+  return `${path} ${escalate ? 'escalates Windows' : 'keeps the Windows baseline'}: ${reason}${named ? ` (${named})` : ''}`;
+};
+
 // `windowsEscalates` decides whether a trigger widens the WINDOWS job too, not
 // only the Linux ones. Three windows-server shards are 3 of a full run's 12
 // jobs and 41% of its runner-minutes (58% at GitHub's 2x windows-latest
@@ -72,11 +223,20 @@ export const shardIndexes = (mode, count) => (
 // baseline instead, the depth a Windows-risk scoped PR already gets. `true` is
 // the fail-closed default for anything unlisted, and a diff touching
 // WINDOWS_RISK_RULES escalates regardless of this flag (issue #7440).
+//
+// `windowsEscalates: 'dependencies'` defers the decision to the diff of the
+// manifest itself (classifyDependencyChange): a pure-JS version bump installs
+// the same files on every platform, so the full Linux matrix covers it and
+// Windows runs the baseline. A native, install-script, os/cpu-gated or optional
+// package, an `engines`/`overrides`/non-dependency field change, or a manifest
+// the planner could not read and compare escalates Windows.
 const FULL_TRIGGER_RULES = [
   // Defines the windows-server job itself.
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: true },
-  // Native rebuilds and platform-conditional resolution differ on Windows.
-  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed', windowsEscalates: true },
+  { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsEscalates: 'dependencies' },
+  // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
+  // it on the Windows install too.
+  { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsEscalates: true },
   { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
@@ -90,7 +250,9 @@ const FULL_TRIGGER_RULES = [
   // Client-only: the Windows job builds no client bundle.
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsEscalates: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsEscalates: true },
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: true },
+  // Widely imported, but pure cross-platform schema logic: no spawn, path or
+  // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
+  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
@@ -117,6 +279,8 @@ export const WINDOWS_RISK_RULES = [
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
+  /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
   // and APFS are case-insensitive while ext4 is not, and git reports paths its
   // own way (drive-letter case, 8.3 short names like C:\Users\RUNNER~1). A
@@ -246,9 +410,13 @@ export const ALWAYS_RUN_TESTS = [
   // can select it — a docs-only PR that documented a removed endpoint would
   // otherwise merge green.
   'docs/api-doc.test.js',
+  'docs/auth-public-paths-doc.test.js',
+  'docs/doc-endpoint-methods.test.js',
+  'docs/docs-index.test.js',
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
+  'scripts/doc-code-pointers.test.js',
   // Whole-tree scanner: a new browser suite can adopt the gate with no import
   // edge back to the registry it must join (#10312).
   'scripts/browser-suite-registry.test.js',
@@ -261,7 +429,14 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/direct-invocation-drift.test.js',
   'scripts/ensure-deps.test.js',
   'scripts/migrations/promptBumpMigrations.guard.test.js',
+  'scripts/migrations/shippedPromptHistory.guard.test.js',
+  // Sweeps every migration export against independent prompt-hash baselines;
+  // migration files have no import edge back to this guard.
+  'scripts/setup-data-drift.test.js',
   'scripts/node-version-drift.test.js',
+  // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
+  // in prose with no import edge back to this test (#11851).
+  'scripts/port-band-docs.test.js',
   'scripts/repo-scan-guards.test.js',
   // Whole-tree scanner: any server file can add an import of client source.
   'scripts/server-imports-no-client.test.js',
@@ -272,6 +447,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can add a `process.env` read, and
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
+  // Whole-tree scanner (#12093): any rename or deletion can strand a backticked
+  // file name in an AGENTS.md, which is documentation-only to the planner.
+  'server/instructionFileReferences.test.js',
   // Whole-tree scanners over the shared collectServerSources/collectClientSources
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
@@ -309,6 +487,12 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
+  // Whole-tree scanner: a renamed export in any module leaves a dead key in some
+  // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
+  'server/mockContractConventions.test.js',
+  // Whole-tree scanner over git-tracked tests (#12047): any suite can add a
+  // real sleep before a not-called assertion with no import edge to this guard.
+  'server/negativeProofSleepConventions.test.js',
   // Whole-tree scanner: any server file can spawn a child and await before
   // attaching its error/exit listener (#11761), with no import edge to this file.
   'server/childListenerOrderConventions.test.js',
@@ -321,6 +505,12 @@ export const ALWAYS_RUN_TESTS = [
   'server/services/orphanedPartialGc.test.js',
   'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
+  // Base-relative retired history guard: JSON edits have no import edge here.
+  // Pregate and CI forward the planner's exact CI_BASE_SHA.
+  'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
+  // Whole-tree scanner (#12048): server/index.js can mount a new router that no
+  // test imports, with no import edge from that router to this guard.
+  'server/routeTestCoverageConventions.test.js',
   'server/routeValidationConventions.test.js',
   'server/timerCallbackConventions.test.js',
 ];
@@ -344,9 +534,12 @@ const DOCUMENTATION_RULES = [
 // Text snapshots are executable test inputs, but their extension is deliberately
 // outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
 // `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
-const FIXTURE_OWNERS = [
+// `dir` names the directory the pattern covers so the test memo
+// (scripts/lib/testMemo.js) can hash every fixture an owning test reads.
+export const FIXTURE_OWNERS = [
   {
     re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
+    dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
 ];
@@ -386,16 +579,87 @@ const SLASHDO_CONTRACT_SOURCE_FILES = [
  * changing would not set this, even though Vitest's real `related` selection
  * can still transitively pull the contract tests in — in which case they run
  * without the submodule and take the documented skip. In practice a
- * sufficiently shared dependency changing also tends to select enough tests
- * to exceed MAX_TARGETED_TEST_FILES and force a full plan, which does trigger
- * this; a narrowly-shared one is the remaining gap.
+ * sufficiently shared dependency changing also tends to select more than
+ * MAX_TARGETED_TEST_FILES explicit server tests, which does trigger this (as
+ * the full plan that cap used to force did); a narrowly-shared one is the
+ * remaining gap.
  */
 export const needsSlashdoSubmodule = (plan) => Boolean(
   plan.full
+  || plan.server.files.length > MAX_TARGETED_TEST_FILES
   || plan.changedFiles.includes(SLASHDO_GITLINK_PATH)
   || plan.server.files.some((path) => SLASHDO_CONTRACT_TEST_FILES.includes(path))
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
 );
+
+// Two narrow CI jobs observe a small, enumerable input set, so a pull request
+// that touches none of it skips them (non-PR and release-base runs are forced
+// full and always run both). Each gate is the head tree's static import
+// closure of the job's entry points, computed per run so it cannot drift from
+// a hand-kept list, plus the non-module inputs named by the pattern. ci.yml is
+// in both patterns so a workflow edit proves the job still runs.
+export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
+// The guard reads git history of data.reference/prompts/stages and imports the
+// migrations that declare prompt hashes. The whole migrations directory is
+// listed (not just today's declaring modules) so a diff that removes a
+// declaration still runs the guard. taskPromptDefaults and the snapshot
+// regenerator are the other half of a prompt-default bump.
+export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
+// The files the `linux-containment` job passes to `npm test --prefix server`.
+export const LINUX_CONTAINMENT_TESTS = [
+  'server/lib/codeAnimationContainment.test.js',
+  'server/routes/codeAnimationExecution.test.js',
+  'server/services/codeAnimation/containedWorker.test.js',
+];
+// The server Vitest config and its setup files load around every one of those
+// tests; vitestTempRootSetup.js is named by URL, not by an import edge.
+const LINUX_CONTAINMENT_ENTRIES = [
+  ...LINUX_CONTAINMENT_TESTS,
+  'server/vitest.config.js',
+  'server/vitest.setup.js',
+  'scripts/vitestTempRootSetup.js',
+];
+// The job installs server dependencies from these before running anything.
+export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+
+/**
+ * Repository-relative static import closure of `entries` in `cwd`, or null
+ * when a module cannot be read — the caller then runs the gated job rather
+ * than trusting a partial walk. Every entry is an input even when absent, so
+ * deleting or renaming one still runs the job that names it.
+ */
+const staticClosureOf = (entries, cwd) => {
+  try {
+    const files = new Set(entries);
+    for (const entry of entries) {
+      if (!existsSync(join(cwd, entry))) continue;
+      for (const file of staticImportClosure(join(cwd, entry)).files) files.add(toModuleKey(relative(cwd, file)));
+    }
+    return uniqueSorted([...files]);
+  } catch {
+    return null;
+  }
+};
+
+/** Static closure of the prompt-history guard and every migration it imports. */
+export function collectPromptHistoryInputs(files, cwd) {
+  try {
+    const declaring = files.filter((path) => path.startsWith('scripts/migrations/')
+      && !path.slice('scripts/migrations/'.length).includes('/')
+      && isNumberedMigrationFile(basenameOf(path))
+      && declaresPromptHashes(readFileSync(join(cwd, path), 'utf8')));
+    return staticClosureOf([PROMPT_HISTORY_GUARD, ...declaring], cwd);
+  } catch {
+    return null;
+  }
+}
+
+/** Static closure of the linux-containment tests and their Vitest harness. */
+export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
+
+/** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
+const touchesJobInputs = (changed, inputs, pattern) => inputs === null
+  || changed.some((path) => pattern.test(path) || inputs.includes(path));
 
 const RUNNER_ROOTS = {
   server: [
@@ -471,7 +735,7 @@ const featureDirectory = (path) => {
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-  'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+  'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
   'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
 ]);
@@ -501,6 +765,8 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   }
   if (sharedCacheInputChanged || changedFiles.some((path) => WORKSPACE_CACHE_CLIENT_INPUTS.has(path))) {
     add('client/src/test/workspaceCaches.test.js');
+    // The runner's client enumeration is pinned against `vitest list` from the client workspace, where the client job runs it.
+    add('client/src/test/workspaceTests.test.js');
   }
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
@@ -548,6 +814,7 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/listFetchConventions.test.js');
     add('client/src/moduleContractConventions.test.js');
     add('client/src/numberFormattingConventions.test.js');
     add('client/src/pageShellConventions.test.js');
@@ -634,19 +901,29 @@ export const isRouteOnlyAppDiff = (diff) => {
   return changedLines.length > 0 && changedLines.every((line) => /^[-+]\s*<\/?Route\b.*>(?:\s*)$/.test(line));
 };
 
+// A scoped runner spread over several shards says why, so the summary never
+// reads as a full run.
+const fanOutNote = (plan, runner) => {
+  const count = plan.shards[runner].length;
+  if (plan.full || count === 1) return '';
+  return plan[runner].files.length > MAX_TARGETED_TEST_FILES
+    ? `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`
+    : `; related import graph sharded ${count} ways`;
+};
+
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   server: plan.server.mode === 'skip'
     ? 'skipped: no server-impacting source changed'
     : plan.full
       ? `full matrix: ${plan.reason}`
-      : 'always-run cross-install and repository guards',
+      : `always-run cross-install and repository guards${fanOutNote(plan, 'server')}`,
   client: plan.client.mode === 'skip'
     ? 'skipped: no client-impacting source changed'
     : appRouteOnly
-      ? 'route-only client App.jsx change: related client contracts'
+      ? `route-only client App.jsx change: related client contracts${fanOutNote(plan, 'client')}`
       : plan.full
         ? `full matrix: ${plan.reason}`
-        : 'client-impacting source changed',
+        : `client-impacting source changed${fanOutNote(plan, 'client')}`,
   browser: plan.browserFiles.length > 0
     ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
     : 'skipped: no cross-workspace browser suite selected',
@@ -657,12 +934,13 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   // A full plan whose Windows job stayed at the contract baseline says so
   // explicitly, so the CI summary never reads "full matrix" beside a one-shard
   // Windows run (issue #7440).
+  // A dependency-manifest plan names the packages behind its Windows decision.
   windows: !plan.windows
     ? 'skipped: no Windows-sensitive surface changed'
     : plan.full
-      ? (plan.windowsMode === 'full'
+      ? `${plan.windowsMode === 'full'
         ? `full matrix: ${plan.reason}`
-        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`)
+        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`}${plan.windowsNote ? `; ${plan.windowsNote}` : ''}`
       : 'Windows-sensitive surface changed',
 });
 
@@ -674,7 +952,29 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  * Flat/shared files fall back to Vitest's import-graph-aware "related" mode,
  * while composition roots and test configuration force the complete suite.
  */
-export function buildCiTestPlan(changedFiles, {
+/**
+ * The CI plan for a diff: the test-suite selection plus whether each
+ * path-gated job (prompt history, Linux containment) runs.
+ *
+ * `promptHistoryInputs` / `linuxContainmentInputs` are the jobs' static
+ * import closures from collectPlanInputs(); null (the default) runs the job.
+ */
+export function buildCiTestPlan(changedFiles, options = {}) {
+  const plan = buildSuitePlan(changedFiles, options);
+  const { forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, serverReach = null } = options;
+  // Informational: names the changed source behind a large related selection
+  // (#12285). It never changes what runs.
+  const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
+  return {
+    ...plan,
+    ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
+    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
+    linuxContainment: forceFull
+      || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
+  };
+}
+
+function buildSuitePlan(changedFiles, {
   trackedFiles = [],
   forceFull = false,
   forceFullReason = 'full CI requested',
@@ -690,6 +990,9 @@ export function buildCiTestPlan(changedFiles, {
   dbDependencies = [],
   // Registered suite → reachable files; null retains that suite conservatively.
   browserDependencies = {},
+  // Changed dependency manifest → classifyDependencyChange() verdict. A
+  // manifest with no verdict escalates Windows (fail closed).
+  dependencyChanges = {},
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -712,12 +1015,25 @@ export function buildCiTestPlan(changedFiles, {
   // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
   // branch below returning before the triggers are even looked at — which
   // downgraded Windows for an App.jsx PR that also bumped a lockfile.
+  const dependencyVerdicts = [];
   const fullTriggers = changed
     .flatMap((path) => FULL_TRIGGER_RULES
       .filter(({ re }) => re.test(path))
-      .map(({ reason, windowsEscalates }) => ({ path, reason, windowsEscalates })));
+      .map(({ reason, windowsEscalates }) => {
+        const scopedToWindows = windowsEscalates === 'dependencies' || (windowsEscalates === true && /(?:^|\/)\.npmrc$/.test(path));
+        if (!scopedToWindows) return { path, reason, windowsEscalates };
+        if (!windowsInstalls(path)) {
+          dependencyVerdicts.push(`${path} keeps the Windows baseline: the Windows job does not install that workspace`);
+          return { path, reason, windowsEscalates: false };
+        }
+        if (windowsEscalates === true) return { path, reason, windowsEscalates };
+        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
+        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
+        return { path, reason, windowsEscalates: verdict.escalate };
+      }));
   const fullTrigger = fullTriggers.at(0);
   const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsEscalates);
+  const windowsNote = dependencyVerdicts.join('; ');
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
   if (appCompositionChanged && !appRouteOnly) {
@@ -727,6 +1043,7 @@ export function buildCiTestPlan(changedFiles, {
       appRouteOnly,
       trackedSet,
       windowsEscalates: triggersEscalateWindows,
+      windowsNote,
     });
   }
 
@@ -735,6 +1052,7 @@ export function buildCiTestPlan(changedFiles, {
       appRouteOnly,
       trackedSet,
       windowsEscalates: triggersEscalateWindows,
+      windowsNote,
     });
   }
 
@@ -853,10 +1171,6 @@ export function buildCiTestPlan(changedFiles, {
   const serverFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'server'));
   const clientFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'client'));
 
-  if (serverFiles.length > MAX_TARGETED_TEST_FILES || clientFiles.length > MAX_TARGETED_TEST_FILES) {
-    return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly, trackedSet, windowsEscalates: false });
-  }
-
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);
 
@@ -931,25 +1245,38 @@ export function buildCiTestPlan(changedFiles, {
       ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
     ]) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
-  }, { appRouteOnly });
+  }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
 }
 
-/** The derived fields every plan carries: per-suite reasons and shard matrices. */
-const finishPlan = (plan, options) => ({
-  ...plan,
-  slashdo: needsSlashdoSubmodule(plan),
-  suiteReasons: suiteReasonsFor(plan, options),
-  shards: {
-    server: shardIndexes(plan.server.mode, FULL_SUITE_SHARDS.server),
-    client: shardIndexes(plan.client.mode, FULL_SUITE_SHARDS.client),
+/**
+ * The derived fields every plan carries: per-suite reasons and shard matrices.
+ *
+ * `linuxRunnerExcludes` names selected files the Linux test jobs never run
+ * (DB and browser suites have their own jobs); fansOut() keeps them out of the
+ * shard-count floor.
+ */
+const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) => {
+  const linuxShards = (runner) => shardIndexes(
+    fansOut(runner, plan[runner], linuxRunnerExcludes) ? 'full' : plan[runner].mode,
+    FULL_SUITE_SHARDS[runner],
+  );
+  const shards = {
+    server: linuxShards('server'),
+    client: linuxShards('client'),
     // Related mode can reach most of the server graph through one shared
     // source. The explicit selector count does not bound that work: one Windows
     // runner exceeded the unchanged 15-minute step budget on a TUI handshake
     // edit. Split execution across the existing matrix without widening or
     // reducing related-test selection; exact-file plans stay on one runner.
     windows: shardIndexes(plan.windowsMode === 'related' ? 'full' : plan.windowsMode, FULL_SUITE_SHARDS.windows),
-  },
-});
+  };
+  return {
+    ...plan,
+    slashdo: needsSlashdoSubmodule(plan),
+    suiteReasons: suiteReasonsFor({ ...plan, shards }, options),
+    shards,
+  };
+};
 
 /**
  * A full plan for every Linux suite — with the Windows job at the depth the
@@ -957,9 +1284,10 @@ const finishPlan = (plan, options) => ({
  *
  * `windowsEscalates` (default true, so an unlisted caller fails closed) is
  * false only for a trigger windows-server cannot observe: a client-only
- * surface, or a CAPACITY escalation (the targeted-test cap, a wide diff) that
- * says the planner ran out of scoping headroom, not that anything risky
- * changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
+ * surface, pure cross-platform schema logic, a dependency-manifest change
+ * classifyDependencyChange() proved platform-neutral, or a CAPACITY escalation
+ * (a wide diff) that says the planner ran out of scoping headroom, not that
+ * anything risky changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
  *
  * Downgraded does not mean skipped: the job still runs WINDOWS_CONTRACT_TESTS,
  * the curated cross-platform baseline a Windows-risk scoped PR already gets.
@@ -970,7 +1298,7 @@ const finishPlan = (plan, options) => ({
  * `options` is also forwarded to finishPlan(), which reads only appRouteOnly.
  */
 function fullPlan(changedFiles, reason, options = {}) {
-  const { trackedSet = new Set(), windowsEscalates = true } = options;
+  const { trackedSet = new Set(), windowsEscalates = true, windowsNote = '' } = options;
   // An empty `files` list makes run-ci-tests.js print "No server tests
   // selected" and exit 0 — a green Windows job that ran nothing. So the
   // baseline is only a downgrade while it actually resolves to tracked tests;
@@ -992,6 +1320,7 @@ function fullPlan(changedFiles, reason, options = {}) {
     windowsMode: windowsFull ? 'full' : 'files',
     windowsFiles: windowsFull ? [] : baseline,
     windowsSources: [],
+    windowsNote,
   }, options);
 }
 
@@ -1011,6 +1340,41 @@ const gitGrepFiles = (pattern, pathspecs, cwd) => {
   }
 };
 
+const basenameOf = (path) => path.slice(path.lastIndexOf('/') + 1);
+
+/** Basenames carried by more than one present, executable, non-test source. */
+const sharedSourceBasenames = (files) => {
+  const seen = new Set();
+  const shared = new Set();
+  for (const path of files) {
+    if (!isExecutable(path) || isTestFile(path)) continue;
+    const name = basenameOf(path);
+    (seen.has(name) ? shared : seen).add(name);
+  }
+  return shared;
+};
+
+/**
+ * Keep the basename hits that plausibly mean THIS copy of a shared basename:
+ * a test inside the source's directory subtree (it reaches the file as
+ * `./name` or `../name`), or one whose text also names the source's parent
+ * directory as a token (`cos-runner`, `aiToolkit`, `join(…, 'imageGen', …)`).
+ * A test naming only another directory's `index.js` is dropped; Vitest's
+ * import graph still selects every real importer. A repo-root source has no
+ * parent to tell copies apart, so it keeps every hit (#11870).
+ */
+const narrowSharedBasenameHits = (source, hits, cwd) => {
+  const dir = posix.dirname(source);
+  if (dir === '.' || hits.length === 0) return hits;
+  const parent = basenameOf(dir);
+  const naming = new Set(gitGrepFiles(
+    `(^|[^A-Za-z0-9_])${escapeRegExp(parent)}([^A-Za-z0-9_]|$)`,
+    hits.map((path) => `:(literal)${path}`),
+    cwd,
+  ));
+  return hits.filter((path) => path.startsWith(`${dir}/`) || naming.has(path));
+};
+
 export function emitGitHubPlan(plan) {
   const outputs = {
     full: plan.full,
@@ -1028,6 +1392,8 @@ export function emitGitHubPlan(plan) {
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
+    prompt_history: plan.promptHistory,
+    linux_containment: plan.linuxContainment,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1036,6 +1402,10 @@ export function emitGitHubPlan(plan) {
     client_shards: JSON.stringify(plan.shards.client),
     windows_shards: JSON.stringify(plan.shards.windows),
     suite_reasons: JSON.stringify(plan.suiteReasons),
+    // The pregate attestation this plan honored (see applyAttestation), or
+    // why none was: `{"attested": false, "reason": …}` is still a decision.
+    attestation: JSON.stringify(plan.attestation ?? { attested: false, reason: 'no attestation resolved' }),
+    attested_stages: JSON.stringify(plan.attestedStages ?? []),
   };
 
   Object.entries(outputs).forEach(([name, value]) => {
@@ -1184,11 +1554,17 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   // the text-reading contract tests (mirror parity, navManifest.js's 20+ client
   // reads) that no import edge or feature-directory match can reach. Basename
   // matching is deliberate: a mirror test names the client copy only as e.g.
-  // 'canonPrompt.js', never by its full path. Over-selection here costs
-  // seconds; under-selection is the bug this closes (issue #6363).
-  const pathContractTests = Object.fromEntries(collectedChangedFiles
-    .filter((path) => isExecutable(path) && !isTestFile(path))
-    .map((path) => [path, gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd)]));
+  // 'canonPrompt.js', never by its full path. Under-selection is the bug this
+  // closes (issue #6363), but over-selection is not free: every hit is an
+  // explicit selector, and a broad selection fans the runner out across shards.
+  // A basename several tracked sources share (42 `index.js`) is narrowed by
+  // narrowSharedBasenameHits (#11870).
+  const changedSources = collectedChangedFiles.filter((path) => isExecutable(path) && !isTestFile(path));
+  const sharedBasenames = changedSources.length > 0 ? sharedSourceBasenames(presentFiles) : new Set();
+  const pathContractTests = Object.fromEntries(changedSources.map((path) => {
+    const hits = gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd);
+    return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, cwd) : hits];
+  }));
 
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
@@ -1207,8 +1583,298 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
       collectTestDependencies([suite], dependencyFiles, cwd, importCache)]))
     : {};
 
+  // Each changed manifest at the diff base vs the tree under test (the working
+  // tree: HEAD in CI, HEAD plus local edits under pregate). The base commit is
+  // inside the depth-2 checkout, so `git show` resolves it; any read failure
+  // becomes null, which classifyDependencyChange() treats as escalation.
+  const readAtBase = (path) => {
+    try {
+      return execFileSync('git', ['show', `${baseSha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+      return null;
+    }
+  };
+  const readInTree = (path) => {
+    try {
+      return readFileSync(join(cwd, path), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const dependencyChanges = Object.fromEntries(collectedChangedFiles
+    .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
+    .map((path) => [path, classifyDependencyChange(path, baseSha ? readAtBase(path) : null, readInTree(path))]));
+
+  // `vitest related` follows dynamic imports too; report that fan-out per
+  // changed server source so the selection size is attributable. A failed
+  // walk only loses the note.
+  let serverReach = null;
+  if (hasRelatedServerSource) {
+    try {
+      serverReach = measureRepoImportReach({
+        cwd,
+        files: dependencyFiles,
+        sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
+          && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
+      });
+    } catch (err) {
+      console.warn(`⚠️ Dynamic-aware reach not measured: ${err.message}`);
+    }
+  }
+
+  // A forced-full run always runs both gated jobs, so it skips the walks.
+  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
+  const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
+
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies };
+    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs,
+    serverReach };
+}
+
+// ---------------------------------------------------------------------------
+// Pregate attestation (docs/GITHUB_ACTIONS.md "Pregate attestation")
+//
+// A local `npm run pregate` that ran a stage to green, followed by
+// `node scripts/pregate-attest.js` after the push, leaves a `pregate` commit
+// status on the head whose description names the validated TREE, the platform
+// and Node major it ran on, and the stages that passed
+// (scripts/lib/pregateAttestation.js). This section reads that status back
+// and lets the plan skip those stages — never Windows, the Linux containment
+// job, or the Node-minimum check, which have no local run.
+//
+// Fail closed at every step: anything other than a same-repository pull
+// request into a non-release base, with a head commit the owner attested
+// whose tree is exactly the head commit's tree, leaves the plan untouched and
+// the reason in the outputs. The planner never has to be right about a fork
+// or a bot for this to be safe — a fork's token cannot create a status here
+// and a bot's login is not the owner's — but it refuses them explicitly so
+// the summary says why.
+//
+// What the receipt vouches for is the HEAD COMMIT's tree; what CI tests is
+// the merge ref, that tree plus whatever the base branch gained since the
+// branch forked. `attestationDrift` closes that gap per stage: a base-side
+// change that could reach a stage's runner refuses the attestation for that
+// stage, and docs-only or other-runner movement keeps it.
+// ---------------------------------------------------------------------------
+
+/** Stages a receipt may attest to, mapped to the plan fields they clear. */
+const ATTESTATION_SKIPS = Object.freeze({
+  lint: (plan) => ({ lint: { ...plan.lint, mode: 'skip' } }),
+  client: (plan) => ({ client: { ...plan.client, mode: 'skip' } }),
+  build: () => ({ build: false }),
+  smoke: () => ({ smoke: false }),
+  browser: () => ({ browserFiles: [] }),
+  db: () => ({ db: false }),
+  'prompt-history': () => ({ promptHistory: false }),
+});
+
+/** How long after the head commit a just-posted status may still be on its way. */
+const ATTESTATION_YOUNG_HEAD_SECONDS = 300;
+const ATTESTATION_POLL_TOTAL_MS = 90_000;
+const ATTESTATION_POLL_INTERVAL_MS = 10_000;
+
+/**
+ * Whether this run may honor an attestation at all, and the head it would
+ * read it from. Reads only the `CI_*` inputs ci.yml passes to the plan step.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{eligible: boolean, reason: string, headSha?: string, repository?: string, owner?: string}}
+ */
+export function attestationEligibility(env) {
+  const trim = (value) => (typeof value === 'string' ? value.trim() : '');
+  const eventName = trim(env.CI_EVENT_NAME);
+  const repository = trim(env.CI_REPOSITORY);
+  const owner = trim(env.CI_REPOSITORY_OWNER);
+  const headRepo = trim(env.CI_PR_HEAD_REPO);
+  const headSha = trim(env.CI_PR_HEAD_SHA);
+  const author = trim(env.CI_PR_AUTHOR);
+  if (eventName !== 'pull_request') return { eligible: false, reason: `event ${eventName || '(none)'} is not a pull request` };
+  if (env.CI_FORCE_FULL === 'true') return { eligible: false, reason: 'full CI requested' };
+  if (trim(env.CI_BASE_REF) === 'release') return { eligible: false, reason: 'release gate: pull request into release' };
+  if (!repository || !owner) return { eligible: false, reason: 'repository or owner unknown' };
+  if (headRepo.toLowerCase() !== repository.toLowerCase()) return { eligible: false, reason: `head repository ${headRepo || '(unknown)'} is not ${repository}` };
+  if (!author || /\[bot\]$/i.test(author)) return { eligible: false, reason: `pull request author ${author || '(unknown)'} is a bot or unknown` };
+  if (!/^[0-9a-f]{40}$/.test(headSha)) return { eligible: false, reason: 'head sha unknown' };
+  return { eligible: true, reason: 'same-repository pull request', headSha, repository, owner };
+}
+
+const isRunnerConfig = (path) => FULL_TRIGGER_RULES.some((rule) => rule.re.test(path)) || WORKSPACE_CACHE_COMMON_INPUTS.has(path);
+const isSourceUnder = (path, prefixes) => isExecutable(path) && !isTestFile(path) && !isDocumentationOnly(path)
+  && prefixes.some((prefix) => path.startsWith(prefix));
+
+// A full-mode runner selects every test it owns, so `files` is empty there and
+// the membership check alone would let a base-side test change slip through.
+const selectsTest = (selection, runner, path) => selection.files.includes(path) || (selection.mode === 'full' && runnerForTest(path) === runner);
+
+/**
+ * Per stage, whether a base-side path could change that stage's outcome:
+ * (a) a test file the plan selected for the runner, (b) a non-test source
+ * under the runner's roots, or (c) a runner config or setup file. Each entry
+ * is the first offending path, for the refusal reason.
+ */
+const STAGE_DRIFT_RULES = Object.freeze({
+  server: (plan, path) => selectsTest(plan.server, 'server', path) || isSourceUnder(path, RUNNER_ROOTS.server) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  client: (plan, path) => selectsTest(plan.client, 'client', path) || isSourceUnder(path, RUNNER_ROOTS.client) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  lint: (plan, path) => isLintSurface(path),
+  build: (plan, path) => isSourceUnder(path, ['client/']) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  smoke: (plan, path) => isSourceUnder(path, ['server/']) || path === 'scripts/smoke-boot.js' || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  browser: (plan, path) => plan.browserFiles.includes(path) || BROWSER_SUITES.includes(path)
+    || isSourceUnder(path, ['server/', 'client/src/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  db: (plan, path) => resolveDbTestFiles([path]).length > 0 || isSourceUnder(path, ['server/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  'prompt-history': (plan, path) => PROMPT_HISTORY_PATH_RE.test(path),
+});
+
+/**
+ * The stages a base-side diff refuses, each with the path that refuses it.
+ *
+ * `driftPaths` is `git diff --name-only HEAD^2 HEAD` on the merge ref: exactly
+ * what the base branch added since the branch forked. A runner config or
+ * workflow change refuses every stage; otherwise each stage answers for its
+ * own runner. Null (the diff could not be read) refuses everything.
+ *
+ * @param {object} plan - the finished plan
+ * @param {string[]|null} driftPaths
+ * @returns {Record<string, string>} stage → reason
+ */
+export function attestationDrift(plan, driftPaths) {
+  const refused = {};
+  if (!Array.isArray(driftPaths)) {
+    for (const stage of Object.keys(STAGE_DRIFT_RULES)) refused[stage] = 'base movement could not be read';
+    return refused;
+  }
+  const paths = uniqueSorted(driftPaths.filter((path) => typeof path === 'string' && path.length > 0));
+  const config = paths.find(isRunnerConfig);
+  for (const [stage, touches] of Object.entries(STAGE_DRIFT_RULES)) {
+    const hit = config ?? paths.find((path) => touches(plan, path));
+    if (hit) refused[stage] = `base branch moved: ${hit}`;
+  }
+  return refused;
+}
+
+/**
+ * The attestation on the pull request's head, or null and why.
+ *
+ * The checkout is the merge ref at depth 2, which carries the head commit as
+ * `HEAD^2`: that is what makes `<head>^{tree}` resolvable without a wider
+ * fetch, and the first check — the event's head must BE that second parent,
+ * or the attested tree would be compared with some other commit's. It is NOT
+ * the tree under test: the merge ref also carries the base branch's movement,
+ * which `attestationDrift` weighs per stage in applyAttestation from the
+ * `baseDrift` returned here.
+ *
+ * A status posted moments after the push can still be on its way when the
+ * run starts, so a head younger than five minutes with no `pregate` status
+ * is re-read for up to 90 seconds before "no attestation" is concluded.
+ *
+ * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
+ * and the tests parse, so every human-readable line here stays off it.
+ *
+ * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void, now?: () => number, sleep?: (ms: number) => void}} [options]
+ * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, os?: string, node?: number, stages?: string[], creator?: string, createdAt?: string, baseDrift?: string[]|null, waitedMs?: number}}
+ */
+export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn, now = Date.now, sleep = sleepMs } = {}) {
+  const none = (reason) => {
+    log(`⏭️ Pregate attestation not honored: ${reason}.`);
+    return { attested: false, reason };
+  };
+  const eligibility = attestationEligibility(env);
+  if (!eligibility.eligible) return none(eligibility.reason);
+  const { headSha, repository, owner } = eligibility;
+  const capture = (command, args) => {
+    try {
+      return exec(command, args, { cwd, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch (error) {
+      return { error: error?.stderr?.toString().trim() || error?.message || 'command failed' };
+    }
+  };
+  const mergeHead = capture('git', ['rev-parse', '--verify', '--quiet', 'HEAD^2']);
+  if (typeof mergeHead !== 'string' || mergeHead !== headSha) {
+    return none(`checkout is not the merge ref of head ${headSha.slice(0, 9)}`);
+  }
+  const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
+  if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
+  const committed = capture('git', ['show', '-s', '--format=%ct', headSha]);
+  const headAgeSeconds = typeof committed === 'string' && /^\d+$/.test(committed) ? Math.floor(now() / 1000) - Number(committed) : null;
+
+  const readStatuses = () => {
+    const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
+    if (typeof body !== 'string') return { error: `statuses API failed: ${body.error}` };
+    try {
+      return { statuses: JSON.parse(body) };
+    } catch {
+      return { error: 'statuses API returned unreadable JSON' };
+    }
+  };
+  const started = now();
+  let waitedMs = 0;
+  let selected;
+  for (;;) {
+    const read = readStatuses();
+    if (read.error) return none(read.error);
+    selected = selectAttestation(read.statuses, { owner, headTree });
+    const missing = !selected.attestation && selected.reason.startsWith('no "');
+    const young = headAgeSeconds !== null && headAgeSeconds >= 0 && headAgeSeconds < ATTESTATION_YOUNG_HEAD_SECONDS;
+    if (!missing || !young || now() - started >= ATTESTATION_POLL_TOTAL_MS) break;
+    sleep(ATTESTATION_POLL_INTERVAL_MS);
+    waitedMs = now() - started;
+  }
+  if (waitedMs > 0) log(`⏳ Waited ${Math.round(waitedMs / 1000)}s for a pregate status on the ${headAgeSeconds}s-old head ${headSha.slice(0, 9)}.`);
+  if (!selected.attestation) return none(selected.reason);
+  const drift = capture('git', ['diff', '--name-only', 'HEAD^2', 'HEAD']);
+  const baseDrift = typeof drift === 'string' ? drift.split('\n').filter(Boolean) : null;
+  const { attestation, reason } = selected;
+  log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}; base moved by ${baseDrift ? `${baseDrift.length} file(s)` : 'an unreadable diff'}.`);
+  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs };
+}
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * The plan with every attested stage skipped and the decision recorded.
+ *
+ * Stages the base-side drift refuses (`attestationDrift`) stay as planned and
+ * say why. The server job owns the boot smoke (`smoke == 'true' &&
+ * matrix.shard == 1` on a job gated by `server_mode != 'skip'`), so `server`
+ * is skipped only when the smoke is attested too or was never selected;
+ * otherwise skipping the job would drop an unattested smoke on the floor.
+ * `full` is forced false so the `Full CI Gate` is never published for a run
+ * that skipped anything on the strength of a local receipt. Windows, Linux
+ * containment, the Node-minimum check and the shard matrices are left as the
+ * plan computed them.
+ *
+ * @param {object} plan - a finished plan (buildCiTestPlan)
+ * @param {{attested: boolean, reason: string, stages?: string[], sha?: string, tree?: string, os?: string, node?: number, creator?: string, createdAt?: string, baseDrift?: string[]|null}} attestation
+ */
+export function applyAttestation(plan, attestation) {
+  const base = { ...plan, attestation, attestedStages: [] };
+  if (!attestation?.attested) {
+    return { ...base, suiteReasons: { ...plan.suiteReasons, attestation: `not honored: ${attestation?.reason ?? 'unknown'}` } };
+  }
+  const refused = attestationDrift(plan, attestation.baseDrift ?? null);
+  const attested = new Set((attestation.stages ?? []).filter((stage) => !refused[stage]));
+  const smokeCovered = attested.has('smoke') || !plan.smoke;
+  const skips = { ...ATTESTATION_SKIPS, server: smokeCovered ? (current) => ({ server: { ...current.server, mode: 'skip' } }) : null };
+  let next = base;
+  const skipped = [];
+  for (const stage of ATTESTABLE_STAGES) {
+    if (!attested.has(stage) || !skips[stage]) continue;
+    next = { ...next, ...skips[stage](next) };
+    skipped.push(stage);
+  }
+  const label = `attested by pregate on ${String(attestation.sha ?? '').slice(0, 9)} (tree ${String(attestation.tree ?? '').slice(0, 12)}, ${attestation.os ?? '?'}/node ${attestation.node ?? '?'})`;
+  const driftRefused = Object.fromEntries((attestation.stages ?? []).filter((stage) => refused[stage]).map((stage) => [stage, refused[stage]]));
+  const suiteReasons = { ...plan.suiteReasons, attestation: `${label}: skipping ${skipped.join(', ') || 'nothing'}` };
+  const reasonKey = (stage) => (stage === 'prompt-history' ? 'promptHistory' : stage);
+  for (const stage of skipped) suiteReasons[reasonKey(stage)] = `skipped: ${label}`;
+  for (const [stage, reason] of Object.entries(driftRefused)) {
+    if (stage !== 'scan') suiteReasons[reasonKey(stage)] = `${plan.suiteReasons[reasonKey(stage)] ?? 'planned'}; attestation refused: ${reason}`;
+  }
+  if (attested.has('server') && !smokeCovered) {
+    suiteReasons.server = `${plan.suiteReasons.server}; server job kept: the boot smoke was not attested`;
+  }
+  return { ...next, full: false, attestedStages: skipped, attestation: { ...attestation, driftRefused }, suiteReasons };
 }
 
 function main() {
@@ -1232,12 +1898,15 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies } = collectPlanInputs({
+  const {
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
+    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, serverReach,
+  } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
   });
-  emitGitHubPlan(buildCiTestPlan(changedFiles, {
+  const plan = buildCiTestPlan(changedFiles, {
     trackedFiles,
     forceFull,
     forceFullReason,
@@ -1246,7 +1915,13 @@ function main() {
     clientDependencies,
     dbDependencies,
     browserDependencies,
-  }));
+    dependencyChanges,
+    promptHistoryInputs,
+    linuxContainmentInputs,
+    serverReach,
+  });
+  // Last, over the finished plan: the attestation only ever removes work.
+  emitGitHubPlan(applyAttestation(plan, resolveCiAttestation()));
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

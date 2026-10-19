@@ -81,6 +81,9 @@ function pruneConfig(config, retiredSeed) {
   return Object.keys(pruned).length > 0 ? pruned : null;
 }
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['memory-classifier-config.json', 'browser-config.json'];
+
 export default {
   async up({ rootDir }) {
     const results = {

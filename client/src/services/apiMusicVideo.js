@@ -674,3 +674,8 @@ export const importMusicVideoDocumentShots = (id, body, options = {}) => request
 export const getMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, options);
 export const prepareMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, { method: 'POST', ...options });
 export const musicVideoSharingCopyDownloadUrl = (id) => `/api/music-video/${encodeURIComponent(id)}/sharing-copy/download`;
+
+export const getMusicVideoRenderCleanup = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/render-cleanup`, options);
+export const cleanupMusicVideoRenders = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/render-cleanup`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});

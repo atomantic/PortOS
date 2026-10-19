@@ -1,7 +1,7 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { bindMaintenanceIo } from './maintenanceControl.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
-import { noteReadinessChanged } from './readinessNotify.js';
+import { noteReadinessChanged } from './readinessSignal.js';
 /**
  * Server boot orchestration.
  *
@@ -79,7 +79,7 @@ import * as cos from './cos.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
-import { activeAgents } from './agentState.js';
+import { activeAgents, dispatchingAgentIds } from './agentState.js';
 import * as automationScheduler from './automationScheduler.js';
 import * as agentActionExecutor from './agentActionExecutor.js';
 import * as telegram from './telegram.js';
@@ -141,7 +141,7 @@ import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -675,10 +675,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
  * persisted jobs (otherwise they'd miss `completed` events for reloaded jobs).
  */
 const initMediaJobDependentHooks = () => {
-  // LoRA training run records reconcile against the live queue (interrupted
-  // runs → failed) and mirror queue-side cancels — must run after the queue
-  // has loaded its persisted jobs.
-  initLoraTraining().catch(err => logBootstrapFailure('❌ loraTraining init failed', err));
   // Universe Builder needs the media job queue running before it can listen
   // for `completed` events — so initialize the hook here.
   initUniverseBuilderCollectionHook();
@@ -963,7 +959,12 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // persistence + SSE + temp-file cleanup, and accepting requests with a
     // half-init queue silently corrupts state.
     initMediaJobQueue,
+    // LoRA run records reconcile against the live queue (interrupted runs →
+    // failed) and mirror queue-side cancels. Own step so the smoke boot can
+    // no-op it: the reconcile needs a database the hermetic root does not have.
+    initLoraTraining,
     initMediaJobDependentHooks,
+    resumeMediaJobCompletions,
 
     // Sharing: attach chokidar watchers to every registered share bucket so
     // incoming manifests from peers are picked up live. Backlog processing
@@ -1151,10 +1152,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // Record which agents this process owned, so the NEXT boot's orphan sweep can
     // tell "PortOS was restarted out from under a healthy agent" apart from "the
     // agent's own process died" and skip the retry-budget/cooldown penalty for a
-    // fault the agent didn't cause (#3202). Only `activeAgents` — the ones whose
-    // child processes live in THIS process's tree — belong here; agents the CoS
-    // runner owns survive this restart untouched and are re-adopted by
-    // `syncRunnerAgents` on the next boot.
+    // fault the agent didn't cause (#3202). Include dispatches whose durable
+    // registration exists but whose process handoff has not finished: shutdown
+    // destroys that setup too. Exclude `runnerAgents`; those handed-off runs
+    // survive this restart and are re-adopted on the next boot.
     //
     // Note `activeAgents` is NOT "direct-spawn only": runner-launched TUI agents
     // register there too (`agentTuiSpawning.js`, both launch modes). The
@@ -1168,7 +1169,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // `.catch` is the belt-and-suspenders for an out-of-lifecycle rejection, and a
     // marker we fail to write only degrades recovery to the pre-existing orphan path.
     const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
-      writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
+      writeHostShutdownMarker({ agentIds: [...activeAgents.keys(), ...dispatchingAgentIds], signal })
         .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
 
     // Reach every child spawned into its own process group — agent runs, CLI
@@ -1222,6 +1223,9 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even
     // if a future socket.io version changes which server it owns.
+    // Upgraded (WebSocket) sockets are invisible to closeAllConnections() but
+    // keep server.close() pending; Socket.IO has already sent its close frames.
+    httpDrain.destroyUpgraded();
     await Promise.all([
       closeServer(httpServer, 'HTTP server'),
       closeServer(localHttpServer, 'Local HTTP mirror')

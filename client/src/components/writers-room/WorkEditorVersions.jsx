@@ -5,7 +5,7 @@ import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
 // WorkEditorVersions — the Versions drawer body for WorkEditor: the draft
 // version list with the referenced-ingredient chips under each row.
 // Extracted from WorkEditor (#3387).
-export default function WorkEditorVersions({ work, dirty, onSwitch }) {
+export default function WorkEditorVersions({ work, dirty, pending = false, disabled = false, onSwitch }) {
   const drafts = (work.drafts || []).slice().reverse();
 
   // Resolve referenced ingredient ids (stored per draft version) into display
@@ -37,6 +37,7 @@ export default function WorkEditorVersions({ work, dirty, onSwitch }) {
   }
   return (
     <>
+      {pending && <div role="status">Switching draft…</div>}
       {dirty && (
         <div className="mb-2 px-2 py-1.5 text-[11px] border border-port-warning/40 bg-port-warning/5 text-port-warning rounded">
           Save or snapshot before switching versions — unsaved edits will be lost.
@@ -50,7 +51,7 @@ export default function WorkEditorVersions({ work, dirty, onSwitch }) {
             <li key={draft.id}>
               <button
                 onClick={() => onSwitch(draft.id)}
-                disabled={isActive}
+                disabled={isActive || dirty || pending || disabled}
                 className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left ${
                   isActive ? 'bg-port-accent/20 text-port-accent cursor-default' : 'text-gray-400 hover:bg-port-bg hover:text-white'
                 }`}

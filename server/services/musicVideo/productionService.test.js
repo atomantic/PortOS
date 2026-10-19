@@ -52,19 +52,38 @@ const store = new Map();
 const storeFault = { failOnList: false, failWrites: false };
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
+const mutateMock = (id, transform, options = {}) => {
+  const run = writeTail.then(async () => {
+    if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
+    if (storeFault.failWrites) throw new Error('store write failed');
+    const current = clone(store.get(id));
+    const out = transform(current);
+    if (options?.source) {
+      const { preserveAutomatedShotLocks } = await import('./productionReview.js');
+      const guarded = preserveAutomatedShotLocks(current, out.project, options.source);
+      out.project = guarded.project;
+      if (guarded.rejected) {
+        out.rejected = true;
+        if (out.scenes) out.scenes = guarded.project.scenes;
+        if (out.scene) out.scene = guarded.project.scenes.find(scene => scene.sceneId === out.scene?.sceneId) || null;
+      }
+    }
+    store.set(id, clone(out.project));
+    return out;
+  });
+  writeTail = run.catch(() => {});
+  return run;
+};
 vi.mock('./projects.js', () => ({
   getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
   listProjects: async () => [...store.values()].map(clone),
-  mutateProjectRecord: (id, transform) => {
-    const run = writeTail.then(() => {
-      if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
-      if (storeFault.failWrites) throw new Error('store write failed');
-      const out = transform(clone(store.get(id)));
-      store.set(id, clone(out.project));
-      return out;
+  mutateProjectRecord: (...args) => mutateMock(...args),
+  appendSceneTakes: async (id, sceneId, inputs) => {
+    const { appendSceneTakes: append } = await import('./takes.js');
+    const outcome = await mutateMock(id, current => append(current, sceneId, inputs), {
+      source: inputs.some(input => input.source === 'generated') ? 'generation-completion' : null,
     });
-    writeTail = run.catch(() => {});
-    return run;
+    return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
   },
 }));
 
@@ -147,6 +166,21 @@ function completeJob(jobId) {
   else scene.videoHistoryId = jobId;
   mediaJobEvents.emit('completed', job);
   musicVideoEvents.emit(job.kind === 'image' ? 'scene-image' : 'scene-video', { projectId: 'mv-example', sceneId: scene.sceneId });
+}
+
+/** Complete a job through appendSceneTakes (with source: 'generation-completion'), as the real hook does. */
+async function completeJobThroughHook(jobId) {
+  const job = jobs.find((j) => j.id === jobId);
+  job.status = 'completed';
+  const sceneId = job.params.musicVideo.sceneId;
+  const { appendSceneTakes } = await import('./projects.js');
+  await appendSceneTakes('mv-example', sceneId, [{
+    kind: job.kind === 'image' ? (job.params?.musicVideo?.slot === 'end' ? 'endImage' : 'image') : 'video',
+    assetId: job.kind === 'image' ? `${jobId}.png` : jobId,
+    source: 'generated',
+  }]);
+  mediaJobEvents.emit('completed', job);
+  musicVideoEvents.emit(job.kind === 'image' ? 'scene-image' : 'scene-video', { projectId: 'mv-example', sceneId });
 }
 
 const settle = async () => {
@@ -1488,4 +1522,66 @@ it('moves past the optional animated proof to review without rendering or waitin
   expect(renderProductionProof).not.toHaveBeenCalled();
   expect(JSON.stringify(theRun())).not.toMatch(/animated proof/);
   expect(startAutoReview).toHaveBeenCalled();
+});
+
+it('allows production to fill still-less locked shots on an approved board and proceed to clips without re-dispatching', async () => {
+  creativeReview.real = true;
+  const { approveProductionStage, productionReviewBasis, shotLocks } = await vi.importActual('./productionReview.js');
+  const seeded = seedProject({
+    devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+  });
+  seeded.productionReview = { draft: {
+    cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+    guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+    storyboard: seeded.scenes.map(scene => ({ sceneId: scene.sceneId, lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' })),
+  } };
+  await start();
+  expect(theRun().status).toBe('blocked');
+  for (const stage of ['art', 'storyboard']) {
+    const project = current();
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
+  }
+
+  // Board approved with still-less shots: every shot is locked with empty referenceImageId
+  expect(shotLocks(current())).toEqual({ 'mvs-a': 'locked', 'mvs-b': 'locked' });
+  expect(current().scenes[0].referenceImageId).toBeFalsy();
+  expect(current().scenes[1].referenceImageId).toBeFalsy();
+
+  await service.resumeProduction('mv-example', theRun().id);
+  await settle();
+  expect(theRun().status).toBe('running');
+  // Frames are dispatched for both scenes
+  expect(jobs).toHaveLength(2);
+  expect(jobs.every(j => j.kind === 'image')).toBe(true);
+  const frameJobA = jobs.find(j => j.params.musicVideo.sceneId === 'mvs-a');
+  const frameJobB = jobs.find(j => j.params.musicVideo.sceneId === 'mvs-b');
+  expect(frameJobA).toBeDefined();
+  expect(frameJobB).toBeDefined();
+
+  // Complete first frame through hook (generation-completion)
+  await completeJobThroughHook(frameJobA.id);
+  await settle();
+
+  // Slot for scene A is filled, lock still locked!
+  let updated = current();
+  const sceneA = updated.scenes.find(s => s.sceneId === 'mvs-a');
+  expect(sceneA.referenceImageId).toBe(`${frameJobA.id}.png`);
+  expect(shotLocks(updated)['mvs-a']).toBe('locked');
+  // No re-dispatch of frame A!
+  expect(jobs.filter(j => j.params.musicVideo.sceneId === 'mvs-a' && j.kind === 'image')).toHaveLength(1);
+
+  // Complete second frame through hook
+  await completeJobThroughHook(frameJobB.id);
+  await settle();
+
+  updated = current();
+  const sceneB = updated.scenes.find(s => s.sceneId === 'mvs-b');
+  expect(sceneB.referenceImageId).toBe(`${frameJobB.id}.png`);
+  expect(shotLocks(updated)).toEqual({ 'mvs-a': 'locked', 'mvs-b': 'locked' });
+  // No re-dispatch of frame B!
+  expect(jobs.filter(j => j.params.musicVideo.sceneId === 'mvs-b' && j.kind === 'image')).toHaveLength(1);
+
+  // Now both frames are filled, production proceeds to clip dispatch (no re-dispatch loop)!
+  expect(jobs.length).toBeGreaterThanOrEqual(3);
+  expect(jobs.some(j => j.kind === 'video')).toBe(true);
 });

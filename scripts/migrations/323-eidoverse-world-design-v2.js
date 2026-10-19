@@ -12,6 +12,9 @@ import { join } from 'path';
 import { atomicWrite, safeJSONParse } from '../../server/lib/fileUtils.js';
 import { migrateEidoverseWorldState, EIDOVERSE_WORLD_DESIGN_VERSION, EIDOVERSE_WORLD_STATE_SCHEMA_VERSION } from '../../server/lib/eidoverseWorldDesign.js';
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['eidoverse/portos-world.json'];
+
 export default {
   async up({ rootDir }) {
     const statePath = join(rootDir, 'data', 'eidoverse', 'portos-world.json');

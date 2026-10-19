@@ -328,7 +328,11 @@ export async function startBrowserFixture({
       if (!config.optimizeDeps?.entries?.length) {
         throw new Error('viteConfig must set optimizeDeps.entries to the rendered source files, or Vite scans the whole app');
       }
-      const vite = await createServer(config);
+      // The fixture serves a static synthetic page. A file change elsewhere in
+      // the shared client tree (other suites, an editor, a sibling agent) must
+      // not push an HMR update or full reload that remounts the page mid-test
+      // (#12230), so the watcher and HMR channel are off for every fixture.
+      const vite = await createServer({ ...config, server: { ...config.server, watch: null, hmr: false } });
       own(() => vite.close(), 'Vite server');
       // A server that arrives after the deadline was just closed by own();
       // listening would bind a port nothing closes.

@@ -48,7 +48,7 @@ import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
-import { useRunner } from './agentState.js';
+import { useRunner, spawningTasks } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -93,9 +93,9 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { getPendingTaskIds } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
@@ -363,6 +363,20 @@ async function runStart() {
 
   setDaemonRunning(true);
 
+  try {
+    await bootDaemon(state);
+  } catch (err) {
+    // A failed start must not leave the flag reading "Already running" with
+    // half the timers armed — tear down whatever was scheduled, then rethrow.
+    console.error(`❌ CoS daemon start failed: ${err?.message || err}`);
+    await teardownDaemon().catch(teardownErr =>
+      console.error(`❌ CoS teardown after failed start failed: ${teardownErr?.message || teardownErr}`));
+    throw err;
+  }
+  return { success: true };
+}
+
+async function bootDaemon(state) {
   // First clean up orphaned agents (agents marked running but no live process)
   const { cleanupOrphanedAgents } = await import('./agentManagement.js');
   const cleanedAgents = await cleanupOrphanedAgents();
@@ -430,6 +444,7 @@ async function runStart() {
     type: 'interval',
     intervalMs: state.config.healthCheckIntervalMs,
     handler: async () => {
+      if (!isDaemonRunning()) return;
       await runHealthCheck();
       const { runDevelopmentWatchdog } = await import('./developmentWatchdog.js');
       await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
@@ -545,14 +560,16 @@ async function runStart() {
   // queued merges. Same autonomy gate as the evaluateTasks call site: merging
   // writes to a default branch, so it only runs when the user has CoS auto-run
   // set to `execute` and the daemon is not paused.
-  const { PENDING_MERGE_SWEEP_INTERVAL_MS } = await import('./prWatcher.js');
+  // The handoff follow-up poll (prWatcher.followUpHandoffReceipt) shares the
+  // gate and is cancelled with the daemon.
+  const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
+  setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({
     id: 'cos-pending-merge-sweep',
     type: 'interval',
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
-      const s = await loadState();
-      if (s.paused || getDomainMode(s.config, 'cos') !== 'execute') return;
+      if (await pendingMergeSweepBlocked()) return;
       const prWatcher = await import('./prWatcher.js');
       const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
         console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);
@@ -596,18 +613,34 @@ async function runStart() {
       scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
   }, POST_STARTUP_QUEUE_DELAY_MS);
+}
 
-  return { success: true };
+// Null when a pending-merge sweep may merge, else the skip reason.
+async function pendingMergeSweepBlocked() {
+  if (!isDaemonRunning()) return 'daemon-stopped';
+  const s = await loadState();
+  if (s.paused) return 'daemon paused';
+  if (getDomainMode(s.config, 'cos') !== 'execute') return 'CoS auto-run is not set to execute';
+  return null;
 }
 
 /**
  * Stop the CoS daemon
  */
 export async function stop() {
+  // A Stop issued mid-start would otherwise see the flag already true, cancel
+  // timers that don't exist yet, and then watch the resumed boot arm them all
+  // (#11860). Let the start settle so Stop tears down a fully started daemon.
+  if (daemonStartPromise) await daemonStartPromise.catch(() => {});
   if (!isDaemonRunning()) {
     return { success: false, error: 'Not running' };
   }
 
+  await teardownDaemon();
+  return { success: true };
+}
+
+async function teardownDaemon() {
   await shutdownPersistentMindSupervisor();
   unregisterPersistentMindTurnAdapter();
 
@@ -619,6 +652,7 @@ export async function stop() {
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-pending-merge-sweep');
+  (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 
   await withStateLock(async () => {
@@ -629,7 +663,6 @@ export async function stop() {
 
   setDaemonRunning(false);
   cosEvents.emit('status', { running: false });
-  return { success: true };
 }
 
 /**
@@ -780,7 +813,7 @@ export async function forceSpawnTask(taskId) {
  * immediately instead of waiting out its liveness grace, which on the periodic
  * pass is what stops the sweep stealing a task mid-cleanup.
  */
-async function resetOrphanedTasks({ bootRecovery = false } = {}) {
+export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   const state = await loadState();
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
@@ -819,16 +852,6 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
         (Date.now() - new Date(a.completedAt).getTime()) < RECENT_COMPLETION_GRACE_MS)
       .map(a => a.taskId)
   );
-
-  // Track tasks whose agents completed successfully — if handleAgentCompletion's
-  // updateTask call failed silently (e.g., file write race after server restart),
-  // we should complete the task here rather than treating it as orphaned.
-  const successfullyCompletedTaskIds = new Map();
-  for (const agent of Object.values(state.agents)) {
-    if (agent.status === 'completed' && agent.result?.success) {
-      successfullyCompletedTaskIds.set(agent.taskId, agent.id);
-    }
-  }
 
   emitLog('debug', `Running agents: ${runningAgentTaskIds.length}, recently completed: ${recentlyCompletedTaskIds.size}`, { taskIds: runningAgentTaskIds });
 
@@ -903,9 +926,10 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
         emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
         continue;
       }
-      // If the agent completed successfully but task wasn't updated (silent updateTask failure),
-      // complete the task now instead of treating it as orphaned
-      const successAgentId = successfullyCompletedTaskIds.get(task.id);
+      // Only the latest run can settle a missed task update. An older success
+      // must not hide a failed rerun that needs orphan recovery.
+      const lastAgent = lastAgentByTask.get(task.id);
+      const successAgentId = lastAgent?.status === 'completed' && lastAgent.result?.success ? lastAgent.id : null;
       if (successAgentId) {
         emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
         await updateTask(task.id, { status: 'completed' }, task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user'));
@@ -1088,6 +1112,7 @@ async function spawnDequeuePriority1UserTasks(ctx) {
 
   await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    isOwned: (task) => capacity.isTaskOwned(task),
     canSpawn: (task) => capacity.canSpawn(task),
     emitSpawn: (task) => cosEvents.emit('task:ready', task),
     trackSpawn: (task) => capacity.trackSpawn(task),
@@ -1121,6 +1146,7 @@ async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
     spawnProjectCounts: capacity.spawnProjectCounts,
     instanceId,
   }, {
+    isOwned: (task) => capacity.isTaskOwned(task),
     canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
     trackSpawn: (task) => capacity.trackSpawn(task),
     emitSpawn: (task) => {
@@ -1249,6 +1275,7 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   // to every CoS-subscribed socket client.
   const loggedFullEndpoints = new Set();
   const capacity = createDequeueCapacity(state, {
+    inFlightTaskIds: spawningTasks,
     agentsByProject: countRunningAgentsByProject(state.agents),
     localEndpointCounts: countRunningAgentsByLocalEndpoint(state.agents, localSlots.endpointForAgent),
     localEndpointLimit: localSlots.limit,
@@ -1347,10 +1374,10 @@ export function isPerpetualRefillCandidate(agent, schedule) {
   const analysisType = agentScheduledType(agent);
   if (!analysisType) return false;
   const taskDef = schedule?.tasks?.[analysisType];
-  // `perpetual` is the single drain signal, orthogonal to the cadence type: an
-  // on-demand or cron task carrying the flag re-queues on completion, and one
-  // without it stays a single-run action.
-  return Boolean(taskDef?.enabled) && taskDef?.perpetual === true;
+  // A manual branch reconciliation owns a bounded sweep even when recurring
+  // dispatch is off. Other task types retain their saved perpetual policy.
+  const manualBranchSweep = analysisType === 'branch-reconcile' && agent?.metadata?.taskOnDemand;
+  return Boolean(taskDef?.enabled) && (taskDef?.perpetual === true || Boolean(manualBranchSweep));
 }
 
 /**
@@ -1412,7 +1439,15 @@ export function perpetualRefillPlan(agent, schedule) {
  * converges and can't fan out past the `dequeueNextTask` concurrency limits).
  */
 async function refillPerpetualForCompletedAgent(agent) {
-  if (!isDaemonRunning()) return;
+  const branchSweep = agentScheduledType(agent) === 'branch-reconcile';
+  const interrupted = async (reason) => {
+    if (!branchSweep) return;
+    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    await recordBranchReconcileOutcome(agent?.metadata?.taskApp || null, {
+      status: 'incomplete', reason, nextAction: 'Resolve the interruption, then run branch reconciliation again.',
+    });
+  };
+  if (!isDaemonRunning()) return interrupted('daemon-stopped');
   // Only a SUCCESSFUL perpetual run drains to the next item immediately. A failed
   // run (provider/setup/test failure) must NOT refill back-to-back: perpetual
   // completions skip the per-app cooldown, and the work-detector will usually
@@ -1420,13 +1455,13 @@ async function refillPerpetualForCompletedAgent(agent) {
   // the daemon through repeated failures. On failure, fall back to the task
   // retry/backoff and the improvement-check recheck cadence (the park IS the
   // throttle only once work genuinely runs out, not when a run errors).
-  if (!agent?.result?.success) return;
-  if (await isPaused()) return;
+  if (!agent?.result?.success) return interrupted('agent-failed');
+  if (await isPaused()) return interrupted('daemon-paused');
 
   const taskScheduleMod = await import('./taskSchedule.js');
   const schedule = await taskScheduleMod.loadSchedule();
   const plan = perpetualRefillPlan(agent, schedule);
-  if (plan.lane === 'skip') return;
+  if (plan.lane === 'skip') return interrupted('continuation-disabled');
 
   const state = await loadState();
 
@@ -1437,7 +1472,7 @@ async function refillPerpetualForCompletedAgent(agent) {
     // dequeueNextTask({ ignoreTaskId }) drains the re-issue dedup-safely against
     // the still-`in_progress` completing task; letting triggerOnDemandTask emit
     // its event would fire a redundant SECOND dequeue of the same request.
-    if (!isImprovementEnabled(state)) return;
+    if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');
     // A PARK STOPS A REFILL (#3848). Park elapse used to be read only by the
     // SCHEDULED lane, so a drain that parked itself (idle detector, no-progress,
     // drain cap) could still be re-issued here on the very next completion — the
@@ -1454,12 +1489,16 @@ async function refillPerpetualForCompletedAgent(agent) {
     // the drain engines must leave the park, convergence signature, and dispatch
     // counter intact. Without that pair the refill wipes its own convergence
     // state on every hop and the drain never parks while one actionable item remains.
-    await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId);
+    const refill = await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId).catch(async (err) => {
+      await interrupted('refill-failed');
+      throw err;
+    });
+    if (refill?.error) await interrupted('refill-rejected');
     return;
   }
 
   // Scheduled drain — autonomous queue path, gated on CoS auto-run.
-  if (!canQueueImprovementTasks(state)) return;
+  if (!canQueueImprovementTasks(state)) return interrupted('automatic-dispatch-disabled');
 
   // `agent:completed` fires from `completeAgent` BEFORE the completion flow's
   // `updateTask` marks this agent's task done (agentLifecycle.js: completeAgent
@@ -1493,17 +1532,18 @@ export async function init() {
 
   // When an agent completes, refill perpetual work then dequeue the next task
   cosEvents.on('agent:completed', (agent) => {
-    // Refill the perpetual backlog FIRST, THEN dequeue — in one async task so the
-    // generic dequeue can't fill the just-freed slot with idle-review work ahead
-    // of the perpetual re-queue. Perpetual schedules (e.g. claim-issue) drain
-    // back-to-back: regenerate the next eligible task now instead of waiting for
-    // the ~hourly improvement check (dequeueNextTask only spawns ALREADY-queued
-    // work, so on its own a perpetual backlog stalls between ticks). The refill
-    // early-returns fast for non-perpetual or failed completions, so for those
-    // this stays a thin wrapper around the dequeue. Both steps are .catch-guarded
-    // because this runs outside the request lifecycle.
+    // Settle deterministic cleanup even for one-shot/failed runs. Then refill
+    // before dequeue so unrelated idle work cannot take the newly freed slot.
+    // Each phase owns its rejection because this is an event boundary.
     setImmediate(() => {
-      refillPerpetualForCompletedAgent(agent)
+      Promise.resolve()
+        .then(async () => {
+          if (agentScheduledType(agent) !== 'branch-reconcile') return;
+          const { settleBranchReconcileRun } = await import('./branchReconcileCompletion.js');
+          await settleBranchReconcileRun(agent);
+        })
+        .catch(err => console.error(`❌ Branch reconciliation completion failed: ${err.message}`))
+        .then(() => refillPerpetualForCompletedAgent(agent))
         .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
         // Same window as the refill above: this runs before the completing
         // task's `updateTask` settles it, so the idle tier's generator must
@@ -1559,7 +1599,7 @@ export async function init() {
   //   the evaluation interval that's meant for system task generation.
   // - 'approved': a newly approved task can now spawn — re-run dequeue. Either
   //   queue: a user row withheld by the #7300 hold is released the same way.
-  // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
+  // - 'unblocked': a blocked or completed task flipped back to pending (#2614, #12058)
   //   is newly spawnable exactly like an approval — re-run dequeue.
   // - 'requeued': an in_progress task flipped back to pending — a failed run's
   //   retry released from its cleanup hold (#3373) or an orphan sweep requeue.

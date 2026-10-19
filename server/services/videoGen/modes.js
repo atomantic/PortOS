@@ -52,6 +52,10 @@ export function isVideoModeUsable(settings, mode) {
   if (mode === VIDEO_GEN_MODE.REACTOR) {
     return Boolean((settings?.videoGen?.reactor?.apiKey || '').trim() || (process.env.REACTOR_API_KEY || '').trim());
   }
+  // Runway's developer API — gated on a key in settings or RUNWAYML_API_SECRET.
+  if (mode === VIDEO_GEN_MODE.RUNWAY) {
+    return Boolean((settings?.videoGen?.runway?.apiKey || '').trim() || (process.env.RUNWAYML_API_SECRET || '').trim());
+  }
   return mode === VIDEO_GEN_MODE.LOCAL;
 }
 

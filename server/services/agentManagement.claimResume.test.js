@@ -10,6 +10,7 @@ vi.mock('./cosState.js', () => ({
   withStateLock: createFileWriteQueue(),
   loadState: async () => f.state,
   saveState: async state => { f.state = state; f.disk = structuredClone(state); },
+  readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: structuredClone(f.disk.agents) }),
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({

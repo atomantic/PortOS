@@ -61,6 +61,12 @@ export async function snapshotAssets(directory, { streamMedia = false } = {}) {
   return assets;
 }
 
+// Events whose arrival distinguishes a closed, crashed or detached target from
+// a live session that simply never answered. Only the method name is retained.
+const LIFECYCLE_EVENTS = new Set([
+  'Target.detachedFromTarget', 'Target.targetCrashed', 'Target.targetDestroyed', 'Inspector.detached', 'Inspector.targetCrashed',
+]);
+
 // One browser-level socket owns a disposable context and its hidden target.
 // Disconnect/abort rejects pending commands; disposeOnDetach covers crashes.
 // `bytes=a-b` / `bytes=a-` / `bytes=-n` against `size`; null when absent or unsatisfiable.
@@ -137,6 +143,7 @@ export async function openComposition(directory, {
       const page = await connectComposition(assets, {
         ...connectOptions,
         transport: owner.transport,
+        lifecycleFacts: owner.lifecycleFacts,
         version: owner.transport
           ? { 'User-Agent': 'HeadlessChrome/' }
           : { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' },
@@ -157,7 +164,7 @@ export async function openComposition(directory, {
 
 async function connectComposition(assets, {
   signal, mediaMode, version, initScripts = [], transport, contentSecurityPolicy, freezeNetworkConstructors = true,
-  onEvent, previewBridge = false, refuseUnknown = 'fail', lockLoopback = false,
+  onEvent, previewBridge = false, refuseUnknown = 'fail', lockLoopback = false, lifecycleFacts,
 }) {
   const { webSocketDebuggerUrl } = version || {};
   if (!transport && !webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
@@ -168,6 +175,28 @@ async function connectComposition(assets, {
   let contextId;
   let sessionId;
   let closing = false;
+  // Failure-only evidence for a command that never answers (#12294): which
+  // setup step was reached, whether the connection and session were still
+  // talking, which allowlisted lifecycle events arrived and what the owned
+  // child had done. Names and counters only; never params, payloads or paths.
+  const startedAt = performance.now();
+  const sinceStart = () => Math.round(performance.now() - startedAt);
+  let phase = 'connect';
+  let lastInboundMs = null;
+  let lastSessionInboundMs = null;
+  let transportState = 'open';
+  const lifecycleEvents = new Set();
+  const commandFacts = (sentMs) => {
+    const owned = (() => { try { return lifecycleFacts?.() ?? {}; } catch { return { owner: 'unreadable' }; } })();
+    const facts = {
+      phase, sentMs, timeoutMs: sinceStart(),
+      context: contextId ? 'created' : 'none', session: sessionId ? 'attached' : 'none',
+      transport: transportState, lastInboundMs, lastSessionInboundMs,
+      events: lifecycleEvents.size ? [...lifecycleEvents].join('|') : 'none', pending: pending.size,
+      ...owned,
+    };
+    return Object.entries(facts).map(([key, value]) => `${key}=${value ?? 'unobserved'}`).join(', ');
+  };
   const fail = (error) => {
     failure ??= error;
     for (const command of pending.values()) command.reject(failure);
@@ -179,7 +208,9 @@ async function connectComposition(assets, {
     if (failure) return Promise.reject(failure);
     return new Promise((resolveCommand, rejectCommand) => {
       const id = ++nextId;
-      const timer = setTimeout(() => fail(new Error(`Browser command timed out: ${method}`)), 30000);
+      const sentMs = sinceStart();
+      // The prefix is matched by encode.js page recovery; facts follow it.
+      const timer = setTimeout(() => fail(new Error(`Browser command timed out: ${method} (${commandFacts(sentMs)})`)), 30000);
       const finish = (fn) => (value) => { clearTimeout(timer); pending.delete(id); fn(value); };
       pending.set(id, { resolve: finish(resolveCommand), reject: finish(rejectCommand) });
       ws.send(JSON.stringify({ id, method, params, ...(session ? { sessionId: session } : {}) }), error => {
@@ -246,6 +277,9 @@ async function connectComposition(assets, {
   ws.on('message', bytes => {
     try {
       const message = JSON.parse(bytes.toString());
+      lastInboundMs = sinceStart();
+      if (sessionId && message.sessionId === sessionId) lastSessionInboundMs = lastInboundMs;
+      if (LIFECYCLE_EVENTS.has(message.method)) lifecycleEvents.add(message.method);
       if (message.id) {
         const command = pending.get(message.id);
         if (message.error) command?.reject(new Error(message.error.message));
@@ -275,8 +309,11 @@ async function connectComposition(assets, {
       }
     } catch (error) { fail(error); }
   });
-  ws.on('error', fail);
-  ws.on('close', () => { if (!closing) fail(new Error('Managed browser disconnected')); });
+  ws.on('error', error => { transportState = 'error'; fail(error); });
+  ws.on('close', () => {
+    if (transportState === 'open') transportState = 'closed';
+    if (!closing) fail(new Error('Managed browser disconnected'));
+  });
   async function close({ verify = false } = {}) {
     closing = true;
     signal?.removeEventListener('abort', abort);
@@ -306,6 +343,7 @@ async function connectComposition(assets, {
       ws.once('close', () => rejectOpen(failure ?? new Error('Managed browser disconnected')));
     });
     signal?.throwIfAborted();
+    phase = 'create-context';
     ({ browserContextId: contextId } = await send('Target.createBrowserContext', {
       disposeOnDetach: true,
       // Defense in depth for browser-originated HTTP requests outside Fetch.
@@ -315,9 +353,12 @@ async function connectComposition(assets, {
     // Headless Chrome has no tab UI to hide. Give its compositor a foreground
     // target: hidden targets can stall surface screenshots on Linux. Headed
     // managed browsers retain the hidden, background rendering posture.
+    phase = 'create-target';
     const headless = /HeadlessChrome\//.test(version['User-Agent'] || '');
     const { targetId } = await send('Target.createTarget', { url: 'about:blank', browserContextId: contextId, hidden: !headless, background: !headless }, null);
+    phase = 'attach';
     ({ sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, null));
+    phase = 'session-setup';
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Runtime.addBinding', { name: '__portosRefused' });
@@ -391,10 +432,12 @@ async function connectComposition(assets, {
     if (previewBridge) await send('Page.addScriptToEvaluateOnNewDocument', { source: PREVIEW_BRIDGE_SCRIPT });
     for (const source of initScripts) await send('Page.addScriptToEvaluateOnNewDocument', { source });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    phase = 'navigate';
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });
     if (navigation.errorText) throw new Error(`Composition navigation failed: ${navigation.errorText}`);
     await evaluate(`new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, { once: true }))`, 'document load');
     await evaluate('document.fonts.ready.then(() => true)', 'font readiness');
+    phase = 'ready';
     return { evaluate, send, close, check: () => { signal?.throwIfAborted(); if (failure) throw failure; } };
   } catch (error) {
     await close();

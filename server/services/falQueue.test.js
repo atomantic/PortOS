@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { cancelFalRequest, submitFalRequest, awaitFalCompletion, createFalRequestEntry } from './falQueue.js';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe('awaitFalCompletion', () => {
   it.each(['COMPLETED', 'ERROR'])('waits for cancellation transport when concurrent status reports %s', async remoteStatus => {
@@ -86,5 +89,33 @@ describe('awaitFalCompletion', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(entry.cancelUrl);
     expect(fetchMock.mock.calls[0][1].method).toBe('PUT');
+  });
+
+  // The status read is allowed to start in the last moments of the budget.
+  // COMPLETED that arrives after `deadline` is still a finished render (#12053).
+  it('keeps a COMPLETED status that resolves after the deadline', async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    let releaseStatus;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
+      releaseStatus = resolve;
+    })));
+    const entry = createFalRequestEntry('test-key');
+    entry.cancelUrl = 'https://queue.fal.run/example/requests/abc/cancel';
+    const pending = awaitFalCompletion({
+      entry,
+      statusUrl: 'https://queue.fal.run/example/status',
+      apiKey: 'test-key',
+      deadline: start + 50,
+      timeoutMs: 50,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(200);
+    releaseStatus({ ok: true, json: async () => ({ status: 'COMPLETED' }) });
+
+    await expect(pending).resolves.toEqual({ outcome: 'completed' });
+    expect(entry.remoteTerminal).toBe(true);
+    expect(entry.canceledRemote).toBeFalsy();
   });
 });

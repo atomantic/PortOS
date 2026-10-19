@@ -787,6 +787,37 @@ describe('stitchVideos — history provenance', () => {
       expect(stitched).not.toHaveProperty('streamingPolicyApplied');
     });
   });
+
+  // LoRA application strategy (#12262). Each chunk's child decides whether an
+  // adapter applied at inference or was merged and re-quantized, so a stitched
+  // clip may claim a strategy only when every chunk agrees on it.
+  describe('LoRA strategy outcome', () => {
+    const applied = (strategy, quantizedTargets = 480) => ({
+      loraStrategyApplied: {
+        adapters: [{ role: 'user', name: 'character.safetensors', strategy, stages: ['all'], strength: 0.8, quantizedTargets, fusedTargets: 0 }],
+      },
+    });
+
+    it('inherits a unanimous outcome even when target counts differ', async () => {
+      const stitched = await stitchHistory(applied('runtime-delta'), applied('runtime-delta', 479));
+
+      expect(stitched.loraStrategyApplied).toEqual(applied('runtime-delta').loraStrategyApplied);
+    });
+
+    it('omits the outcome when the chunks applied the adapter differently', async () => {
+      const stitched = await stitchHistory(applied('runtime-delta'), applied('merged-requantized'));
+
+      expect(stitched).not.toHaveProperty('loraStrategyApplied');
+    });
+
+    it('omits the outcome when the chunks used the adapter at different strengths', async () => {
+      const weaker = applied('runtime-delta');
+      weaker.loraStrategyApplied.adapters[0].strength = 0.4;
+      const stitched = await stitchHistory(applied('runtime-delta'), weaker);
+
+      expect(stitched).not.toHaveProperty('loraStrategyApplied');
+    });
+  });
 });
 
 describe('extractLastFrame — anchor selection', () => {
@@ -4065,13 +4096,10 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
     expect((await failed).failure).toMatchObject({ classification: 'attributeerror', signature: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
-  it('SIGABRT names the macOS Metal command-buffer watchdog with a resolution/frame-count next step', async () => {
+  it('a bare SIGABRT with no native line is an unexplained native abort, not a Metal watchdog', async () => {
     const evt = await failWithSignal('signal-sigabrt', 'SIGABRT');
-    expect(evt.error).toMatch(/Metal command-buffer watchdog/i);
-    expect(evt.error).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
-    expect(evt.error).toMatch(/resolution/i);
-    expect(evt.error).toMatch(/frame count/i);
-    // The old bare wording must be gone.
+    expect(evt.error).toMatch(/native abort with no diagnostic/);
+    expect(evt.error).not.toMatch(/watchdog/i);
     expect(evt.error).not.toMatch(/Killed by signal SIGABRT/);
   });
 
@@ -5297,7 +5325,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   it.each([
     ['the classic timeout signature', TIMEOUT_ABORT],
     ['the impacting-interactivity signature newer macOS reports', INTERACTIVITY_ABORT],
-  ])('relaunches once at a reduced Gemma budget on %s', async (_label, abort) => {
+  ])('relaunches once with smaller command buffers, prompt untouched, on %s', async (_label, abort) => {
     const first = makeDrivenProc(101);
     const second = makeDrivenProc(102);
     const spawnMock = await startRender(`pe-${abort.length}`, [first, second]);
@@ -5309,11 +5337,13 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     const calls = ltx2Calls(spawnMock);
     expect(calls).toHaveLength(2);
     const [firstArgs, retryArgs] = calls.map(([, args]) => args);
-    // The original render never carries the flag — the reduced budget exists
-    // only as the mitigation, not as a new default.
-    expect(firstArgs).not.toContain('--gemma-max-length');
-    expect(flagValue(retryArgs, '--gemma-max-length')).toBe('512');
-    // Same render, smaller prompt budget: seed and output must survive verbatim
+    // Recovery never shortens the encoder sequence (the encoder would drop the
+    // START of the prompt): the args are byte-identical and only the env differs.
+    expect(retryArgs).toEqual(firstArgs);
+    expect(retryArgs).not.toContain('--gemma-max-length');
+    expect(calls[0][2].env.MLX_MAX_OPS_PER_BUFFER).toBeUndefined();
+    expect(calls[1][2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+    // Same render, smaller command buffers: seed and output must survive verbatim
     // or the relaunch silently produces a different clip than the user asked for.
     expect(flagValue(retryArgs, '--seed')).toBe(flagValue(firstArgs, '--seed'));
     expect(flagValue(retryArgs, '--seed')).toBe('987654');
@@ -5413,7 +5443,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     expect(failures).toHaveLength(1);
   });
 
-  it('relaunches at most once — a second abort at the reduced budget fails the job', async () => {
+  it('relaunches at most once — a second abort at the smaller setting fails the job', async () => {
     const first = makeDrivenProc(105);
     const second = makeDrivenProc(106);
     const spawnMock = await startRender('pe-twice', [first, second]);

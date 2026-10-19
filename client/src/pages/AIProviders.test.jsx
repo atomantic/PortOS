@@ -2411,3 +2411,66 @@ it('shares readiness subscriptions and reconciles events, reconnect and tab show
     vi.useRealTimers();
   }
 });
+
+describe('AIProviders list resources (#12171)', () => {
+  it('shows error row with Retry when workspaces fail to load, and recovers on retry', async () => {
+    vi.clearAllMocks();
+    api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', type: 'api', enabled: true }], activeProvider: 'p1' });
+    api.getApps.mockRejectedValueOnce(new Error('apps offline'));
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Prompt' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load workspaces — apps offline');
+
+    api.getApps.mockResolvedValueOnce([{ id: 'app-1', name: 'App 1', repoPath: '/path' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    const workspaceSelect = await screen.findByLabelText('Workspace');
+    expect(workspaceSelect).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows empty option when workspaces list is empty', async () => {
+    vi.clearAllMocks();
+    api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', type: 'api', enabled: true }], activeProvider: 'p1' });
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Prompt' }));
+
+    const workspaceSelect = await screen.findByLabelText('Workspace');
+    expect(within(workspaceSelect).getByRole('option', { name: 'No workspaces found' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows error row with Retry when fleet peers fail to load in fleet setup', async () => {
+    vi.clearAllMocks();
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getInstances.mockRejectedValueOnce(new Error('tailnet unreachable'));
+
+    mountPage('/ai/fleet?fleetStep=client');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load fleet peers — tailnet unreachable');
+
+    api.getInstances.mockResolvedValueOnce({ peers: [{ id: 'peer-1', name: 'Peer 1', host: 'host.ts.net', enabled: true }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+    expect(await screen.findByLabelText('Known PortOS peer')).toBeInTheDocument();
+  });
+});

@@ -72,8 +72,8 @@ describe('planning-only peer administration', () => {
     const view = render(<PeerAdministrationPanel peer={peer} />);
     fireEvent.click(screen.getByRole('button', { name: /Peer administration/ }));
     view.rerender(<PeerAdministrationPanel peer={{ ...peer, instanceId: '33333333-3333-4333-8333-333333333333' }} />);
-    resolveOld(setup);
-    await waitFor(() => expect(screen.queryByText(setup.hostInstanceId)).toBeNull());
+    await act(async () => { resolveOld(setup); });
+    expect(screen.queryByText(setup.hostInstanceId)).toBeNull();
     expect(savePeerAdminGrant).not.toHaveBeenCalled();
   });
 });

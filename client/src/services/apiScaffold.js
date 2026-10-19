@@ -1,7 +1,7 @@
 import { request } from './apiCore.js';
 
 // Templates & Scaffold
-export const getTemplates = () => request('/scaffold/templates');
+export const getTemplates = (options = {}) => request('/scaffold/templates', options);
 
 export const getDirectories = (path = null, { includeFiles = false } = {}) => {
   const params = new URLSearchParams();

@@ -186,6 +186,13 @@ const GIT_TAG_MUTATING_FLAGS = new Set(['-d', '--delete', '-a', '--annotate', '-
 const GIT_LIST_MODE_FLAGS = new Set(['-l', '--list', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged']);
 const GIT_REMOTE_READ_VERBS = new Set(['show', 'get-url']);
 
+// `--output[=<file>]` on log/show/diff (and any verb sharing diff-options)
+// writes the command's output to an arbitrary path — the same file-write
+// primitive `find -fprint*` is denied for below (#12020). Checked for every
+// verb rather than per verb so a newly allowlisted verb cannot inherit it.
+// `--output-indicator-*` only changes diff markers and is not matched.
+const GIT_OUTPUT_FLAG = '--output';
+
 // `find` action flags: `-delete` removes files and `-exec`/`-ok` family runs
 // arbitrary binaries, which would defeat the allowlist entirely. `-f*print*`
 // writes attacker-chosen files. Everything else (`-name`, `-type`, `-maxdepth`,
@@ -218,10 +225,20 @@ function isGitRefListing(sub, rest) {
 function validateUnattendedGit(args) {
   const sub = args[0];
   if (!sub) return deny("'git' needs a read-only subcommand on the unattended lane.");
+  // Global options (`-c key=val`, `--git-dir`, `--work-tree`, `--exec-path`,
+  // `--config-env`, `-C`) precede the verb and reconfigure what it runs
+  // against; the verb must be the first argument.
+  if (sub.startsWith('-')) {
+    return deny(`'git ${sub}' is not allowed on the unattended lane — global options before the subcommand are rejected; the first argument must be a read-only verb.`);
+  }
   if (!UNATTENDED_GIT_SUBCOMMANDS.has(sub)) {
     return deny(`'git ${sub}' is not allowed on the unattended lane — only read-only inspection subcommands are: ${[...UNATTENDED_GIT_SUBCOMMANDS].sort().join(', ')}.`);
   }
   const rest = args.slice(1);
+  const outputFlag = rest.find(a => a === GIT_OUTPUT_FLAG || a.startsWith(`${GIT_OUTPUT_FLAG}=`));
+  if (outputFlag) {
+    return deny(`'git ${sub} ${outputFlag}' is not allowed on the unattended lane — '--output' writes command output to a file.`);
+  }
   if (sub === 'config' && !rest.some(a => GIT_CONFIG_READ_FLAGS.has(a))) {
     return deny("'git config' is only allowed in its read form on the unattended lane (e.g. 'git config --get <key>').");
   }
@@ -337,17 +354,27 @@ export function validateUnattendedCommand(command) {
   return check;
 }
 
-// Patterns matching sensitive env var values in command output
-const SENSITIVE_ENV_PATTERN = /("(?:[a-z0-9]+_)*(?:KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH)(?:_[a-z0-9]+)*":\s*)"[^"]+"/gi;
+// Sensitive key names: a segment of the key, separated by `_`, `.` or `-`, so
+// `API_TOKEN` and `github.token` match while `author` does not.
+const SENSITIVE_KEY_WORDS = 'KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH';
+// JSON key/value pairs, e.g. `"SECRET_KEY": "value"` in `pm2 jlist` env blocks.
+const SENSITIVE_ENV_PATTERN = new RegExp(`("(?:[a-z0-9]+_)*(?:${SENSITIVE_KEY_WORDS})(?:_[a-z0-9]+)*":\\s*)"[^"]+"`, 'gi');
+// Assignment lines, e.g. `API_TOKEN=value` from a dotenv read or
+// `github.token=value` from `git config --list` (#12019). Anchored to the
+// line (horizontal whitespace only) so a value is only ever the remainder of
+// its own line.
+const SENSITIVE_ASSIGNMENT_PATTERN = new RegExp(`^([ \\t]*(?:export[ \\t]+)?(?:[a-z0-9]+[_.-])*(?:${SENSITIVE_KEY_WORDS})(?:[_.-][a-z0-9]+)*[ \\t]*=)(.+)$`, 'gim');
 
 /**
- * Redact sensitive env var values from command output before persisting.
- * Only redacts JSON key/value patterns (e.g. "SECRET_KEY": "value"). Shell-level
- * leaks (env expansion, command substitution) are not covered — acceptable for
- * PortOS's single-user, private-network deployment where the operator is the
- * only user and shell output is not exposed to external consumers.
+ * Redact sensitive values from command output before it is persisted,
+ * broadcast, or returned. Covers JSON key/value pairs and `KEY=value`
+ * assignment lines whose key names a secret. Shell-level leaks (env
+ * expansion, command substitution) are not covered — the allowlist and the
+ * metacharacter filter keep those out of the spawn in the first place.
  */
 export function redactOutput(output) {
   if (!output) return output;
-  return output.replace(SENSITIVE_ENV_PATTERN, '$1"[REDACTED]"');
+  return output
+    .replace(SENSITIVE_ENV_PATTERN, '$1"[REDACTED]"')
+    .replace(SENSITIVE_ASSIGNMENT_PATTERN, '$1[REDACTED]');
 }

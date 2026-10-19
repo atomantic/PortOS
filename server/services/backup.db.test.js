@@ -11,6 +11,7 @@ import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
+import { buildCatalogIdentityViewsDdl } from '../lib/db/schema/catalogIdentityViews.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
@@ -52,6 +53,7 @@ const { restorePostgres } = await import('./backup.js');
 const owned = ownTestBodies(vitestIt);
 const it = owned.it;
 let fixtureSetup;
+const FIXTURE_SETUP_BUDGET_MS = 60000;
 
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
@@ -62,11 +64,19 @@ const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
   health.connected && spawnSync('psql', ['--version']).status === 0,
   'test database or PostgreSQL client tools unavailable');
+// Every restore replaces the whole database; vitest.config.db.js holds a run-wide
+// advisory lock (test/dbRunExclusivity.js) so no other run overlaps this one.
 let dest;
 let dumpPath;
-const folderId = 'restore-schema-folder-probe';
-const issueId = 'restore-schema-issue-probe';
-const personId = '00000000-0000-4000-8000-000000000862';
+// Per-run identifiers: a row an earlier or overlapping run left behind can
+// never collide with this run's inserts, and teardown deletes only its own.
+const runId = randomUUID();
+const folderId = `restore-schema-folder-${runId}`;
+const issueId = `restore-schema-issue-${runId}`;
+const seriesId = `restore-schema-series-${runId}`;
+const probeAppId = `restore-probe-${runId}`;
+const personId = randomUUID();
+const postSnapshotPersonId = randomUUID();
 const executionHostId = randomUUID();
 const pendingMigration = '007-storyboard-scene-durable-ids.js';
 const connectionArgs = ['-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port), '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database];
@@ -90,8 +100,8 @@ afterAll(async () => {
       await query('DELETE FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
       await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
       await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
-      await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
-      await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
+      await query('DELETE FROM tribe_people WHERE id = ANY($1::uuid[])', [[personId, postSnapshotPersonId]]);
+      await query('DELETE FROM app_quality_measurements WHERE app_id = $1', [probeAppId]);
       await runDbMigrations();
     }
   } finally {
@@ -107,6 +117,13 @@ afterAll(async () => {
 
 function restore(dryRun = false, snapshotId = 'old-schema') {
   return restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
+}
+
+// toMatchObject prints only the asserted keys of a mismatch, which hides why a
+// restore failed; carry the failure reason and error into the assertion message.
+function expectRestoreOk(result, dryRun) {
+  expect(result.status, `restore ${result.status}: ${result.reason ?? ''} ${result.error ?? ''}`).toBe('ok');
+  expect(result.dryRun).toBe(dryRun);
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
@@ -129,15 +146,39 @@ describe.skipIf(!ready)('restore older database schema', () => {
   // Prepare the shared snapshot in a hook so setup failures stop dependent
   // cases and the first test's budget measures restore and its assertions.
   // Teardown drains it too: a timed-out hook keeps running like a case does.
-  beforeAll(() => (fixtureSetup = prepareFixture()));
+  // The DB config leaves hookTimeout at Vitest's 10 s default, which the schema
+  // rebuild, two migration runs and pg_dump do not fit on a loaded host.
+  // fixtureSetup stays the real work so teardown drains it even after the
+  // hook has been failed for running over budget.
+  beforeAll(() => {
+    fixtureSetup = prepareFixture();
+    return failWithinBudget(fixtureSetup);
+  }, FIXTURE_SETUP_BUDGET_MS);
+
+  // Fail a little before the hook's own timeout so the message names how long
+  // the fixture actually ran, not only the budget it exceeded.
+  async function failWithinBudget(work) {
+    const started = Date.now();
+    let timer;
+    const overBudget = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(
+        `restore fixture setup still running after ${Date.now() - started}ms (budget ${FIXTURE_SETUP_BUDGET_MS}ms)`,
+      )), FIXTURE_SETUP_BUDGET_MS - 5000);
+    });
+    try {
+      await Promise.race([work, overBudget]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function prepareFixture() {
     await ensureSchema({ force: true });
     await runDbMigrations();
     appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
     await query('INSERT INTO writers_room_folders (id, name, data) VALUES ($1, $2, $3)', [folderId, folder.name, folder]);
-    await query("INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, 'restore-schema-series', $2)", [
-      issueId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
+    await query('INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, $2, $3)', [
+      issueId, seriesId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
     ]);
     await query("INSERT INTO tribe_people (id, name) VALUES ($1, 'Snapshot person')", [personId]);
     // The snapshot predates this table and its inbound FK to tribe_people.
@@ -159,17 +200,17 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await ensureSchema({ force: true });
     await runDbMigrations();
     await query("UPDATE tribe_people SET name = 'After backup' WHERE id = $1", [personId]);
-    await query("INSERT INTO tribe_people (id, name) VALUES ('00000000-0000-4000-8000-000000000863', 'Post-snapshot person')");
+    await query("INSERT INTO tribe_people (id, name) VALUES ($1, 'Post-snapshot person')", [postSnapshotPersonId]);
     // A simpler approved additive table holds post-snapshot rows to prove a
     // full replacement, independently of Beeper's account/conversation graph.
-    await query("INSERT INTO app_quality_measurements VALUES ('restore-probe', 'test', 'agent', NOW(), '{}')");
+    await query("INSERT INTO app_quality_measurements VALUES ($1, 'test', 'agent', NOW(), '{}')", [probeAppId]);
     // Feed positions handed out after the dump must never be reissued (#8710).
     await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 5)");
     feedBefore = await feedSequenceValues();
   }
 
   it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
-    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(), false);
     expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
     const feedAfter = await feedSequenceValues();
     for (const [name, value] of Object.entries(feedBefore)) {
@@ -179,8 +220,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(BigInt(next)).toBeGreaterThan(BigInt(feedBefore.memories_sync_feed_seq));
     expect(await listFolders()).toContainEqual(folder);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
-    expect((await query("SELECT id FROM tribe_people WHERE id = '00000000-0000-4000-8000-000000000863'")).rowCount).toBe(0);
-    expect((await query("SELECT * FROM app_quality_measurements WHERE app_id = 'restore-probe'")).rowCount).toBe(0);
+    expect((await query('SELECT id FROM tribe_people WHERE id = $1', [postSnapshotPersonId])).rowCount).toBe(0);
+    expect((await query('SELECT * FROM app_quality_measurements WHERE app_id = $1', [probeAppId])).rowCount).toBe(0);
     expect((await query('SELECT * FROM beeper_participants')).rowCount).toBe(0);
     expect((await query("SELECT 1 FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass AND confrelid = 'tribe_people'::regclass")).rowCount).toBe(1);
     const issue = await query('SELECT data FROM pipeline_issues WHERE id = $1', [issueId]);
@@ -200,8 +241,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const path = join(dir, 'portos-db.sql');
     await writeFile(path, sql);
     await query("UPDATE tribe_people SET name = 'Changed after newer-client backup' WHERE id = $1", [personId]);
-    expect(await restore(true, 'newer-client')).toMatchObject({ status: 'ok', dryRun: true });
-    expect(await restore(false, 'newer-client')).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(true, 'newer-client'), true);
+    expectRestoreOk(await restore(false, 'newer-client'), false);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
     expect(await readFile(path, 'utf8')).toBe(sql);
   });
@@ -217,7 +258,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const saved = (await ledger.consume(input)).operation;
     await ledger.advanceGenerationFloor({ hostInstanceId: executionHostId, peerInstanceId: input.peerInstanceId,
       action: input.intent.action, generation: 3, executionEpoch: epoch });
-    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(), false);
     expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'uncertain', fingerprint: saved.fingerprint });
     const current = ledger.authority.read();
     expect(current.epoch).not.toBe(epoch);
@@ -291,7 +332,39 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect((await query('SELECT 1 FROM writers_room_folders WHERE id = $1', [folderId])).rowCount).toBe(1);
   });
 
+  it('refuses unknown functions and wrong overloads even when a shipped function is absent', async () => {
+    // Missing signatures resolve to NULL: they must not admit an unrelated
+    // function through nullable NOT IN comparisons during an older restore.
+    // Current identity read views depend on this resolver. Model an older
+    // install lacking both views and function; never CASCADE unknown objects.
+    const identityViews = buildCatalogIdentityViewsDdl().map(sql => /^CREATE OR REPLACE VIEW ([a-z_]+)/.exec(sql)[1]);
+    await query(`DROP VIEW IF EXISTS ${identityViews.map(name => `public.${name}`).join(', ')} RESTRICT`);
+    await query('DROP FUNCTION public.catalog_resolve_ingredient_id(text) RESTRICT');
+    try {
+      for (const signature of ['unexpected_restore_function()', 'catalog_resolve_ingredient_id(integer)']) {
+        await query(`CREATE FUNCTION public.${signature} RETURNS text LANGUAGE SQL AS $$ SELECT 'unapproved'::text $$`);
+        try {
+          const before = (await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows;
+          for (const dryRun of [true, false]) {
+            expect(await restore(dryRun)).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+          }
+          expect((await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual(before);
+          expect((await query('SELECT to_regprocedure($1) IS NOT NULL AS present', [`public.${signature}`])).rows[0].present).toBe(true);
+        } finally {
+          await query(`DROP FUNCTION IF EXISTS public.${signature} RESTRICT`);
+        }
+      }
+    } finally {
+      await ensureSchema({ force: true });
+    }
+  });
+
   it('preflights unknown objects and external dependencies without mutations, including preview', async () => {
+    await query('CREATE VIEW public.unexpected_restore_view AS SELECT 42 AS value');
+    try {
+      for (const dryRun of [true, false]) expect(await restore(dryRun)).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+      expect((await query('SELECT value FROM public.unexpected_restore_view')).rows).toEqual([{ value: 42 }]);
+    } finally { await query('DROP VIEW public.unexpected_restore_view RESTRICT'); }
     await query('CREATE TABLE public.unexpected_restore_record (id integer PRIMARY KEY)');
     await query('INSERT INTO public.unexpected_restore_record VALUES (42)');
     expect(await restore()).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
@@ -305,7 +378,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect((await query('SELECT * FROM restore_external.link')).rows).toEqual([{ person_id: personId }]);
     await query('DROP SCHEMA restore_external CASCADE');
     const before = (await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows;
-    expect(await restore(true)).toMatchObject({ status: 'ok', dryRun: true });
+    expectRestoreOk(await restore(true), true);
     expect((await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual(before);
   });
 });

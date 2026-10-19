@@ -36,6 +36,8 @@ vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ hasOrigin: true, host: 'github.com' }))
 }));
 const reconcileMock = vi.fn(async () => ({ defaultBranch: 'main', cleaned: [], inFlight: [], wip: [], skipped: [], orphanRemotes: { reaped: [], reported: [] } }));
+const appsMock = vi.hoisted(() => ({ getAppById: vi.fn() }));
+vi.mock('./apps.js', () => appsMock);
 vi.mock('./branchReconcile.js', () => ({ reconcile: (...args) => reconcileMock(...args) }));
 
 const {
@@ -659,6 +661,22 @@ describe('syncRepo — the argv it issues is the non-destructive form', () => {
     reconcileMock.mockClear();
     await syncRepo({ repoPath: process.cwd(), name: 'Example', actions: { reapRemotes: true } });
     expect(reconcileMock.mock.calls[0][1].reapRemotes).toBe(true);
+  });
+
+  it('hands the app\'s queued pending-merge branches to branch cleanup, failing closed on an unreadable app', async () => {
+    arrange();
+    appsMock.getAppById.mockResolvedValueOnce({ id: 'app-1', pendingMergePrs: [{ prNumber: 7, prUrl: 'https://example.com/pr/7', prBranch: 'claim/issue-7', sourceTask: {} }] });
+    await syncRepo({ repoPath: process.cwd(), appId: 'app-1', name: 'Example' });
+    expect(reconcileMock.mock.calls[0][1].pendingMergeBranches).toEqual(new Set(['claim/issue-7']));
+
+    reconcileMock.mockClear();
+    appsMock.getAppById.mockRejectedValueOnce(new Error('unreadable'));
+    await syncRepo({ repoPath: process.cwd(), appId: 'app-1', name: 'Example' });
+    expect(reconcileMock.mock.calls[0][1].pendingMergeBranches).toBeNull();
+
+    reconcileMock.mockClear();
+    await syncRepo({ repoPath: process.cwd(), name: 'Example' });
+    expect(reconcileMock.mock.calls[0][1].pendingMergeBranches).toBeUndefined();
   });
 
   it('skips branch cleanup entirely when cleanupMerged is off', async () => {

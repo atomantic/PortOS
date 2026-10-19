@@ -107,3 +107,26 @@ export function createKeyedFileWriteQueue() {
     return queue(safeKey, fn); // callers see the real resolve/reject
   };
 }
+
+/**
+ * Detached writes — bookkeeping a caller schedules off a queued turn and does
+ * not await (the settings ledger row, #12018) — still need one drain point:
+ * a test teardown that removes the data root the write targets, or a shutdown.
+ * The registry lives on `globalThis` so the module instances `vi.resetModules()`
+ * creates share it; entries remove themselves on settle, fulfilled or rejected.
+ */
+const DETACHED_WRITES = Symbol.for('portos.detachedWrites');
+const detachedWrites = globalThis[DETACHED_WRITES] ??= new Set();
+
+/** Track a detached write's promise; the caller still owns its rejection. */
+export function trackDetachedWrite(promise) {
+  detachedWrites.add(promise);
+  const release = () => detachedWrites.delete(promise);
+  promise.then(release, release);
+  return promise;
+}
+
+/** Await every detached write tracked so far, including ones scheduled meanwhile. */
+export async function drainDetachedWrites() {
+  while (detachedWrites.size) await Promise.allSettled([...detachedWrites]);
+}

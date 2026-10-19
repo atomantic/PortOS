@@ -1,8 +1,31 @@
+// Keep recovered bytes in the fixture; never touch the host's Trash.
+const recycled = new Map();
+vi.mock('../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  const { unlink } = await import('node:fs/promises');
+  for (const path of paths) {
+    recycled.set(basename(path), await readFile(path));
+    await unlink(path);
+  }
+} }));
+let publicationStarted = null;
+let trashCalls = 0;
+vi.mock('../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: work => actual.withBackupAssetPublication(() => {
+    const result = work();
+    publicationStarted?.();
+    return result;
+  }) };
+});
+vi.mock('../lib/trashFiles.js', async original => {
+  const actual = await original();
+  return { ...actual, trashFiles: paths => { trashCalls++; return actual.trashFiles(paths); } };
+});
 /** Real gallery/history workflows and files, with the derived PG index held at
  * its commit seam. A cut must never enter after bytes change but before rows do. */
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -42,6 +65,9 @@ const deferred = () => {
 afterAll(cleanupTempDataRoots);
 beforeEach(async () => {
   rows.clear();
+  recycled.clear();
+  publicationStarted = null;
+  trashCalls = 0;
   beforeIndexWrite = async () => {};
   await rm(PATHS.data, { recursive: true, force: true });
   await Promise.all([PATHS.images, PATHS.videos, PATHS.imageThumbnails, PATHS.videoThumbnails]
@@ -182,4 +208,35 @@ it('drains a queued sidecar edit through its index commit before taking the cut'
   }
   expect(rows.get('fixture.png')).toMatchObject({ prompt: 'after', hidden: true });
   expect(await readMetadata()).toEqual({ prompt: 'after', hidden: true });
+});
+
+it('recycles the latest image edit and refuses a stale edit queued behind deletion', async () => {
+  const editReached = deferred();
+  const commitEdit = deferred();
+  beforeIndexWrite = async () => { editReached.resolve(); await commitEdit.promise; };
+  const prompt = updateImagePrompt('fixture.png', 'latest prompt');
+  await editReached.promise;
+  // This fixture boundary acknowledges the deletion callback has returned
+  // its queued work, so absence of trashCalls proves serialization without a sleep.
+  const deletionStarted = deferred();
+  publicationStarted = () => deletionStarted.resolve();
+  const deletion = deleteImage('fixture.png');
+  let stale;
+  try {
+    await deletionStarted.promise;
+    expect(trashCalls).toBe(0);
+    publicationStarted = null;
+    stale = setImageHidden('fixture.png', true);
+    const rejected = expect(stale).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    commitEdit.resolve();
+    await Promise.all([prompt, deletion, rejected]);
+    expect(JSON.parse(recycled.get('fixture.metadata.json').toString())).toEqual({ prompt: 'latest prompt', hidden: false });
+    expect(recycled.get('fixture.png')).toEqual(png);
+    expect(rows.has('fixture.png')).toBe(false);
+    await expect(readFile(metadataPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    publicationStarted = null;
+    commitEdit.resolve();
+    await Promise.allSettled([prompt, deletion, stale]);
+  }
 });

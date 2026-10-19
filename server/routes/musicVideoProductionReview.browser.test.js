@@ -1,15 +1,13 @@
 /** Actual review controls + router/file store + Chrome/ffmpeg proof. No provider or live data. */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-import { createRequire } from 'node:module';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../lib/browserSuiteGate.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-review-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
@@ -19,18 +17,12 @@ let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
 // cross-workspace visual test runs when all three local QA prerequisites exist.
 const client = resolve(import.meta.dirname, '../../client');
-const requireClient = createRequire(join(client, 'package.json'));
-let clientBundler;
-try {
-  clientBundler = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map(name => requireClient.resolve(name));
-} catch (error) {
-  if (error.code !== 'MODULE_NOT_FOUND') throw error;
-}
+const clientBundler = resolveClientBundler(resolve(client, '..'));
 
 // Dependency discovery can read the mocked PATHS through ffmpeg imports.
 // Vitest does not run afterAll when the whole suite is skipped.

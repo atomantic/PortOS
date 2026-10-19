@@ -29,6 +29,21 @@ afterEach(() => {
 // first server boot via seedIfMissing(). This suite verifies that the runtime
 // registry matches the expected guarantees without depending on a committed file.
 describe('media model registry freshly loaded', () => {
+  it('adds the pinned MOSS preview without overwriting customization or restoring a removed entry', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const initial = loadMediaModels();
+    initial.image = initial.image.filter(model => model.id !== 'moss-image-sft-bf16');
+    initial._shippedDefaults.image.list = initial._shippedDefaults.image.list.filter(id => id !== 'moss-image-sft-bf16');
+    initial.image[0].steps = 17;
+    writeFileSync(registryFile, JSON.stringify(initial));
+    const upgraded = reloadMediaModels();
+    const moss = upgraded.image.find(model => model.id === 'moss-image-sft-bf16');
+    expect(moss).toMatchObject({ runner: 'moss-swift', supportsImg2Img: false, supportsLoras: false, license: 'apache-2.0', hardwareRequirements: { minMemoryGb: 48 } });
+    expect(upgraded.image[0].steps).toBe(17);
+    upgraded.image = upgraded.image.filter(model => model.id !== moss.id);
+    writeFileSync(registryFile, JSON.stringify(upgraded));
+    expect(reloadMediaModels().image.some(model => model.id === moss.id)).toBe(false);
+  });
   it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
     const registry = loadMediaModels();

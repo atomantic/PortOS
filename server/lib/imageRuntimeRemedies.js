@@ -15,6 +15,8 @@
 
 import { isFlux2, usesDiffusersRunner } from './runners.js';
 
+export const MOSS_IMAGE_MODEL_ID = 'moss-image-sft-bf16';
+
 export const IMAGE_RUNTIME_READINESS = Object.freeze({
   READY: 'ready',
   UNAVAILABLE: 'unavailable',
@@ -29,11 +31,13 @@ export const IMAGE_RUNTIME_READINESS = Object.freeze({
 export const IMAGE_RUNTIME = Object.freeze({
   TORCH_VENV: 'torch-venv',
   MFLUX_PYTHON: 'mflux-python',
+  MOSS_SWIFT: 'moss-swift',
 });
 
 export const IMAGE_RUNTIME_LABELS = Object.freeze({
   [IMAGE_RUNTIME.TORCH_VENV]: 'Shared torch runtime (FLUX.2 · Z-Image · ERNIE · HiDream · Qwen)',
   [IMAGE_RUNTIME.MFLUX_PYTHON]: 'mflux Python interpreter',
+  [IMAGE_RUNTIME.MOSS_SWIFT]: 'MOSS Swift / MLX (SFT bf16, text-to-image)',
 });
 
 // Which runtime a model needs. Shipping the vocabulary without the CLASSIFIER
@@ -42,7 +46,10 @@ export const IMAGE_RUNTIME_LABELS = Object.freeze({
 // the enum exists to end. `services/imageGen/regen.js` re-exports this as
 // `modelUsesFluxVenv` for its existing callers.
 export const imageRuntimeFor = (model) =>
-  (isFlux2(model) || usesDiffusersRunner(model)) ? IMAGE_RUNTIME.TORCH_VENV : IMAGE_RUNTIME.MFLUX_PYTHON;
+  model?.runner === IMAGE_RUNTIME.MOSS_SWIFT ? IMAGE_RUNTIME.MOSS_SWIFT
+    : (isFlux2(model) || usesDiffusersRunner(model)) ? IMAGE_RUNTIME.TORCH_VENV : IMAGE_RUNTIME.MFLUX_PYTHON;
+
+export const usesMossSwift = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.MOSS_SWIFT;
 
 export const usesTorchVenv = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.TORCH_VENV;
 
@@ -50,6 +57,8 @@ export const usesTorchVenv = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME
 // onto one button apiece — see client/src/components/imageGen/LocalRuntimeStatus.jsx.
 export const IMAGE_RUNTIME_REMEDY = Object.freeze({
   INSTALL_TORCH_VENV: 'install-torch-venv',
+  INSTALL_MOSS_SWIFT: 'install-moss-swift',
+  DOWNLOAD_MOSS_WEIGHTS: 'download-moss-weights',
   INSTALL_PACKAGES: 'install-packages',
   SET_PYTHON_PATH: 'set-python-path',
   SWITCH_PYTHON: 'switch-python',

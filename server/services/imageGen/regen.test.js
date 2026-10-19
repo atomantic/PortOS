@@ -75,6 +75,7 @@ describe('modelSupportsRegen / modelUsesFluxVenv', () => {
     // the regenerated lineage honest.
     expect(modelSupportsRegen(FLUX2)).toBe(true);
     expect(modelSupportsRegen(ZIMAGE)).toBe(false);
+    expect(modelSupportsRegen({ id: 'moss-image-sft-bf16', runner: 'moss-swift' })).toBe(false);
   });
 
   it('legacy mflux is not a flux-venv model', () => {

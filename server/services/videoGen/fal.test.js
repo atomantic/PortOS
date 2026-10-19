@@ -934,3 +934,20 @@ describe('hosted inputs', () => {
     expect(JSON.stringify(posted)).not.toContain('data:');
   });
 });
+
+it('cancels during preparation before starting a render', async () => {
+  const { videoGenEvents: events } = await import('./events.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  vi.stubGlobal('fetch', vi.fn());
+  const jobId = 'preamble-cancel-videoGen-fal';
+  const pending = fal.generateVideo({ prompt: 'a quiet gate', jobId, apiKey: 'test-key', modelId: 'fal-ai/veo3.1/fast' });
+  expect(fal.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(fal.cancel(jobId)).toBe(false);
+});

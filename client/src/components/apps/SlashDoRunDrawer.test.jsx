@@ -194,6 +194,34 @@ describe('SlashDoRunDrawer', () => {
     expect(body.reviewerMaxRounds).toBeUndefined();
   });
 
+  // The removal bar is `/do:depfree`-only (the route forwards it as the
+  // command's own --heavy / --extreme flag). Untouched it sends the default bar,
+  // so the bare button still queues the flag-less run.
+  it('offers the depfree removal bar and sends the chosen mode', async () => {
+    renderDrawer({ command: 'depfree', label: '/do:depfree' });
+
+    const select = await screen.findByLabelText('Removal bar');
+    expect(select).toHaveValue('default');
+    await userEvent.selectOptions(select, 'extreme');
+    expect(screen.getByText(/Pick the strongest model and max effort/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Queue/ }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [command, , body] = api.createSlashdoTask.mock.calls[0];
+    expect(command).toBe('depfree');
+    expect(body.depfreeMode).toBe('extreme');
+  });
+
+  it('hides the removal bar for every other command and never sends it', async () => {
+    renderDrawer({ command: 'better', label: '/do:better' });
+
+    await waitFor(() => expect(screen.getByText('Task settings')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Removal bar')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Queue/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][2].depfreeMode).toBeUndefined();
+  });
+
   it('lists the tracker items once "pick a specific" is chosen and sends the pinned ref', async () => {
     const onQueued = vi.fn();
     renderDrawer({ onQueued });
@@ -255,6 +283,14 @@ describe('SlashDoRunDrawer', () => {
     const [, , settings] = api.createSlashdoTask.mock.calls.at(-1);
     expect(settings.prCompletion).toBe('merge-on-green');
     expect(settings.reviewers).toBeUndefined();
+  });
+
+  it('inherits server policy when queued before the app completion preview resolves', async () => {
+    api.getAppClaimReviewers.mockReturnValue(new Promise(() => {}));
+    renderDrawer();
+    await userEvent.click(screen.getByRole('button', { name: /Queue \/do:next/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls.at(-1)[2]).not.toHaveProperty('prCompletion');
   });
 
   it('seeds prCompletion from claimReviewers when available', async () => {

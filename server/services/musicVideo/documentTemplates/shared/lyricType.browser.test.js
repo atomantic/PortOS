@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
-import { browserSuiteCanRun } from '../../../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSuiteGate.js';
 
 // A synthetic song: a verse line, a chorus line, a spoken direction, all word-timed.
 const words = (text, start, step = 0.3) => text.split(' ').map((w, i) => ({ text: w, startSec: start + i * step, endSec: start + i * step + 0.25 }));
@@ -27,8 +27,7 @@ const MV = {
   ],
 };
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('lyric type browser', { Chrome: chrome });
 
 describe.skipIf(!canRun)('lyricType in the layered template (browser pixels)', () => {

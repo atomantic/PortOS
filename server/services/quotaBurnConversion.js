@@ -30,6 +30,7 @@ import {
   planQuotaBurnStepConversion,
 } from '../lib/quotaBurnLegacyConversion.js';
 import { normalizeQuotaBurnJob } from '../lib/quotaBurnConfig.js';
+import { getQuotaBurnConfig, saveQuotaBurnConfig } from './quotaBurnStore.js';
 
 /**
  * Ensure the custom job a conversion needs exists, and say whether it did.
@@ -102,4 +103,17 @@ export async function convertLegacyQuotaBurnPatch(patch) {
     next[familyId] = result.changed ? { ...family, jobs: result.jobs } : family;
   }
   return changed ? { ...patch, families: next } : patch;
+}
+
+/**
+ * Convert the legacy steps in the plan on disk — the door for a plan a backup
+ * restore just installed. Migration 359 runs once per install, so a plan
+ * restored from a snapshot taken before it would otherwise stay legacy (and
+ * unrunnable) until the user happened to re-save it. An already converted plan
+ * is left untouched and nothing is written.
+ */
+export async function reconcileRestoredQuotaBurnPlan() {
+  const patch = { families: (await getQuotaBurnConfig()).families };
+  const converted = await convertLegacyQuotaBurnPatch(patch);
+  if (converted !== patch) await saveQuotaBurnConfig(converted);
 }

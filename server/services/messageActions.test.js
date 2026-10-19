@@ -6,7 +6,7 @@ vi.mock('./messageSync.js', () => ({ getMessage: mocks.message, removeMessageFro
 vi.mock('./messagePlaywrightSync.js', () => ({ findOrOpenPage: async () => ({}), getPages: async () => [], isAuthPage: () => false, evaluateOnPage: mocks.evaluate }));
 vi.mock('./messageTriageRules.js', () => ({ recordCorrection: mocks.correction }));
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}), GOOGLE_API_TIMEOUT_MS: 30_000 }));
-vi.mock('@googleapis/gmail', () => ({ gmail: () => ({ users: { messages: { trash: mocks.trash, modify: mocks.modify } } }) }));
+vi.mock('./gmailApi.js', () => ({ createGmailApi: () => ({ trashMessage: mocks.trash, modifyMessage: mocks.modify }) }));
 import { executeAction } from './messageActions.js';
 const accountId = '11111111-1111-1111-1111-111111111111';
 const message = { id: 'requested', subject: 'Status update', from: { name: 'Example Sender', email: 'sender@example.com' }, date: '2026-09-26 10:30' };
@@ -97,8 +97,8 @@ for (const provider of ['gmail', 'outlook']) describe(`${provider} browser ident
 it('preserves Gmail API-by-ID archive and delete without browser calls', async () => {
   mocks.account.mockResolvedValue({ type: 'gmail' }); mocks.message.mockResolvedValue({ ...message, apiId: 'api-target' });
   await executeAction(accountId, message.id, 'delete'); await executeAction(accountId, message.id, 'archive');
-  expect(mocks.trash).toHaveBeenCalledWith({ userId: 'me', id: 'api-target' });
-  expect(mocks.modify).toHaveBeenCalledWith({ userId: 'me', id: 'api-target', requestBody: { removeLabelIds: ['INBOX'] } });
+  expect(mocks.trash).toHaveBeenCalledWith('api-target');
+  expect(mocks.modify).toHaveBeenCalledWith('api-target', { removeLabelIds: ['INBOX'] });
   expect(mocks.evaluate).not.toHaveBeenCalled();
 });
 

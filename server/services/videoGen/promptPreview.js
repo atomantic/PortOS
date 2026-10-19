@@ -66,6 +66,14 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile, hasAudio: !!uploads.audioFile,
     }).record };
   }
+  if (backend === VIDEO_GEN_MODE.RUNWAY) {
+    const { runwayVideoSentPrompt } = await import('./runway.js');
+    return { backend, ...runwayVideoSentPrompt({
+      modelId: body.runwayModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.runwayDuration, width: body.width, height: body.height, resolution: body.runwayResolution, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+    }).record };
+  }
   if (backend === VIDEO_GEN_MODE.LOCAL) {
     // The local runner's modules load only for a local preview.
     const [{ defaultVideoModelId, listVideoModels }, { resolveVideoLoras }, { captureSystemCapabilities }] = await Promise.all([

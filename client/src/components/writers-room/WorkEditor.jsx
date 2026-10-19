@@ -108,8 +108,9 @@ function readSidebarTab() {
   return STORYBOARD_TAB_VALUES.includes(stored) ? stored : STORYBOARD_TAB.BOARDS;
 }
 
-export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen, onDirtyChange, headerCollapsed = false }) {
+export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen, onDirtyChange, headerCollapsed = false, draftMutation = null, beginDraftMutation, endDraftMutation }) {
   const navigate = useNavigate();
+  const exercisePending = draftMutation?.kind === 'exercise';
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
   const [promoting, setPromoting] = useState(false);
@@ -118,6 +119,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [status, setStatus] = useState(work.status);
   const [savedBody, setSavedBody] = useState(work.activeDraftBody || '');
   const [saving, setSaving] = useState(false);
+  const [switchingDraft, setSwitchingDraft] = useState(false);
+  const [polishBusy, setPolishBusy] = useState(false);
+  const draftTransitionRef = useRef(false);
   const [readingTheme, setReadingTheme] = useState(readReadingTheme);
   const [characters, setCharacters] = useState([]);
   const [places, setPlaces] = useState([]);
@@ -164,7 +168,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // instantly; re-synced from the prop. The panel's imperative suggest fn and
   // the post-typing debounce live in useLiveSuggest (below).
   const [liveMode, setLiveMode] = useState(work.liveMode || null);
-  useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
+  useEffect(() => { setLiveMode(work.liveMode || null); }, [work.id, work.activeDraftVersionId, work.liveMode]);
   // Shared live text-suggest usage counter. The continuation panel and the CD
   // bridge BOTH draw on the same server-side daily budget, so a single mirror
   // lives here (not one per panel) — otherwise the panel that didn't make the
@@ -271,8 +275,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     setTitle(work.title);
   }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title, savedBody, dirty]);
 
-  useEffect(() => { setStatus(work.status); }, [work.status]);
-  useEffect(() => { setTitle(work.title); }, [work.title]);
+  useEffect(() => { setStatus(work.status); }, [work.id, work.activeDraftVersionId, work.status]);
+  useEffect(() => { setTitle(work.title); }, [work.id, work.activeDraftVersionId, work.title]);
 
   // The CharactersBible / PlacesBible drawers are the canonical editors;
   // mirror their lists here so the storyboard's image-prompt enrichment picks
@@ -301,7 +305,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     return () => { active = false; };
   }, [work.id]);
 
-  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty || polishBusy || !!runningKind); }, [dirty, polishBusy, runningKind, onDirtyChange]);
   const wordCount = useMemo(() => countWords(body), [body]);
 
   // Live mirror of `body` for callbacks that only READ the prose (#3387).
@@ -330,17 +334,21 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const savingRef = useRef(false);
   const handleSaveRef = useRef(null);
   handleSaveRef.current = async () => {
-    if (savingRef.current) return;
+    if (savingRef.current || draftTransitionRef.current || polishBusy || exercisePending) return;
+    const startOwner = ownerKeyRef.current;
+    const transaction = beginDraftMutation?.(startOwner, 'save');
+    if (beginDraftMutation && !transaction) return;
     savingRef.current = true;
     setSaving(true);
     const updated = await saveWritersRoomDraft(work.id, body, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Save failed: ${err.message}`);
       return null;
     });
+    endDraftMutation?.(transaction);
     savingRef.current = false;
     if (!mountedRef.current) return;
     setSaving(false);
-    if (!updated) return;
+    if (!updated || ownerKeyRef.current !== startOwner) return;
     setSavedBody(body);
     onChange?.(updated);
     toast.success('Saved');
@@ -362,7 +370,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // close/reload, and any in-app navigation (sidebar link, ⌘K, voice
   // `ui_navigate`, browser Back) — otherwise the body reset in the effect above
   // silently discards them. The confirm renders below the header banners.
-  const routeGuard = useUnsavedChangesGuard(dirty);
+  const routeGuard = useUnsavedChangesGuard(dirty || switchingDraft || exercisePending);
   const { proceed: proceedExit } = routeGuard;
   const discardAndExit = useCallback(() => {
     setBody(savedBody);
@@ -372,15 +380,25 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   useClickOutside(overflowRef, overflowOpen, () => setOverflowOpen(false));
 
   const handleSnapshot = async () => {
+    if (savingRef.current || draftTransitionRef.current || polishBusy || runningKind || exercisePending) return;
     if (dirty) {
       toast('Save before snapshotting', { icon: '⚠️' });
       return;
     }
+    const startOwner = ownerKeyRef.current;
+    const transaction = beginDraftMutation?.(startOwner, 'version');
+    if (beginDraftMutation && !transaction) return;
+    draftTransitionRef.current = true;
+    setSwitchingDraft(true);
     const updated = await snapshotWritersRoomDraft(work.id, undefined, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Snapshot failed: ${err.message}`);
       return null;
     });
-    if (!updated || !mountedRef.current) return;
+    endDraftMutation?.(transaction);
+    draftTransitionRef.current = false;
+    if (!mountedRef.current) return;
+    setSwitchingDraft(false);
+    if (!updated || ownerKeyRef.current !== startOwner) return;
     onChange?.({ ...updated, activeDraftBody: body });
     toast.success(`Created ${updated.drafts[updated.drafts.length - 1].label}`);
   };
@@ -415,39 +433,41 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     navigate(`/creative-director/${encodeURIComponent(work.cdProjectId)}/overview`);
   };
 
+  const publishMetadata = useCallback((updated, fields, startOwner) => {
+    if (!updated || !mountedRef.current || ownerKeyRef.current !== startOwner) return false;
+    onChange?.(updated, { fields, ownerKey: startOwner });
+    return true;
+  }, [onChange, mountedRef]);
+
   const commitTitle = async () => {
     if (title === work.title) return;
+    const startOwner = ownerKeyRef.current;
     const updated = await updateWritersRoomWork(work.id, { title }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Title save failed: ${err.message}`);
       return null;
     });
-    if (!updated || !mountedRef.current) return;
+    if (!publishMetadata(updated, ['title'], startOwner)) return;
     if (updated.title !== title) setTitle(updated.title);
-    onChange?.({ ...updated, activeDraftBody: body });
   };
 
   // useCallback + bodyRef: this is a StoryboardPanel prop, and the panel is
   // memoized — a fresh identity per keystroke would defeat the memo boundary.
   const commitImageStyle = useCallback(async (next) => {
-    // Snapshot the buffer BEFORE awaiting: `updated` is this work's manifest, so
-    // the body folded back into it must be the one that was on screen when the
-    // style was committed. Reading bodyRef after the round-trip would splice a
-    // different work's prose in if the user swapped works mid-flight.
-    const bodyAtCommit = bodyRef.current;
+    const startOwner = ownerKeyRef.current;
     const updated = await updateWritersRoomWork(work.id, { imageStyle: next }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Style save failed: ${err.message}`);
       return null;
     });
-    if (updated && mountedRef.current) {
-      onChange?.({ ...updated, activeDraftBody: bodyAtCommit });
+    if (publishMetadata(updated, ['imageStyle'], startOwner)) {
       toast.success(next.presetId === 'none' ? 'World style cleared' : 'World style saved');
     }
-  }, [work.id, onChange, mountedRef]);
+  }, [work.id, publishMetadata, mountedRef]);
 
   // Persist the voice exemplars (#2179). Drop rows with a blank passage before
   // sending (the server prunes them too, but this keeps the round-tripped state
   // honest) and clear the drawer's dirty edits into the saved work.
   const saveVoice = async () => {
+    const startOwner = ownerKeyRef.current;
     const clean = (list) => (Array.isArray(list) ? list : [])
       .map((e) => ({ passage: (e.passage || '').trim(), note: (e.note || '').trim() }))
       .filter((e) => e.passage)
@@ -462,10 +482,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     });
     if (!mountedRef.current) return;
     setSavingVoice(false);
-    if (updated) {
+    if (publishMetadata(updated, ['voiceExemplars', 'voiceAntiExemplars'], startOwner)) {
       setVoiceExemplars(updated.voiceExemplars || []);
       setVoiceAntiExemplars(updated.voiceAntiExemplars || []);
-      onChange?.({ ...updated, activeDraftBody: body });
       toast.success('Voice exemplars saved');
       setDrawer(null);
     }
@@ -507,6 +526,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // restore focus + caret after the inserted text so the writer keeps flowing.
   const insertAtCursor = useCallback((opt) => {
     const ta = textareaRef.current;
+    if (draftTransitionRef.current || exercisePending) return;
     const snippet = opt?.text || '';
     if (!snippet) return;
     const text = bodyRef.current;
@@ -525,59 +545,70 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       el.setSelectionRange(caret, caret);
     });
     toast('Inserted — save to persist', { icon: '✍️' });
-  }, []);
+  }, [exercisePending]);
 
   // Debounce a suggest after the writer pauses typing. Only arms while live
   // mode is on and we're in the edit textarea; cleared on every keystroke and
   // on unmount so a deferred fire can't hit a dead/closed editor.
   const { registerTrigger: registerLiveTrigger, scheduleSuggest: scheduleLiveSuggest } = useLiveSuggest({
-    enabled: liveEnabled && viewMode === 'edit',
+    enabled: liveEnabled && viewMode === 'edit' && !switchingDraft && !exercisePending,
     debounceMs: liveDebounceMs,
   });
 
   const toggleLiveMode = useCallback(async () => {
+    const startOwner = ownerKeyRef.current;
     const nextEnabled = !liveEnabled;
     // Optimistic flip; the PATCH returns the persisted liveMode (with defaults
     // filled in for a first opt-in) which we fold back through onChange.
     setLiveMode((prev) => ({ ...(prev || {}), enabled: nextEnabled }));
     const updated = await updateWritersRoomWork(work.id, { liveMode: { enabled: nextEnabled } }, { silent: true }).catch((err) => {
-      if (mountedRef.current) {
+      if (mountedRef.current && ownerKeyRef.current === startOwner) {
         toast.error(`Live mode save failed: ${err.message}`);
         setLiveMode(work.liveMode || null);
       }
       return null;
     });
-    if (!updated || !mountedRef.current) return;
+    if (!publishMetadata(updated, ['liveMode'], startOwner)) return;
     setLiveMode(updated.liveMode || null);
-    onChange?.({ ...updated, activeDraftBody: body });
     toast.success(nextEnabled ? 'Live director on' : 'Live director off');
-  }, [liveEnabled, work.id, work.liveMode, body, onChange, mountedRef]);
+  }, [liveEnabled, work.id, work.liveMode, publishMetadata, mountedRef]);
 
   const commitStatus = async (next) => {
     if (next === status) return;
+    const startOwner = ownerKeyRef.current;
     setStatus(next);
     const updated = await updateWritersRoomWork(work.id, { status: next }, { silent: true }).catch((err) => {
-      if (mountedRef.current) {
+      if (mountedRef.current && ownerKeyRef.current === startOwner) {
         toast.error(`Status save failed: ${err.message}`);
         setStatus(work.status);
       }
       return null;
     });
-    if (updated && mountedRef.current) onChange?.({ ...updated, activeDraftBody: body });
+    if (publishMetadata(updated, ['status'], startOwner)) setStatus(updated.status);
   };
 
   const switchToDraft = async (draftId) => {
-    if (draftId === work.activeDraftVersionId) return;
+    if (draftId === work.activeDraftVersionId || draftTransitionRef.current || savingRef.current || polishBusy || runningKind || exercisePending) return;
     if (dirty) {
       toast('Save or snapshot before switching versions', { icon: '⚠️' });
       return;
     }
+    const startOwner = ownerKeyRef.current;
+    const transaction = beginDraftMutation?.(startOwner, 'version');
+    if (beginDraftMutation && !transaction) return;
+    draftTransitionRef.current = true;
+    setSwitchingDraft(true);
     const updated = await setWritersRoomActiveDraft(work.id, draftId, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Switch failed: ${err.message}`);
       return null;
     });
-    if (!updated || !mountedRef.current) return;
+    endDraftMutation?.(transaction);
+    draftTransitionRef.current = false;
+    if (!mountedRef.current) return;
+    setSwitchingDraft(false);
+    if (!updated || ownerKeyRef.current !== startOwner) return;
     onChange?.(updated);
+    setDrawer(null);
   };
 
   // Shared analysis runner — the storyboard, overflow menu, and per-scene
@@ -586,7 +617,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // back out by simply not saving. Characters refreshes the bible cache so
   // the storyboard's prompt enrichment picks up new profiles immediately.
   const runAnalysis = useCallback(async (kind) => {
-    if (runningKind) return false;
+    if (runningKind || draftTransitionRef.current || savingRef.current || polishBusy || exercisePending) return false;
     const startOwner = ownerKeyRef.current;
     const startBody = bodyRef.current;
     // Analysis reads the SAVED draft, so a buffer that was already dirty is not what gets formatted.
@@ -607,7 +638,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (!snapshot) return false;
     // The writer moved to another work/draft while this ran; its result belongs
     // to the old owner and must not touch the current buffer or bible lists.
-    if (ownerKeyRef.current !== startOwner) return false;
+    if (ownerKeyRef.current !== startOwner || draftTransitionRef.current) return false;
     if (snapshot.status === 'failed') {
       toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${snapshot.error || 'unknown'}`);
       return false;
@@ -635,7 +666,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       }
     }
     return true;
-  }, [runningKind, work.id]);
+  }, [runningKind, work.id, polishBusy, exercisePending]);
 
   // Sequential pipeline for the 3-step storyboard setup. Run characters →
   // places → script in order so each later step has the earlier bible to
@@ -650,6 +681,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   }, [runAnalysis, runningKind]);
 
   const applyFormatText = (text) => {
+    if (draftTransitionRef.current || savingRef.current || exercisePending) return;
     setBody(text);
     toast('Applied to editor — save to persist', { icon: '💾' });
   };
@@ -658,11 +690,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // keep/revert). After a completed run or a manual revert, pull the fresh body
   // back into the editor as the new saved baseline so the buffer isn't stale.
   const reloadBodyFromServer = useCallback(async () => {
+    if (draftTransitionRef.current || exercisePending) return;
     const startOwner = ownerKeyRef.current;
     const startBody = bodyRef.current;
     const wasDirty = startBody !== savedBodyRef.current;
     const fresh = await getWritersRoomWork(work.id).catch(() => null);
-    if (!fresh || !mountedRef.current || ownerKeyRef.current !== startOwner) return;
+    if (!fresh || !mountedRef.current || ownerKeyRef.current !== startOwner || draftTransitionRef.current) return;
     const nextBody = fresh.activeDraftBody || '';
     // Adopt the server body as the saved baseline always; replace the buffer
     // only when the writer had nothing unsaved and typed nothing during the GET.
@@ -670,7 +703,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (!wasDirty && bodyRef.current === startBody) setBody(nextBody);
     setSavedBody(nextBody);
     onChange?.(fresh);
-  }, [work.id, onChange, mountedRef]);
+  }, [work.id, onChange, mountedRef, exercisePending]);
 
   const activeDraft = useMemo(
     () => work.drafts?.find((d) => d.id === work.activeDraftVersionId),
@@ -831,7 +864,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         </div>
         <button
           onClick={handleSave}
-          disabled={!dirty || saving}
+          disabled={!dirty || saving || switchingDraft || polishBusy || exercisePending}
           className={`flex shrink-0 items-center justify-center gap-1 w-24 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded ${
             dirty ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
           }`}
@@ -843,7 +876,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         </button>
         <button
           onClick={handleSnapshot}
-          disabled={dirty}
+          disabled={dirty || saving || switchingDraft || polishBusy || exercisePending}
           aria-label="Snapshot"
           className={`${headerCollapsed ? 'hidden' : 'flex'} items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed`}
           title="Snapshot the active draft as a new version"
@@ -863,11 +896,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           {overflowOpen && (
             <div className="absolute right-0 top-full mt-1 z-30 w-60 rounded-md border border-port-border bg-port-card shadow-xl py-1 text-xs">
               <MenuSection label="AI">
-                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
-                <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
-                <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
-                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
-                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} disabled={dirty || saving || switchingDraft || polishBusy || exercisePending} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
+                <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} disabled={dirty || saving || switchingDraft || polishBusy || exercisePending} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
+                <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} disabled={dirty || saving || switchingDraft || polishBusy || exercisePending} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
+                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} disabled={dirty || saving || switchingDraft || polishBusy || exercisePending} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
+                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} disabled={dirty || saving || switchingDraft || polishBusy || exercisePending} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
                 <MenuItem icon={Wand2} label="Polish (cut → revise)" onClick={closeOverflowAnd(() => setDrawer(DRAWER.POLISH))} />
                 <MenuItem icon={Quote} label="Voice exemplars" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VOICE))} />
                 <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
@@ -906,9 +939,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
       {/* A save in flight is about to settle the draft clean, and the guard
           releases the parked navigation on its own — no confirm to flash. */}
+      {exercisePending && <div role="status" className="px-3 py-2 text-sm text-port-warning">Adding sprint text to draft…</div>}
       <UnsavedChangesConfirm
         guard={routeGuard}
-        when={!saving}
+        when={!saving && !switchingDraft && !exercisePending}
         question="Discard your unsaved changes to this work?"
         label={`Discard unsaved changes to ${title || 'this work'}`}
         onDiscard={discardAndExit}
@@ -978,7 +1012,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             <ProseEditor
               ref={textareaRef}
               value={body}
-              onChange={(e) => { setBody(e.target.value); scheduleLiveSuggest(); }}
+              readOnly={switchingDraft || exercisePending}
+              aria-busy={switchingDraft || exercisePending}
+              onChange={(e) => { if (draftTransitionRef.current || exercisePending) return; setBody(e.target.value); scheduleLiveSuggest(); }}
               readingTheme={readingTheme}
               className="w-full h-full resize-none px-6 py-6 text-base focus:outline-none"
             />
@@ -1109,14 +1145,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         onStopOne={queueStopOne}
       />
 
-      <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => setDrawer(null)} title="Versions">
-        <WorkEditorVersions work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
+      <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => { if (!draftTransitionRef.current) setDrawer(null); }} title="Versions">
+        <WorkEditorVersions work={work} dirty={dirty} pending={switchingDraft} disabled={saving || polishBusy || !!runningKind || exercisePending} onSwitch={switchToDraft} />
       </Drawer>
       <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
       </Drawer>
-      <Drawer open={drawer === DRAWER.POLISH} onClose={() => setDrawer(null)} title="Polish" size="md">
-        <PolishPanel work={work} dirty={dirty} onBodyChanged={reloadBodyFromServer} />
+      <Drawer open={drawer === DRAWER.POLISH} onClose={() => { if (!polishBusy) setDrawer(null); }} title="Polish" size="md">
+        <PolishPanel work={work} dirty={dirty} blocked={switchingDraft || saving || exercisePending} onBusyChange={setPolishBusy} onBodyChanged={reloadBodyFromServer} />
       </Drawer>
       <Drawer open={drawer === DRAWER.VOICE} onClose={() => setDrawer(null)} title="Voice exemplars" size="md">
         <WorkEditorVoicePanel

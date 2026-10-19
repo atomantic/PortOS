@@ -2,7 +2,7 @@
  * Owner-aware sweep of run-scoped temp roots (#9113, #9804).
  *
  * Workspace configs and the CI launcher stamp `.owner.pid` in each root. A
- * killed run never reaches `teardown()` in `runTempRoot.js`, so its root is
+ * killed run never reaches its runner close hook, so its root is
  * left behind; the next config load calls `sweepStaleRunRoots()` to reclaim
  * it for the caller's exact prefix (default `pvt-`). A recorded owner that is provably gone frees the root immediately, an
  * owner that is alive keeps it however old it is (a >6h run must not be swept
@@ -27,21 +27,34 @@ export function writeOwnerFile(root) {
   writeFileSync(join(root, OWNER_FILE), `${process.pid} ${startMs}\n`);
 }
 
-/** Start time of a live pid in ms, or null when it cannot be read (always null on win32). */
-function readProcessStartMs(pid) {
+/** Process state and start time of a live pid, or null when it cannot be read (always null on win32). */
+function readProcessInfo(pid, { exec = execFileSync } = {}) {
   if (process.platform === 'win32') return null;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const out = exec('ps', ['-o', 'stat=,lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: { ...process.env, LC_ALL: 'C' },
     }).trim();
-    const ms = Date.parse(out);
-    return Number.isNaN(ms) ? null : ms;
+    if (!out) return null;
+    const match = /^(\S+)\s+(.+)$/.exec(out);
+    if (!match) return null;
+    const stat = match[1];
+    const ms = Date.parse(match[2].trim());
+    return {
+      zombie: stat.startsWith('Z'),
+      startMs: Number.isNaN(ms) ? null : ms,
+    };
   } catch {
     return null;
   }
+}
+
+/** Start time of a live pid in ms, or null when it cannot be read or is a zombie. */
+function readProcessStartMs(pid, options) {
+  const info = readProcessInfo(pid, options);
+  return info?.zombie ? null : (info?.startMs ?? null);
 }
 
 /**
@@ -49,14 +62,23 @@ function readProcessStartMs(pid) {
  * `process.kill(pid, 0)` throws ESRCH for a missing pid and EPERM for a live
  * pid owned by someone else (alive).
  */
-export function isOwnerAlive({ pid, startMs }) {
+export function isOwnerAlive({ pid, startMs }, { exec = execFileSync } = {}) {
   try {
     process.kill(pid, 0);
   } catch (err) {
     if (err.code === 'ESRCH') return false;
     if (err.code !== 'EPERM') return null;
   }
-  const liveStart = readProcessStartMs(pid);
+  const info = readProcessInfo(pid, { exec });
+  if (info?.zombie) return false;
+  if (!info && process.platform !== 'win32') {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      if (err.code === 'ESRCH') return false;
+    }
+  }
+  const liveStart = info?.startMs ?? null;
   if (liveStart === null || !Number.isFinite(startMs)) return true;
   return Math.abs(liveStart - startMs) <= START_TOLERANCE_MS;
 }
@@ -80,6 +102,21 @@ function rootIsOrphaned(root, probe, now) {
   } catch (error) { return error.code === 'ENOENT'; }
 }
 
+// Only fixed categories leave the private process snapshot; never argv or env.
+function processKind({ args = [] }) {
+  const executable = basename(args[0] ?? '').toLowerCase();
+  if (executable === 'esbuild') return 'esbuild';
+  if (/^(node|nodejs)(\.exe)?$/.test(executable)) {
+    if (args.some(arg => /[/\\]tinypool[/\\]/.test(arg))) return 'tinypool';
+    if (args.some(arg => /[/\\]vitest[/\\]/.test(arg))) return 'vitest';
+    return 'node';
+  }
+  if (/^(chrome|chromium|google chrome|google chrome helper)(\.exe)?$/.test(executable)) return 'browser';
+  if (/^(sh|bash|zsh)$/.test(executable)) return 'shell';
+  if (/^python[0-9.]*$/.test(executable)) return 'python';
+  return 'other';
+}
+
 function ownedSnapshot(parent, prefix, read) {
   const records = read();
   if (!Array.isArray(records)) return null;
@@ -88,7 +125,7 @@ function ownedSnapshot(parent, prefix, read) {
   const owned = records.flatMap(record => {
     if (!Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
     const root = testProcessRoot(record, parent, prefix);
-    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root }] : [];
+    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root, kind: processKind(record), parent: ancestors.has(record.ppid) ? 'runner' : 'descendant' }] : [];
   });
   return { ancestors, owned };
 }
@@ -113,7 +150,7 @@ export function terminatePid(record, { valid, kill = (pid, signal) => process.ki
 
 /** Only individually proven processes are signalled; an unowned group member is never collateral cleanup. */
 export function killTestProcessesUnder(root, { read = readTestProcesses, probe = isOwnerAlive,
-  kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+  kill = (pid, signal) => process.kill(pid, signal), onKilled = () => {} } = {}) {
   let rootExists = true;
   try { if (!lstatSync(root).isDirectory()) return 0; } catch (error) {
     if (error.code !== 'ENOENT') return 0;
@@ -134,7 +171,8 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
   let killed = 0;
   for (const record of snapshot.owned) {
     if (record.root !== root || !stillOwned(record, snapshot, parent, prefix, read)) continue;
-    try { kill(record.pid, 'SIGKILL'); killed++; } catch { /* already gone */ }
+    try { kill(record.pid, 'SIGKILL'); killed++; } catch { continue; /* already gone */ }
+    onKilled({ kind: record.kind, parent: record.parent });
   }
   return killed;
 }
@@ -163,9 +201,9 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // Keep ownership evidence when the platform cannot inspect processes.
+  // Dead-owner evidence is sufficient to reclaim a root even if process
+  // inspection failed. Unknown owners still require inspection before aging out.
   const { inspected, preserved } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
-  if (!inspected && process.platform !== 'win32') return;
   let names;
   try {
     names = readdirSync(tmpRoot);
@@ -182,7 +220,7 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
       const owner = readOwner(path);
       const alive = owner ? probe(owner) : null;
       if (alive === true) continue;
-      if (alive === false || now - stat.mtimeMs > STALE_ROOT_AGE_MS) {
+      if (alive === false || (inspected && now - stat.mtimeMs > STALE_ROOT_AGE_MS)) {
         rmSync(path, { recursive: true, force: true });
       }
     } catch {

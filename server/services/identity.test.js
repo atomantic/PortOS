@@ -66,6 +66,9 @@ function makeFsPromisesStore() {
       return { mode: 0o644 };
     }),
     chmod: vi.fn(async () => {}),
+    // atomicWrite fsyncs the parent directory after the rename (#12025); the
+    // in-memory store has nothing to flush, so hand back an inert handle.
+    open: vi.fn(async () => ({ sync: async () => {}, close: async () => {} })),
   };
 }
 

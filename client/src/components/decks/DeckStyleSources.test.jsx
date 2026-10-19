@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DeckStyleSources from './DeckStyleSources';
 import { getUniverse, listMoodBoardNames, synthesizeMoodBoardStyle } from '../../services/api';
@@ -36,8 +36,8 @@ describe('Deck style imports', () => {
     getUniverse.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
     fireEvent.click(screen.getByRole('button', { name: 'Re-import universe style' }));
     view.unmount();
-    resolve({ styleNotes: 'Stale style' });
-    await waitFor(() => expect(onPatch).not.toHaveBeenCalled());
+    await act(async () => { resolve({ styleNotes: 'Stale style' }); });
+    expect(onPatch).not.toHaveBeenCalled();
   });
 
   it('previews mood board synthesis and keeps adoption open when saving fails', async () => {

@@ -46,6 +46,7 @@ import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { leavesPrForHuman, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { probePrForBranch } from './prProbe.js';
+import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import {
   REPO_STATE_ISSUES,
@@ -220,6 +221,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     remoteBranchPresent,
     branchMerged,
     prState: pr.prState,
+    autoMergeEnabled: pr.autoMergeEnabled === true,
     prUrl: pr.prUrl,
     prNumber: pr.prNumber,
     forgeCli: pr.cli,
@@ -309,7 +311,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
       emitLog('info', `🔎 Repo state only partly readable for ${agentId} (${branchName}) — could not check: ${observed.unreadable.join(', ')}`, { agentId, branchName });
       return { verified: false, skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE, issues: [], observed, recoveryTaskId: null };
     }
-    emitLog('info', `🔎 Agent branch ${branchName} verified clean for ${agentId}`, { agentId, branchName });
+    emitLog('info', `🔎 Agent branch ${branchName} ${observed.autoMergeEnabled ? 'verified pending GitHub auto-merge' : 'verified clean'} for ${agentId}`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
   }
 
@@ -371,9 +373,10 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
  * A map rather than a switch with a `default`, so a new code cannot ship without
  * one — `repoStateExpectations.test.js` asserts the two key sets match.
  * `PR_UNMERGED` delegates to branch-reconcile's `driveToMerge`, which carries the
- * caveats a hand-written line loses: merge from the repo ROOT (gh cannot delete a
+ * caveats a hand-written line loses: preserve the linked checkout (gh can implicitly delete a
  * branch checked out elsewhere), retry `--squash`/`--rebase` on "not allowed",
- * never `--auto`, and remove the worktree before deleting the branch.
+ * verify the GitHub auto-merge handoff, or remove the worktree after merging
+ * before deleting the branch.
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
@@ -431,6 +434,10 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   const observation = processAuditFingerprint({ codes: issues.map(issue => issue.code).sort(),
     merged: observed.branchMerged, remotePresent: observed.remoteBranchPresent, prState: observed.prState });
   const previous = task?.metadata?.recoveryOrigin;
+  // The PR this recovery may land under merge admission (#12251): the forge's
+  // own answer for this branch, never the agent's report or the task prose.
+  const mergeTarget = issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED) && parsePullRequestUrl(observed.prUrl)
+    ? { url: observed.prUrl, branch: branchName } : null;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
@@ -438,7 +445,8 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     isRecovery: true,
     metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
       subsystem: 'repository-cleanup', attempt: Math.min(1000, (previous?.attempt || 0) + 1),
-      observation, noProgress: previous?.observation === observation } },
+      observation, noProgress: previous?.observation === observation },
+    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}) },
     context,
     useWorktree: false,
   }, 'user');
@@ -446,6 +454,14 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   if (created?.duplicate) {
     emitLog('info', `🔎 Repo-state recovery for ${branchName} already queued as ${created.id}`, { agentId, branchName });
     return null;
+  }
+  if (mergeTarget && created?.id) {
+    // Admission's trust anchor: task metadata is API-writable, so only this
+    // server-written backlink on the parent names which task may land its PR.
+    const { updateAgent } = await import('./cosAgentLifecycle.js');
+    const bound = await updateAgent(agentId, { metadata: { repoStateRecovery: { taskId: created.id, ...mergeTarget } } })
+      .catch(error => { emitLog('warn', `Could not bind repo-state recovery to ${agentId}: ${error.message}`, { agentId, branchName }); return null; });
+    if (!bound) emitLog('warn', `Repo-state recovery ${created.id} cannot merge ${branchName}: parent ${agentId} was not bound`, { agentId, branchName });
   }
   emitLog('info', `🔧 Filed repo-state recovery task for ${branchName} (${issues.length} issue(s))`, { agentId, branchName, appName });
   return created?.id || null;

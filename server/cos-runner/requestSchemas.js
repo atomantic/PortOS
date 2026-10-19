@@ -37,6 +37,7 @@ export const spawnTuiBodySchema = z.object({
   cols: z.number().int().min(1).optional(),
   rows: z.number().int().min(1).optional(),
   doneSentinelPath: optionalString,
+  trackPromptSubmission: z.boolean().optional(),
 });
 
 export const spawnBodySchema = z.object({
@@ -55,6 +56,7 @@ export const spawnBodySchema = z.object({
 });
 
 export const pauseBodySchema = z.object({ reason: optionalString });
+export const terminateBodySchema = z.object({ onlyIfPromptUnsubmitted: z.boolean().optional() });
 
 export const btwBodySchema = z.object({ message: z.string().min(1, 'message is required') });
 

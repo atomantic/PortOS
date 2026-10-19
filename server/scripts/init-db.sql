@@ -2271,6 +2271,9 @@ CREATE TABLE IF NOT EXISTS app_quality_measurements (
 
 CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC);
 
+-- The AUDIT_SLICE line of the run's completion summary (#12090); null for runs that predate it.
+ALTER TABLE app_quality_measurements ADD COLUMN IF NOT EXISTS slice TEXT;
+
 -- Machine-local Mind recipe library (#7194).
 CREATE TABLE IF NOT EXISTS mind_tool_recipes (
     id UUID PRIMARY KEY,
@@ -2448,3 +2451,215 @@ CREATE TABLE IF NOT EXISTS brain_memory_links (
   bridge_key TEXT PRIMARY KEY,
   memory_id UUID NOT NULL
 );
+
+-- Local, recoverable catalog identity merges.
+CREATE TABLE IF NOT EXISTS catalog_ingredient_merges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+      survivor_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+      before_state JSONB NOT NULL,
+      after_fingerprint TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      restored_at TIMESTAMPTZ,
+      CHECK (source_id <> survivor_id)
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_merge_source_active
+       ON catalog_ingredient_merges (source_id) WHERE restored_at IS NULL;
+CREATE OR REPLACE FUNCTION catalog_resolve_ingredient_id(requested_id TEXT)
+       RETURNS TEXT LANGUAGE SQL STABLE AS $$
+         SELECT COALESCE((SELECT survivor_id FROM catalog_ingredient_merges
+           WHERE source_id = requested_id AND restored_at IS NULL), requested_id)
+       $$;
+CREATE OR REPLACE FUNCTION guard_catalog_merged_ingredient()
+       RETURNS TRIGGER LANGUAGE plpgsql AS $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM catalog_ingredient_merges WHERE restored_at IS NULL
+             AND (source_id = OLD.id OR (survivor_id = OLD.id AND
+               (TG_OP = 'DELETE' OR NEW.deleted = true)))) THEN
+           RAISE EXCEPTION 'Merged ingredient is protected; recover its merge first';
+         END IF;
+         IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+         RETURN NEW;
+       END $$;
+DROP TRIGGER IF EXISTS trg_catalog_merged_ingredient ON catalog_ingredients;
+CREATE TRIGGER trg_catalog_merged_ingredient BEFORE UPDATE OR DELETE ON catalog_ingredients
+       FOR EACH ROW EXECUTE FUNCTION guard_catalog_merged_ingredient();
+
+-- Shared canonical identity: receipts, fences and read-only evidence views.
+CREATE TABLE IF NOT EXISTS catalog_identity_operations (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+    survivor_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
+    source_owner TEXT NOT NULL,
+    survivor_owner TEXT NOT NULL,
+    local_owner TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('proposed', 'prepared', 'committed', 'aborted', 'recovery_prepared', 'recovered')),
+    epoch INTEGER NOT NULL DEFAULT 0,
+    plan JSONB NOT NULL,
+    plan_hash TEXT NOT NULL,
+    before_state JSONB,
+    applied_fingerprint TEXT,
+    current_snapshot JSONB,
+    recovery JSONB,
+    peer_state TEXT,
+    peer_observed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (source_id <> survivor_id),
+    CHECK (source_owner <> survivor_owner),
+    CHECK (local_owner IN (source_owner, survivor_owner))
+  );
+CREATE INDEX IF NOT EXISTS idx_catalog_identity_source ON catalog_identity_operations(source_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_identity_survivor ON catalog_identity_operations(survivor_id);
+CREATE OR REPLACE FUNCTION catalog_canonical_ingredient_id(requested_id TEXT)
+    RETURNS TEXT LANGUAGE SQL STABLE AS $$
+    SELECT catalog_resolve_ingredient_id(COALESCE((SELECT survivor_id FROM catalog_identity_operations
+      WHERE source_id = requested_id AND state IN ('committed', 'recovery_prepared')), requested_id))
+    $$;
+CREATE OR REPLACE FUNCTION catalog_identity_member_ids(requested_id TEXT)
+    RETURNS TEXT[] LANGUAGE SQL STABLE AS $$
+    SELECT ARRAY(SELECT DISTINCT member FROM (
+      SELECT catalog_canonical_ingredient_id(requested_id) AS member
+      UNION ALL SELECT source_id FROM catalog_identity_operations
+        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND state IN ('committed', 'recovery_prepared')
+      UNION ALL SELECT source_id FROM catalog_ingredient_merges
+        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND restored_at IS NULL
+    ) members)
+    $$;
+CREATE OR REPLACE FUNCTION guard_catalog_identity_member()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    DECLARE touched TEXT[]; old_row JSONB; new_row JSONB; operation RECORD;
+    BEGIN
+      IF TG_OP <> 'INSERT' THEN old_row := to_jsonb(OLD); END IF;
+      IF TG_OP <> 'DELETE' THEN new_row := to_jsonb(NEW); END IF;
+      touched := ARRAY[old_row->>'id', new_row->>'id', old_row->>'ingredient_id', new_row->>'ingredient_id',
+        old_row->>'from_id', new_row->>'from_id', old_row->>'to_id', new_row->>'to_id'];
+      FOR operation IN SELECT * FROM catalog_identity_operations
+        WHERE state IN ('prepared', 'committed', 'recovery_prepared')
+          AND (source_id = ANY(touched) OR survivor_id = ANY(touched)) LOOP
+        IF current_setting('portos.catalog_identity_operation', true) IS DISTINCT FROM operation.id THEN
+          IF current_setting('portos.catalog_identity_peer_apply', true) = 'on'
+            OR operation.state IN ('prepared', 'recovery_prepared') OR operation.source_id = ANY(touched)
+            OR operation.local_owner <> operation.survivor_owner
+            OR (TG_TABLE_NAME = 'catalog_ingredients' AND
+              (TG_OP = 'DELETE' OR (new_row->>'deleted')::boolean OR new_row->>'origin_instance_id' IS DISTINCT FROM operation.survivor_owner
+                OR new_row->>'type' IS DISTINCT FROM old_row->>'type')) THEN
+            RAISE EXCEPTION 'Shared canonical identity is protected; use its owner protocol' USING ERRCODE = 'P0001';
+          END IF;
+        END IF;
+      END LOOP;
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END $$;
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredients;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredients
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_sources;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_sources
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_refs;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_refs
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_media;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_media
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_relations;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_relations
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_revisions;
+CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_revisions
+      FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+CREATE OR REPLACE VIEW catalog_identity_read_sources AS
+    WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
+    candidates AS (
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_sources, item) AS r, 0 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'source'->'sources', '[]'::jsonb)) item
+      UNION ALL
+      SELECT live AS r, 1 AS priority FROM catalog_ingredient_sources live
+        WHERE NOT EXISTS (SELECT 1 FROM active o WHERE live.ingredient_id = o.source_id
+          OR (o.local_owner <> o.survivor_owner AND live.ingredient_id = o.survivor_id))
+
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_sources, item) AS r, 2 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.current_snapshot->'sources', o.plan->'survivor'->'sources', '[]'::jsonb)) item
+        WHERE o.local_owner <> o.survivor_owner
+
+
+    ) SELECT DISTINCT ON ((r).ingredient_id, (r).scrap_id) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).ingredient_id, (r).scrap_id, priority;
+CREATE OR REPLACE VIEW catalog_identity_read_refs AS
+    WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
+    candidates AS (
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_refs, item) AS r, 0 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'source'->'refs', '[]'::jsonb)) item
+      UNION ALL
+      SELECT live AS r, 1 AS priority FROM catalog_ingredient_refs live
+        WHERE NOT EXISTS (SELECT 1 FROM active o WHERE live.ingredient_id = o.source_id
+          OR (o.local_owner <> o.survivor_owner AND live.ingredient_id = o.survivor_id))
+        AND live.ingredient_id = catalog_resolve_ingredient_id(live.ingredient_id)
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_refs, item) AS r, 2 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.current_snapshot->'refs', o.plan->'survivor'->'refs', '[]'::jsonb)) item
+        WHERE o.local_owner <> o.survivor_owner
+
+
+    ) SELECT DISTINCT ON ((r).ingredient_id, (r).ref_kind, (r).ref_id, (r).role) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).ingredient_id, (r).ref_kind, (r).ref_id, (r).role, priority;
+CREATE OR REPLACE VIEW catalog_identity_read_media AS
+    WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
+    candidates AS (
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_media, item) AS r, 0 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'source'->'media', '[]'::jsonb)) item
+      UNION ALL
+      SELECT live AS r, 1 AS priority FROM catalog_ingredient_media live
+        WHERE NOT EXISTS (SELECT 1 FROM active o WHERE live.ingredient_id = o.source_id
+          OR (o.local_owner <> o.survivor_owner AND live.ingredient_id = o.survivor_id))
+        AND live.ingredient_id = catalog_resolve_ingredient_id(live.ingredient_id)
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_media, item) AS r, 2 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.current_snapshot->'media', o.plan->'survivor'->'media', '[]'::jsonb)) item
+        WHERE o.local_owner <> o.survivor_owner
+
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_media, item) AS r, 4 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'archivedMedia', '[]'::jsonb)) item
+    ) SELECT DISTINCT ON ((r).ingredient_id, (r).media_key, (r).kind) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).ingredient_id, (r).media_key, (r).kind, priority;
+CREATE OR REPLACE VIEW catalog_identity_read_relations AS
+    WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
+    candidates AS (
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_relations, item) AS r, 0 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'source'->'relations', '[]'::jsonb)) item
+      UNION ALL
+      SELECT live AS r, 1 AS priority FROM catalog_ingredient_relations live
+        WHERE NOT EXISTS (SELECT 1 FROM active o WHERE (live.from_id = o.source_id OR live.to_id = o.source_id)
+          OR (o.local_owner <> o.survivor_owner AND (live.from_id = o.survivor_id OR live.to_id = o.survivor_id)))
+        AND live.from_id = catalog_resolve_ingredient_id(live.from_id) AND live.to_id = catalog_resolve_ingredient_id(live.to_id)
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_relations, item) AS r, 2 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.current_snapshot->'relations', o.plan->'survivor'->'relations', '[]'::jsonb)) item
+        WHERE o.local_owner <> o.survivor_owner
+
+
+    ) SELECT DISTINCT ON ((r).from_id, (r).to_id, (r).kind) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).from_id, (r).to_id, (r).kind, priority;
+CREATE OR REPLACE VIEW catalog_identity_read_revisions AS
+    WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
+    candidates AS (
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_revisions, item) AS r, 0 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'source'->'revisions', '[]'::jsonb)) item
+      UNION ALL
+      SELECT live AS r, 1 AS priority FROM catalog_ingredient_revisions live
+        WHERE NOT EXISTS (SELECT 1 FROM active o WHERE live.ingredient_id = o.source_id
+          OR (o.local_owner <> o.survivor_owner AND live.ingredient_id = o.survivor_id))
+
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_revisions, item) AS r, 2 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.current_snapshot->'revisions', o.plan->'survivor'->'revisions', '[]'::jsonb)) item
+
+      UNION ALL
+      SELECT jsonb_populate_record(NULL::catalog_ingredient_revisions, item) AS r, 3 AS priority
+        FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'survivor'->'revisions', '[]'::jsonb)) item
+
+    ) SELECT DISTINCT ON ((r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).id, priority;

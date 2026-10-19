@@ -7,6 +7,8 @@ const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
 vi.mock('../services/maintenanceRun.js', () => maintenance);
+const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
+vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
@@ -25,36 +27,9 @@ vi.mock('../services/taskSchedule.js', () => ({
   INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
-vi.mock('../lib/validation.js', () => ({
+vi.mock('../lib/validation.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   sanitizeTaskMetadata: vi.fn((meta) => meta),
-  taskDataInputsSchema: {
-    safeParse: (ids) => {
-      const allowed = new Set(['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests']);
-      return Array.isArray(ids) && ids.every((id) => allowed.has(id))
-        ? { success: true, data: [...new Set(ids)] }
-        : { success: false };
-    }
-  },
-  cosScheduleTargetBodySchema: {
-    safeParse: (body) => (typeof body?.taskType === 'string' && body.taskType
-      ? { success: true, data: { taskType: body.taskType, appId: body.appId } }
-      : { success: false }),
-  },
-  validateRequest: vi.fn((schema, data) => {
-    const result = schema.safeParse(data);
-    if (!result.success) {
-      const { ServerError } = require('../lib/errorHandler.js');
-      throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    return result.data;
-  }),
-  parsePagination: vi.fn((query, { defaultLimit = 50, maxLimit = 200 } = {}) => {
-    const rawLimit = parseInt(query?.limit, 10);
-    const rawOffset = parseInt(query?.offset, 10);
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, maxLimit) : defaultLimit;
-    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
-    return { limit, offset };
-  }),
 }));
 
 import * as taskSchedule from '../services/taskSchedule.js';
@@ -67,6 +42,23 @@ describe('CoS Schedule Routes', () => {
     app.use(express.json());
     app.use('/api/cos', scheduleRoutes);
     vi.clearAllMocks();
+  });
+
+  it('validates and forwards separate retirement review evidence without including it in checkout identity', async () => {
+    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    const prepared = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/review').send({ appId: 'app-1', ...tuple, prUrl });
+    expect(prepared.status).toBe(200);
+    expect(recovery.prepareInventoriedCheckoutRetirement).toHaveBeenCalledWith({ appId: 'app-1', release: tuple, prUrl });
+    const review = { prUrl, digest: 'b'.repeat(64), acceptSuperseded: true };
+    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-review-changed' });
+    const kept = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, review });
+    expect(kept.status).toBe(409);
+    expect(recovery.retireInventoriedCheckout).toHaveBeenCalledWith({ appId: 'app-1', release: tuple, review });
+    recovery.retireInventoriedCheckout.mockClear();
+    expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, review: { ...review, digest: 'wrong' } })).status).toBe(400);
+    expect(recovery.retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   describe('GET /api/cos/schedule', () => {
@@ -447,12 +439,15 @@ describe('CoS Schedule Routes', () => {
       expect(response.body.success).toBe(true);
     });
 
-    it('should return 400 if taskType is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/schedule/trigger')
-        .send({});
+    it('rejects missing or malformed taskType before triggering an on-demand task', async () => {
+      for (const body of [{}, { taskType: '' }, { taskType: 42 }]) {
+        const response = await request(app)
+          .post('/api/cos/schedule/trigger')
+          .send(body);
 
-      expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
+      }
+      expect(taskSchedule.triggerOnDemandTask).not.toHaveBeenCalled();
     });
 
     it('should return 409 when triggerOnDemandTask returns an error', async () => {
@@ -508,12 +503,15 @@ describe('CoS Schedule Routes', () => {
       expect(response.status).toBe(200);
     });
 
-    it('should return 400 if taskType is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/schedule/reset')
-        .send({});
+    it('rejects missing or malformed taskType before resetting execution history', async () => {
+      for (const body of [{}, { taskType: '' }, { taskType: 42 }]) {
+        const response = await request(app)
+          .post('/api/cos/schedule/reset')
+          .send(body);
 
-      expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
+      }
+      expect(taskSchedule.resetExecutionHistory).not.toHaveBeenCalled();
     });
 
     it('should return 404 on reset error', async () => {

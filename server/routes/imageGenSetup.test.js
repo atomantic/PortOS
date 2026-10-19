@@ -48,6 +48,13 @@ const pySetup = vi.hoisted(() => ({
   createVenv: vi.fn(async (_base, target) => join(target, 'bin', 'python3')),
   installPackages: vi.fn(() => ({ promise: Promise.resolve(), kill: vi.fn() })),
 }));
+const mossSetup = vi.hoisted(() => ({
+  install: vi.fn(emit => { emit({ type: 'complete', message: 'Runtime installed' }); return { promise: Promise.resolve(), kill: vi.fn() }; }),
+  download: vi.fn(emit => { emit({ type: 'complete', message: 'Weights verified' }); return { promise: Promise.resolve(), kill: vi.fn() }; }),
+}));
+vi.mock('../services/imageGen/mossInstall.js', () => ({ installMossRuntime: mossSetup.install }));
+vi.mock('../services/imageGen/mossRuntime.js', () => ({ diagnoseMossRuntime: async () => ({ readiness: 'unavailable' }) }));
+vi.mock('../services/imageGen/mossWeights.js', () => ({ downloadMossWeights: mossSetup.download, mossModelCacheStatus: async () => ({ cached: false }) }));
 vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   ...(await importOriginal()), // keep the real isAllowedPython format check
   detectPython: vi.fn(async () => 'python3'),
@@ -91,6 +98,24 @@ describe('/api/image-gen/setup/* interpreter admission (#9015)', () => {
     setupCheck.getSetupCheck.mockClear();
     pySetup.createVenv.mockClear();
     pySetup.installPackages.mockClear();
+  });
+
+  it('keeps MOSS GET read-only and requires host authority for each explicit installation action', async () => {
+    expect((await request(local()).get('/api/image-gen/setup/moss-install')).body.readiness).toBe('unavailable');
+    expect((await request(local()).get('/api/image-gen/setup/moss-weights')).body.cached).toBe(false);
+    for (const action of ['moss-install', 'moss-weights']) {
+      expectForbidden(await request(remote()).post(`/api/image-gen/setup/${action}?runtime=moss-swift`));
+    }
+    expect(mossSetup.install).not.toHaveBeenCalled();
+    expect(mossSetup.download).not.toHaveBeenCalled();
+    const install = await request(local()).post('/api/image-gen/setup/moss-install?runtime=moss-swift');
+    expect(install.status).toBe(200);
+    expect(install.text).toContain('Runtime installed');
+    expect(mossSetup.download).not.toHaveBeenCalled();
+    const weights = await request(local()).post('/api/image-gen/setup/moss-weights?runtime=moss-swift');
+    expect(weights.text).toContain('Weights verified');
+    expect(mossSetup.install).toHaveBeenCalledTimes(1);
+    expect(mossSetup.download).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a remote password-free caller naming an arbitrary absolute interpreter, and spawns nothing', async () => {

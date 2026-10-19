@@ -119,6 +119,7 @@ import {
   getTaskInterval,
   updateTaskInterval,
   recordExecution,
+  recordRecommendedAudits,
   getExecutionHistory,
   shouldRunTask,
   shouldContinuePerpetualDrain,
@@ -141,6 +142,7 @@ import {
   isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
+  recordBranchReconcileOutcome,
   applyOnDemandRunResets,
   queuePerpetualRefill,
   isRefillRequest,
@@ -546,6 +548,40 @@ describe('taskSchedule', () => {
       expect(schedule.version).toBe(2)
       expect(schedule.tasks).toBeDefined()
       expect(schedule.executions).toBeDefined()
+    })
+
+    it('returns independent schedule instances on consecutive no-file reads without polluting defaults', async () => {
+      readJSONFile.mockResolvedValue(null)
+      const first = await loadSchedule()
+      first.executions['task:security'] = { lastRun: '2026-10-18T00:00:00.000Z', count: 1 }
+      first.templates.push({ name: 'polluted' })
+      first.tasks['security'].enabled = false
+
+      const second = await loadSchedule()
+      expect(second.executions['task:security']).toBeUndefined()
+      expect(second.templates).toEqual([])
+      expect(second.tasks['security'].enabled).toBe(true)
+      expect(DEFAULT_TASK_INTERVALS['security'].enabled).toBe(true)
+    })
+
+    it('does not mutate DEFAULT_TASK_INTERVALS during v1 to v2 migration', async () => {
+      const originalSecurityPrompt = DEFAULT_TASK_INTERVALS['security'].prompt
+      const originalSecurityMeta = DEFAULT_TASK_INTERVALS['security'].taskMetadata
+
+      readJSONFile.mockResolvedValue({
+        version: 1,
+        selfImprovement: {
+          security: {
+            prompt: 'custom v1 prompt',
+            taskMetadata: { fileIssues: true }
+          }
+        }
+      })
+
+      const migrated = await loadSchedule()
+      expect(migrated.tasks['security'].prompt).toBe('custom v1 prompt')
+      expect(DEFAULT_TASK_INTERVALS['security'].prompt).toBe(originalSecurityPrompt)
+      expect(DEFAULT_TASK_INTERVALS['security'].taskMetadata).toEqual(originalSecurityMeta)
     })
 
     it('installs tasks on demand and keeps model research disabled until configured', async () => {
@@ -1560,15 +1596,23 @@ describe('taskSchedule', () => {
       expect(result.name).toBe('Custom audit')
     })
 
-    it('should get template tasks', async () => {
-      const templates = await getTemplateTasks()
-      expect(Array.isArray(templates)).toBe(true)
-    })
+    it('round-trips a template through listing, the persisted payload, and delete', async () => {
+      // Store reads the file on every call, so each write is fed back as the next read.
+      mockSchedule()
+      const template = await addTemplateTask({ name: 'Round trip', prompt: 'test' })
+      const afterAdd = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(afterAdd.templates.map(t => t.id)).toContain(template.id)
+      readJSONFile.mockResolvedValue(afterAdd)
+      expect((await getTemplateTasks()).map(t => t.id)).toContain(template.id)
 
-    it('should delete template task', async () => {
-      const template = await addTemplateTask({ name: 'To delete', prompt: 'test' })
       const result = await deleteTemplateTask(template.id)
       expect(result.success).toBe(true)
+      const afterDelete = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(afterDelete.templates.map(t => t.id)).not.toContain(template.id)
+      readJSONFile.mockResolvedValue(afterDelete)
+      expect((await getTemplateTasks()).map(t => t.id)).not.toContain(template.id)
+
+      expect(await deleteTemplateTask(template.id)).toMatchObject({ error: expect.any(String) })
     })
   })
 
@@ -1928,14 +1972,17 @@ describe('taskSchedule', () => {
     // product decision ("an unattended scheduled run must not land code"), so
     // asserting it in two places 20 lines apart just means a future flag gets
     // added to one of them. Every audit includes open issues; some also preload
-    // PRs to dedup against work in flight without spending forge calls.
-    const OPEN_ISSUES_ONLY = ['open-issues']
-    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests']
+    // PRs to dedup against work in flight without spending forge calls. Every
+    // audit also preloads its recent slices so runs rotate coverage (#12090)
+    // and its lane health so it does not re-file a rejected finding (#12088).
+    const OPEN_ISSUES_ONLY = ['open-issues', 'audit-slice-history', 'lane-health']
+    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests', 'audit-slice-history', 'lane-health']
     const FILE_ISSUES_LANES = [
       ['data-safety', OPEN_ISSUES_ONLY],
       ['simplify', OPEN_ISSUES_ONLY],
       ['ui-lifecycle', OPEN_ISSUES_ONLY],
       ['module-hygiene', DEDUP_PRELOAD],
+      ['upgrade-rehearsal', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
       ...[...AUDIT_TASK_TYPES]
         .filter((taskType) => taskType.startsWith('better-'))
@@ -1955,9 +2002,11 @@ describe('taskSchedule', () => {
       ])
     })
 
-    it('ships open issues for every scheduled quality audit', () => {
+    it('ships open issues, the slice rotation record and lane health for every scheduled quality audit', () => {
       for (const taskType of AUDIT_TASK_TYPES) {
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
+        expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('audit-slice-history')
+        expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('lane-health')
       }
     })
 
@@ -3131,6 +3180,20 @@ describe('taskSchedule', () => {
         expect(await shouldRunTask('branch-reconcile', 'app-1')).toEqual({ shouldRun: false, reason: 'disabled' });
       });
 
+      it('persists incomplete sweep evidence and exposes it when recurring dispatch is off', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: false } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const remaining = [{ branch: 'fix/example', path: '/example/checkout', reason: 'worktree-locked' }];
+        await recordBranchReconcileOutcome('app-1', { status: 'running', reason: 'batch-pending', remaining, nextAction: 'Continue.' });
+        const observedAt = saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.observedAt;
+        await recordBranchReconcileOutcome('app-1', { status: 'incomplete', reason: 'agent-failed', nextAction: 'Resolve the provider failure and run again.' });
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome)
+          .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
+        expect((await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'])
+          .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
+      });
+
       it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {
         let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: true } }, executions: {}, templates: [] };
         readJSONFile.mockImplementation(async () => JSON.parse(JSON.stringify(saved)));
@@ -3779,5 +3842,32 @@ describe('boundParkedUntil', () => {
 
   it('returns the recheck unchanged when it is itself unparseable', () => {
     expect(boundParkedUntil('never', '2026-01-12T00:00:00.000Z', NOW)).toBe('never')
+  })
+})
+
+// The code-quality lane's ranked triage output lives beside its execution
+// record and surfaces on the Schedule card (#12085).
+describe('recordRecommendedAudits', () => {
+  it('stores the ranked list on the execution record and exposes it on schedule status', async () => {
+    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 2, perApp: {} } } })
+    const recorded = await recordRecommendedAudits('code-quality', 'app-1', [
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ])
+    expect(recorded).toMatchObject({ appId: 'app-1', items: [expect.stringContaining('better-structural-drift'), expect.stringContaining('ux —')] })
+    expect(Date.parse(recorded.at)).toBeGreaterThan(0)
+    const history = await getExecutionHistory('code-quality')
+    expect(history.count).toBe(2)
+    expect(history.recommendedAudits.items).toHaveLength(2)
+    const status = await getScheduleStatus()
+    expect(status.tasks['code-quality'].recommendedAudits).toEqual(history.recommendedAudits)
+    expect(status.tasks['security'].recommendedAudits).toBeNull()
+  })
+
+  it('keeps the previous recommendation when a run produced none', async () => {
+    const previous = { at: '2026-10-01T00:00:00Z', appId: 'app-1', items: ['ux — one'] }
+    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 1, perApp: {}, recommendedAudits: previous } } })
+    expect(await recordRecommendedAudits('code-quality', 'app-1', [])).toBeNull()
+    expect((await getExecutionHistory('code-quality')).recommendedAudits).toEqual(previous)
   })
 })

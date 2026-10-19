@@ -492,6 +492,8 @@ export function createRemoteMediaExecutor({
           peerId: state.peerId,
           request,
           remoteJob: completed,
+          // Local-only evidence for the consumer sidecar; never part of the wire request.
+          inputAssets: marker.inputAssets,
           // Wall-clock render timing (#5878). Measured from THIS install's
           // ingestion of the job — submission, the peer's own queue wait and
           // render, download, verification — because that whole span is what the

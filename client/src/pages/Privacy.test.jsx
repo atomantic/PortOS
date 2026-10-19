@@ -2,19 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
+const SUBJECTS = vi.hoisted(() => [
+  {
+    id: '00000000-0000-4000-8000-000000000001', displayName: 'Me', relationship: 'self',
+    isSelf: true, consentCount: 1, recordCount: 2, activeScopes: ['pii_vault'],
+  },
+  {
+    id: 'sub-2', displayName: 'Alex', relationship: 'partner',
+    isSelf: false, consentCount: 1, recordCount: 1, activeScopes: ['pii_vault'],
+  },
+]);
+
 // ── Mock the API surface ─────────────────────────────────────────────────────
 vi.mock('../services/api', () => ({
   // Household subjects (#3658) — `self` plus one consenting partner.
-  getPrivacySubjects: vi.fn().mockResolvedValue([
-    {
-      id: '00000000-0000-4000-8000-000000000001', displayName: 'Me', relationship: 'self',
-      isSelf: true, consentCount: 1, recordCount: 2, activeScopes: ['pii_vault'],
-    },
-    {
-      id: 'sub-2', displayName: 'Alex', relationship: 'partner',
-      isSelf: false, consentCount: 1, recordCount: 1, activeScopes: ['pii_vault'],
-    },
-  ]),
+  getPrivacySubjects: vi.fn().mockResolvedValue(SUBJECTS),
   createPrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn().mockResolvedValue([]),
@@ -106,7 +108,10 @@ function renderAt(path) {
 }
 
 describe('Privacy Center', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPrivacySubjects.mockResolvedValue(SUBJECTS);
+  });
 
   it('renders the Overview tab with encryption status and counts', async () => {
     renderAt('/privacy/overview');
@@ -159,7 +164,7 @@ describe('Privacy Center', () => {
 
   it('stale :tab param falls back to Overview', async () => {
     renderAt('/privacy/bogus');
-    await waitFor(() => expect(screen.getByText(/system of record/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Vault values stay hidden/i)).toBeInTheDocument());
   });
 
   // ── Household subjects (#3658) ────────────────────────────────────────────
@@ -225,6 +230,30 @@ describe('Privacy Center', () => {
       const select = await screen.findByLabelText('Subject');
       await waitFor(() => expect(select).toHaveValue('deleted-subject'));
       expect(screen.getByRole('option', { name: 'Unknown subject' })).toBeInTheDocument();
+    });
+
+    it('shows error row with Retry when subjects fail to load, and recovers on retry', async () => {
+      getPrivacySubjects.mockRejectedValueOnce(new Error('db connection error'));
+      renderAt('/privacy/vault');
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Could not load household subjects — db connection error');
+
+      getPrivacySubjects.mockResolvedValueOnce(SUBJECTS);
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      });
+      expect(screen.getByLabelText('Subject')).toBeInTheDocument();
+    });
+
+    it('shows empty copy when subjects list is empty and ready', async () => {
+      getPrivacySubjects.mockResolvedValue([]);
+      renderAt('/privacy/vault');
+
+      expect(await screen.findByText('No household subjects on record.')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
   });
 });

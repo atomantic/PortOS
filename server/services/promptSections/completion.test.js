@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
@@ -19,11 +23,24 @@ describe('review-enabled completion merge gate', () => {
     const section = render();
 
     expect(section).toContain('4. **Wait for CI to finish**');
+    expect(section).not.toContain('portos_check_merge_admission');
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
-    expect(section).toContain('gh pr merge "<PR_URL>" --merge --delete-branch');
-    expect(section.indexOf('4. **Wait for CI to finish**')).toBeLessThan(section.indexOf('gh pr merge'));
+    expect(section).toContain('gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>');
+    expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
+    expect(section).toContain('allow_auto_merge: true');
+    expect(section).toContain('autoMergeRequest.enabledAt');
+    expect(section).toContain('If this run requires repository merge admission, do not enable GitHub auto-merge');
+    expect(section).toContain('every outstanding check');
+    expect(section).toContain('Missing/unknown required-check policy');
+    expect(section).toContain('all configured reviews pass');
     expect(section).toContain('8. Write a short markdown summary');
+  });
+
+  it('retains immediate merging for a registered claim requiring local admission', () => {
+    const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(section).toContain('Local admission forbids GitHub deferred auto-merge');
+    expect(section).toContain('confirm MERGED, then release');
   });
 
   it('uses GitLab CI and merge commands when the completion forge is GitLab', () => {
@@ -60,12 +77,12 @@ describe('claim parent merge admission instructions', () => {
   it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
-    expect(prompt).toContain('"action":"check"');
+    expect(prompt).toContain('action:"check"');
     expect(prompt).toContain('"action":"release"');
     expect(prompt).toContain('Authorization: Bearer');
     expect(prompt).toContain('never a fan-out child');
     // Ordering: CI-verified head → acquire → final PR re-read → pinned merge.
-    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', '--match-head-commit'];
+    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', 'then merge pinned to the CI-verified head'];
     const positions = order.map((marker) => prompt.indexOf(marker));
     expect(positions.every((at) => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
@@ -82,5 +99,39 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
+  });
+});
+
+describe('pending-merge handoff instructions (#12247)', () => {
+  it('offers the server handoff before the CI wait and stops on a receipt without merging', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(prompt).toContain('/api/cos/merge-handoff');
+    expect(prompt).toContain('"agentId":"parent-example","prUrl":"PR_URL","headSha":"HEAD_SHA","worktreePath":"WORKTREE_PATH"');
+    expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('Once required CI is green'));
+    expect(prompt).toContain('NOT yet merged');
+    expect(prompt).toContain('A refusal never permits merging without admission');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-handoff');
+  });
+
+  // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS
+  // kept, exactly one REVIEW_HEAD naming the reviewed commit.
+  it.skipIf(process.platform === 'win32')('records exactly one REVIEW_HEAD for the reviewed commit beside REVIEW_STATUS', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const command = prompt.split('\n').find((line) => line.includes('REVIEW_HEAD=%s'));
+    const repo = mkdtempSync(join(tmpdir(), 'review-head-'));
+    try {
+      const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+      git('init', '-q');
+      git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
+      const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
+      // No reviewers ran: the record must not invent a status file the server would read as unreadable.
+      execFileSync('sh', ['-c', command], { cwd: repo });
+      expect(existsSync(statusFile)).toBe(false);
+      writeFileSync(statusFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`);
+      execFileSync('sh', ['-c', command], { cwd: repo });
+      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=clean\nREVIEW_HEAD=${git('rev-parse', 'HEAD')}\n`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

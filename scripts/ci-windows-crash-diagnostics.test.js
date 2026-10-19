@@ -85,10 +85,22 @@ describe.runIf(process.platform === 'win32')('real Windows PowerShell diagnostic
 
   it('can query the real Application Error provider with a bounded empty future window', async () => {
     const options = setup();
-    options.run = (command, args, spawnOptions) => bufferedSpawn(command, args, {
-      ...spawnOptions,
-      env: { ...spawnOptions.env, PORTOS_CRASH_UNTIL: new Date(Date.now() + 120_000).toISOString() },
-    });
-    expect(await reportWindowsCrashDiagnostics(Date.now() + 60_000, options)).toEqual({ outcome: 'no-events' });
+    let spawned;
+    options.run = async (command, args, spawnOptions) => {
+      spawned = await bufferedSpawn(command, args, {
+        ...spawnOptions,
+        // The 10s production budget runs after the test step, on a quiet runner.
+        // Here a cold powershell.exe + Get-WinEvent module load competes with
+        // every vitest worker, and a timeout reads as 'unavailable' — that is
+        // load, not the query semantics this case pins.
+        timeoutMs: 25_000, // inside the 30s test budget, so the facts below still print
+        env: { ...spawnOptions.env, PORTOS_CRASH_UNTIL: new Date(Date.now() + 120_000).toISOString() },
+      });
+      return spawned;
+    };
+    const result = await reportWindowsCrashDiagnostics(Date.now() + 60_000, options);
+    // Bounded facts only: stderr can name the runner's machine or paths.
+    expect(result, `timedOut=${spawned?.timedOut} code=${spawned?.code} stdoutBytes=${spawned?.stdout?.length}`)
+      .toEqual({ outcome: 'no-events' });
   });
 });

@@ -1,3 +1,4 @@
+vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi } from 'vitest';
 import { catalogSyncEnvelopeSchema } from '../lib/catalogValidation.js';
 import { GENERATION_METADATA_LIMITS } from '../lib/pngMetadata.js';
@@ -37,6 +38,16 @@ const okIngredient = () => ({ id: 'ing-1', name: 'Test' });
 const b64 = (s) => Buffer.from(s).toString('base64');
 
 describe('uploadIngredientMediaFile', () => {
+  it('refuses a fenced target before writing uploaded bytes', async () => {
+    const saveImageFn = vi.fn();
+    const attachMediaFn = vi.fn();
+    await expect(uploadIngredientMediaFile({ ingredientId: 'prepared-target', dataBase64: b64('img'), mimeType: 'image/png' }, {
+      assertWritableFn: async () => { throw Object.assign(new Error('Prepared'), { status: 409 }); },
+      getIngredientFn: okIngredient, saveImageFn, attachMediaFn,
+    })).rejects.toMatchObject({ status: 409 });
+    expect(saveImageFn).not.toHaveBeenCalled();
+    expect(attachMediaFn).not.toHaveBeenCalled();
+  });
   it('routes an image through the gallery saver and attaches as reference', async () => {
     const saveImageFn = vi.fn().mockResolvedValue({ filename: 'upload-abcd1234.png' });
     const attachMediaFn = vi.fn().mockResolvedValue({ mediaKey: 'upload-abcd1234.png', kind: 'reference' });

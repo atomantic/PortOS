@@ -295,7 +295,12 @@ describe('grok provider — directed-path harvest', () => {
     const completedListener = vi.fn();
     imageGenEvents.on('completed', completedListener);
 
-    const job = await grok.generateImage({ prompt: 'a fox' });
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    for (const name of ['source.png', 'ref-a.png', 'ref-b.png', 'overflow.png']) await writeFile(join(FAKE_IMAGES_DIR, name), 'fake');
+    const job = await grok.generateImage({
+      prompt: 'a fox', initImagePath: join(FAKE_IMAGES_DIR, 'source.png'),
+      referenceImagePaths: ['missing.png', 'ref-a.png', 'ref-b.png'],
+    });
     // Grok "writes" the directed staging file before the child exits. The
     // harvest signature-sniffs the bytes, so the fixture needs a real PNG
     // magic header.
@@ -333,6 +338,9 @@ describe('grok provider — directed-path harvest', () => {
     // timing flake.
     const meta = JSON.parse(await readFile(sidecar, 'utf8'));
     expect(meta.renderMs).toBeGreaterThanOrEqual(0);
+    expect(meta.initImageFilename).toBe('source.png');
+    expect(meta.inputProvenance).toBe('provider-inputs');
+    expect(meta.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
     expect(Date.parse(meta.renderStartedAt)).toBeLessThanOrEqual(Date.parse(meta.renderCompletedAt));
     expect(Date.parse(meta.renderCompletedAt) - Date.parse(meta.renderStartedAt)).toBe(meta.renderMs);
   });
@@ -643,4 +651,20 @@ describe('grok provider — launch refusal settlement', () => {
     expect(grok.getActiveJob()).toBeNull();
     expect(grok.cancel(job.jobId)).toBe(false);
   });
+});
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  const jobId = 'preamble-cancel-imageGen-grok';
+  const pending = grok.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(grok.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(spawnCalls).toHaveLength(0);
+  expect(grok.cancel(jobId)).toBe(false);
 });

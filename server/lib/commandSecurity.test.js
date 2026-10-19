@@ -221,6 +221,25 @@ describe('commandSecurity', () => {
       expect(redactOutput(input)).toBe(input)
     })
 
+    // Operator command output is dotenv / `git config --list` shaped as often
+    // as JSON (#12019): the key must name a secret as its own segment.
+    it.each([
+      ['a dotenv line', 'API_TOKEN=abc123\nPORT=3000', 'API_TOKEN=[REDACTED]\nPORT=3000'],
+      ['an exported shell assignment', 'export GITHUB_TOKEN=ghp_example', 'export GITHUB_TOKEN=[REDACTED]'],
+      ['a git config key', 'github.token=example\nuser.name=Example', 'github.token=[REDACTED]\nuser.name=Example'],
+      ['a kebab-case key', 'my-secret-key=value', 'my-secret-key=[REDACTED]'],
+    ])('redacts %s', (_label, input, expected) => {
+      expect(redactOutput(input)).toBe(expected)
+    })
+
+    it.each([
+      ['a key that only contains a secret word', 'author=Example Author'],
+      ['an empty assignment', 'API_TOKEN='],
+      ['a value on a different line from the key', 'API_TOKEN\n=value'],
+    ])('leaves %s alone', (_label, input) => {
+      expect(redactOutput(input)).toBe(input)
+    })
+
     it('should redact multiple sensitive values', () => {
       const input = '{"API_KEY": "key1", "SECRET_TOKEN": "tok2", "name": "app"}'
       const result = redactOutput(input)
@@ -268,6 +287,8 @@ describe('commandSecurity', () => {
       'pm2 scale all 2',
       'pm2 KILL',          // case-insensitive subcommand
       'pm2 stop ALL',      // case-insensitive target
+      'pm2 stop --namespace=x all',  // --opt=value split must not hide the target
+      'pm2 delete --name=x all',
     ])('rejects %s', (cmd) => {
       const result = validateCommand(cmd)
       expect(result.valid).toBe(false)
@@ -435,6 +456,8 @@ describe('commandSecurity', () => {
 
     it.each([
       ['git branch -D deletes a branch', 'git branch -D main'],
+      ['git branch --unset-upstream is a mutating flag', 'git branch --unset-upstream'],
+      ['git branch -D with a list-mode flag is still a delete', 'git branch -D old --merged'],
       ['git branch <name> creates one', 'git branch newbranch'],
       ['git tag <name> creates a tag', 'git tag v9.9.9'],
       ['git tag -d deletes one', 'git tag -d v1'],
@@ -442,6 +465,34 @@ describe('commandSecurity', () => {
       ['git config <key> <value> writes config', 'git config user.email a@example.com'],
     ])('rejects the mutating form of a listing verb: %s', (_label, cmd) => {
       expect(validateUnattendedCommand(cmd).valid).toBe(false)
+    })
+
+    // `--output[=<file>]` is a file-write primitive on a lane documented as
+    // read-only — the same class `find -fprint` is denied for (#12020).
+    it.each([
+      'git log --output=notes.txt',
+      'git diff --output=notes.txt',
+      'git show --output=notes.txt',
+      'git log --oneline --output notes.txt',
+    ])('rejects git --output file write: %s', (cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/--output/)
+    })
+
+    it('still accepts --output-indicator-* on git diff (a marker option, not a file write)', () => {
+      expect(validateUnattendedCommand('git diff --output-indicator-new=+').valid).toBe(true)
+    })
+
+    it.each([
+      ['-c injects config such as core.pager or a credential helper', 'git -c core.pager=less log'],
+      ['--git-dir retargets the repository', 'git --git-dir=../other/.git log'],
+      ['--work-tree retargets the checkout', 'git --work-tree=../other status'],
+      ['--exec-path swaps the git binaries', 'git --exec-path=/opt/evil log'],
+    ])('rejects a global option before the verb: %s', (_label, cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/global options before the subcommand/)
     })
 
     it.each([
@@ -469,6 +520,8 @@ describe('commandSecurity', () => {
       ['gh api --method DELETE is an authenticated write', 'gh api --method DELETE /repos/x/y/issues/1'],
       ['gh api --method=PATCH is an authenticated write', 'gh api --method=PATCH /repos/x/y/issues/1'],
       ['a field flag makes gh api an implicit POST', 'gh api /repos/x/y/issues -f title=hi'],
+      ['--raw-field= makes gh api an implicit POST', 'gh api repos/o/r/issues --raw-field=title=hi'],
+      ['--field= makes gh api an implicit POST', 'gh api repos/o/r/issues --field=title=hi'],
       ['gh pr merge merges with operator credentials', 'gh pr merge 1'],
       ['gh issue close mutates the tracker', 'gh issue close 1'],
       ['gh pr create mutates the tracker', 'gh pr create --fill'],

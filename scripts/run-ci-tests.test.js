@@ -13,22 +13,26 @@ import {
   hasOtherTestFailures,
   planCrashRetry,
   recordVitestDuration,
-  relatedInputs,
   repoRelativeFromCrashPath,
+  parseShard,
   requiresSourceFiles,
-  shardArgs,
   spawnNpm,
   toRunnerPath,
 } from './run-ci-tests.js';
 import { killProcessTree } from '../server/lib/bufferedSpawn.js';
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
+import { vitestShardSlice } from './lib/testMemoRunner.js';
+import { toWorkspacePath } from './lib/workspaceTests.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
-// Synthetic crash/retry cases must not export a fabricated crash filename to
-// the Actions job's real GITHUB_ENV. Duration/summary tests retain real I/O.
+// Synthetic crash/retry cases must not print a fabricated crash as a real
+// Actions annotation. Duration/summary tests retain real I/O.
 vi.mock('./lib/githubOutput.js', async (importOriginal) => ({
   ...await importOriginal(),
-  writeStepEnv: vi.fn(),
+  formatErrorAnnotation: vi.fn((title, message) => `${title}: ${message}`),
 }));
 
 // Keep nested Vitest's own scratch under its separately owned pvt-* root,
@@ -45,40 +49,176 @@ const FIXTURE_CONFIG = `
 
 const WORKFLOW = readFileSync(join(import.meta.dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
 
-describe('shardArgs', () => {
-  it('passes a slice selector only when the matrix actually split the suite', () => {
-    expect(shardArgs(undefined)).toEqual([]);
-    expect(shardArgs('')).toEqual([]);
-    expect(shardArgs('1/1')).toEqual([]);
-    expect(shardArgs('2/3')).toEqual(['--shard=2/3']);
-    expect(() => shardArgs('2')).toThrow(/<index>\/<count>/);
+describe('parseShard', () => {
+  it('reads a slice only when the matrix actually split the suite', () => {
+    expect(parseShard(undefined)).toBeNull();
+    expect(parseShard('')).toBeNull();
+    expect(parseShard('1/1')).toBeNull();
+    expect(parseShard('2/3')).toEqual({ index: 2, count: 3 });
+    expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
   });
 });
 
-it('forwards the related matrix slice and all selectors through the real launcher', () => {
+/** A fake `npm` on PATH that prints its arguments and the selection file it was handed. */
+function installFakeNpm(fixture, body) {
+  const npmScript = join(fixture, 'npm.js');
+  writeFileSync(npmScript, body);
+  writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
+}
+
+const REPORTING_NPM = 'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), '
+  + 'selection: JSON.parse(require("fs").readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8")) }) + "\\n");';
+
+it('hands Vitest the selection as a file, sliced by the runner for the matrix shard, never as --shard', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
   try {
-    const npmScript = join(fixture, 'npm.js');
-    writeFileSync(npmScript, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
-    writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n`
-      + 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o755 });
-    writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-      encoding: 'utf8', timeout: 30000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-        CI_TEST_MODE: 'related', CI_SHARD: '2/3',
-        CI_TEST_SOURCES: JSON.stringify(['server/lib/example.js']),
-        CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
-        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
-    expect(args.slice(0, 9)).toEqual(['run', 'test:ci:related', '--prefix', 'server', '--',
-      './lib/example.js', './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3']);
+    installFakeNpm(fixture, REPORTING_NPM);
+    // The planner fans both scoped modes out (ci-test-plan.js fansOut), so
+    // each must hand Vitest its slice rather than run the whole selection twice.
+    // Related selection is closure-based: this runner imports
+    // scripts/lib/directInvocation.js, so the runner's own test is related to it.
+    const files = ['server/lib/example.test.js', 'scripts/example.test.js'];
+    for (const [mode, shard, sources, expected] of [
+      ['related', '', ['scripts/lib/directInvocation.js'], ['../scripts/run-ci-tests.test.js', 'lib/example.test.js', '../scripts/example.test.js']],
+      ['files', '', [], ['lib/example.test.js', '../scripts/example.test.js']],
+      // Two explicit files split three ways: shard 2 of 3 gets exactly one of them.
+      ['files', '2/3', [], [vitestShardSlice(files, { repoRoot: join(import.meta.dirname, '..'), scope: 'server', index: 2, count: 3 })].flat().map((rel) => toWorkspacePath('server', rel))],
+    ]) {
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: mode, CI_SHARD: shard, PORTOS_TEST_MEMO: 'off',
+          CI_TEST_SOURCES: JSON.stringify(sources),
+          CI_TEST_FILES: JSON.stringify(files),
+          GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const { args, selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+      expect(args.slice(0, 5), mode).toEqual(['run', 'test:ci', '--prefix', 'server', '--']);
+      expect(args.some(arg => arg.startsWith('--shard')), mode).toBe(false);
+      expect(args, mode).not.toContain('--experimental.recordDependencies');
+      expect(selection.exclude, mode).toEqual([]);
+      expect(selection.include, `${mode} ${shard}`).toEqual(expect.arrayContaining(expected));
+      if (mode === 'files') expect(selection.include, shard).toHaveLength(expected.length);
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
+}, 150_000);
+
+it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'db'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: 'files', CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
+        CI_TEST_FILES: JSON.stringify(['server/services/dbAdmin.db.test.js']),
+        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const { args, selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(args.slice(0, 5)).toEqual(['run', 'test:db:ci', '--prefix', 'server', '--']);
+    expect(selection.include).toEqual(['services/dbAdmin.db.test.js']);
+    expect(result.stdout).toMatch(/⏱ db files|⏱ db selected tests/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
+describe('test memo through the real runner', () => {
+  it('runs a selected file once, then skips it while its inputs are unchanged, and runs it again when they change', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-memo-e2e-'));
+    const memoDir = join(fixture, 'memo');
+    try {
+      // A fake npm that reports every selected file as passed, so the contract
+      // covers the runner's bookkeeping without a nested Vitest run.
+      installFakeNpm(fixture, [
+        'const fs = require("fs");',
+        'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+        'const out = process.argv.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+        `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
+        'const testResults = selection.include.map(rel => ({ name: require("path").resolve(repo, "server", rel), status: "passed", assertionResults: [{ status: "passed" }] }));',
+        'fs.writeFileSync(out, JSON.stringify({ testResults }));',
+        // The run-level report scripts/vitestRunDiagnostics.js would write; PORTOS_FAKE_LATE_ERROR simulates a rejection after the last test.
+        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: process.env.PORTOS_FAKE_LATE_ERROR ? 1 : 0, errors: [] }));',
+        'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+      ].join('\n'));
+      const test = 'scripts/lib/releaseTitle.test.js';
+      const run = (extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
+          // An inherited PORTOS_TEST_MEMO=off (a developer's shell, a recording run) must not turn this contract off,
+          // and an inherited CI_SHARD (a matrix job) must not slice the one selected file away.
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
+      });
+      // A green-looking report with a run-level error records nothing.
+      const tainted = run({ PORTOS_FAKE_LATE_ERROR: '1' });
+      expect(tainted.status, tainted.stderr).toBe(0);
+      expect(tainted.stdout).toContain('RAN ');
+      expect(tainted.stdout).not.toContain('recorded');
+
+      const first = run();
+      expect(first.status, first.stderr).toBe(0);
+      expect(first.stdout).toContain('🧠 Test memo: skipped 0 of 1 selected files (closure unchanged); running 1.');
+      expect(first.stdout).toContain('RAN ["../scripts/lib/releaseTitle.test.js"]');
+      // Two entries when this checkout's Vitest cache already holds a depfile for the file (a recorded key), one otherwise.
+      expect(first.stdout).toMatch(/recorded [12] green entries for 1 passed files/);
+
+      const second = run();
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stdout).toContain('🧠 Test memo: skipped 1 of 1 selected files (closure unchanged); running 0.');
+      expect(second.stdout).toMatch(new RegExp(`skipped ${test.replace(/[./]/g, '\\$&')} \\((?:recorded|floor) key\\)`));
+      expect(second.stdout).not.toContain('RAN ');
+
+      // A gating environment variable is part of the key.
+      const other = run({ PORTOS_TEST_QUIET: process.env.PORTOS_TEST_QUIET === '1' ? '' : '1' });
+      expect(other.stdout).toContain('skipped 0 of 1 selected files');
+      // Off restores the pre-memo behavior: no summary, the file runs.
+      const off = run({ PORTOS_TEST_MEMO: 'off' });
+      expect(off.stdout).not.toContain('🧠');
+      expect(off.stdout).toContain('RAN ');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 200_000);
+
+  it('selects the same files as `vitest related` on a fixture graph with a dynamic import', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-related-parity-'));
+    try {
+      const host = join(fixture, 'host');
+      mkdirSync(host);
+      writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
+      writeFileSync(join(fixture, 'a.js'), 'export const a = 1;\n');
+      writeFileSync(join(fixture, 'b.js'), "export const load = () => import('./c.js');\n");
+      writeFileSync(join(fixture, 'c.js'), 'export const c = 1;\n');
+      writeFileSync(join(fixture, 'a.test.js'), "import { a } from './a.js';\ntest('a', () => { expect(a).toBe(1); });\n");
+      writeFileSync(join(fixture, 'b.test.js'), "import { load } from './b.js';\ntest('b', async () => { expect((await load()).c).toBe(1); });\n");
+      writeFileSync(join(fixture, 'plain.test.js'), "test('plain', () => { expect(1).toBe(1); });\n");
+      // Vitest's JS entry through node: the .bin shim cannot be started by spawnSync on Windows.
+      const vitest = join(import.meta.dirname, '..', 'server', 'node_modules', 'vitest', 'vitest.mjs');
+      const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1', PORTOS_CI_TEST_SELECTION: '' };
+      delete env.PORTOS_TEST_TEMP_ROOT;
+      const viaVitest = (source) => {
+        const report = join(fixture, `${source}.json`);
+        const result = spawnSync(process.execPath, [vitest, 'related', `./${source}`, '--run', '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture,
+          '--reporter=json', `--outputFile=${report}`, '--passWithNoTests'], { cwd: fixture, encoding: 'utf8', env, timeout: 60000 });
+        expect(result.error).toBeUndefined();
+        return JSON.parse(readFileSync(report, 'utf8')).testResults.map(suite => suite.name.replace(/\\/g, '/').split('/').pop()).sort();
+      };
+      const keys = computeTestMemoKeys(['a.test.js', 'b.test.js', 'plain.test.js'], { fs: createDiskFs(fixture, nodeFs, nodePath), workspace: '.', env: {} });
+      for (const source of ['a.js', 'b.js', 'c.js']) {
+        expect(relatedTests(keys, [source]).sort(), source).toEqual(viaVitest(source));
+      }
+      expect(relatedTests(keys, ['c.js'])).toEqual(['b.test.js']);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 it('rejects empty browser coverage except explicitly deferred smoke-only inputs', () => {
@@ -101,11 +241,12 @@ describe('ci.yml shard wiring', () => {
   const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
-    expect(runners.map(([id]) => id).sort()).toEqual(['client', 'database', 'server', 'windows-server']);
-    // `database` runs run-ci-tests.js only in `files` mode, for the
-    // cross-workspace browser suites the planner selected (#10312): an exact
-    // file list has nothing to shard, so it is the one runner without a matrix.
-    for (const [id, body] of runners.filter(([id]) => id !== 'database')) {
+    expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
+    // `browser` runs the planner's cross-workspace browser suites in `files`
+    // mode (#10312): an exact file list has nothing to shard, so it is the one
+    // runner without a matrix.
+    // `database` is one serial job (a single `portos_test`), also without a matrix.
+    for (const [id, body] of runners.filter(([id]) => id !== 'browser' && id !== 'database')) {
       // The fan-out is decided by the impact job, never hardcoded here: a
       // scoped plan must collapse to one runner, and a job-level `if` cannot
       // read `matrix` to skip the extra shards itself.
@@ -117,9 +258,21 @@ describe('ci.yml shard wiring', () => {
     }
   });
 
-  it('runs the planner-selected browser suites on the database job with prerequisites required (#10312)', () => {
+  it('memoizes the serial database job through the db scope', () => {
     const body = workflowJobs(WORKFLOW).database;
-    expect(body).toContain("if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'");
+    const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
+    const step = body.slice(start, body.indexOf('- name:', start + 1));
+    expect(step).toContain('run: node scripts/run-ci-tests.js db');
+    expect(step).toContain('CI_TEST_MODE: full');
+    expect(step).toContain('PGDATABASE: portos_test');
+    expect(step).toContain('PORTOS_TEST_MEMO_DIR:');
+    expect(body).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
+  });
+
+  it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
+    const body = workflowJobs(WORKFLOW).browser;
+    expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -131,16 +284,13 @@ describe('ci.yml shard wiring', () => {
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
   });
 
-  it('deduplicates only Linux browser ownership and admits PR fidelity separately', () => {
+  it('deduplicates only Linux browser ownership and runs PR browser suites as smoke', () => {
     const jobs = workflowJobs(WORKFLOW);
     expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');
     expect(jobs['windows-server']).not.toContain('PORTOS_CI_BROWSER_OWNER');
-    expect(jobs.database).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
-    expect(jobs.gate.indexOf('node scripts/ci-gate-report.js')).toBeLessThan(
-      jobs.gate.indexOf('node scripts/verify-browser-fidelity.js'));
-    for (const name of ['CI_BROWSER_FILES', 'CI_EXPECTED_HEAD']) {
-      expect(jobs.gate).toContain(`${name}:`);
-    }
+    expect(jobs.browser).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
+    expect(jobs.database).not.toContain('Run cross-workspace browser suites');
+    expect(jobs.gate).toContain('CI_GATE_RESULT_BROWSER: ${{ needs.browser.result }}');
     expect(jobs['full-gate']).toContain("(github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)");
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT:');
     expect(jobs.gate).toContain('CI_GATE_RESULT_WINDOWS_SERVER:');
@@ -168,11 +318,9 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.lint).toBeTruthy();
     expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
     expect(jobs.lint).not.toContain('strategy:');
-    // Exactly one `matrix.shard`: the shared fail-fast step's CI_FAILED_SHARD,
-    // which renders empty on an unsharded job. A second occurrence — a cache
-    // key, a step name, above all a shard-pinned `if:` — is the regression.
-    expect(jobs.lint.match(/matrix\.shard/g)).toHaveLength(1);
-    expect(jobs.lint).toContain('CI_FAILED_SHARD: ${{ matrix.shard }}');
+    // No `matrix.shard` at all: lint is not a matrix, so a cache key, a step
+    // name, above all a shard-pinned `if:` naming it is the regression.
+    expect(jobs.lint).not.toMatch(/matrix\.shard/);
     // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
     // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
     expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");
@@ -336,19 +484,6 @@ describe('hasOtherTestFailures', () => {
   });
 });
 
-describe('relatedInputs', () => {
-  it('runs source-related tests and explicit guards in one deduplicated invocation', () => {
-    expect(relatedInputs(
-      ['./services/auth.js', './services/auth.test.js'],
-      ['./services/auth.test.js', '../scripts/repo-scan-guards.test.js'],
-    )).toEqual([
-      './services/auth.js',
-      './services/auth.test.js',
-      '../scripts/repo-scan-guards.test.js',
-    ]);
-  });
-});
-
 describe('native crash diagnostics before retry/cancellation (#8152)', () => {
   const output = 'Worker exited unexpectedly with exit code 3221226505 during started state while running test file '
     + 'D:/a/PortOS/PortOS/server/services/sprites/walk.test.js\n'
@@ -361,9 +496,10 @@ describe('native crash diagnostics before retry/cancellation (#8152)', () => {
       return { status: 1, output };
     });
     const diagnose = vi.fn(async () => { order.push('diagnose'); });
-    expect(await spawnNpm('server', 'test:ci', ['--shard=3/3'], 'fixture', { run, diagnose })).toBe(1);
+    expect(await spawnNpm('server', 'test:ci', ['--experimental.recordDependencies'], 'fixture', { run, diagnose })).toBe(1);
     expect(order).toEqual(['run', 'diagnose', 'run', 'diagnose']);
-    expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js']]);
+    // The retry narrows the selectors to the crashed file but keeps the run's flags, so its record is taken too.
+    expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js', '--experimental.recordDependencies']]);
   });
 
   it('refuses an explicitly empty browser profile before invoking tests', async () => {
@@ -436,12 +572,19 @@ describe('structured failure diagnostics', () => {
       delete env.PORTOS_TEST_TEMP_ROOT;
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
         `import { runNpm } from ${JSON.stringify(runnerUrl)};
-         const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+         import { passedTestFiles } from ${JSON.stringify(new URL('./lib/testMemoRunner.js', import.meta.url).href)};
+         const result = await runNpm('server', 'test:ci', ${JSON.stringify(args)});
+         console.log('MEMO ' + JSON.stringify({ status: result.status, runReport: result.runReport, files: result.fileResults.map(f => f.status),
+           passed: passedTestFiles(result.fileResults, { repoRoot: ${JSON.stringify(fixture)}, status: result.status, runReport: result.runReport }) }));
          process.exitCode = result.status;`,
       ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
       expect(stripVTControlCharacters(result.stdout)).toMatch(/Test Files\s+1 passed/);
+      // The JSON report calls the file passed; the process and run-level report say otherwise, and the memo believes them.
+      const memo = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('MEMO ')).slice(5));
+      expect(memo).toMatchObject({ status: 1, files: ['passed'], passed: [] });
+      expect(memo.runReport.errorCount).toBe(1);
       const diagnostic = result.stderr.slice(result.stderr.indexOf('Test launcher exited:'));
       expect(diagnostic).toContain('code=1, signal=none');
       expect(diagnostic).toContain('unhandledErrors=1');
@@ -474,7 +617,7 @@ describe('structured failure diagnostics', () => {
       delete env.PORTOS_TEST_TEMP_ROOT;
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
         `import { runNpm } from ${JSON.stringify(runnerUrl)};
-         const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+         const result = await runNpm('server', 'test:ci', ${JSON.stringify(args)});
          process.exitCode = result.status;`,
       ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
@@ -526,7 +669,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
     try {
       const { runNpm } = await import('./run-ci-tests.js');
       const controller = new AbortController();
-      const pending = runNpm('server', 'test:ci:related', [], {
+      const pending = runNpm('server', 'test:ci', [], {
         env: { ...process.env, PORTOS_CI_DIAGNOSTICS_DIR: '' },
         signal: controller.signal, cancellationTimeoutMs: 100,
       });
@@ -579,7 +722,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       import { runNpm } from ${JSON.stringify(runnerUrl)};
       const controller = new AbortController();
       if (${abortOnSignal}) process.once('SIGUSR2', () => controller.abort());
-      const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)},
+      const result = await runNpm('server', 'test:ci', ${JSON.stringify(args)},
         ${abortOnSignal} ? { signal: controller.signal } : {});
       process.exitCode = result.status;`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -693,6 +836,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
         killProcessTree({ pid: doomedPids.group }, 'SIGKILL', { processGroup: true });
       }
       await doomed.closed;
+      await waitFor(() => !alive(doomed.child.pid), 'doomed launcher survived SIGKILL');
       expect(existsSync(deadRoot)).toBe(true);
       const next = launch(host, 'success');
       runs.push(next);
@@ -703,7 +847,9 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       expect(existsSync(liveRoot)).toBe(true);
       expect(alive(live.child.pid)).toBe(true);
       expect(existsSync(join(host, 'unrelated-old'))).toBe(true);
-      expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(false);
+      // Windows has no process snapshot reader: dead-owner evidence permits
+      // cleanup above, but age alone cannot prove a pid-less root is unused.
+      expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(process.platform === 'win32');
       expect(existsSync(join(host, 'portos-vitest-legacy-fresh'))).toBe(true);
     } finally {
       await Promise.allSettled(runs.map(run => run.cleanup()));

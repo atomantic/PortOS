@@ -68,7 +68,7 @@ export const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
  */
 export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 = IS_WIN32) {
   const resolved = resolveWindowsExecutable(command, isWin32, searchEnv) || command;
-  return prepareWindowsSafeSpawn(resolved, args, isWin32);
+  return prepareWindowsSafeSpawn(resolved, args, isWin32, searchEnv);
 }
 
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only
@@ -196,6 +196,40 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
 
 
 /**
+ * Stop a child gracefully with forced escalation: SIGTERM now, SIGKILL after
+ * `graceMs` if the child has not exited. The tree's one SIGTERM→SIGKILL
+ * pattern (the pm2 CLI runner and `bufferedSpawn`'s timeout path do the same
+ * dance): a child that traps or ignores SIGTERM — an npm wrapper, docker
+ * compose — must not outlive the caller's idea of "stopped" (#12021).
+ *
+ * Returns a cancel function for the caller's `close`/`error` handler so a
+ * child that did exit on SIGTERM never gets a stray SIGKILL aimed at a pid
+ * the OS may have reused. The timer is unref'd and never keeps the process
+ * alive. On Windows `killProcessTree` is already `taskkill /F`, so there is
+ * nothing to escalate to and the cancel is a no-op.
+ *
+ * @param {import('child_process').ChildProcess|{pid: number, kill?: Function}} child
+ * @param {{ graceMs?: number, label?: string, processGroup?: boolean }} [opts]
+ * @param {boolean} [isWin32] - platform override for tests
+ * @returns {() => void} cancel the pending SIGKILL escalation
+ */
+export function terminateWithEscalation(child, { graceMs = 5000, label = 'child process', processGroup = false } = {}, isWin32 = IS_WIN32) {
+  killProcessTree(child, 'SIGTERM', { processGroup }, isWin32);
+  if (isWin32) return () => {};
+  const timer = setTimeout(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    console.warn(`⚠️ ${label} ignored SIGTERM for ${graceMs}ms — escalating to SIGKILL`);
+    try {
+      killProcessTree(child, 'SIGKILL', { processGroup }, isWin32);
+    } catch (err) {
+      console.error(`❌ ${label} SIGKILL escalation failed: ${err.message}`);
+    }
+  }, graceMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
+
+/**
  * Spawn a command, buffer its (capped) stdout/stderr, enforce a timeout, and
  * resolve a structured result. NEVER rejects — every terminal condition
  * (clean exit, non-zero exit, spawn error, timeout) resolves a result object.
@@ -245,20 +279,9 @@ export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, ki
       ? setTimeout(() => {
           if (!settled) {
             settled = true;
-            killProcessTree(child, 'SIGTERM');
-            if (!IS_WIN32) {
-              const escalationTimer = setTimeout(() => {
-                try {
-                  if (child.exitCode === null && child.signalCode === null) {
-                    console.log(`⚠️ ${cmd} didn't exit on SIGTERM — escalating to SIGKILL`);
-                    killProcessTree(child, 'SIGKILL');
-                  }
-                } catch (err) {
-                  console.error(`❌ ${cmd} SIGKILL escalation failed: ${err.message}`);
-                }
-              }, killGraceMs);
-              escalationTimer.unref?.();
-            }
+            // Fire-and-forget: the timed-out result resolves now and the
+            // escalation timer is unref'd, so no cancel is held here.
+            terminateWithEscalation(child, { graceMs: killGraceMs, label: cmd });
             resolve({ success: false, code: -1, signal: null, stdout, stderr, timedOut: true });
           }
         }, timeoutMs)

@@ -118,17 +118,8 @@ describe('cos-runner termination', () => {
   });
 });
 
+// Sentinel-validation behavior lives in tuiSentinel.test.js (runs the runner in a VM).
 describe('cos-runner durable TUI ownership (#3202)', () => {
-  it('does not complete a TUI until sentinel read and recovery promotion both validate', () => {
-    const guard = RUNNER_SRC.indexOf('if (!sentinelValidated) {');
-    const completed = RUNNER_SRC.indexOf('current.completedBySentinel = true;');
-    const killed = RUNNER_SRC.indexOf('current.process.kill();');
-    expect(guard, 'sentinel failures must stay on the watch path').toBeGreaterThan(-1);
-    expect(completed, 'completion must be marked only after validation').toBeGreaterThan(guard);
-    expect(killed, 'the PTY must be killed only after validation').toBeGreaterThan(completed);
-    expect(RUNNER_SRC).toContain('current.doneWatcher = sentinelAccess.watch(handleSentinel);');
-  });
-
   it('checks the TUI executable against its child PATH before opening a PTY', () => {
     // node-pty otherwise turns a missing binary into exit 1 with no transcript,
     // which loses the real configuration error to a generic startup failure.
@@ -212,5 +203,17 @@ describe('cos-runner output — ANSI decoloring parity with spawnDirectly', () =
 
   it('drops a chunk that was only terminal control instead of emitting a blank line', () => {
     expect(RUNNER_SRC).toMatch(/if \(!trimmedDecolored \|\| isKnownCliStderrNoise\(trimmedDecolored\)\) return;/);
+  });
+});
+
+describe('runner browser boundary wiring', () => {
+  it('guards HTTP before parsing and every Socket.IO transport request', () => {
+    const guard = RUNNER_SRC.indexOf('app.use(runnerRequestGuard)');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(RUNNER_SRC.indexOf('app.use(express.json'));
+    expect(guard).toBeLessThan(RUNNER_SRC.indexOf('app.post('));
+    expect(RUNNER_SRC).toContain('allowRequest: (req, callback) => callback(null, runnerRequestRefusal(req) === null)');
+    expect(RUNNER_SRC).toContain('io.engine.use(runnerRequestGuard)');
+    expect(RUNNER_SRC).not.toContain("origin: '*'");
   });
 });

@@ -77,25 +77,25 @@ describe('creativeDirectorMusicBedHook', () => {
 
   it('ignores a completed job with no creativeDirectorMusicBed tag', async () => {
     mediaJobEvents.emit('completed', completedAudioJob({ params: { prompt: 'plain audio render' } }));
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateProject).not.toHaveBeenCalled();
   });
 
   it('ignores a non-audio job kind (other hooks own those)', async () => {
     mediaJobEvents.emit('completed', { kind: 'image', params: { creativeDirectorMusicBed: tag() }, result: { filename: 'img.png' } });
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateProject).not.toHaveBeenCalled();
   });
 
   it('skips a tag missing projectId', async () => {
     mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: {} } }));
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateProject).not.toHaveBeenCalled();
   });
 
   it('skips a completed job whose result carries no filename', async () => {
     mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: tag() }, result: { filename: undefined } }));
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateProject).not.toHaveBeenCalled();
   });
 
@@ -103,7 +103,7 @@ describe('creativeDirectorMusicBedHook', () => {
     getProject.mockRejectedValueOnce(Object.assign(new Error('Project not found'), { status: 404 }));
     mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: tag() } }));
     await waitFor(() => getProject.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     // No throw escapes the listener; nothing further to assert beyond "didn't crash".
     expect(updateProject).not.toHaveBeenCalled();
   });
@@ -112,7 +112,7 @@ describe('creativeDirectorMusicBedHook', () => {
     getProject.mockImplementationOnce(async (id) => ({ id, musicBed: { filename: 'already-there.wav' } }));
     mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: tag() } }));
     await waitFor(() => getProject.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateProject).not.toHaveBeenCalled();
   });
 

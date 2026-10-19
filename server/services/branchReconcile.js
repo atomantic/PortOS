@@ -1,3 +1,4 @@
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
  *
@@ -22,6 +23,7 @@
  * is reported, never touched.
  */
 
+import { buildAutoMergeHandoffInstructions } from '../lib/mergeGateContract.js';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
@@ -463,6 +465,26 @@ function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace })
 }
 
 /**
+ * A branch queued for the pr-watcher's deterministic merge coordinator (an
+ * agent handoff receipt or a merge-on-green PR) has an open PR and no live
+ * agent, yet the coordinator owns its merge: a reconcile agent waiting on CI or
+ * rebasing would race it and invalidate the handoff's head binding.
+ *
+ * `pendingMergeBranches` is a Set of queued branch names, `null` when the app
+ * record could not be read (holds every branch — fail closed), and undefined
+ * when the caller has no app to ask (nothing added).
+ *
+ * @param {Set<string>|null|undefined} pendingMergeBranches
+ * @param {string} branch
+ * @returns {string|null}
+ */
+function pendingMergeReason(pendingMergeBranches, branch) {
+  if (pendingMergeBranches === undefined) return null;
+  if (pendingMergeBranches === null) return 'pending-merge-unavailable';
+  return pendingMergeBranches.has(branch) ? 'pending-merge-queued' : null;
+}
+
+/**
  * Is this worktree a CoS agent workspace whose agent is no longer running?
  *
  * Pure. True only for a `agent-<id>` worktree (the CoS naming convention) that
@@ -884,7 +906,7 @@ async function worktreeAgeMs(worktreePath) {
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree,
  *     abandonedClaimWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, claimOwners = undefined, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, claimOwners = undefined, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
   // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
@@ -998,7 +1020,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // set nor the branch name can see it (#10089).
       liveOwnerReason: resolveLiveOwnerReason({
         branch: b.name, path: worktreePath, locked: worktreeLocked, activeAgentIds
-      }) || claimOwnerReason || (worktreeStatusUnavailable ? 'worktree-status-unavailable' : null),
+      }) || claimOwnerReason || pendingMergeReason(pendingMergeBranches, b.name) || (worktreeStatusUnavailable ? 'worktree-status-unavailable' : null),
       claimOwnerReason,
       behind: divergence.behind,
       ahead: divergence.ahead,
@@ -1017,7 +1039,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
  * Persist counts and typed causes, with the earliest known hold expiry as the
  * next possible wake-up; raw cleanup diagnostics stay out of scheduler state.
  */
-export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [], detachedWorktrees = [], superseded = [], gated = [], claimMarkersHeld = [] } = {}) {
+export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [], detachedWorktrees = [], superseded = [], gated = [], claimMarkersHeld = [], worktreeInventory = [] } = {}) {
   // One entry per surviving branch/checkout, even when it appears in both the
   // skipped and detached/superseded projections. Never persist raw error text.
   const holds = new Map();
@@ -1031,7 +1053,6 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
     }
   };
   for (const entry of skipped) {
-    if (entry.reason === 'not-merged-on-recheck') continue;
     const cause = entry.reason?.startsWith('delete-failed') ? 'branch-delete-failed' : entry.reason || 'cleanup-failed';
     add(entry, cause);
   }
@@ -1042,6 +1063,16 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
   for (const entry of gated) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : 'action-disabled');
   // Marker cleanup is distinct from successful local branch retirement.
   for (const entry of claimMarkersHeld) add({ ...entry, claimMarker: true }, entry.reason || 'claim-marker-held', `claim-marker:${entry.issue ?? entry.branch}`);
+  // Include checkouts the branch classifier cannot see (protected branches,
+  // detached unmerged HEADs, stale registrations), and enrich existing holds.
+  // Inventory is evidence only: a lock's prose never grants release authority.
+  const holdKeysByPath = new Map([...holds].map(([key, entry]) => [entry.path || entry.worktreePath, key]));
+  for (const tree of worktreeInventory || []) {
+    const key = holdKeysByPath.get(tree.path) ?? tree.branch ?? tree.path;
+    const existing = holds.get(key);
+    add({ ...tree, ...existing }, existing?.cause || tree.reason, key);
+  }
+  if (worktreeInventory === null) add({}, 'worktree-inventory-unavailable', 'worktree-inventory-unavailable');
   const entries = [...holds.values()];
   const heldBackMerged = skipped.filter(s => !s.detached && s.reason?.startsWith('worktree-'));
   const skipCauses = {};
@@ -1058,6 +1089,16 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       : heldBackMerged.length === entries.length ? 'merged-branches-held-back' : 'branches-blocked';
   return {
     reason, heldBackMerged, counts, skipCauses: entries.length ? skipCauses : null,
+    remaining: entries.map(entry => ({
+      ...(entry.branch && { branch: entry.branch }),
+      ...((entry.path || entry.worktreePath) && { path: entry.path || entry.worktreePath }),
+      ...(entry.issue && { issue: entry.issue }),
+      ...(entry.head && { head: entry.head }),
+      ...(entry.locked !== undefined && { locked: entry.locked, lockReason: entry.lockReason ?? null }),
+      ...(entry.detached && { detached: true }),
+      ...(entry.managed !== undefined && { managed: entry.managed }),
+      reason: entry.cause,
+    })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null
   };
 }
@@ -1145,7 +1186,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     });
     if (!retired.ok) {
       const { ok, ...failure } = retired;
-      skipped.push({ branch: b.branch, ...failure });
+      skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
     const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin });
@@ -1409,6 +1450,27 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
     .then((r) => r?.exitCode === 0)
     .catch(() => false);
 
+// Read after cleanup so removed holders cannot survive in the recovery report.
+// No content or ownership inference: retirement still uses its existing gates.
+async function gatherRecoveryWorktrees(repoPath) {
+  const trees = await listWorktrees(repoPath).catch(() => null);
+  if (!trees?.length) return null;
+  return trees.slice(1).filter(tree => !tree.bare).map(tree => {
+    const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
+    return {
+      path: tree.path,
+      ...(tree.branch && { branch: tree.branch.replace(/^refs\/heads\//, '') }),
+      head: tree.head ?? null,
+      detached: !tree.branch,
+      locked: Boolean(tree.locked),
+      lockReason: tree.lockReason ?? null,
+      managed,
+      reason: tree.prunable ? 'worktree-prunable' : tree.locked ? 'worktree-locked'
+        : !managed ? 'worktree-unmanaged-location' : 'checkout-retained',
+    };
+  });
+}
+
 const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
   const onBranch = await execGit(['symbolic-ref', '-q', 'HEAD'], treePath, { ignoreExitCode: true })
     .then((r) => r?.exitCode === 0)
@@ -1518,6 +1580,8 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   registered claim owners — see `resolveClaimOwnerReason`; a dispatching
  *   caller must pass it. `readAgents` re-reads the registry right before each
  *   retirement, because a claim run can bind a branch after the scan.
+ *   `pendingMergeBranches` (Set, or null for an unreadable app record) holds the
+ *   branches queued for the pr-watcher merge coordinator — see `pendingMergeReason`.
  *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
@@ -1533,7 +1597,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
   if (claimOwners === undefined) claimOwners = { agents: await readClaimOwnershipAgents(), readAgents: readClaimOwnershipAgents };
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
@@ -1596,7 +1660,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
   const inputs = await gatherBranchState(repoPath, {
     defaultBranch, activeAgentIds, claimOwners, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin,
-    forgeExec, forgeAccount
+    forgeExec, forgeAccount, pendingMergeBranches
   });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
   // page) is still "we could not ask" — surface it so the caller retries next
@@ -1664,6 +1728,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
     // Detached trees at merged commits that were NOT removed, managed or not.
     detachedWorktrees: detachedReap.held,
+    worktreeInventory: await gatherRecoveryWorktrees(repoPath),
     orphanRemotes,
     prStateUnavailable
   };
@@ -1776,7 +1841,7 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
     'For each, read the default branch\'s current version and compare it to what this branch does there. You are looking for one thing: has the default branch already solved this branch\'s problem, by any means? A differently-named function, a policy object where this branch has a boolean, a scheduled tick where this branch has a watcher — all count. It does not need to look like this branch\'s approach to have replaced it.',
     'If it HAS been solved there, this branch is SUPERSEDED: stop, do not commit, rebase, resolve, or merge anything, and report it as superseded naming the file(s) and what on the default branch replaced it. Merging it would undo work already shipped. Say so plainly rather than resolving the conflict — a conflict you can resolve is exactly how a regression gets in looking deliberate.',
     recordVerdictInstruction(ledgerPath()),
-    'Recording the verdict is the handoff to this scheduled task\'s deterministic cleanup pass. It backs up the branch commits, tracked diff, and untracked files, then removes the worktree and branch on the immediately-following drain pass. Do not describe the surviving branch as work a human must clean up, and do not write the verdict anywhere except the absolute ledger path above — a ledger inside the abandoned worktree is invisible to the running PortOS instance and leaves the branch stranded.',
+    'Recording the verdict is the handoff to this scheduled task\'s deterministic cleanup pass. It backs up the branch commits, tracked diff, and untracked files, then removes the worktree and branch in the completion cleanup pass (without waiting for another scheduled run). Do not describe the surviving branch as work a human must clean up, and do not write the verdict anywhere except the absolute ledger path above — a ledger inside the abandoned worktree is invisible to the running PortOS instance and leaves the branch stranded.',
     'Only once you have confirmed the work is still needed, continue.'
   ].join(' ');
 };
@@ -1786,28 +1851,22 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
 // recovery followed by fresh validation on the resulting head.
 const verifyGate = 'Fetch the default branch for comparison before opening or updating a PR; inspect semantic overlap and supersession. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk. Base movement alone does not require a rebase or another CI run; this overrides mandatory base-sync instructions in delegated slashdo workflows. Run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result. After changing the head, rerun affected validation and required reviews/checks. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
 
-// The terminal state of an auto-mergeable branch is MERGED — not "PR opened",
-// not "PR green and waiting". Every drive-to-merge instruction ends with this
-// tail so the agent waits CI out IN-SESSION instead of handing back an open PR
-// (the miss that left a green, MERGEABLE PR sitting open after a NEEDS_PR run:
-// the agent opened it and signaled done 51s later). GitHub-native `--auto` is
-// deliberately not the answer on its own — the agent exits the moment it
-// finishes, so a queued auto-merge that later goes red has nobody left to fix
-// it, and the branch silently stays in-flight until the next recheck.
-//
+// A verified GitHub auto-merge handoff can finish the run before CI drains.
+// Immediate merges still require the current-head CI and ownership gates.
 // `pr` is the PR's number when the branch already has one, else the `<num>`
 // placeholder the agent fills in after opening it.
 // Exported so the per-agent repo-state audit (services/agentRepoStateVerification.js)
 // hands a recovery agent the SAME merge procedure, rather than re-authoring a
 // `gh pr merge` line that loses these caveats.
 export const driveToMerge = (pr) => [
+  buildAutoMergeHandoffInstructions(pr),
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
   'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
   'Record the exact local branch head whose checks and configured reviews passed as <verified-head>; immediately before merging, repeat the ownership/policy Recheck and require the forge PR head to equal that same head. If either changed, stop and revalidate. Every merge attempt, including a method retry, must retain --match-head-commit <verified-head>.',
-  `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch --match-head-commit <verified-head>\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
-  'After the merge, remove the branch\'s worktree first, then delete the local branch — the delete fails while a worktree still has it checked out.'
+  `Once every required check is green AND the PR is MERGEABLE, merge without implicit local teardown: \`gh pr merge ${pr} --merge --match-head-commit <verified-head>\`. On a disallowed method retry with \`gh pr merge ${pr} --squash --match-head-commit <verified-head>\`, then \`gh pr merge ${pr} --rebase --match-head-commit <verified-head>\`. Never \`--auto\`: a queued merge outlives this run.`,
+  MANAGED_WORKTREE_CLEANUP_CONTRACT,
 ].join(' ');
 
 /**

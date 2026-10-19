@@ -192,6 +192,26 @@ describe('Memory Routes', () => {
 
       expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000);
     });
+
+    it('forwards the sender schema version', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
+
+      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3');
+
+      expect(response.status).toBe(200);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3);
+    });
+
+    it('passes a schema-version conflict through at the HTTP boundary', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      memorySync.getChangesSince.mockRejectedValue(Object.assign(new Error('schema version is ahead'), { status: 409 }));
+
+      const response = await request(app).get('/api/memory/sync?schemaVersion=99');
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/schema version is ahead/);
+    });
   });
 
   // ===========================================================================
@@ -263,6 +283,18 @@ describe('Memory Routes', () => {
       expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ id: '00000000-0000-0000-0000-000000000001', type: 'fact', content: 'synced memory' })])
       );
+    });
+
+    it('forwards the sender schema version with remote changes', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      memorySync.applyRemoteChanges.mockResolvedValue({ inserted: 0, updated: 0, skipped: 0 });
+
+      const response = await request(app)
+        .post('/api/memory/sync')
+        .send({ memories: [], schemaVersion: 3 });
+
+      expect(response.status).toBe(200);
+      expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith([], 3);
     });
   });
 

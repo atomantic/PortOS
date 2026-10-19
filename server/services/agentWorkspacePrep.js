@@ -26,7 +26,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * the inline code did.
  */
 
-import { join } from 'path';
+import { basename, join } from 'path';
 import { existsSync } from 'fs';
 import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
@@ -170,6 +170,14 @@ async function prepareRequestedWorktree({
   forkHead,
   allowSharedWorkspaceFallback,
 }) {
+  // Fail before any git fetch/branch work: a non-git directory can never host a
+  // worktree, and the raw `fatal: not a git repository` says nothing actionable.
+  if (!(await git.isRepo(workspacePath))) {
+    const reason = git.notGitRepoMessage(task.metadata?.app || basename(workspacePath));
+    emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
+    await blockTask(task, reason, 'worktree-failed');
+    return { outcome: 'blocked', reason };
+  }
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
   const baseCommit = isLegacyDeepAudit(task.metadata)
     ? await (await import('./deepAudit.js')).getDeepAuditSourceRevision(task)

@@ -2,7 +2,7 @@
  * Unit tests for the BATCHED export-slice hydration (#3940).
  *
  * `exportSliceForRef` used to issue three queries per ingredient (scraps, refs,
- * media) — 3N round-trips for an N-ingredient universe. It now issues four
+ * media) — 3N round-trips for an N-ingredient universe. It now issues five
  * queries total, regardless of N. Postgres is mocked: the fake `query` routes on
  * the SQL text, so the suite asserts BOTH the query count and that the payload
  * shape / ordering is byte-identical to the per-ingredient version.
@@ -76,10 +76,11 @@ vi.mock('../lib/db.js', () => ({
   query: vi.fn(async (sql, params) => {
     const flat = sql.replace(/\s+/g, ' ').trim();
     calls.push({ sql: flat, params });
-    if (flat.includes('FROM catalog_ingredients i')) return { rows: sliceIsEmpty.value ? [] : INGREDIENT_ROWS };
+    if ((flat.includes('FROM catalog_ingredients i') || flat.includes('FROM export_ingredients i'))) return { rows: sliceIsEmpty.value ? [] : INGREDIENT_ROWS };
+    if (flat.includes('FROM catalog_identity_read_sources')) return { rows: [{ ingredient_id: 'i1', scrap_id: 'missing-scrap', span: { start: 1, end: 4 }, extracted_at: new Date('2026-01-01T00:00:00Z') }] };
     if (flat.includes('FROM catalog_scraps s')) return { rows: SCRAP_ROWS };
-    if (flat.includes('FROM catalog_ingredient_refs')) return { rows: REF_ROWS };
-    if (flat.includes('FROM catalog_ingredient_media')) return { rows: MEDIA_ROWS };
+    if ((flat.includes('FROM catalog_ingredient_refs') || flat.includes('FROM catalog_identity_read_refs') || flat.includes('JOIN catalog_identity_read_refs r'))) return { rows: REF_ROWS };
+    if ((flat.includes('FROM catalog_ingredient_media') || flat.includes('FROM catalog_identity_read_media') || flat.includes('JOIN catalog_identity_read_media m'))) return { rows: MEDIA_ROWS };
     return { rows: [] };
   }),
   withTransaction: vi.fn(),
@@ -98,12 +99,12 @@ beforeEach(() => {
 });
 
 describe('exportSliceForRef batching (#3940)', () => {
-  it('issues exactly four queries regardless of ingredient count', async () => {
+  it('issues exactly five queries regardless of ingredient count', async () => {
     await catalogDB.exportSliceForRef('universe', 'uni-1');
-    expect(calls).toHaveLength(4);
-    // Three of them are the batched ANY($1) hydration queries.
-    const batched = calls.filter((c) => c.sql.includes('= ANY($1)'));
-    expect(batched).toHaveLength(3);
+    expect(calls).toHaveLength(5);
+    // Four of them are the batched ANY($1) hydration queries.
+    const batched = calls.filter((c) => c.sql.includes('= ANY($1)') || c.sql.includes('unnest($1::text[])'));
+    expect(batched).toHaveLength(4);
     for (const c of batched) expect(c.params[0]).toEqual(['i1', 'i2']);
   });
 
@@ -112,6 +113,7 @@ describe('exportSliceForRef batching (#3940)', () => {
     expect(bundle.ref).toEqual({ kind: 'universe', id: 'uni-1' });
     const [alpha, beta] = bundle.ingredients;
     expect(alpha.id).toBe('i1');
+    expect(alpha.sources).toEqual([{ ingredientId: 'i1', scrapId: 'missing-scrap', span: { start: 1, end: 4 }, extractedAt: '2026-01-01T00:00:00.000Z' }]);
     expect(alpha.roleForExportedRef).toBe('cast');
     expect(alpha.scraps.map((s) => s.id)).toEqual(['s-old', 's-new']); // per-ingredient order kept
     expect(alpha.refs).toEqual([expect.objectContaining({ refId: 'uni-1', role: 'cast' })]);
@@ -120,6 +122,7 @@ describe('exportSliceForRef batching (#3940)', () => {
     expect(beta.id).toBe('i2');
     expect(beta.roleForExportedRef).toBe('mentioned');
     expect(beta.scraps).toEqual([]);
+    expect(beta.sources).toEqual([]);
     expect(beta.refs).toEqual([]);
     expect(beta.media).toEqual([]);
   });

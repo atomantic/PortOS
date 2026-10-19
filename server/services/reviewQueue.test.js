@@ -12,7 +12,8 @@ const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert: vi.fn() };
 const productMetrics = { getProductEngagement: vi.fn() };
-const backup = { getState: vi.fn() };
+const backup = { getState: vi.fn(), saveState: vi.fn() };
+const settingsMock = { getSettings: vi.fn() };
 const reviewService = { reviewEvents: { emit: vi.fn() }, getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
 const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn() };
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
@@ -53,6 +54,7 @@ vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlertSources.js', () => proactiveAlerts);
 vi.mock('./portosProductMetrics.js', () => productMetrics);
 vi.mock('./backup.js', () => backup);
+vi.mock('./settings.js', async (importOriginal) => ({ ...(await importOriginal()), getSettings: (...args) => settingsMock.getSettings(...args) }));
 vi.mock('./review.js', () => reviewService);
 vi.mock('./notifications.js', () => notifications);
 vi.mock('./identity.js', () => identity);
@@ -108,6 +110,7 @@ function resetEmpty() {
 
 describe('reviewQueue.buildQueue', () => {
   beforeEach(() => {
+    settingsMock.getSettings.mockResolvedValue({});
     vi.clearAllMocks();
     resetEmpty();
     // The alerts sweep is cached with a TTL; clear it so each case sees its
@@ -723,6 +726,15 @@ describe('reviewQueue.buildQueue', () => {
     expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(baseline);
   });
 
+  it('hides a backup failure once backups are disabled, and acknowledging clears it', async () => {
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
+    backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastSnapshotId: 's1' });
+    settingsMock.getSettings.mockResolvedValue({ backup: { enabled: false } });
+    expect((await buildQueue()).items.find(i => i.source === 'backup')).toBeUndefined();
+    await resolveQueueItem('backup:last-run');
+    expect(backup.saveState).toHaveBeenCalledWith({ status: 'ok', error: null });
+  });
+
   it('surfaces a degraded backup as a normal-severity warning, not a high-severity failure', async () => {
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
     // Degraded shape: files saved (status 'degraded') but the DB dump failed,
@@ -964,7 +976,7 @@ describe('reviewQueue.buildQueue', () => {
     // resolve — none of them carry an inline action.
     expect(queue.items.find(i => i.source === 'ask').action).toBeUndefined();
     expect(queue.items.find(i => i.source === 'health').action).toBeUndefined();
-    expect(queue.items.find(i => i.source === 'backup').action).toBeUndefined();
+    expect(queue.items.find(i => i.source === 'backup').action).toBe('Done');
   });
 
   it('attaches source-appropriate meta chips when the raw field is present', async () => {
@@ -1392,10 +1404,9 @@ describe('reviewQueue.resolveQueueItem', () => {
     expect(brain.markInboxDone).toHaveBeenCalledWith('b:1:2');
   });
 
-  it('rejects sources without an inline resolve (ask/health/backup) and unknown sources with a 400', async () => {
+  it('rejects sources without an inline resolve (ask/health) and unknown sources with a 400', async () => {
     await expect(resolveQueueItem('ask:a1')).rejects.toMatchObject({ status: 400 });
     await expect(resolveQueueItem('health:x')).rejects.toMatchObject({ status: 400 });
-    await expect(resolveQueueItem('backup:last-run')).rejects.toMatchObject({ status: 400 });
     await expect(resolveQueueItem('nope:x')).rejects.toMatchObject({ status: 400 });
   });
 

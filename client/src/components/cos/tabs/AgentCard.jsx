@@ -37,6 +37,8 @@ import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
 import { useSocketResource } from '../../../hooks/useSocketResource';
+import { useTimeTick } from '../../../hooks/useTimeTick';
+import useStickToBottom from '../../../hooks/useStickToBottom';
 
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -406,7 +408,6 @@ function GoalFidelityFollowUp({ followUp }) {
 export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
   const [expanded, setExpanded] = useState(initiallyExpanded);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [now, setNow] = useState(Date.now());
   // Every surface of this card that renders the agent's own prose resolves a
   // bare `#7640` against the run's tracker through the one resolver.
   const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
@@ -512,12 +513,10 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     }
   }, [agent.id, btwInput, sendingBtw]);
 
-  // Update duration display for running agents
-  useEffect(() => {
-    if (inactive) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [inactive]);
+  // The elapsed-time display shares the app-wide one-second ticker (one timer
+  // for N running cards, paused in a hidden tab) and unsubscribes once the run
+  // is finished or paused, where the duration no longer moves.
+  const now = useTimeTick(1000, { enabled: !inactive });
 
   // Read only for an expanded, active local agent. The resource key discards
   // in-flight responses after collapsing, switching agents, or going inactive.
@@ -624,6 +623,11 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       ? (fullOutput?.lines || agent.output || [])
       : (liveOutput || agent.output || [])
   ), [inactive, fullOutput, liveOutput, agent.output]);
+  // Live output renders tail-first (see OutputBlocks `anchor`), so the panel
+  // follows the newest line until the reader scrolls up. The array identity is
+  // the revision: the live buffer is capped, so its length stops moving.
+  const outputPanelRef = useRef(null);
+  useStickToBottom(outputPanelRef, { enabled: expanded && !inactive, revision: output });
   const taskSummary = completed && (fullMetadata && Object.hasOwn(fullMetadata, 'taskSummary')
     ? fullMetadata.taskSummary : agent.metadata?.taskSummary);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
@@ -1292,7 +1296,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
       {/* Expanded output view */}
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-dvh-cap [--dvh-cap:60dvh]">
+        <div ref={outputPanelRef} className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-dvh-cap [--dvh-cap:60dvh]">
           {taskSummary && (
             <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
               <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
@@ -1399,7 +1403,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 return (
                   <>
                     {truncated && <TranscriptTruncationNotice transcript={fullOutput} />}
-                    {output.length > 0 && <OutputBlocks output={output} linkifyText={linkifyIssues} />}
+                    {output.length > 0 && <OutputBlocks output={output} linkifyText={linkifyIssues} anchor={inactive ? 'head' : 'tail'} />}
                   </>
                 );
               }

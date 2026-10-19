@@ -29,7 +29,8 @@ import {
   runDatabasePhase,
   runPostRouteSequence,
   runPostListenSequence,
-  gateStepsForSmokeBoot
+  gateStepsForSmokeBoot,
+  SMOKE_BOOT_DISABLED_STEPS
 } from './bootstrapSequence.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -660,7 +661,9 @@ describe('runPostRouteSequence — post-route boot order', () => {
       recoverStuckClassifications: step('recoverStuckClassifications', () => Promise.resolve()),
       recoverInterruptedRepoClones: step('recoverInterruptedRepoClones', () => Promise.resolve()),
       initMediaJobQueue: step('initMediaJobQueue', () => Promise.resolve()),
+      initLoraTraining: step('initLoraTraining', () => Promise.resolve()),
       initMediaJobDependentHooks: step('initMediaJobDependentHooks'),
+      resumeMediaJobCompletions: step('resumeMediaJobCompletions'),
       initSharing: step('initSharing', () => Promise.resolve()),
       recoverCreativeDirectorProjects: step('recoverCreativeDirectorProjects', () => Promise.resolve()),
       runDatabasePhase: step('runDatabasePhase', () => Promise.resolve({ dbReady: true })),
@@ -683,7 +686,9 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'recoverStuckClassifications',
       'recoverInterruptedRepoClones',
       'initMediaJobQueue',
+      'initLoraTraining',
       'initMediaJobDependentHooks',
+      'resumeMediaJobCompletions',
       'initSharing',
       'recoverCreativeDirectorProjects',
       'runDatabasePhase',
@@ -698,16 +703,19 @@ describe('runPostRouteSequence — post-route boot order', () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder);
     await runPostRouteSequence(gateStepsForSmokeBoot(deps, 'postRoute', true));
+    expect(SMOKE_BOOT_DISABLED_STEPS.postRoute).toContain('initLoraTraining');
     expect(recorder.calls).toEqual([
       'ensureSelf',
       'initSyncLog',
       'initMediaJobQueue',
       'initMediaJobDependentHooks',
+      'resumeMediaJobCompletions',
       'runDatabasePhase',
       'loadSeriesCoverBackfill',
       'backfillSeriesCoverImages',
       'startListening'
     ]);
+    expect(recorder.calls).not.toContain('initLoraTraining');
     expect(deps.onFatal).not.toHaveBeenCalled();
   });
 

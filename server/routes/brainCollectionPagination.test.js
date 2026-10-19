@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import express from 'express';
@@ -111,9 +111,11 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
     brainStorage.invalidateAllCaches();
   });
 
-  afterAll(() => {
-    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  });
+  // Thousands of per-record files: async removal keeps the worker loop free and the
+  // explicit budget outlasts a loaded disk (default hookTimeout is 30s).
+  afterAll(async () => {
+    if (tempRoot) await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }, 120_000);
 
   describe('Inbox pagination & bounds', () => {
     it('enforces default limit of 50 and returns complete collection counts', async () => {

@@ -5,6 +5,9 @@ import { PORTS } from '../../server/lib/ports.js';
 
 // Derived from the existing machine-local config. No seed and no forward-port
 // rewrite: a stored forward may still target an independently upgraded peer.
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['tailcat-serve.json'];
+
 export default {
   async up({ rootDir }) {
     const path = join(rootDir, 'data', 'tailcat-serve.json');

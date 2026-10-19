@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { isValidKey, parseKey } from './mediaItemKey.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
@@ -48,7 +49,7 @@ const imageUrlSchema = z.string().trim().min(1).max(2048).refine(
 
 const captionSchema = z.string().max(2000).nullable().optional();
 const sourceSchema = z.string().max(2048).nullable().optional();
-const promptSchema = z.string().trim().max(8000).nullable().optional();
+const promptSchema = z.string().trim().max(GENERATION_METADATA_LIMITS.prompt).nullable().optional();
 
 // Board create. description optional (defaults to '' in the record builder).
 export const moodBoardCreateSchema = z.object({

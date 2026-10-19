@@ -348,6 +348,26 @@ export async function getExecutionHistory(taskType) {
   return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
 }
 
+/**
+ * Keep the latest triage output of an audit beside its execution record so the
+ * Schedule card can show it (#12085). Machine-local: the execution store never
+ * federates. An empty list clears nothing — a run that produced no
+ * recommendation leaves the previous one visible rather than erasing it.
+ */
+export async function recordRecommendedAudits(taskType, appId, items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return updateSchedule(async (schedule) => {
+    const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+    schedule.executions[key] ||= { lastRun: null, count: 0, perApp: {} };
+    schedule.executions[key].recommendedAudits = {
+      at: new Date().toISOString(),
+      appId: appId || null,
+      items: items.slice(0, 3).map(item => String(item).slice(0, 300)),
+    };
+    return { result: schedule.executions[key].recommendedAudits, changed: true };
+  });
+}
+
 // ============================================================
 // Perpetual (drain-until-done) park state
 // ============================================================
@@ -563,6 +583,17 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
     const record = ensureExecutionRecord(schedule, taskType, appId);
     record.parkedUntil = parkedUntil;
     record.parkReason = reason;
+    if (taskType === 'branch-reconcile') {
+      const remaining = record.branchReconcileOutcome?.remaining ?? null;
+      const drained = reason === 'no-in-flight-branches' && remaining?.length === 0;
+      record.branchReconcileOutcome = {
+        ...record.branchReconcileOutcome,
+        status: drained ? 'drained' : 'incomplete', reason, remaining,
+        observedAt: record.branchReconcileOutcome?.observedAt ?? null,
+        updatedAt: new Date().toISOString(),
+        nextAction: drained ? null : 'Resolve the listed holds or dispatch limit, then run branch reconciliation again.',
+      };
+    }
     if (branchAttempts === null) delete record.branchReconcileAttempts;
     else if (branchAttempts !== undefined) record.branchReconcileAttempts = branchAttempts;
     record.parkActionableCount = actionableCount;
@@ -706,6 +737,50 @@ export async function isPerpetualParkActive(taskType, appId = null) {
   const schedule = await loadSchedule();
   const record = resolveExecutionRecord(schedule, taskType, appId);
   return parkedUntilMs(record) > Date.now();
+}
+
+/** Persist the latest deterministic sweep evidence independently of agent success. */
+export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction }) {
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const now = new Date().toISOString();
+    record.branchReconcileOutcome = {
+      ...record.branchReconcileOutcome, status, reason, nextAction, updatedAt: now,
+      remaining: remaining === undefined ? record.branchReconcileOutcome?.remaining ?? null : remaining,
+      observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
+}
+
+export async function getBranchReconcileOutcome(appId) {
+  const schedule = await loadSchedule();
+  return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
+}
+
+const RETIRED_CHECKOUTS_KEPT = 20;
+
+/**
+ * Drop a retired checkout from the last inventory and keep a short record of
+ * where its archive went. Status is untouched: only the next sweep can say the
+ * repository converged.
+ */
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir }) {
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome || {};
+    const retiredAt = new Date().toISOString();
+    record.branchReconcileOutcome = {
+      ...outcome,
+      updatedAt: retiredAt,
+      remaining: Array.isArray(outcome.remaining)
+        ? outcome.remaining.filter(entry => entry.path !== path && !(branchDeleted && branch && entry.branch === branch))
+        : outcome.remaining ?? null,
+      retired: [{ path, ...(branch && { branch }), head, branchDeleted, archiveDir, retiredAt }, ...(outcome.retired || [])]
+        .slice(0, RETIRED_CHECKOUTS_KEPT),
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
 }
 
 /**
@@ -1464,6 +1539,8 @@ export async function getScheduleStatus() {
       runCount: execution.count,
       globalLastRun: execution.lastRun,
       globalRunCount: execution.count,
+      // The triage lane's last ranked "Recommended next audits" (#12085).
+      recommendedAudits: execution.recommendedAudits || null,
       perAppCount: Object.keys(execution.perApp).length,
       appOverrides,
       enabledAppCount,
@@ -1548,6 +1625,13 @@ export async function getScheduleStatus() {
       };
     }
 
+    if (taskType === 'branch-reconcile') {
+      taskStatus.reconcileOutcomes = Object.fromEntries([
+        ...(execution.branchReconcileOutcome ? [[null, execution.branchReconcileOutcome]] : []),
+        ...Object.entries(execution.perApp || {}).filter(([, record]) => record.branchReconcileOutcome)
+          .map(([appId, record]) => [appId, record.branchReconcileOutcome]),
+      ]);
+    }
     status.tasks[taskType] = taskStatus;
 
     if (learningInfo.adjusted) {

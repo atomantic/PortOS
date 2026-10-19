@@ -9,6 +9,7 @@ import { readFile, readdir, rm, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createEventLoopLagProbe, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 import { ensureDirs, safeJSONParse, readJSONFileStrict, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
@@ -51,7 +52,37 @@ export const ROOT_DIR = PATHS.root;
 // `withStateLock(...)` call sites are unchanged; the name is kept for that
 // reason. The queue additionally silences its tail so one rejected write can't
 // poison subsequent waiters (a strict improvement over the prior mutex).
-export const withStateLock = createFileWriteQueue();
+const stateQueue = createFileWriteQueue();
+
+// Slow-operation diagnostics (#12329): only bounded numbers reach the log, and
+// only for an operation at or above this duration. Each held operation's time
+// is split into event-loop lag and the rest, so a stalled queue can be told
+// apart from a busy host (see docs/TROUBLESHOOTING.md).
+export const SLOW_STATE_OPERATION_MS = 1000;
+let stateClock = systemClock;
+let stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
+
+/** Inject a deterministic clock; `null` restores the system clock. */
+export function __setCosStateDiagnosticsClockForTests(clock) {
+  stateClock = clock ?? systemClock;
+  stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
+}
+
+export function withStateLock(fn) {
+  const queuedAt = stateClock.now();
+  return stateQueue(async () => {
+    const waitMs = roundMs(stateClock.now() - queuedAt);
+    const span = stateLagProbe.begin('hold');
+    try {
+      return await fn();
+    } finally {
+      const { totalMs, lagMs, lagMaxMs } = span.end();
+      if (totalMs >= SLOW_STATE_OPERATION_MS) {
+        console.warn(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}`);
+      }
+    }
+  });
+}
 
 // Config gets its OWN tail, so a settings read or write never queues behind the
 // runtime-record writes that dominate state.json (#6182). Same
@@ -269,20 +300,48 @@ async function recoverFromUnreadableState(content) {
 // In-memory config cache. Every mutation goes through `withConfigLock` +
 // `saveConfig`, so the cache stays consistent.
 let configCache = null;
+let configLoad = null;
 // Enumerable symbols survive a caller's shallow copy but never reach JSON.
 // Reject delayed writeback of a pre-restore read, even if queued afterwards.
 const RESTORE_GENERATION = Symbol('cosRestoreGeneration');
+const WRITE_GENERATION = Symbol('cosWriteGeneration');
+const stateRecovery = { generation: 0, required: false };
+const configRecovery = { generation: 0, required: false };
 let restoreGeneration = 0;
-function stampGeneration(value) {
+function stampGeneration(value, recovery) {
   value[RESTORE_GENERATION] = restoreGeneration;
+  value[WRITE_GENERATION] = recovery.generation;
   return value;
 }
-function assertCurrentGeneration(value) {
+function assertCurrentGeneration(value, recovery) {
   if (value[RESTORE_GENERATION] !== undefined && value[RESTORE_GENERATION] !== restoreGeneration) {
     throw new ServerError('CoS files were restored. Read the current state before retrying this change.', {
       status: 409, code: 'COS_RESTORE_STALE_WRITE',
     });
   }
+  if (recovery.required || (value[WRITE_GENERATION] !== undefined && value[WRITE_GENERATION] !== recovery.generation)) {
+    throw new ServerError('A CoS write failed. Read the current persisted state before retrying this change.', {
+      status: 409, code: 'COS_PERSISTENCE_STALE_WRITE',
+    });
+  }
+}
+
+function invalidateFailedWrite(recovery) {
+  recovery.generation += 1;
+  recovery.required = true;
+}
+
+// After an uncertain write, never replace unreadable ownership/settings with
+// defaults. Only a fresh trusted read may clear the recovery requirement.
+async function readRecoveryFile(filePath) {
+  const missing = Symbol('missing');
+  const { ok, value } = await readJSONFileStrict(filePath, missing, { allowArray: false, logError: true });
+  if (!ok || (value !== missing && !isPlainObject(value))) {
+    throw new ServerError('CoS persistence recovery requires a readable state/config file. Repair the file before retrying.', {
+      status: 503, code: 'COS_PERSISTENCE_RECOVERY_REQUIRED',
+    });
+  }
+  return value === missing ? null : value;
 }
 
 /**
@@ -300,7 +359,9 @@ function assertCurrentGeneration(value) {
  * never boots on bare defaults.
  */
 async function readPersistedConfig() {
-  const { ok, value } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false, logError: true });
+  const { ok, value } = configRecovery.required
+    ? { ok: true, value: await readRecoveryFile(CONFIG_FILE) }
+    : await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false, logError: true });
   if (ok && isPlainObject(value)) return { config: value, fromConfigFile: true };
   if (!ok) {
     console.log(`⚠️ Corrupted or empty config file at ${CONFIG_FILE}, falling back to legacy/default config`);
@@ -309,9 +370,10 @@ async function readPersistedConfig() {
   }
   // Back-compat read. Deliberately does NOT quarantine or rewrite state.json —
   // loadState() owns that file's recovery.
-  if (!existsSync(STATE_FILE)) return { config: null, fromConfigFile: false };
-  const stateContent = await readFile(STATE_FILE, 'utf-8');
-  const state = parseStateFile(stateContent, 'CoS state (legacy config)');
+  if (!configRecovery.required && !existsSync(STATE_FILE)) return { config: null, fromConfigFile: false };
+  const state = configRecovery.required
+    ? await readRecoveryFile(STATE_FILE)
+    : parseStateFile(await readFile(STATE_FILE, 'utf-8'), 'CoS state (legacy config)');
   const legacy = state?.config;
   return { config: isPlainObject(legacy) ? legacy : null, fromConfigFile: false };
 }
@@ -321,9 +383,25 @@ async function readPersistedConfig() {
  */
 export async function loadConfig() {
   if (configCache) return configCache;
+  // The legacy split writes during a read. Share its settlement so another
+  // loader cannot overwrite a subsequent settings change with the legacy copy.
+  if (configLoad) return configLoad;
+  configLoad = readConfig();
+  try {
+    return await configLoad;
+  } finally {
+    configLoad = null;
+  }
+}
+
+async function readConfig() {
+  if (configCache) return configCache;
+  const generation = configRecovery.generation;
+  const restored = restoreGeneration;
   await ensureDirectories();
   const { config, fromConfigFile } = await readPersistedConfig();
-  configCache = stampGeneration(mergeStoredConfig(config));
+  if (configCache || generation !== configRecovery.generation || restored !== restoreGeneration) return readConfig();
+  const loaded = stampGeneration(mergeStoredConfig(config), configRecovery);
   // Recovering settings out of a legacy state.json is a READ; nothing has
   // written them to their own file yet. `saveState` strips `config` from
   // state.json on the very next runtime write, so leaving the recovery in
@@ -332,8 +410,18 @@ export async function loadConfig() {
   // restored pre-split backup on a machine that already recorded it as applied).
   if (config && !fromConfigFile) {
     console.log(`📦 Recovered CoS config from a legacy state.json — writing ${CONFIG_FILE}`);
-    await atomicWrite(CONFIG_FILE, configCache);
+    try {
+      await atomicWrite(CONFIG_FILE, loaded);
+    } catch (error) {
+      configCache = null;
+      invalidateFailedWrite(configRecovery);
+      throw error;
+    }
   }
+  if (configCache || generation !== configRecovery.generation || restored !== restoreGeneration) return readConfig();
+  configCache = loaded;
+  configRecovery.required = false;
+  if (stateCache) stateCache.config = configCache;
   return configCache;
 }
 
@@ -343,12 +431,21 @@ export async function loadConfig() {
  * before the write does not go stale.
  */
 export async function saveConfig(config) {
-  await ensureDirectories();
-  assertCurrentGeneration(config);
-  configCache = stampGeneration(config);
-  if (stateCache) stateCache.config = config;
-  await atomicWrite(CONFIG_FILE, config);
-  return config;
+  assertCurrentGeneration(config, configRecovery);
+  stampGeneration(config, configRecovery);
+  try {
+    await ensureDirectories();
+    await atomicWrite(CONFIG_FILE, config);
+  } catch (error) {
+    // Callers may have mutated the shared object in place; a prior pointer is
+    // not a rollback image. The write may also have reached disk before failing.
+    configCache = null;
+    invalidateFailedWrite(configRecovery);
+    throw error;
+  }
+  configCache = stampGeneration(config, configRecovery);
+  if (stateCache) stateCache.config = configCache;
+  return configCache;
 }
 
 // In-memory state cache — avoids re-reading state.json from disk on every call.
@@ -381,38 +478,37 @@ export async function getConfig() {
 }
 
 export async function loadState() {
-  if (stateCache) return stateCache;
-
-  await ensureDirectories();
-
-  // Config is its own file now, so it survives every state.json failure path.
+  // Config recovery must also repair a warm runtime cache's config view.
   const config = await loadConfig();
-
-  if (!existsSync(STATE_FILE)) {
-    stateCache = Object.assign(structuredClone(DEFAULT_STATE), { config });
-    return stampGeneration(stateCache);
+  if (stateCache) {
+    stateCache.config = config;
+    return stateCache;
   }
 
-  const content = await readFile(STATE_FILE, 'utf-8');
-  const state = parseStateFile(content);
-
-  if (!state) {
-    stateCache = Object.assign(await recoverFromUnreadableState(content), { config });
-    return stampGeneration(stateCache);
+  const generation = stateRecovery.generation;
+  const restored = restoreGeneration;
+  await ensureDirectories();
+  let state;
+  if (stateRecovery.required) {
+    state = await readRecoveryFile(STATE_FILE);
+  } else if (existsSync(STATE_FILE)) {
+    const content = await readFile(STATE_FILE, 'utf-8');
+    state = parseStateFile(content) ?? await recoverFromUnreadableState(content);
   }
+  // A concurrent read/write or restore may have superseded this disk read.
+  if (stateCache || generation !== stateRecovery.generation || restored !== restoreGeneration) return loadState();
 
-  stateCache = {
+  stateCache = state ? {
     ...DEFAULT_STATE,
     ...state,
-    // Always the config file's copy — a legacy `config` slice still sitting in
-    // state.json was already folded in by `readPersistedConfig()`, and must
-    // never shadow the (newer) config file on an install carrying both.
+    // Legacy state.json settings must never shadow the independent config file.
     config,
     stats: { ...DEFAULT_STATE.stats, ...state.stats },
     persistentMind: normalizePersistentMindState(state.persistentMind),
     agents: state.agents ?? {}
-  };
-  return stampGeneration(stateCache);
+  } : Object.assign(structuredClone(DEFAULT_STATE), { config });
+  stateRecovery.required = false;
+  return stampGeneration(stateCache, stateRecovery);
 }
 
 // Read the persisted state for safety checks, bypassing both the cache and
@@ -421,10 +517,12 @@ export async function loadState() {
 // action must distinguish "known empty" from "could not establish what is
 // there". `trusted: false` means the file exists but could not be read as an
 // object — every caller must treat that as "assume the worst", never as empty.
-async function readStateForSafetyCheck() {
+async function readStateForSafetyCheck({ onStage } = {}) {
+  onStage?.('read');
   await ensureDirectories();
   if (!existsSync(STATE_FILE)) return { trusted: true, state: null };
   const content = await readFile(STATE_FILE, 'utf-8');
+  onStage?.('parse');
   const state = parseStateFile(content);
   if (!state) return { trusted: false, state: null };
   return { trusted: true, state };
@@ -432,8 +530,9 @@ async function readStateForSafetyCheck() {
 
 // Merge admission shares the runtime ownership store and its write queue.
 // Missing leases are legacy empty state; malformed leases are never defaulted.
-export async function readMergeAdmissionStateForSafetyCheck() {
-  const { trusted, state } = await readStateForSafetyCheck();
+// `onStage('read'|'parse')` marks each stage for slow-admission diagnostics.
+export async function readMergeAdmissionStateForSafetyCheck({ onStage } = {}) {
+  const { trusted, state } = await readStateForSafetyCheck({ onStage });
   return { trusted, agents: state?.agents ?? null, mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {} };
 }
 
@@ -466,16 +565,63 @@ export async function readAgentsStateForSafetyCheck() {
  * can neither publish that copy nor leave `stateCache.config` undefined for the
  * next `state.config.…` reader. A caller wanting to CHANGE a setting must call
  * `updateConfig()`; `state.config` is a read-only view.
+ *
+ * `onStage` is called as each persistence stage begins (`prepare`, `serialize`,
+ * `write`, `replace`, `dirSync`) for a caller's own slow-operation diagnostics.
  */
-export async function saveState(state) {
-  await ensureDirectories();
-  assertCurrentGeneration(state);
-  state.config = await loadConfig();
-  stateCache = stampGeneration(state);
-  // Config lives in its own file; never re-serialize it onto the hot path.
-  const persisted = { ...state };
-  delete persisted.config;
-  await atomicWrite(STATE_FILE, persisted);
+export async function saveState(state, { onStage } = {}) {
+  assertCurrentGeneration(state, stateRecovery);
+  stampGeneration(state, stateRecovery);
+  const span = stateLagProbe.begin('prepare');
+  const stage = (name) => { span.mark(name); onStage?.(name); };
+  onStage?.('prepare');
+  let bytes = 0;
+  let outcome = 'failed';
+  try {
+    await ensureDirectories();
+    state.config = await loadConfig();
+    // Config lives in its own file; never re-serialize it onto the hot path.
+    const persisted = { ...state };
+    delete persisted.config;
+    stage('serialize');
+    const payload = JSON.stringify(persisted, null, 2);
+    bytes = Buffer.byteLength(payload);
+    await atomicWrite(STATE_FILE, payload, { onStage: stage });
+    outcome = 'saved';
+  } catch (error) {
+    stateCache = null;
+    invalidateFailedWrite(stateRecovery);
+    throw error;
+  } finally {
+    const summary = span.end();
+    if (summary.totalMs >= SLOW_STATE_OPERATION_MS) {
+      const ms = (name) => summary.phases[name]?.ms ?? 0;
+      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
+    }
+  }
+  stateCache = stampGeneration(state, stateRecovery);
+}
+
+const legacyConfigSlice = (state) => (isPlainObject(state?.config) ? JSON.stringify(state.config) : null);
+
+/**
+ * A snapshot taken before the #6182 split keeps the CoS config inside
+ * state.json and carries no config.json. Restored over an upgraded install, the
+ * live config.json is newer than the snapshot yet wins every read (and migration
+ * 339 no-ops on its presence), so the restored settings were silently discarded
+ * and then stripped by the next saveState. After a transfer that completed and
+ * installed the snapshot's slice, move config.json aside — kept for manual
+ * recovery, never deleted — so readConfig() completes the split from the
+ * restored slice. A failed transfer is left alone: the live state.json may
+ * already hold the same slice without this restore having installed it.
+ */
+async function supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig) {
+  if (!existsSync(STATE_FILE) || !existsSync(CONFIG_FILE)) return;
+  const restored = legacyConfigSlice(parseStateFile(await readFile(STATE_FILE, 'utf-8'), 'CoS state (restored legacy config)'));
+  if (restored === null || restored !== JSON.stringify(snapshotLegacyConfig)) return;
+  const parked = join(dirname(CONFIG_FILE), `config.pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  await rename(CONFIG_FILE, parked);
+  console.log(`📦 Restored snapshot predates config.json; moved the newer CoS config aside to ${basename(parked)} and recovering settings from the restored state.json`);
 }
 
 /**
@@ -483,8 +629,10 @@ export async function saveState(state) {
  * reload settle. This order matches config changes that consult runtime state;
  * never acquire the config queue from inside the state queue.
  * Callers must read their mutation's pre-image INSIDE its respective queue.
+ * `snapshotLegacyConfig` is the config slice a pre-split snapshot installs, if
+ * any (see supersedeConfigForRestoredLegacySlice).
  */
-export function withLiveCosRestore(transfer) {
+export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {}) {
   return withConfigLock(() => withStateLock(async () => {
     const persisted = await readStateForSafetyCheck();
     const states = [stateCache, persisted.state].filter(Boolean);
@@ -504,6 +652,7 @@ export function withLiveCosRestore(transfer) {
     configCache = null;
     stateCache = null;
     const [reload] = await Promise.allSettled([(async () => {
+      if (snapshotLegacyConfig && result.status === 'fulfilled') await supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig);
       const { reloadAgentIndexAfterRestore } = await import('./cosAgentIndex.js');
       await reloadAgentIndexAfterRestore();
       const state = await loadState();

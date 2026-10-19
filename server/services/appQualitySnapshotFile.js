@@ -110,7 +110,7 @@ function skipped(app, reason) {
 // together, and read-modify-write against `.quality.json` plus `.git/index` is
 // not re-entrant — the second run must see the first run's bytes (and answer
 // `no-changes`) rather than race it. Keyed by repo path, not app id: two app
-// records can point at one checkout. Same shape as `issueWriteTail`.
+// records can point at one checkout. Same shape as `queueSeriesIssuesWrite`.
 const publishTails = new Map();
 // Bytes the in-process publisher last landed (or confirmed on origin) for a
 // checkout. Origin/default still holds the previous file until the PR merges,

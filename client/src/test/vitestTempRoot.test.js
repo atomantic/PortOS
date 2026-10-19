@@ -42,8 +42,8 @@ describe('real client runner temp lifecycle', () => {
          const root = process.env.PORTOS_TEST_TEMP_ROOT;
          await import(${JSON.stringify(new URL('../../vitest.config.js?reimport', import.meta.url).href)});
          if (process.env.PORTOS_TEST_TEMP_ROOT !== root) throw Error('reimport created another root');
-         const { teardown } = await import(${JSON.stringify(new URL('../../../scripts/vitestTempRootSetup.js', import.meta.url).href)});
-         teardown();`], { env, encoding: 'utf8', timeout: 20000 });
+         const { cleanupRunTempRoot } = await import(${JSON.stringify(new URL('../../../scripts/vitestTempRootSetup.js', import.meta.url).href)});
+         cleanupRunTempRoot();`], { env, encoding: 'utf8', timeout: 20000 });
       expect(result.error).toBeUndefined();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(readdirSync(host)).toEqual([]);

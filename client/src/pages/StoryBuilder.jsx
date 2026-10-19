@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -627,7 +629,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   );
 }
 
-function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onRegisterDraftFlush, onUniverseCharRef }) {
+function StepPanel({ session, universe, series, issues, issuesState, issuesError, retryIssues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onRegisterDraftFlush, onUniverseCharRef }) {
   const { start, busy, phase, op } = useStoryStepRun(stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
@@ -794,7 +796,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} onUniverseCharRef={onUniverseCharRef} />;
   }
   if (stepId === 'issues') {
-    return <IssuesPanel session={session} series={series} issues={issues} onChanged={onChanged} />;
+    return <IssuesPanel session={session} series={series} issues={issues} issuesState={issuesState} issuesError={issuesError} retryIssues={retryIssues} onChanged={onChanged} />;
   }
   if (stepId === 'production') {
     const locks = session.steps?.issues?.issueLocks || {};
@@ -922,7 +924,7 @@ function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRe
   );
 }
 
-function IssuesPanel({ session, series, issues, onChanged }) {
+function IssuesPanel({ session, series, issues, issuesState, issuesError, retryIssues, onChanged }) {
   const locks = session.steps?.issues?.issueLocks || {};
   const [busyId, setBusyId] = useState(null);
   const [generating, setGenerating] = useState(false);
@@ -993,7 +995,10 @@ function IssuesPanel({ session, series, issues, onChanged }) {
           )}
         </div>
       </div>
-      {(!issues || issues.length === 0) && (
+      {issuesState === 'error' ? (
+        <ListLoadError what="pipeline issues" error={issuesError} onRetry={retryIssues} />
+      ) : null}
+      {issuesState === 'ready' && issues.length === 0 && (
         <p className="text-gray-600 italic text-sm">
           {hasSeasons
             ? 'No issues yet — “Generate issues from arc” seeds one issue per episode for each season, or plan them in the Pipeline.'
@@ -1059,7 +1064,16 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const [syncDrift, setSyncDrift] = useState(false);
   const [universe, setUniverse] = useState(null);
   const [series, setSeries] = useState(null);
-  const [issues, setIssues] = useState([]);
+  const fetchIssues = useCallback(
+    async () => {
+      if (!session?.seriesId) return [];
+      const list = await listPipelineIssues(session.seriesId, { silent: true });
+      return Array.isArray(list) ? list : (list?.items || []);
+    },
+    [session?.seriesId],
+  );
+  const issuesResource = useListResource(fetchIssues, { enabled: !!session?.seriesId });
+  const { items: issues, setItems: setIssues } = issuesResource;
   const [loading, setLoading] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
 
@@ -1070,6 +1084,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // records fetched before the newer completion landed.
   const reloadGenRef = useRef(0);
   const manifestGenRef = useRef(0);
+  const loadedSeriesIdRef = useRef(null);
 
   // Runs this view did not start itself (a reload, a second tab, or the holder of
   // a refused kickoff) are discovered on the session read and adopted by the
@@ -1118,6 +1133,11 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     const { activeSteps, ...record } = s;
     adoptActive(storyId, activeSteps);
     setSession(record);
+    const previousSeriesId = loadedSeriesIdRef.current;
+    loadedSeriesIdRef.current = s.seriesId || null;
+    // A same-series session refresh must also refresh the independently owned
+    // issue list. A changed series id triggers the hook's fetcher effect instead.
+    if (s.seriesId && previousSeriesId === s.seriesId) issuesResource.retry();
     setStaleSteps(s.staleSteps || []);
     setSyncDrift(s.syncDrift === true);
     // These GETs own their fallback (.catch → null/[]), so silence the helper's
@@ -1129,14 +1149,10 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     if (!isCurrent()) return;
     setUniverse(u);
     setSeries(ser);
-    if (s.seriesId) {
-      const iss = await listPipelineIssues(s.seriesId, { silent: true }).catch(() => []);
-      if (!isCurrent()) return;
-      setIssues(Array.isArray(iss) ? iss : (iss?.items || []));
-    }
+    if (!s.seriesId) setIssues([]);
     setReadBusy(false);
     setLoading(false);
-  }, [storyId, adoptActive]);
+  }, [storyId, adoptActive, issuesResource.retry]);
   reloadRef.current = reload;
 
   // Optimistically mirror a completed character render onto the loaded
@@ -1536,6 +1552,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               </details>
               <StepPanel
                 session={session} universe={universe} series={series} issues={issues}
+                issuesState={session?.seriesId ? issuesResource.state : 'ready'} issuesError={issuesResource.error} retryIssues={issuesResource.retry}
                 stepId={activeStepId} locked={stepState.locked} onChanged={reload}
                 onSeriesUpdate={updateSeriesFromServer}
                 onIssuesUpdate={handleIssuesUpdate}

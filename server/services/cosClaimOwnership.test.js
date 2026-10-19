@@ -1,20 +1,38 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-const store = { state: null };
+const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false };
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
 vi.mock('./cosState.js', () => ({
-  withStateLock: (work) => work(),
-  loadState: async () => structuredClone(store.state),
-  saveState: async (next) => { store.state = structuredClone(next); },
+  withStateLock: vi.fn(async work => { if (store.stateGate) await store.stateGate; return work(); }),
+  readAgentsStateForSafetyCheck: vi.fn(async () => {
+    if (store.readGate) await store.readGate;
+    return { trusted: !store.unreadable, agents: structuredClone(store.state.agents) };
+  }),
+  loadState: async () => store.stale ? { agents: {} } : store.state,
+  saveState: vi.fn(async next => { if (store.saveGate) await store.saveGate; store.state = structuredClone(next); }),
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 
-const { updateClaimOwnership, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
+const { updateClaimOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+// Hold the same leaf fence cleanup uses while exercising binding through its public service.
+const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
+
+const { withStateLock, readAgentsStateForSafetyCheck, saveState } = await import('./cosState.js');
+const { cosEvents } = await import('./cosEvents.js');
 
 const SOURCE = '/repos/app-x';
 const CHILD = '/repos/app-x/data/cos/worktrees/claim-issue-101';
 
 beforeEach(() => {
+  store.stateGate = store.readGate = store.saveGate = null;
+  store.unreadable = store.stale = false;
+  vi.clearAllMocks();
   store.state = {
     agents: {
       'agent-epicrun': {
@@ -25,8 +43,12 @@ beforeEach(() => {
   };
 });
 
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
 describe('updateClaimOwnership', () => {
   it('persists the bound child branch on the run record and settles its selection', async () => {
+    expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
+      .toEqual({ bound: true, branch: 'claim/issue-101' });
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: true, branch: 'claim/issue-101' });
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({
@@ -45,6 +67,123 @@ describe('updateClaimOwnership', () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: false, reason: 'owner-not-running' });
     expect(store.state.agents['agent-epicrun'].metadata).toEqual(before.agents['agent-epicrun'].metadata);
+  });
+});
+
+describe('claim ownership queued transaction deadlines', () => {
+  const update = action => updateClaimOwnership({ agentId: 'agent-epicrun', action, branch: 'claim/issue-101' });
+  const tick = () => vi.advanceTimersByTimeAsync(0);
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it.each(['bind', 'release'])('fences a timed-out %s at each queued boundary', async action => {
+    store.state.agents['agent-epicrun'].metadata.claimBranches = action === 'release' ? ['claim/issue-101'] : [];
+    const before = structuredClone(store.state);
+    // A retirement can hold ownership while unrelated state writers hold state.
+    // Neither resumed callback may mutate after the caller received a refusal.
+    for (const queue of ['ownership', 'state']) {
+      const gate = deferred();
+      const held = queue === 'ownership' ? withClaimOwnershipLock(() => gate.promise) : null;
+      if (queue === 'state') store.stateGate = gate.promise;
+      const pending = update(action);
+      await tick();
+      await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+      expect(await pending).toEqual({ [action === 'bind' ? 'bound' : 'released']: false,
+        reason: `${queue}-queue-timeout`, retryAfterMs: 5000 });
+      expect(readAgentsStateForSafetyCheck).not.toHaveBeenCalled();
+      gate.resolve();
+      if (held) await held;
+      await withClaimOwnershipLock(() => {});
+      expect(store.state).toEqual(before);
+      expect(saveState).not.toHaveBeenCalled();
+      expect(cosEvents.emit).not.toHaveBeenCalled();
+    }
+    store.stateGate = null;
+    expect(await update(action)).toEqual({ [action === 'bind' ? 'bound' : 'released']: true, branch: 'claim/issue-101' });
+  });
+
+  it('fences overdue callbacks even when the timer has not run, sharing the budget across queues', async () => {
+    const ownership = deferred();
+    const state = deferred();
+    const held = withClaimOwnershipLock(() => ownership.promise);
+    store.stateGate = state.promise;
+    const pending = update('bind');
+    await tick();
+    await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS - 1);
+    ownership.resolve();
+    await held;
+    await tick();
+    expect(withStateLock).toHaveBeenCalledOnce();
+    // Advance only the monotonic clock; leave the scheduled timer unfired.
+    vi.spyOn(performance, 'now').mockReturnValue(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    state.resolve();
+    expect(await pending).toEqual({ bound: false, reason: 'state-queue-timeout', retryAfterMs: 5000 });
+    expect(readAgentsStateForSafetyCheck).not.toHaveBeenCalled();
+    expect(saveState).not.toHaveBeenCalled();
+    await withClaimOwnershipLock(() => {});
+  });
+
+  it('keeps a started save owned until durable settlement and reports redacted persistence evidence', async () => {
+    const save = deferred();
+    store.saveGate = save.promise;
+    const before = structuredClone(store.state);
+    let settled = false;
+    const pending = update('bind').then(result => { settled = true; return result; });
+    await tick();
+    expect(saveState).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    expect(settled).toBe(false);
+    expect(store.state).toEqual(before);
+    expect(cosEvents.emit).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('status=pending phase=persistence'));
+    let nextEntered = false;
+    const following = withClaimOwnershipLock(() => { nextEntered = true; });
+    await tick();
+    expect(nextEntered).toBe(false);
+    save.resolve();
+    expect(await pending).toEqual({ bound: true, branch: 'claim/issue-101' });
+    await following;
+    expect(store.state.agents['agent-epicrun'].metadata.claimBranches).toEqual(['claim/issue-101']);
+    expect(cosEvents.emit).toHaveBeenCalledOnce();
+    const diagnostics = [...console.warn.mock.calls, ...console.log.mock.calls].flat().join(' ');
+    expect(diagnostics).not.toMatch(/agent-epicrun|claim\/issue|repos/);
+    expect(diagnostics).toMatch(/ownershipQueueMs=\d+ stateQueueMs=\d+ ownerReadMs=\d+ ownershipCheckMs=\d+ persistenceMs=\d+/);
+  });
+
+  it('diagnoses an in-flight trusted owner read and refuses unreadable or stale ownership without writes', async () => {
+    const read = deferred();
+    store.readGate = read.promise;
+    store.unreadable = true;
+    const pending = update('bind');
+    await tick();
+    await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('status=pending phase=ownerRead'));
+    read.resolve();
+    expect(await pending).toEqual({ bound: false, reason: 'ownership-unreadable' });
+    store.unreadable = false;
+    store.stale = true;
+    expect(await update('release')).toEqual({ released: false, reason: 'ownership-stale' });
+    expect(saveState).not.toHaveBeenCalled();
+  });
+
+  it('propagates a started persistence failure and releases the queue only after rejection', async () => {
+    const save = deferred();
+    store.saveGate = save.promise;
+    const before = structuredClone(store.state);
+    const pending = update('bind');
+    const failure = expect(pending).rejects.toThrow('synthetic write failure');
+    await tick();
+    await vi.advanceTimersByTimeAsync(CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS);
+    save.reject(new Error('synthetic write failure'));
+    await failure;
+    await withClaimOwnershipLock(() => {});
+    expect(store.state).toEqual(before);
+    expect(cosEvents.emit).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('status=failed phase=persistence'));
   });
 });
 

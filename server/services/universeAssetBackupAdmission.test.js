@@ -1,3 +1,8 @@
+// Keep the filesystem half real without touching the host's Trash.
+vi.mock('../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  const { unlink } = await import('node:fs/promises');
+  for (const path of paths) await unlink(path);
+} }));
 /** Universe asset workflows over real files, with the universe row write held
  * at its commit seam. A backup cut must never land between a sheet copy or file
  * removal and the universe row that names (or stops naming) those bytes. */
@@ -52,7 +57,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
   },
   getJob: id => queuedJobs.get(id),
 }));
-vi.mock('./mediaCollections.js', () => ({ addItem: vi.fn(), ERR_DUPLICATE: 'DUPLICATE' }));
+vi.mock('./mediaCollections.js', () => ({ addItem: vi.fn(), removeItemFromAllCollections: async () => 0, ERR_DUPLICATE: 'DUPLICATE' }));
 // This suite owns universe references; music-video pool cleanup has its own contracts.
 vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ indexImage: async () => {}, unindexImage: async () => {} }));

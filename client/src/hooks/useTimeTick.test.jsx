@@ -44,6 +44,35 @@ describe('useTimeTick', () => {
     expect(result.current).toBe(initial + 60000);
   });
 
+  it('does not subscribe while disabled and resumes ticking once enabled', () => {
+    vi.setSystemTime(new Date('2026-05-21T12:00:00Z'));
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const { result, rerender } = renderHook(({ enabled }) => useTimeTick(1000, { enabled }), {
+      initialProps: { enabled: false },
+    });
+    const initial = result.current;
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 1000)).toHaveLength(0);
+    expect(result.current).toBe(initial);
+
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(result.current).toBe(initial + 6000);
+
+    rerender({ enabled: false });
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(initial + 6000);
+
+    intervalSpy.mockRestore();
+  });
+
   it('subscribers at the same intervalMs share one underlying setInterval', () => {
     const intervalSpy = vi.spyOn(window, 'setInterval');
 

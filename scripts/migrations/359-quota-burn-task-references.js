@@ -85,6 +85,9 @@ async function readJson(fullPath, label) {
 
 const writeJson = (fullPath, value) => atomicWrite(fullPath, `${JSON.stringify(value, null, 2)}\n`);
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['cos/quota-burn.json', 'cos/quota-burn.pre-359.json'];
+
 export default {
   async up({ rootDir }) {
     const planPath = join(rootDir, QUOTA_BURN_PATH);

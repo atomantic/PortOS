@@ -12,6 +12,8 @@ export const TASK_DATA_INPUT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: 'open-issues', label: 'Open issues', description: 'Include the target repository\'s current open forge issues, with their labels, excluding help wanted issues.', requiresApp: true, carriesDispatchLabels: true }),
   Object.freeze({ id: 'open-pull-requests', label: 'Open pull requests', description: 'Include the target repository\'s current open pull or merge requests.', requiresApp: true }),
   Object.freeze({ id: 'closed-unmerged-pull-requests', label: 'Closed unmerged pull requests', description: 'Include recently closed pull or merge requests that were not merged.', requiresApp: true }),
+  Object.freeze({ id: 'audit-slice-history', label: 'Recent audit slices', description: 'Include the areas this audit lane deep-reviewed in its last eight runs for the app, so the run rotates to other areas.', requiresApp: true }),
+  Object.freeze({ id: 'lane-health', label: 'Lane health', description: 'Include what became of the issues this audit lane filed in the last 60 days (completed, not planned, reverted, re-filed) so the run does not repeat a rejected finding.', requiresApp: true }),
 ]);
 
 export const TASK_DATA_INPUT_IDS = Object.freeze(TASK_DATA_INPUT_DEFINITIONS.map(({ id }) => id));

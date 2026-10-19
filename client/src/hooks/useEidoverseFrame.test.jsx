@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import useEidoverseFrame from './useEidoverseFrame';
 import { safeRemoveStorage, safeWriteStorage } from '../lib/safeStorage';
+import { mockFrameWindows } from '../test/mockFrameWindows.js';
 
 const hostUrl = 'https://world.example.com/';
 const objects = [{ id: 'portos-design-v2-signal-app-example', route: '/apps' }];
@@ -29,6 +30,7 @@ afterEach(() => {
 });
 
 describe('hosted Eidoverse frame navigation', () => {
+  beforeEach(mockFrameWindows);
   it('waits for the current renderer departure acknowledgement before retiring its frame', async () => {
     let frame;
     render(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);

@@ -101,24 +101,25 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const isQuota = explicitReason === 'quota' || isReviewerQuotaFailure(result)
   const isExplicitUnavailable = explicitReason === 'unavailable'
 
-  const settings = await getSettings().catch(() => null)
-  const prior = settings?.codeReview?.reviewerHealth?.[reviewer]
-  const priorCount = Number(prior?.failureCount) || 0
-  const failureCount = priorCount + 1
-  const isRepeatedFailure = failureCount >= 2
   const isProvider = isProviderReviewer(reviewer)
 
-  if (!isConfigFault && !isMalformed && !isQuota && !isExplicitUnavailable && !isRepeatedFailure && !isProvider) {
+  if (!isConfigFault && !isMalformed && !isQuota && !isExplicitUnavailable && !isProvider) {
     return false
   }
 
-  const shouldPause = isQuota || isExplicitUnavailable || isRepeatedFailure || (Number(prior?.pausedUntil) > now)
-  const pauseReason = isQuota ? 'quota' : (isExplicitUnavailable ? 'unavailable' : (isRepeatedFailure ? 'unavailable' : (prior?.reason || 'unavailable')))
-
+  // The failure count and pause decision derive from the persisted record
+  // inside the serialized update, so concurrent failures each see the others.
   // Reviewer telemetry is not a user action. The standalone claim bridge must
   // not initialize the live user-action database while updating local health.
+  let shouldPause = false
+  let pauseReason = null
   await updateSettingsWith((current) => {
     const existing = current.codeReview?.reviewerHealth?.[reviewer] || {}
+    const failureCount = (Number(existing.failureCount) || 0) + 1
+    const isRepeatedFailure = failureCount >= 2
+    shouldPause = isQuota || isExplicitUnavailable || isRepeatedFailure || (Number(existing.pausedUntil) > now)
+    pauseReason = isQuota ? 'quota' : (isExplicitUnavailable ? 'unavailable' : (isRepeatedFailure ? 'unavailable' : (existing.reason || 'unavailable')))
+
     let entry
     if (isMalformed) {
       entry = {
@@ -721,6 +722,8 @@ For a request that quotes an old launch-video failure ("stop if no music engine 
 Judge the production behavior before treating a regression test as the behavior itself. A regression test can state the observable requirement more plainly than a low-level production diff; it is evidence of the behavior, not the only implementation. For concurrency or admission objectives, a production handoff or release can be the actual behavior: when local inference owns an endpoint-scoped/GPU slot, releasing the generic global agent-admission slot lets unrelated non-local work (for example agy or gemini) claim it while the local turn remains in flight. If the diff contains that matching release or handoff and a regression test that keeps local inference active while probing the unrelated claim, judge them together as one delivered behavior. Do not call the release or test unrequested, and do not mark the objective missing merely because the test is the clearest statement of the outcome. This interpretation applies only when both the production resource transition and the concurrent competing-path assertion are present; it does not exempt a test-only change or an unverified claim.
 
 For an objective that asks to move or reorder an existing UI section, a diff may show the move as a complete added block and a complete deleted block. When the same complete named section, with materially unchanged contents, is added at the requested position and its former placement is removed, judge the pair as one relocation that satisfies the requested order. Do not call the insertion an unrequested addition or the removal a missing section. This rule applies only when the diff establishes that matched move: an added duplicate whose old copy remains, a different section, or independent content changes must still be judged on their own; matching headings alone do not prove a relocation.
+
+For an objective to diagnose why an autonomous agent run stalled or failed and fix it, where the agent behavior is defined by a task prompt template (for example a \`taskPromptDefaults/prompts.js\` entry with a \`PROMPT_VERSIONS\` bump in \`versions.js\`), the prompt text IS the production behavior: an added prompt section telling the agent to stay with the work until the stated completion condition, plus the version bump, delivers a behavior fix without any runtime-code change, and a run id or commit cited in the version note is the diagnosis evidence. Do not list missing runtime code merely because the fix lives in prompt text. A separate hunk repairing a CI failure that blocks that same delivery (for example renaming an unused export a dead-exports check rejects) is part of the objective, not unrequested. This applies only when the diff shows the prompt-section addition and the version bump; a prompt edit with no version bump, or a diff with neither prompt text nor a CI repair, remains incomplete.
 
 For an objective to add buttons or links that send an item to other pages (for example a card action that opens an image or video generator), judge the rendered UI, not only the helper that builds the destinations. A helper that returns route strings (such as a sendLinks object) is supporting code, not the buttons. A control can be rendered data-driven: a JSX array of [key, Icon, label] tuples mapped to one <Link to={links[key]}> per entry, so no separate literal element exists per button. When the diff ADDS such a mapped array or per-entry Link/button whose keys match the helper's returned keys and whose targets are the requested destinations, count each requested destination as delivered; do not report the buttons missing because the JSX has no hand-written element per destination. This exempts only a rendering path the diff actually adds: a helper with no added JSX consumer, a tuple key the helper never returns, or a requested destination absent from both still counts as missing.
 

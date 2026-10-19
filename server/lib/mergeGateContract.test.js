@@ -82,6 +82,16 @@ describe('resolveMergeGateVerdict', () => {
     })).toBe('leave-open-stated');
   });
 
+  it('accepts live auto-merge evidence even without a handoff summary', () => {
+    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true, autoMergeEnabled: true }, summary })).toBe('auto-merge-enabled');
+    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true }, summary: 'Auto-merge enabled.' })).toBe('needs-reprompt');
+  });
+
+  it('accepts a verified pending-merge receipt, never the summary alone, as a pending end state', () => {
+    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true, mergeHandoffQueued: true }, summary })).toBe('merge-handoff-queued');
+    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true }, summary: 'Handed to the PortOS pending-merge coordinator.' })).toBe('needs-reprompt');
+  });
+
   it('is "needs-reprompt" when the PR is open and no blocker is stated', () => {
     expect(resolveMergeGateVerdict({
       prProbe: { prState: 'OPEN', readable: true }, summary,

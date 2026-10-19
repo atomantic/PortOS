@@ -2,6 +2,7 @@ import { createElement, useEffect } from 'react';
 import MaintenanceRunStatus, { maintenanceRunProgress } from '../components/cos/tabs/schedule/MaintenanceRunStatus';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 import { timeUntil } from '../utils/formatters';
 import { formatLiReason } from '../utils/layeredIntelligenceReasons';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses';
@@ -65,10 +66,9 @@ function maintenanceNeedsAttention(run) {
  * high in the tree (Layout), alongside useErrorNotifications.
  */
 export function useOnDemandTaskToast() {
+  useSocketSubscription('cos');
+
   useEffect(() => {
-    const subscribe = () => socket.emit('cos:subscribe');
-    subscribe();
-    socket.on('connect', subscribe);
     const maintenanceStates = new Map();
     const handleMaintenance = run => {
       if (run.historyOnly) return;
@@ -223,14 +223,12 @@ export function useOnDemandTaskToast() {
     socket.on('cos:schedule:on-demand-empty', handleEmpty);
     socket.on('cos:schedule:on-demand-handled', handleHandled);
     return () => {
-      socket.off('connect', subscribe);
       socket.off('cos:maintenance:updated', handleMaintenance);
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
       socket.off('cos:schedule:on-demand-handled', handleHandled);
       for (const state of maintenanceStates.values()) {
         if (state.toastId) toast.dismiss(state.toastId);
       }
-      // Don't unsubscribe from cos — other components share the room.
     };
   }, []);
 }

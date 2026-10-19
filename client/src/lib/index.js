@@ -39,6 +39,7 @@ export * from './characterFramework.js';
 export * from './characterIntegrity.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
+export * from './creativeLibraries.js';
 export * from './creativeDirectorPreview.js';
 export * from './creativeDirectorStatus.js';
 export * from './editorialRoadmap.js';
@@ -51,6 +52,7 @@ export * from './fableLoomReadiness.js';
 export * from './glbFailure.js';
 export * from './grokVideoClip.js';
 export * from './reactorVideoClip.js';
+export * from './runwayVideoModels.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
 // Namespace export: imageGenBackends re-exports every imageGenModes symbol

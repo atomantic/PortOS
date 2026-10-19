@@ -24,7 +24,7 @@ const completionSchema = z.object({
 }).strict();
 const retirementSchema = z.object({ version: z.literal(1) }).strict();
 const RETIRED_EXITS = 'unreconciled-exits.json';
-const refused = () => new Error('Detached writer inventory is incomplete or unreadable; maintenance must remain fenced.');
+const refused = name => new Error(`Detached writer inventory is incomplete or unreadable${name === undefined ? '' : ` at entry ${JSON.stringify(name)}`}; maintenance must remain fenced.`);
 
 function syncDirectory(directory) {
   if (process.platform === 'win32') return;
@@ -148,9 +148,15 @@ export function createDatabaseWriterRegistry(dataDir = PATHS.data) {
     }
     const retired = names.includes(RETIRED_EXITS);
     if (retired) readRecord(directory, RETIRED_EXITS, retirementSchema);
-    const writers = names.filter(name => name !== RETIRED_EXITS).sort().map(name => {
-      try { return readEntry(name); } catch { throw refused(); }
-    });
+    const writers = [];
+    for (const name of names.filter(name => name !== RETIRED_EXITS).sort()) {
+      try {
+        // Finder/editor regular dotfiles cannot contain a launch reservation.
+        // Hidden directories and symlinks still fail closed.
+        if (name.startsWith('.') && lstatSync(join(directory, name)).isFile()) continue;
+        writers.push(readEntry(name));
+      } catch { throw refused(name); }
+    }
     // Keep this in the inventory itself so a consumer cannot accidentally read
     // only current launch rows and mistake a compacted history for an empty set.
     if (retired) writers.push({ state: 'unresolved', kind: 'retired-exits' });

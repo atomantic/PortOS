@@ -357,8 +357,9 @@ async function probePgvector(root) {
 }
 
 /**
- * Reads `data/migrations.applied.json` only — `listPendingMigrations` is the
- * documented pure-read half of the migration runner and never applies anything.
+ * Reads the migration ledger only (a pre-2026-05 legacy ledger until the next
+ * run moves it) — `listPendingMigrations` is the documented pure-read half of
+ * the migration runner and never applies anything.
  */
 async function probeMigrations(root) {
   const pending = await listPendingMigrations({

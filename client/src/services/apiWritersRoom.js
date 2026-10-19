@@ -3,7 +3,7 @@ import { request } from './apiCore.js';
 const enc = encodeURIComponent;
 
 // Folders
-export const listWritersRoomFolders = () => request('/writers-room/folders');
+export const listWritersRoomFolders = (options = {}) => request('/writers-room/folders', options);
 export const createWritersRoomFolder = (data, options = {}) => request('/writers-room/folders', {
   method: 'POST',
   body: JSON.stringify(data),

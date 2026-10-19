@@ -35,14 +35,27 @@ material finding verified). An issue being filed, or one fix being made, is not
 an automatic score improvement. Scores express an auditor's judgment supported
 by the scan and inspection, not a certification or an exhaustive proof.
 
-The overall score is the rounded, equal-weight average of the latest eligible
-category assessments: **broad** discovery coverage, medium/high confidence, and
-at most 30 days old. Broad means the signal scan covered the entire declared
-eligible inventory; deep investigation still stays bounded. Partial, stale,
-low-confidence, unavailable and inapplicable assessments remain visible but do
-not contribute. Missing categories do not count as 100. The contributing category
-count is shown beside the score so a single good category cannot imply complete
-coverage. Its denominator is the number of categories that **apply** to the
+Each run rates only the **slice** it deep-reviewed (report `version: 2`:
+`slice` names the top-level paths or area, `sliceScore` is its 0–100 rating).
+A bounded run cannot honestly rate the whole category, and when it was asked to
+(`version: 1`, a category-wide `score`) the dashboard moved with whichever
+slice the agent picked — a 20-point swing between consecutive runs was normal.
+Stored v1 reports stay readable; their `score` is read as that run's score.
+
+A category's score is derived server-side: the confidence-weighted mean (high
+1, medium 0.5) of its newest five eligible runs — **broad** discovery coverage,
+medium/high confidence, scored, and at most 30 days old — one run per UTC day.
+The breakdown shows how many runs fed the figure and the worst severity any of
+them found; the row's coverage, confidence, date, slice and summary describe the
+newest run. A newer partial run does not erase a fresh scored one. With no
+eligible run the row shows the newest run's own score beside its stale, partial
+or low-confidence label and does not contribute. The overall score is the
+rounded, equal-weight average of the contributing category scores. Broad means
+the signal scan covered the entire declared eligible inventory; deep
+investigation still stays bounded. Partial, stale, low-confidence, unavailable
+and inapplicable assessments remain visible but do not contribute. Missing
+categories do not count as 100. The contributing category count is shown beside
+the score so a single good category cannot imply complete coverage. Its denominator is the number of categories that **apply** to the
 repository (`applicableCategories`): a category is inapplicable when the
 repository scan says so (see "Which checks" below — the app detail read runs it)
 or its own fresh assessment reported `not-applicable`, unless a fresh rated
@@ -58,9 +71,40 @@ markers and malformed JSON. Missing/invalid output never invents a score or
 replaces a previous valid measurement; the prior measurement keeps its original
 date and expires normally. Assessment collection does not relax commit/PR gates.
 The run's recorded start time orders measurements so delayed recovery cannot
-replace newer evidence. PostgreSQL retains each run measurement and projects the latest per app/category,
-locally and within the ordinary database backup; no old runs are guessed into
-scores and no extra audit batch is enabled automatically.
+replace newer evidence. PostgreSQL retains each run measurement and projects the
+recent runs per app/category into the rolling score, locally and within the
+ordinary database backup; no old runs are guessed into scores and no extra
+audit batch is enabled automatically. The summary also carries one
+`AUDIT_SLICE: <paths or areas deep-reviewed>` line, stored in the measurement's
+`slice` column (null for runs that predate it, or the v2 report's `slice` when
+the line is missing). Every audit lane preloads its last eight slices for the
+app through the `audit-slice-history` task data input ("Recent audit slices")
+so consecutive runs rotate to other areas instead of re-scanning the same
+inventory; the `ux` and `module-hygiene` prompts read that block for their
+route and slice choice. Peers and the `.quality.json` snapshot
+receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
+an older install keeps reading it; the slice text never leaves the machine.
+
+### Lane health
+
+Every audit lane also preloads what became of the issues it filed, through the
+`lane-health` task data input ("Lane health", #12088). `server/lib/laneHealth.js`
+computes, per lane (the audit's metric label; the shared `code-quality` label
+yields to the more specific lane label beside it), the issues filed in the last
+60 days and how they ended: completed, not planned (or duplicate), open, fixes
+reverted (a later commit whose subject starts with `Revert` and names the
+closing PR or one of its SHAs), and re-filed (a new issue citing a
+`path/to/file.ext` that a closed finding of the same lane cited within 30
+days). The block lists up to ten of the lane's not-planned, reverted or re-filed
+titles under "Findings this lane got wrong or repeated", and the discovery
+contract tells the lane not to re-file one of them without new evidence.
+`services/appLaneHealth.js` reads the forge (`gh`/`glab`) and the checkout's
+revert commits on request; nothing is cached or scheduled. The Quality page
+shows the same numbers for every lane in a "Lane health" table
+(`GET /api/apps/:id/lane-health`), noisiest lane first, so the operator can see
+which lanes to retune. A truncated issue read shortens the window and says so;
+a failed pull-request or commit read is named rather than read as "nothing
+reverted".
 
 ## Coverage review
 
@@ -95,6 +139,12 @@ breaking changes, idempotency keys, pagination bounds), `observability`
 (correlation, alertable metrics, truthful health, audit trails) and
 `data-safety` (backup restorability, bulk/backfill safety, retention reach).
 
+`upgrade-rehearsal` is `data-safety`'s executed counterpart: it builds scratch
+installs from migration-test fixture shapes, runs the migration runner and a
+backup restore against them, and boots the result, so a failure only an
+executed path shows (#6182, #12044, #12046, #12049) is caught without touching
+live data.
+
 Two gap lenses cover defects every page-walking and code-shape audit reads as
 intentional or never reaches:
 
@@ -121,8 +171,9 @@ ranges and an overall/category selector. Both selections are shareable URL
 parameters. The expandable history table provides dates, values and coverage
 without relying on color or hover. Refresh history reloads measurements.
 
-Daily snapshots use the latest assessment available on that date, carrying it
-forward for at most 30 days. Missing or expired evidence creates a gap. The
+Daily snapshots apply the same rolling derivation to the runs known on that
+date, carrying each run forward for at most 30 days. Missing or expired evidence
+creates a gap. The
 current day ends at the request time. Category charts include provisional
 partial/low-confidence scores; the overall chart applies the same eligibility
 rules as today's score. Coverage is shown with each value because adding or

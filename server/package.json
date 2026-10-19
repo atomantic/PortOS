@@ -10,12 +10,11 @@
   "scripts": {
     "dev": "node --watch start.js",
     "start": "node start.js",
-    "lint": "node ../client/node_modules/@biomejs/biome/bin/biome lint --max-diagnostics=20 .",
+    "lint": "biome lint --error-on-warnings --max-diagnostics=20 .",
     "test": "vitest run --configLoader runner",
     "test:fast": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
     "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
-    "test:ci:related": "vitest related --run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
     "test:coverage": "vitest run --coverage --configLoader runner",
     "setup:db:test": "node scripts/setup-db-test.mjs",
     "test:db": "vitest run --config vitest.config.db.js --configLoader runner",
@@ -25,27 +24,27 @@
     "@babel/parser": "8.0.7",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.1.0",
-    "@googleapis/gmail": "22.0.1",
     "@novnc/novnc": "1.7.0",
     "better-sqlite3-multiple-ciphers": "13.0.3",
     "chokidar": "5.0.0",
     "compression": "1.8.2",
-    "express": "5.2.1",
+    "express": "5.3.0",
     "node-pty": "1.2.0-beta.15",
     "pg": "8.23.1",
-    "playwright-core": "1.64.0",
+    "playwright-core": "1.64.1",
     "pm2": "7.0.4",
     "sharp": "0.35.5",
     "socket.io": "4.8.4",
     "socket.io-client": "4.8.4",
     "three": "0.186.1",
-    "undici": "8.11.2",
+    "undici": "8.12.1",
     "ws": "8.22.0",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "5.0.3",
-    "vitest": "5.0.3"
+    "@biomejs/biome": "2.5.15",
+    "@vitest/coverage-v8": "5.0.4",
+    "vitest": "5.0.4"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",

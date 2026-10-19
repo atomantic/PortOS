@@ -1,30 +1,34 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Save } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { executeCommand } from '../services/api';
+import useListResource from '../hooks/useListResource.js';
+import ListLoadError from '../components/ui/ListLoadError';
 
 export function ProcessesPage() {
-  const [managedProcessNames, setManagedProcessNames] = useState(new Set());
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    const loadManagedProcessNames = async () => {
-      const apps = await api.getApps().catch(() => []);
-      const names = new Set();
-      apps.forEach(app => {
-        (app.pm2ProcessNames || []).forEach(name => names.add(name));
-      });
-      setManagedProcessNames(names);
-    };
-    loadManagedProcessNames();
+  const fetchApps = useCallback(async () => {
+    const list = await api.getApps({ silent: true });
+    return Array.isArray(list) ? list : [];
   }, []);
+  const appsResource = useListResource(fetchApps);
+  const { items: apps, state: appsState, error: appsError, retry: retryApps } = appsResource;
 
-  const isPortOSManaged = (procName) => {
+  const managedProcessNames = useMemo(() => {
+    const names = new Set();
+    apps.forEach(app => {
+      (app.pm2ProcessNames || []).forEach(name => names.add(name));
+    });
+    return names;
+  }, [apps]);
+
+  const isPortOSManaged = useCallback((procName) => {
     if (procName.startsWith('portos-')) return true;
     return managedProcessNames.has(procName);
-  };
+  }, [managedProcessNames]);
 
   const handlePm2Save = async () => {
     setSaving(true);
@@ -54,6 +58,13 @@ export function ProcessesPage() {
           <span className="sm:hidden">{saving ? '...' : 'Save'}</span>
         </button>
       </div>
+
+      {appsState === 'error' && (
+        <ListLoadError what="managed apps" error={appsError} onRetry={retryApps} />
+      )}
+      {appsState === 'ready' && apps.length === 0 && (
+        <p className="text-xs text-gray-500">No managed apps configured.</p>
+      )}
 
       <ProcessesTab filterFn={isPortOSManaged} />
     </div>

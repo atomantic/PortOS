@@ -87,13 +87,61 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 3. Push `main` to `release` branch to trigger GitHub Release workflow
 4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` after any rebase and before every push. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) for the full contract.
 
-Pregate proves only the stages it runs; it does not replace required CI or resource-dependent checks. A full-suite plan runs only the always-run guards unless `--full` is supplied; DB suites, Windows, client build, and boot smoke are reported but not run by pregate.
+Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
-Rendering PRs that select fidelity cases also run
-`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head.
-The command runs the cases and publishes exact-head evidence using existing GitHub
-authentication; missing or stale evidence blocks CI Gate. See
-[Browser fidelity evidence](GITHUB_ACTIONS.md#browser-fidelity-evidence).
+Pregate proves only the stages it runs, and it says which it did not. A scoped
+plan runs every suite CI would run for it, in CI's dependency order and with
+CI's environment: the hidden-content scan, lint, server and client tests, the
+client build plus the API Explorer bundle pin, the boot smoke, the
+cross-workspace browser suites (smoke profile), and the serial `portos_test`
+DB suite last and alone — never concurrently with the other suites, and never
+against `portos` (both `PGDATABASE` and `PGTESTDATABASE` are pinned and
+`TEST_DB_OK` is removed from the stage's environment). A full-suite plan runs
+only the always-run guards unless `--full` is supplied, which runs everything
+above as well.
+
+A suite stays with CI, and is named as not run in the summary, when:
+
+- you pass `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`;
+- a full plan was downgraded (no `--full`);
+- a prerequisite is missing — no Postgres answering at the resolved endpoint
+  (exported `PG*`, then the checkout's `.env`, then `localhost:5432`), or no
+  Chrome, ffmpeg or client bundler for the browser suites. The line names the
+  remedy; the run continues.
+
+The shipped prompt-history guard (CI's `prompt-history` job) runs locally
+when the planner selects it. The Windows job and the Linux worker-containment
+job (bubblewrap namespaces) are the two suites only CI can prove; both are
+named as not run. Every run writes a receipt to
+`.cache/pregate/report.json` (gitignored): the plan, each stage's outcome and
+duration, the suites not run and why, the base and HEAD SHAs, the Node
+version, platform and worker budget, and the hash of the exact working tree
+that was validated — untracked and uncommitted files included, so a later
+commit of that state yields the same `HEAD^{tree}`. A green summary never
+claims a suite it skipped; required CI checks still apply.
+
+After the push (and, when you open the pull request yourself, before
+`gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
+`pregate` commit status on the pushed head, bound to the validated tree and
+naming the platform and Node it ran on, and the pull request's impact planner
+skips the stages it attests to (only stages that ran and passed; never
+Windows, Linux containment or the Node-minimum check; and, per stage, never
+one that a change `main` gained since the branch forked could reach). It
+refuses — saying what to rerun — when the receipt did not pass, the tree
+changed after pregate, the commit is not on the upstream remote yet, or
+nothing attestable ran, and it attests no server, client or lint stage from
+a receipt planned with `--base` against something other than the default
+branch's merge base; a refusal just means CI runs everything as before.
+`--dry-run` prints the status without posting it; `--revoke "<reason>"`
+withdraws every earlier attestation on the commit. Only a repository writer
+can create the status and only the repository owner's newest one counts, so
+fork and Dependabot pull requests are unaffected. Contract and inspection:
+[Pregate attestation](GITHUB_ACTIONS.md#pregate-attestation).
+
+PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
+and on the release PR. To check them on a rendering PR before merging, run
+`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head. See
+[Browser fidelity cases](GITHUB_ACTIONS.md#browser-fidelity-cases).
 
 ### Checkout-owned development caches
 
@@ -195,6 +243,11 @@ npm run setup:db:test
 npm run test:db
 ```
 
+Every worktree shares one `portos_test`, and some DB suites restore a whole-database
+dump, so `test:db` takes a session-level Postgres advisory lock for the run
+(`server/test/dbRunExclusivity.js`). A second run from another worktree prints
+`Another DB test run holds portos_test` and waits for the first to finish.
+
 Supported full local validation uses the CI worker budget. An unbounded
 `npm test` can oversubscribe a loaded machine: real media, prompt-catalog,
 and nested-worker cases then hit their existing budgets. A green focused
@@ -208,7 +261,9 @@ PORTOS_PREGATE_MAX_WORKERS=4 npm test
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 ```
 
-For release validation, run `npm run test:db` after the server and client
+`npm run pregate` runs the DB suite itself when the plan selects it, after
+every other stage, against `portos_test` only. For release validation by
+hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
 the database restore suite drains a timed-out case before the next one touches
 `portos_test` — but its per-case budgets assume an
@@ -221,8 +276,20 @@ For server watch mode, run this alternative from the repository root:
 npm run test:watch --prefix server
 ```
 
+`npm run pregate` (and CI, through the same runner) also consults the test
+memo: a selected test file whose every input — the modules it loads, the
+fixtures and package versions it reaches, the Node major and platform, and
+the gating environment variables — is byte-identical to a run that already
+passed is skipped, and new green results are recorded under
+`~/.portos/test-memo/`. Tree-wide scanners and anything that reads repository
+state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
+`PORTOS_TEST_MEMO_VERBOSE=1` lists the skipped files; see
+[GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md#test-memo).
+
 Pull requests into `main` run the tests for affected feature directories, with
-conservative fallbacks to Vitest related-test mode or the complete suite. The
+conservative fallbacks to the runner's related-test mode or the complete suite; a
+same-repository pull request whose pushed head carries a pregate attestation
+skips the stages that receipt proved (see the Git Workflow section). The
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
 run nothing — the pull request gate already covered that tree. Release

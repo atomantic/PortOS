@@ -13,7 +13,7 @@
 import { execFile, execFileSync } from './childProcess.js';
 import { promisify } from 'util';
 import { accessSync, constants, existsSync, statSync } from 'fs';
-import { delimiter, isAbsolute, join, resolve } from 'path';
+import { delimiter, isAbsolute, join, resolve, win32 } from 'path';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -184,6 +184,15 @@ const canExecute = (candidate) => {
  * @param {{env?: NodeJS.ProcessEnv|object, cwd?: string}} [options]
  * @returns {string|null}
  */
+/**
+ * Windows PowerShell 5.1's fixed location — it ships with every supported
+ * Windows, so this is the shell resolver's last PowerShell probe and the one
+ * host `nativeTrash.js` targets for its .NET Framework `Add-Type` script.
+ */
+export function windowsPowerShell51Path(env = process.env) {
+  return win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
 export function findCommandOnPath(name, { env = process.env, cwd = process.cwd() } = {}) {
   if (!name || typeof name !== 'string') return null;
 

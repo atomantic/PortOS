@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenModes';
 import { BOARD_POSTER_SIZE } from '../../lib/moodBoardAnalysis';
@@ -97,7 +97,7 @@ describe('MoodBoardStylePanel', () => {
   it('composes from saved analyses without running prompt-from-media again', async () => {
     const onBoardChange = vi.fn();
     render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={onBoardChange} />);
-    expect(screen.queryByRole('button', { name: 'Analyze board' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Analyze/ })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Compose board style' }));
     await waitFor(() => expect(mockCompose).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true }));
     expect(mockStart).not.toHaveBeenCalled();
@@ -110,7 +110,7 @@ describe('MoodBoardStylePanel', () => {
     const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
     render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Compose board style' })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Analyze board' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Analyze 1 new' }));
     expect(mockStart).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true });
     await act(async () => {
       socketHandlers.get('mood-board:analyze')({ boardId: 'mb-1', status: 'running', phase: 'analyzing', total: 4, done: 1 });
@@ -140,6 +140,16 @@ describe('MoodBoardStylePanel', () => {
     await lastRenderOpts.onComplete('poster.png');
     expect(mockUpdateBoard).toHaveBeenCalledWith('mb-1', { posterImageRef: 'poster.png' }, { silent: true });
     expect(onBoardChange).toHaveBeenCalled();
+  });
+
+  it('keeps a saved negative prompt on screen while it is cleared', async () => {
+    render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
+    const field = screen.getByLabelText('Negative prompt (optional)');
+    field.focus();
+    fireEvent.change(field, { target: { value: '' } });
+    expect(screen.getByLabelText('Negative prompt (optional)')).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(screen.getByRole('button', { name: 'Save style' })).toBeEnabled();
   });
 
   it('shows a saved poster', () => {

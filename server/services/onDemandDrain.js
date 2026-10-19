@@ -252,6 +252,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
         await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
         const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
           skipPreconditions: true,
+          onDemand: true,
           targetPullRequest: request.targetPullRequest ?? null,
           // The deterministic pre-agent work reports into the user's card as it
           // runs — this is the whole reason the card exists early.

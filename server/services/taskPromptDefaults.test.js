@@ -49,14 +49,20 @@ const importDefaultsUnder = async (env, expectedOrigin) => {
 };
 
 describe('taskPromptDefaults integrity snapshot', () => {
-  it('security audits preserve delegated authority while tracing untrusted input to harmful effects', () => {
+  // The same default is dispatched to every managed app, so the PortOS trust
+  // model stays a single pointer (AGENTS.md Security Model + ETHOS.md) rather
+  // than policy prose that does not apply elsewhere (#12081).
+  it('security audits point at the project trust model and keep delegated authority generic', () => {
     const prompt = DEFAULT_TASK_PROMPTS.security;
-    expect(prompt).toContain('verified PORTOS_API_TOKEN agent sessions carry operator authority');
+    expect(prompt).toContain('(for PortOS:\nAGENTS.md Security Model and ETHOS.md)');
+    expect(prompt.match(/ETHOS/g)).toHaveLength(1);
+    expect(prompt).not.toContain('PORTOS_API_TOKEN');
+    expect(prompt).not.toContain('Suno');
     expect(prompt).toContain('Third-party code/dependencies, issue/PR/review text, retrieved pages/files');
     expect(prompt).toContain('effect outside the grant');
+    expect(prompt).toContain('repair the boundary that is crossed\nrather than adding human-only approvals');
     expect(prompt).toContain('preserved authorized human AND agent workflows');
-    expect(prompt).toContain('Public Suno publication and');
-    expect(prompt).toContain('social posting remain human-only');
+    expect(prompt).toContain('file ONE\nfinding for the class whose fix is a mechanical guard');
   });
 
   it.each(['claim-issue', 'claim-issue-gitlab', 'claim-issue-jira'])(
@@ -76,9 +82,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   it('keeps the lifecycle prompt history under the renamed task key', () => {
     expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('UI lifecycle and state audit');
-    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(2);
+    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(3);
     expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).toHaveProperty('ui-lifecycle');
-    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(1);
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(2);
     expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).not.toHaveProperty('react-lifecycle');
     expect(SNAPSHOT.PROMPT_VERSIONS).not.toHaveProperty('react-lifecycle');
     expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
@@ -109,7 +115,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(6);
+    expect(PROMPT_VERSIONS.ux).toBe(8);
+    // v8 (#12090): route rotation reads the preloaded slice block, not only the tracker.
+    expect(current).toMatch(/preloaded Recent audit slices block does not list/);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
@@ -139,6 +147,33 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('**Same kind of page, same frame.**');
   });
 
+  // v7: the harness provisions no Playwright MCP, so the walk names no tool and
+  // no exact viewport; the reflow item keeps only desktop-viewport containers
+  // and hands phone/tablet widths to mobile-responsive (#12077, #12084).
+  it('ux v7 uses whatever browser automation the run has and splits layout by viewport width', () => {
+    const ux = DEFAULT_TASK_PROMPTS.ux;
+    expect(ux).not.toMatch(/Playwright MCP|browser_[a-z]+/);
+    expect(ux).toContain('a CDP tab, Playwright, or the host');
+    expect(ux).toContain('three viewport classes');
+    expect(ux).toContain('(desktop viewport, narrow container)');
+    expect(ux).toContain('Phone and tablet viewports (1024 wide or narrower) and touch mechanics');
+    expect(ux).not.toContain('Responsive layout failures ARE part of this UX audit');
+    expect(PROMPT_VERSIONS['mobile-responsive']).toBe(4);
+    expect(DEFAULT_TASK_PROMPTS['mobile-responsive']).toContain('viewport width ≤1024 and touch');
+  });
+
+  // v6: 'Required' coverage sections made a single-process app pad its report
+  // with 'checked, not applicable' lines (#12078).
+  it('performance v6 scopes platform-specific coverage to what the app has', () => {
+    const perf = DEFAULT_TASK_PROMPTS.performance;
+    expect(PROMPT_VERSIONS.performance).toBe(6);
+    expect(perf).not.toMatch(/^## Required/m);
+    expect(perf.match(/^## Where present:/gm)).toHaveLength(2);
+    expect(perf.match(/skip the rest silently/g)).toHaveLength(2);
+    expect(perf).not.toContain('apps/providers');
+    expect(perf).toContain('**Stable reference data re-downloaded**');
+  });
+
   it('ui-bugs v4 hunts unhappy paths and statically provable crashes', () => {
     const current = DEFAULT_TASK_PROMPTS['ui-bugs'];
 
@@ -151,6 +186,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it.each([
     ['feature-completeness', ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
     ['workflow-recovery', ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it']],
+    ['upgrade-rehearsal', ['Build a synthetic older install', 'Restore a backup', 'One issue per root cause']],
   ])('%s v1 states what makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(1);
@@ -158,10 +194,24 @@ describe('taskPromptDefaults integrity snapshot', () => {
     for (const marker of markers) expect(current, key).toContain(marker);
   });
 
+  // The rehearsal EXECUTES migrations and a restore, so the scratch-only rule
+  // has to be the first thing the agent reads, before any step it could run
+  // against the install it was spawned from (#12091).
+  it('upgrade-rehearsal opens with the scratch-only rule and forbids the live install', () => {
+    const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
+    const opening = current.slice(0, current.indexOf('Repository: {repoPath}'));
+    for (const marker of ['never the live `data/`', 'never the real Postgres', '`MEMORY_BACKEND=file`', '`NODE_ENV=test`', 'port']) {
+      expect(opening).toContain(marker);
+    }
+    expect(opening).toMatch(/out of\nbounds even when it only reads/);
+  });
+
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 
-    expect(PROMPT_VERSIONS['module-hygiene']).toBe(1);
+    expect(PROMPT_VERSIONS['module-hygiene']).toBe(3);
+    // v3 (#12090): slice choice reads the preloaded slice block.
+    expect(current).toMatch(/Prefer a slice that block does not name/);
     expect(current).toContain('{appName}');
     expect(current).toContain('{repoPath}');
     expect(current).toContain('{modeInstructions}');
@@ -184,7 +234,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('code-quality v4 keeps conventional defects and cedes drift to its sibling lanes', () => {
     const current = DEFAULT_TASK_PROMPTS['code-quality'];
 
-    expect(PROMPT_VERSIONS['code-quality']).toBe(4);
+    expect(PROMPT_VERSIONS['code-quality']).toBe(6);
     // Still its own: the conventional maintainability defects.
     expect(current).toContain('Brittle conditionals');
     expect(current).toContain('Unexplained magic values');
@@ -199,10 +249,24 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).not.toContain('regeneration-only churn');
   });
 
+  // v6: the triage lane must say which focused audit to run next (#12085), and
+  // test-coverage files by default and pays for a new test in a budgeted suite (#12087).
+  it('code-quality v6 ranks the next audits and test-coverage v4 pays for its tests', () => {
+    const quality = DEFAULT_TASK_PROMPTS['code-quality'];
+    expect(quality).toContain('## Lane recommendation');
+    expect(quality).toMatch(/Rank\sthe three focused audits \(by scheduled task type\)/);
+    expect(quality).toContain('`Recommended next audits`');
+    expect(quality).not.toContain('Missing boundary error handling');
+    expect(quality).toContain('failure-path work');
+    const coverage = DEFAULT_TASK_PROMPTS['test-coverage'];
+    expect(PROMPT_VERSIONS['test-coverage']).toBe(4);
+    expect(coverage).toContain('name the redundant test you removed to pay for it');
+  });
+
   it('better-structural-drift owns the hunts code-quality gave up', () => {
     const current = DEFAULT_TASK_PROMPTS['better-structural-drift'];
 
-    expect(PROMPT_VERSIONS['better-structural-drift']).toBe(1);
+    expect(PROMPT_VERSIONS['better-structural-drift']).toBe(2);
     expect(current).toContain('Derived artifacts committed as a second source of truth');
     // Case-insensitive: the phrase carries the concept whether it heads the
     // evidence recipe or appears in prose, and pinning the casing would break
@@ -223,25 +287,28 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-complexity', ['1 + the number of independent decision points', 'Length is not complexity', 'Name the transformation', 'Behavior preservation is the contract']],
     ['better-cognitive-load', ['reader cost', 'Flag arguments', 'Action at a distance', 'are not your findings']],
     ['better-runtime-safety', ['Sentinel confusion', 'a failure scenario, not a code shape', 'Not yours']],
-    ['better-dependency-freedom', ['Acceptable', 'Suspect', 'Removable', 'Respect documented decisions', 'file no version bumps here']],
+    ['better-dependency-freedom', ['Acceptable', 'Suspect', 'Removable', 'Respect documented decisions', 'file no version bumps here', '{depfreeMode}', 'The\nremoval bar above decides where the Acceptable line sits']],
     ['better-test-quality', ['Vacuous', 'mutation probe', 'Deletion is a valid outcome', 'Missing coverage is separate work']],
     ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
+    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-dependency-freedom': 2, 'better-runtime-safety': 4, 'better-test-quality': 2, 'better-dev-environment': 2 };
     expect(PROMPT_VERSIONS[key]).toBe(versions[key] ?? 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });
 
   it('claim workflows avoid Copilot and require verified remote merge state before cleanup', () => {
-    for (const key of ['plan-task', 'claim-issue']) {
+    for (const key of ['plan-task', 'plan-task-claim', 'claim-issue']) {
       const prompt = DEFAULT_TASK_PROMPTS[key];
       expect(prompt.toLowerCase()).not.toContain('copilot');
       expect(prompt).not.toMatch(/^\s*gh pr merge[^\n]*--auto/m);
-      expect(prompt).toContain('--json state -q .state');
+      expect(prompt).toContain('--json state,headRefOid,mergeStateStatus,isDraft,reviewDecision');
       expect(prompt).toContain('[ "$STATE" = "MERGED" ]');
-      expect(prompt).toContain('--squash --delete-branch');
-      expect(prompt).toContain('--rebase --delete-branch');
+      expect(prompt).toContain('for MERGE_METHOD in merge squash rebase');
+      expect(prompt).not.toContain('--delete-branch');
+      expect(prompt).toContain('Archive failure');
+      expect(prompt).toContain('untracked AND ignored');
+      expect(prompt).toContain('"--$MERGE_METHOD" --match-head-commit "$CI_VERIFIED_HEAD"');
       expect(prompt).toContain('Never force-delete with `-D`');
     }
 
@@ -266,7 +333,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-task'];
     const claimFlow = DEFAULT_TASK_PROMPTS['plan-task-claim'];
 
-    expect(PROMPT_VERSIONS['plan-task']).toBe(21);
+    expect(PROMPT_VERSIONS['plan-task']).toBe(23);
     expect(current).not.toContain('## Phase 6 — Review locally');
     expect(current).not.toContain('{reviewers}');
     expect(current).not.toContain('LOCAL reviewers');
@@ -884,7 +951,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(41);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(43);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -911,7 +978,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   );
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 41], ['claim-issue-gitlab', 37], ['claim-issue-jira', 24]];
+    const cases = [['claim-issue', 43], ['claim-issue-gitlab', 37], ['claim-issue-jira', 24]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];

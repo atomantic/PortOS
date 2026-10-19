@@ -95,6 +95,7 @@ const soleSelectableModel = (provider, selectedModel = '') => {
 };
 
 const runShapeDefaultsPatch = (selectedApp) => {
+  if (selectedApp?.isGitRepo === false) return { useWorktree: false, openPR: false, prCompletion: DEFAULT_PR_COMPLETION };
   const worktreeOptOut = selectedApp?.defaultUseWorktree === false;
   const defaultOpenPR = selectedApp?.defaultOpenPR ?? !worktreeOptOut;
   return {
@@ -394,7 +395,7 @@ export default function useTaskAddForm({
 
   const appDefaultsSig = useMemo(
     () => selectedApp
-      ? `${selectedApp.id}|${String(selectedApp.defaultOpenPR)}|${selectedApp.defaultPrCompletion || DEFAULT_PR_COMPLETION}|${String(selectedApp.defaultUseWorktree)}|${!!selectedApp.jira?.enabled}`
+      ? `${selectedApp.id}|${String(selectedApp.defaultOpenPR)}|${selectedApp.defaultPrCompletion || DEFAULT_PR_COMPLETION}|${String(selectedApp.defaultUseWorktree)}|${String(selectedApp.isGitRepo)}|${!!selectedApp.jira?.enabled}`
       : `none:${state.newTask.app || ''}`,
     [selectedApp, state.newTask.app],
   );

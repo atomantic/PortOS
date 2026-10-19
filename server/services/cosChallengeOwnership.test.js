@@ -163,3 +163,27 @@ describe('challenge ownership workflow', () => {
     expect(results.map(r => r.status || r.code)).toEqual(['challenged', 'CHALLENGE_EXHAUSTED']);
   });
 });
+
+// A direct task:ready emit (Creative Director bridge, on-demand) carries no
+// taskType; the claim write must still land in the file that owns the id (#2633).
+describe('prepareAgentSpawn taskType routing', () => {
+  it.each([
+    ['sys-example', 'internal'],
+    ['cd-example', 'internal'],
+    ['task-example', 'user'],
+  ])('claims %s with no taskType in the %s store', async (id, expectedType) => {
+    await addTask({ id, description: 'Example work' }, expectedType);
+    const context = await prepareAgentSpawn({ id, description: 'Example work', metadata: {} });
+    expect(context).not.toBeNull();
+    expect(context.task.taskType).toBe(expectedType);
+    expect(context.claimAcquired).toBe(true);
+    expect((await getTaskById(id)).taskType).toBe(expectedType);
+  });
+
+  it('keeps an explicit taskType over id-based inference', async () => {
+    await addTask({ id: 'sys-explicit', description: 'Example work' }, 'user');
+    const context = await prepareAgentSpawn({ id: 'sys-explicit', taskType: 'user', description: 'Example work', metadata: {} });
+    expect(context.claimAcquired).toBe(true);
+    expect(context.task.taskType).toBe('user');
+  });
+});

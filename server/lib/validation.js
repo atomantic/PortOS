@@ -332,6 +332,8 @@ export const appSchema = z.object({
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
+  // Omitted inherits reviewed PortOS auto-merge for new tasks; PATCH must not
+  // inject a default over an existing explicit draft/leave-open preference.
   defaultPrCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
   // After a CoS agent completes against this app, audit the repo for the state the
   // task asked for (worktree removed, branch deleted, PR merged) and file a recovery
@@ -1499,6 +1501,14 @@ const scaffoldPortSchema = z.preprocess(
   z.number().int().min(1).max(65535).nullable().optional()
 );
 
+// GET /api/scaffold/directories. `includeFiles` is a query flag, so it arrives
+// as the string 'true' rather than a boolean. The path is not trimmed: a
+// directory name may legitimately begin or end with whitespace.
+export const scaffoldDirectoriesQuerySchema = z.object({
+  path: z.string().min(1).max(4096).optional(),
+  includeFiles: z.enum(['true', 'false']).optional(),
+});
+
 // Full request schema for POST /api/scaffold. Validated before the route
 // touches the filesystem — template enum, port range, and a name that yields a
 // usable directory slug are all enforced up front.
@@ -2106,8 +2116,10 @@ const renderTargetEntrySchema = z.object({
   videoMode: videoModePinSchema,
   videoModel: renderTargetModelSchema,
 });
+// A null entry is an explicit "no pin for this surface": the slice PATCH merges
+// per target, so clearing one must be sent as a value, not an omitted key.
 export const renderDefaultsSettingsSchema = z.object(
-  Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.optional()])),
+  Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.nullable().optional()])),
 );
 
 // Install-wide video render pin (`settings.videoGen`, #3231 Phase 4) — the
@@ -2139,6 +2151,10 @@ export const videoGenSettingsSchema = z.object({
   // reactor.inc fast-h3 provider (#6214) — same settings-wins-over-env
   // precedence as `fal` above.
   reactor: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+  }).optional(),
+  // Runway developer API — same settings-wins-over-env (RUNWAYML_API_SECRET) precedence.
+  runway: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
   }).optional(),
 });
@@ -2245,9 +2261,42 @@ const renderFormSettingsSchema = z.object({
 export const settingsSlicePartialSchemas = Object.freeze({
   ...Object.fromEntries(Object.entries(localLlmSettingsSchema.shape)
     .map(([runtime, schema]) => [`localLlm.${runtime}`, schema.unwrap()])),
+  // The Media settings drawer (ImageGenTab) saves field-by-field through these
+  // so a sibling panel's later patch (VideoGen's LocalSetupPanel writing
+  // `imageGen.local.pythonPath`) survives a drawer save. Cleared strings travel
+  // as '' (every reader falls back on a blank); the two pins that readers
+  // coerce with `||` accept null so an un-pin needs no sentinel string.
+  imageGen: z.object({
+    mode: z.enum(IMAGE_GEN_MODES).optional(),
+    // Legacy flat field, kept populated beside `imageGen.external.sdapiUrl`.
+    sdapiUrl: z.string().max(500).optional(),
+  }).strict(),
+  'imageGen.external': z.object({
+    sdapiUrl: z.string().max(500).optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
+  }).strict(),
   'imageGen.local': z.object({
     pythonPath: z.string().max(500).nullable().optional(),
+    modelId: z.string().max(300).nullable().optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
   }).strict(),
+  'imageGen.codex': z.object({
+    enabled: z.boolean().optional(),
+    codexPath: z.string().max(500).optional(),
+    model: z.string().max(300).optional(),
+    effort: z.string().max(40).optional(),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+    cleanC2PA: z.boolean().optional(),
+    denoise: z.boolean().optional(),
+  }).strict(),
+  'imageGen.grok': imageGenGrokSettingsSchema.strict(),
+  'imageGen.agy': imageGenAgySettingsSchema.strict(),
+  'imageGen.fal': imageGenFalSettingsSchema.strict(),
+  'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
+  renderDefaults: renderDefaultsSettingsSchema,
+  videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   seriesAutopilot: seriesAutopilotSettingsSchema.partial(),
@@ -2798,6 +2847,21 @@ export const cosAgentFeedbackBodySchema = z.object({
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
+// A scoped release names the exact inventory row the operator saw (#12002).
+export const heldCheckoutRetireBodySchema = z.object({
+  appId: nonEmptyString,
+  path: nonEmptyString,
+  head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
+  branch: z.string().min(1).nullable(),
+  locked: z.boolean(),
+  lockReason: z.string().nullable(),
+  review: z.object({
+    prUrl: z.string().url(),
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+    acceptSuperseded: z.boolean(),
+  }).optional(),
+});
+export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url() });
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });
@@ -2848,7 +2912,13 @@ export const calendarAutoConfigureBodySchema = z.object({
   email: optionalString,
   requestId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
-export const commandExecuteBodySchema = z.object({ command: nonEmptyString, workspacePath: nullishString });
+// timeoutMs bounds an operator command run (#12021); absent means unbounded,
+// the right default for an interactive run the operator is watching.
+export const commandExecuteBodySchema = z.object({
+  command: nonEmptyString,
+  workspacePath: nullishString,
+  timeoutMs: z.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
+});
 export const dataArchiveBodySchema = z.object({
   daysToKeep: z.preprocess((value) => (value == null ? undefined : value), z.coerce.number().finite().min(0).optional()),
 });

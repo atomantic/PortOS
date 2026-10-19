@@ -46,6 +46,24 @@ async function drainPublishKitBuilds() {
   }, { timeout: 15000, interval: 20 });
 }
 
+// Resolves with the build's terminal SSE frame (complete/error/canceled), so a
+// case waits on the build itself rather than polling the record against a
+// ceiling that background file I/O can outrun on a loaded runner.
+function buildEnded(jobId) {
+  return new Promise((resolve, reject) => {
+    const res = {
+      writeHead() {},
+      req: { on() {} },
+      end() {},
+      write(frame) {
+        const payload = JSON.parse(frame.slice('data: '.length));
+        if (payload.type !== 'progress') resolve(payload);
+      },
+    };
+    if (!kit.attachPublishKitSseClient(jobId, res)) reject(new Error(`publishing kit job ${jobId} is not registered`));
+  });
+}
+
 afterEach(drainPublishKitBuilds);
 afterAll(() => cleanupTempDataRoots());
 
@@ -79,6 +97,16 @@ describe('publishing kit build (#9281)', () => {
     await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ status: 409, code: 'NO_FINAL_RENDER' });
   });
 
+  it('refuses a new build during render retirement and remains usable after cleanup releases', async () => {
+    const { id } = await projects.createProject({ name: 'Example Cleanup' });
+    const { withRenderCleanupReservation } = await import('./renderCleanupActivity.js');
+    await withRenderCleanupReservation(id, async () => {
+      await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'RENDER_CLEANUP_ACTIVE' });
+      expect(kit.isPublishKitBuildActive(id)).toBe(false);
+    });
+    await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'NO_FINAL_RENDER' });
+  });
+
   it('reserves a build before async prerequisites and releases the reservation after setup fails', async () => {
     const { id } = await projects.createProject({ name: 'Example Concurrent Build' });
     await mkdir(PATHS.videos, { recursive: true });
@@ -96,8 +124,10 @@ describe('publishing kit build (#9281)', () => {
       releasePrerequisite(null);
       // No SSE job exists yet, so nothing is advertised as attachable.
       expect(kit.getActivePublishKitBuild(id)).toBeNull();
+      expect(kit.isPublishKitBuildActive(id)).toBe(true);
       await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
       expect(await firstFailure).toMatchObject({ code: 'FFMPEG_MISSING' });
+      expect(kit.isPublishKitBuildActive(id)).toBe(false);
       expect(probe).toHaveBeenCalledTimes(1);
       // A failed setup must leave the project available for the next attempt.
       await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'FFMPEG_MISSING' });
@@ -120,11 +150,12 @@ describe('publishing kit build (#9281)', () => {
     const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess')
       .mockResolvedValue({ ok: true }).mockImplementationOnce(() => pendingEncode);
     try {
-      await kit.startPublishKitBuild(id);
+      const { jobId } = await kit.startPublishKitBuild(id);
+      const ended = buildEnded(jobId);
       await vi.waitFor(() => expect(encode).toHaveBeenCalledTimes(1));
       await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'new-render' } }));
       releaseEncode({ ok: true });
-      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy());
+      expect(await ended).toEqual({ type: 'complete', result: { projectId: id } });
       const project = await projects.getProject(id);
       expect(project.renderHistoryId).toBe('new-render');
       expect(project.publishKit.master).toEqual({ filename: 'original-master.mp4', renderHistoryId: 'original-render' });

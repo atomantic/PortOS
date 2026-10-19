@@ -20,6 +20,7 @@ const calls = [];
 
 vi.mock('../lib/db.js', () => ({
   query: vi.fn(async (sql, params) => {
+    if (sql.includes('catalog_identity_operations') || sql.includes('set_config(')) return { rows: [] };
     calls.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
     // Echo a media row back so rowToMedia works for the RETURNING * paths.
     return {
@@ -99,7 +100,7 @@ describe('detachMedia', () => {
 describe('setPortraitMedia', () => {
   it('demotes other live portraits then attaches the new one', async () => {
     await catalogDB.setPortraitMedia('i1', 'new.png', { caption: 'now' });
-    expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = \$1 FOR UPDATE/);
+    expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id\(\$1\) FOR UPDATE/);
     // Demote only after locking the owning ingredient.
     expect(calls[0].sql).toMatch(/UPDATE catalog_ingredient_media SET deleted = true/i);
     expect(calls[0].sql).toMatch(/kind = 'portrait'/i);
@@ -195,7 +196,7 @@ describe('listIngredients card thumbnail', () => {
     const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
     // The correlated subquery prefers a live portrait, then the most recent
     // live reference, and excludes unrenderable (audio/video/document) kinds.
-    expect(sql).toMatch(/FROM catalog_ingredient_media m/i);
+    expect(sql).toMatch(/FROM catalog_identity_read_media m/i);
     expect(sql).toMatch(/m\.kind IN \('portrait', 'reference'\)/i);
     expect(sql).toMatch(/ORDER BY \(m\.kind = 'portrait'\) DESC, m\.created_at DESC/i);
     expect(sql).toMatch(/AS thumbnail_key/i);
@@ -207,6 +208,20 @@ describe('listIngredients card thumbnail', () => {
     db.query.mockResolvedValueOnce({ rows: [ingredientRow({ thumbnail_key: null })] });
     const { items } = await catalogDB.listIngredients({ limit: 10 });
     expect(items[0].thumbnailKey).toBeNull();
+  });
+
+  it('returns per-kind link counts as usage, defaulting to an empty object', async () => {
+    const db = await import('../lib/db.js');
+    db.query.mockResolvedValueOnce({ rows: [
+      ingredientRow({ id: 'cat-chr-a', ref_usage: { universe: 1, 'creative-director': 2 } }),
+      ingredientRow({ id: 'cat-chr-b', ref_usage: null }),
+    ] });
+    const { items } = await catalogDB.listIngredients({ limit: 10 });
+    const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/COUNT\(DISTINCT r\.ref_id\)/i);
+    expect(sql).toMatch(/r\.deleted = false/i);
+    expect(items[0].usage).toEqual({ universe: 1, 'creative-director': 2 });
+    expect(items[1].usage).toEqual({});
   });
 });
 

@@ -17,7 +17,7 @@
  * peer's own clock. See `upsertRefFromPeer` for the full rationale.
  */
 
-import { query, arrayToPgvector } from '../../lib/db.js';
+import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import {
   rowToScrap,
   rowToIngredient,
@@ -53,6 +53,7 @@ export const getRelationChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_ingredient_relations', rowToRelation, since, limit);
 
 export async function upsertRelationFromPeer(rel) {
+  return withPeerIdentityWrite([rel.fromId, rel.toId], async (query) => {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
   // the relations feature never emits these rows, so there's no v1-without-
   // tombstone shape to defend against here. But we still treat "key absent"
@@ -91,12 +92,14 @@ export async function upsertRelationFromPeer(rel) {
       [rel.fromId, rel.toId, rel.kind, rel.createdAt],
     );
   }
+  });
 }
 
 export const getMediaChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_ingredient_media', rowToMedia, since, limit);
 
 export async function upsertMediaFromPeer(media) {
+  return withPeerIdentityWrite([media.ingredientId], async (query) => {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
   // the media feature never emits these rows, so there's no pre-tombstone
   // shape to defend against. We still treat "tombstone keys absent" as "peer
@@ -153,6 +156,7 @@ export async function upsertMediaFromPeer(media) {
       [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam],
     );
   }
+  });
 }
 
 export const getTagChangesSince = (since = '0', limit = 100) =>
@@ -284,6 +288,7 @@ export async function upsertScrapFromPeer(scrap) {
 }
 
 export async function upsertIngredientFromPeer(ing) {
+  return withPeerIdentityWrite([ing.id], async (query) => {
   const result = await query(
     `INSERT INTO catalog_ingredients
        (id, type, name, payload, tags, embedding, embedding_model,
@@ -300,6 +305,7 @@ export async function upsertIngredientFromPeer(ing) {
        deleted = EXCLUDED.deleted,
        deleted_at = EXCLUDED.deleted_at
      WHERE EXCLUDED.updated_at > catalog_ingredients.updated_at
+       AND NOT EXISTS (SELECT 1 FROM catalog_ingredient_merges WHERE source_id = EXCLUDED.id AND restored_at IS NULL)
      RETURNING (xmax = 0) AS is_insert`,
     [
       ing.id,
@@ -317,18 +323,22 @@ export async function upsertIngredientFromPeer(ing) {
     ],
   );
   return { applied: result.rows.length > 0, isInsert: result.rows[0]?.is_insert ?? false };
+  });
 }
 
 export async function upsertSourceFromPeer(src) {
+  return withPeerIdentityWrite([src.ingredientId], async (query) => {
   await query(
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span, extracted_at)
      VALUES ($1, $2, $3::jsonb, $4)
      ON CONFLICT (ingredient_id, scrap_id) DO UPDATE SET span = EXCLUDED.span`,
     [src.ingredientId, src.scrapId, src.span ? JSON.stringify(src.span) : null, src.extractedAt],
   );
+  });
 }
 
 export async function upsertRefFromPeer(ref) {
+  return withPeerIdentityWrite([ref.ingredientId], async (query) => {
   // ON CONFLICT DO UPDATE so a peer's soft-delete (or revival) of a ref row
   // is mirrored locally. Refs are tuple-unique (no editable content fields),
   // so `updated_at` exists ONLY as a tombstone/revival change-clock (#8347),
@@ -389,6 +399,7 @@ export async function upsertRefFromPeer(ref) {
       [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
     );
   }
+  });
 }
 
 // The inbox is db-primary, receiver-local, and covered by the normal DB backup.
@@ -440,4 +451,17 @@ export async function drainPendingCatalogApplies() {
       }
     } while (progressed);
   }
+}
+
+async function withPeerIdentityWrite(ids, write) {
+  return withTransaction(async client => {
+    const exec = client.query.bind(client);
+    await exec("SELECT set_config('portos.catalog_identity_peer_apply', 'on', true)");
+    const { rows } = await exec(`SELECT id, state FROM catalog_identity_operations
+      WHERE state IN ('prepared', 'committed', 'recovery_prepared')
+        AND (source_id = ANY($1::text[]) OR survivor_id = ANY($1::text[]))`, [ids]);
+    if (rows.length) return { applied: false, isInsert: false, protectedIdentity: true,
+      identityPending: rows.some(row => row.state !== 'committed') };
+    return write(exec);
+  });
 }

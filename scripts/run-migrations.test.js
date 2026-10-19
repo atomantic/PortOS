@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync, utimesSync } from 'fs';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 
-import { runMigrations, listPendingMigrations } from './run-migrations.js';
+import { runMigrations, listPendingMigrations, sourceDeclaresPurge } from './run-migrations.js';
 
 const fsMocks = vi.hoisted(() => ({ readFailures: new Map(), realRename: null }));
 
@@ -65,6 +66,34 @@ export default {
   const corruptSiblings = () =>
     readdirSync(dataDir).filter((f) => f.startsWith('migrations.applied.json.corrupt-'));
 
+  it.each(['pending', 'missing', 'corrupt', 'applied'])('retires unsafe 428 with a %s ledger before earlier failures (#12398)', async state => {
+    const retired = '428-prune-dangling-collection-images.js';
+    // Exercise the shipped, frozen transform through the real runner. If the
+    // retirement regresses it removes both kinds of unresolved image pointer.
+    writeFileSync(join(migrationsDir, retired), `export { default } from ${JSON.stringify(new URL('./migrations/428-prune-dangling-collection-images.js', import.meta.url).href)};`);
+    mkdirSync(join(dataDir, 'images'));
+    const collectionDir = join(dataDir, 'media-collections', 'collection-example');
+    mkdirSync(collectionDir, { recursive: true });
+    const original = JSON.stringify({ items: [{ kind: 'image', ref: 'hosted.png' }, { kind: 'image', ref: 'temporarily-missing.png' }], coverKey: 'image:hosted.png', updatedAt: '2026-01-01T00:00:00Z' });
+    writeFileSync(join(collectionDir, 'index.json'), original);
+    writeFileSync(join(dataDir, 'peer-hosted-media.json'), JSON.stringify({ version: 1, entries: { 'image:hosted.png': { peerId: 'example-peer', at: '2026-01-01T00:00:00Z' } } }));
+    if (state === 'pending') writeFileSync(appliedFile, '["000-earlier.js"]');
+    if (state === 'corrupt') writeFileSync(appliedFile, '{broken');
+    if (state === 'applied') writeFileSync(appliedFile, JSON.stringify([retired]));
+    writeFileSync(join(migrationsDir, '002-failure.js'), 'export async function up() { throw new Error("fixture interruption"); }');
+    if (state === 'missing' || state === 'corrupt') {
+      writeFileSync(join(migrationsDir, '429-purge.js'), 'export const purge = true; export async function up() { throw new Error("purge must stay disarmed"); }');
+    }
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('fixture interruption');
+    expect(JSON.parse(readFileSync(appliedFile, 'utf8'))).toContain(retired);
+    expect(readFileSync(join(collectionDir, 'index.json'), 'utf8')).toBe(original);
+    // A retry with a now nonempty ledger cannot re-arm the retired transform.
+    rmSync(join(migrationsDir, '002-failure.js'));
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+    expect(readFileSync(join(collectionDir, 'index.json'), 'utf8')).toBe(original);
+    if (state !== 'applied') expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Retired migration 428'));
+  });
+
   it('renames truncated JSON aside and rebuilds from scratch', async () => {
     writeFileSync(appliedFile, '[\n  "001-fixture.js",\n  "002-'); // truncated mid-write
 
@@ -111,6 +140,31 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
     expect(corruptSiblings()).toHaveLength(0);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // A pre-2026-05-16 install upgraded by pull-and-restart reaches the boot
+  // runner without setup-data.js ever moving its ledger.
+  it('adopts a legacy data/migrations/.applied.json instead of re-running what it records', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, JSON.stringify(['001-fixture.js']));
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(existsSync(join(dataDir, 'fixture-marker.txt'))).toBe(false);
+    expect(existsSync(legacyFile)).toBe(false);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+  });
+
+  it('keeps the current ledger authoritative when a legacy one also exists', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, '[]');
+    writeFileSync(appliedFile, JSON.stringify(['001-fixture.js']));
+
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+    expect(readFileSync(legacyFile, 'utf-8')).toBe('[]');
   });
 
   it('rejects unreadable ledgers without running migrations or changing their bytes', async () => {
@@ -172,19 +226,27 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['002-purge.js', '001-fixture.js']);
   });
 
-  it('skips `_`-prefixed shared-helper files (never imports them as migrations)', async () => {
-    // _lib.js / _testHelpers.js are imported by migration files + tests but
-    // they don't export `up()` — if the runner tried to load them it would
-    // throw "does not export an up() function".
-    writeFileSync(join(migrationsDir, '_lib.js'), `
-export const md5 = (s) => s;
-// no default export, no up() — would throw if the runner picked this up.
-`);
+  it('runs numbered migrations without importing helper, CLI or test modules', async () => {
+    for (const file of ['_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js', '001-fixture.test.js']) {
+      writeFileSync(join(migrationsDir, file), 'throw new Error("Non-migration module was imported");');
+    }
 
     const ran = await runMigrations({ rootDir, migrationsDir });
 
     expect(ran).toBe(1); // only 001-fixture.js ran
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+    expect(existsSync(join(dataDir, 'fixture-marker.txt'))).toBe(true);
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual([]);
+  });
+
+  it('still rejects numbered modules without up() and leaves them pending', async () => {
+    writeFileSync(join(migrationsDir, '002-invalid.js'), 'export const notAMigration = true;');
+
+    await expect(runMigrations({ rootDir, migrationsDir }))
+      .rejects.toThrow('Migration "002-invalid.js" does not export an up() function');
+
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual(['002-invalid.js']);
   });
 });
 
@@ -309,6 +371,26 @@ export default {
       .toEqual(['001-normal.js', '197-purge.js']);
   });
 
+  it('disarms a pending purge migration without importing its module (#12049)', async () => {
+    // A purge migration whose import graph cannot even load: the old probe
+    // imported every pending module to read `purge`, which on a fresh install
+    // pulled in dozens of live service graphs before boot. The static probe
+    // must disarm it from the source text alone.
+    writeFileSync(join(migrationsDir, '197-purge.js'), `
+import { neverInstalled } from 'portos-missing-dependency-for-test';
+export default {
+  purge: true,
+  async up() { neverInstalled(); }
+};
+`);
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping purge migration'));
+  });
+
   it('disarms purge migrations even when an earlier migration aborts the rebuilt-empty run', async () => {
     // The re-arm hole: a rebuilt-from-empty run that throws BEFORE reaching the
     // purge migration persists a partial ledger. The next boot's ledger no
@@ -337,6 +419,259 @@ export default {
     // was recorded as applied during the aborted run.
     await runMigrations({ rootDir, migrationsDir });
     expect(readLearning()).toEqual({ bucket: { legitPostFixRuns: 7 }, keep: 3 });
+  });
+});
+
+describe('runMigrations lock (#12046)', () => {
+  let rootDir;
+  let dataDir;
+  let migrationsDir;
+  let appliedFile;
+  let lockDir;
+  let warnSpy;
+  let logSpy;
+
+  // Deliberately NOT idempotent: every execution appends one byte, so a
+  // double-apply shows up as a two-byte marker rather than hiding behind an
+  // existsSync guard.
+  const COUNTING_FIXTURE = `
+import { appendFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    appendFileSync(join(rootDir, 'data', 'applied-count.txt'), 'x');
+  }
+};
+`;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'run-migrations-lock-'));
+    dataDir = join(rootDir, 'data');
+    migrationsDir = join(rootDir, 'migrations');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(migrationsDir, { recursive: true });
+    appliedFile = join(dataDir, 'migrations.applied.json');
+    lockDir = join(dataDir, 'migrations.lock');
+    writeFileSync(appliedFile, JSON.stringify(['000-earlier.js']) + '\n');
+    writeFileSync(join(migrationsDir, '001-count.js'), COUNTING_FIXTURE);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  const appliedCount = () => (existsSync(join(dataDir, 'applied-count.txt'))
+    ? readFileSync(join(dataDir, 'applied-count.txt'), 'utf-8').length
+    : 0);
+
+  it('two concurrent runs apply each pending migration exactly once', async () => {
+    // The race: the manual `npm run migrations` and the booting server both
+    // read the ledger before either persists it. The second runner must wait
+    // for the first and then find nothing pending.
+    const results = await Promise.all([
+      runMigrations({ rootDir, migrationsDir }),
+      runMigrations({ rootDir, migrationsDir }),
+    ]);
+
+    expect(results.sort()).toEqual([0, 1]);
+    expect(appliedCount()).toBe(1);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js', '001-count.js']);
+    expect(existsSync(lockDir)).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Waiting for another migration run'));
+  });
+
+  it('releases the lock when a migration throws', async () => {
+    writeFileSync(join(migrationsDir, '002-throws.js'), 'export default { async up() { throw new Error("boom"); } };');
+
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('boom');
+
+    expect(existsSync(lockDir)).toBe(false);
+    // The retry reaches the migration again (rejecting with its error, not the
+    // lock's) and does not re-apply 001, which the first run recorded.
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 50, lockPollMs: 10 })).rejects.toThrow('boom');
+    expect(appliedCount()).toBe(1);
+  });
+
+  it('waits on a lock whose owner file is empty (torn read) instead of throwing', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), '');
+    setTimeout(() => rmSync(lockDir, { recursive: true, force: true }), 40);
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 2000, lockPollMs: 10 });
+
+    expect(ran).toBeTruthy();
+    expect(appliedCount()).toBeGreaterThan(0);
+  });
+
+  it('gives up after the bounded wait while a live holder keeps the lock', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 }))
+      .rejects.toThrow(/Another migration run \(pid \d+\) holds/);
+
+    expect(appliedCount()).toBe(0);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js']);
+    expect(existsSync(lockDir)).toBe(true); // never steals a live holder's lock
+  });
+
+  it('never expires a live holder, even after the stale timeout', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: Date.now() - 31 * 60 * 1000 }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+      .rejects.toThrow(/Another migration run/);
+
+    expect(appliedCount()).toBe(0);
+    expect(existsSync(lockDir)).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an owner read failure instead of reclaiming an aged live lock', async () => {
+    mkdirSync(lockDir);
+    const ownerPath = join(lockDir, 'owner.json');
+    const old = new Date(Date.now() - 31 * 60 * 1000);
+    writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, startedAt: old.getTime() }));
+    utimesSync(lockDir, old, old);
+    fsMocks.readFailures.set(ownerPath, Object.assign(new Error('owner read failed'), { code: 'EIO' }));
+    try {
+      await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+        .rejects.toMatchObject({ code: 'EIO' });
+      expect(appliedCount()).toBe(0);
+      expect(existsSync(lockDir)).toBe(true);
+    } finally {
+      fsMocks.readFailures.clear();
+    }
+  });
+
+  it('rechecks stale evidence before removing a replacement holder', async () => {
+    mkdirSync(lockDir);
+    const ownerPath = join(lockDir, 'owner.json');
+    writeFileSync(ownerPath, JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+    const fixturePath = join(migrationsDir, '001-count.js');
+    writeFileSync(fixturePath, `
+import { appendFileSync } from 'fs';
+import { join } from 'path';
+let announceStart, announceDuplicate, release;
+export const started = new Promise(resolve => { announceStart = resolve; });
+export const duplicate = new Promise(resolve => { announceDuplicate = resolve; });
+const finish = new Promise(resolve => { release = resolve; });
+export { release };
+export let entries = 0;
+export default { async up({ rootDir }) {
+  entries++;
+  announceStart();
+  if (entries > 1) announceDuplicate();
+  await finish;
+  appendFileSync(join(rootDir, 'data', 'applied-count.txt'), 'x');
+} };
+`);
+    const fixture = await import(pathToFileURL(fixturePath).href);
+    const readFile = vi.mocked(fsPromises.readFile);
+    const originalRead = readFile.getMockImplementation();
+    let announceRead, resumeRead;
+    const readStarted = new Promise(resolve => { announceRead = resolve; });
+    const resume = new Promise(resolve => { resumeRead = resolve; });
+    let paused = false;
+    readFile.mockImplementation(async (path, ...args) => {
+      const raw = await originalRead(path, ...args);
+      if (String(path) === ownerPath && !paused) {
+        paused = true;
+        announceRead();
+        await resume;
+      }
+      return raw;
+    });
+    const staleRun = runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 });
+    const staleResult = staleRun.then(value => ({ value }), error => ({ error }));
+    let holder;
+    try {
+      await readStarted;
+      holder = runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 });
+      await fixture.started;
+      resumeRead();
+      await Promise.race([staleResult, fixture.duplicate]);
+    } finally {
+      resumeRead();
+      fixture.release();
+      await Promise.allSettled([staleRun, holder]);
+      readFile.mockImplementation(originalRead);
+    }
+
+    expect(fixture.entries).toBe(1);
+    expect((await staleResult).error?.message).toMatch(/Another migration run/);
+    expect(appliedCount()).toBe(1);
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  it('reclaims a lock whose holder process is gone', async () => {
+    mkdirSync(lockDir);
+    // Above every platform's pid ceiling, so the liveness probe reports ESRCH.
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+    // The dead holder was killed mid ledger write: its temp file never renamed.
+    const orphanTmp = `${appliedFile}.tmp-2147483646`;
+    writeFileSync(orphanTmp, '["000-earlier.js"');
+    // A live process's temp file may be mid-write (a lock reclaimed by age).
+    const liveTmp = `${appliedFile}.tmp-${process.ppid}`;
+    writeFileSync(liveTmp, '["000-earlier.js"]');
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
+
+    expect(ran).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer running'));
+    expect(existsSync(lockDir)).toBe(false);
+    expect(existsSync(orphanTmp)).toBe(false);
+    expect(existsSync(liveTmp)).toBe(true);
+  });
+
+  it('reclaims a lock held past the stale timeout even when its pid is unknown', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ startedAt: Date.now() - 31 * 60 * 1000 }));
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
+
+    expect(ran).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('held for over 30 minutes'));
+  });
+
+  it('recovers an old ownerless acquisition using its age before the transition mkdir', async () => {
+    mkdirSync(lockDir);
+    const old = new Date(Date.now() - 31 * 60 * 1000);
+    utimesSync(lockDir, old, old);
+
+    expect(await runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 })).toBe(1);
+    expect(appliedCount()).toBe(1);
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  it('keeps an interrupted transition closed instead of racing its recovery', async () => {
+    mkdirSync(join(lockDir, '.transition'), { recursive: true });
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+      .rejects.toThrow(/interrupted .transition/);
+    expect(appliedCount()).toBe(0);
+    expect(existsSync(join(lockDir, '.transition'))).toBe(true);
+  });
+});
+
+describe('sourceDeclaresPurge', () => {
+  it('reads the marker from the default export or a named export', () => {
+    expect(sourceDeclaresPurge('export default {\n  purge: true,\n  async up() {}\n};\n')).toBe(true);
+    expect(sourceDeclaresPurge('export default {\n  purge: true\n};\n')).toBe(true);
+    expect(sourceDeclaresPurge('export const purge = true;\nexport async function up() {}\n')).toBe(true);
+  });
+
+  it('ignores prose, data literals and other flags', () => {
+    expect(sourceDeclaresPurge('/*\n * opts into the purge class (purge: true)\n */\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('// purge: true\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('const SEED = {\n  retention: {\n    purge: true,\n  },\n};\nexport default { async up() {} };')).toBe(false);
+    expect(sourceDeclaresPurge('export default {\n  autoPurge: true,\n  purge: false,\n  async up() {}\n};')).toBe(false);
   });
 });
 
@@ -438,11 +773,22 @@ describe('listPendingMigrations', () => {
     expect(pending).toEqual([]);
   });
 
-  it('excludes *.test.js and `_`-prefixed helper files', async () => {
-    writeFileSync(join(migrationsDir, '001-a.test.js'), '// test');
-    writeFileSync(join(migrationsDir, '_lib.js'), 'export const x = 1;');
+  it('excludes tests and unnumbered helper or CLI modules', async () => {
+    for (const file of ['001-a.test.js', '_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js']) {
+      writeFileSync(join(migrationsDir, file), 'throw new Error("Pending discovery must not import modules");');
+    }
     const pending = await listPendingMigrations({ rootDir, migrationsDir });
     expect(pending).toEqual(['001-a.js', '002-b.js', '003-c.js']);
+  });
+
+  it('reads a legacy ledger the next run will adopt, without moving it', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, JSON.stringify(['001-a.js']));
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['002-b.js', '003-c.js']);
+    expect(existsSync(legacyFile)).toBe(true);
+    expect(existsSync(appliedFile)).toBe(false);
   });
 
   it('treats a corrupt applied-list as empty WITHOUT mutating it (read-only)', async () => {

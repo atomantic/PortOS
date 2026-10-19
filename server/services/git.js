@@ -174,6 +174,11 @@ export async function isRepo(dir) {
   return result?.stdout.trim() === 'true';
 }
 
+/** Actionable refusal text shared by task creation and spawn-time worktree prep. */
+export function notGitRepoMessage(appName) {
+  return `${appName} is not a git repository — run \`git init\` in its directory (and add a remote if PRs are needed), or disable worktree/PR for this task`;
+}
+
 /**
  * Get remote info
  */
@@ -433,7 +438,7 @@ export async function createPR(dir, { title, body, base, head, draft = false }) 
  * The actual `gh pr merge` invocation is the shared core in
  * `appPullRequestMerge.js` (`runForgeMerge`), lazily imported like the other
  * forge CLIs below — this stays the only owner of that argv (#7580), and its
- * `['pr', 'merge', prNumber, '--merge', '--delete-branch']` shape and 60s
+ * `['pr', 'merge', prNumber, '--merge']` shape and 60s
  * default timeout are pinned by `git.forgeTimeout.test.js`.
  *
  * @param {string} dir - Working directory for the target repository
@@ -457,10 +462,81 @@ export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHead
     repoSpec: null,
     number: prNumber,
     method: 'merge',
-    deleteBranch: true,
+    deleteBranch: false,
     expectedHeadSha,
   });
-  return result.ok ? { success: true, ...meta } : { success: false, error: result.error, ...meta };
+  if (result.code === 'invalid-head') return { success: false, error: result.error, ...meta };
+
+  // A zero exit may mean queued, and a timeout/nonzero exit may follow a
+  // completed merge. Read back before reporting success or deleting anything.
+  const { execGh } = await import('./github.js');
+  const merged = await execGh(['pr', 'view', String(prNumber), '--json',
+    'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository'],
+  undefined, { cwd: dir, env }).then(value => safeJSONParse(value, null), () => null);
+  if (merged?.state !== 'MERGED') {
+    return { success: false, error: result.error || 'Pull request merge is not yet verified',
+      branchCleanup: { deleted: false, reason: 'merge-unverified' }, ...meta };
+  }
+  if (expectedHeadSha && (typeof merged.headRefOid !== 'string'
+      || merged.headRefOid.toLowerCase() !== expectedHeadSha.toLowerCase())) {
+    return { success: false, error: 'Merged pull request does not match the reviewed head',
+      code: 'reviewed-head-changed', branchCleanup: { deleted: false, reason: 'reviewed-head-changed' }, ...meta };
+  }
+  const branchCleanup = await deleteVerifiedMergedHead(dir, merged, { expectedHeadSha, host, prNumber, env, account });
+  return { success: true, mergedHeadSha: merged.headRefOid, branchCleanup, ...meta };
+}
+
+/** Remote cleanup is independent of merge success; local refs and worktrees
+ * belong to the archive/ownership cleanup workflow, including ignored files. */
+async function deleteVerifiedMergedHead(dir, merged, { expectedHeadSha, host, prNumber, env, account }) {
+  const retain = reason => ({ deleted: false, reason });
+  if (!expectedHeadSha) return retain('reviewed-head-unavailable');
+  const target = parsePullRequestUrl(merged.url);
+  if (!target || String(target.number) !== String(prNumber) || target.host.toLowerCase() !== String(host).toLowerCase()) {
+    return retain('repository-unverified');
+  }
+  const fullName = `${target.owner}/${target.repo}`.toLowerCase();
+  if (merged.isCrossRepository !== false || typeof merged.headRepository?.nameWithOwner !== 'string'
+      || merged.headRepository.nameWithOwner.toLowerCase() !== fullName) {
+    return retain('source-repository-unverified');
+  }
+  const branch = merged.headRefName;
+  if (typeof branch !== 'string' || !branch || typeof merged.baseRefName !== 'string' || !merged.baseRefName
+      || PROTECTED_BRANCHES.includes(branch) || branch === merged.baseRefName) {
+    return retain('protected-or-unknown-source');
+  }
+  const { execGh } = await import('./github.js');
+  const repository = await execGh(['repo', 'view', `${target.host}/${target.owner}/${target.repo}`, '--json', 'defaultBranchRef'],
+    undefined, { cwd: dir, env }).then(value => safeJSONParse(value, null), () => null);
+  const defaultBranch = repository?.defaultBranchRef?.name;
+  if (typeof defaultBranch !== 'string' || !defaultBranch) return retain('default-branch-unverified');
+  if (branch === defaultBranch) return retain('protected-default-source');
+  // forgeAuth only mints a new environment for a successfully resolved
+  // github.com account. A matched account plus ambient GH_TOKEN is not proof.
+  if (host !== 'github.com' || !account || env === process.env || !env?.GH_TOKEN) {
+    return retain('account-bound-push-unavailable');
+  }
+  const ref = `refs/heads/${branch}`;
+  const valid = await execGitSafe(['check-ref-format', ref], dir);
+  if (valid.exitCode !== 0) return retain('invalid-source-ref');
+  const urls = await execGitSafe(['remote', 'get-url', '--push', '--all', 'origin'], dir);
+  const pushUrls = urls.stdout.trim().split('\n').filter(Boolean);
+  if (urls.exitCode !== 0 || pushUrls.length !== 1) return retain('push-target-ambiguous');
+  const { parseGitRemoteUrl } = await import('../lib/gitRemote.js');
+  const remote = parseGitRemoteUrl(pushUrls[0]);
+  if (!remote || remote.host.toLowerCase() !== target.host.toLowerCase()
+      || `${remote.owner}/${remote.repo}`.toLowerCase() !== fullName) return retain('push-target-mismatch');
+  // SSH keys and embedded credentials can select a different identity from
+  // the merge token. Keep those sources for explicit owner cleanup.
+  if (!/^https:\/\/[^@/]+\//i.test(pushUrls[0])) return retain('account-bound-push-unavailable');
+
+  // Capture the URL rather than re-resolving a remote name at write time. The
+  // lease compares the server's actual ref, never a stale tracking branch.
+  const deletion = await execGitSafe(['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+    '-c', 'core.askPass=', 'push', `--force-with-lease=${ref}:${expectedHeadSha}`, '--', pushUrls[0], `:${ref}`], dir,
+  { env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', GH_PROMPT_DISABLED: '1' } });
+  if (deletion.exitCode !== 0) return retain('remote-delete-failed-or-uncertain');
+  return { deleted: true, branch };
 }
 
 /**

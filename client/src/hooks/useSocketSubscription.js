@@ -45,21 +45,46 @@ function getEntry(namespace) {
  *   redundant refetch in the common case (mount while already-connecting,
  *   HTTP fetch already fresh) — cheap next to silently missing a real miss.
  *
+ * - `payload` / `releasePayload`: a consumer that changes how the server
+ *   serves the room (ChiefOfStaff's `{ taskLists: 'invalidate' }` mode, which
+ *   `registerSubscriber` stores on the server-side socket) emits its own
+ *   `<namespace>:subscribe` with `payload` at mount and on every `connect`,
+ *   regardless of the refcount — the shared subscription may already exist
+ *   and the server would otherwise never hear about the mode. At unmount it
+ *   emits `releasePayload` the same way, BEFORE any final unsubscribe,
+ *   because the mode outlives room membership on the server socket. Both are
+ *   read through refs: a fresh object literal per render must not churn the
+ *   subscription.
+ *
  * Pass no namespace for broadcast-only consumers; no room is acquired.
  *
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
- * @param {{ onResubscribe?: () => void, enabled?: boolean }} [options]
+ * @param {{ onResubscribe?: () => void, enabled?: boolean, payload?: object, releasePayload?: object }} [options]
  */
-export function useSocketSubscription(namespace, { onResubscribe, enabled = true } = {}) {
+export function useSocketSubscription(namespace, {
+  onResubscribe, enabled = true, payload, releasePayload,
+} = {}) {
   const onResubscribeRef = useRef(onResubscribe);
   onResubscribeRef.current = onResubscribe;
+  const payloadRef = useRef(payload);
+  payloadRef.current = payload;
+  const releasePayloadRef = useRef(releasePayload);
+  releasePayloadRef.current = releasePayload;
 
   useEffect(() => {
     if (!namespace || !enabled) return;
     const entry = getEntry(namespace);
 
-    const callback = () => onResubscribeRef.current?.();
+    const subscribeWithPayload = () => {
+      if (payloadRef.current !== undefined) socket.emit(`${namespace}:subscribe`, payloadRef.current);
+    };
+    // Registered before the shared handler fires below, so on connect the
+    // bare subscribe lands first and this consumer's mode overrides it.
+    const callback = () => {
+      subscribeWithPayload();
+      onResubscribeRef.current?.();
+    };
     entry.callbacks.add(callback);
 
     if (entry.count === 0) {
@@ -71,10 +96,14 @@ export function useSocketSubscription(namespace, { onResubscribe, enabled = true
       socket.on('connect', entry.connectHandler);
     }
     entry.count += 1;
+    subscribeWithPayload();
 
     return () => {
       entry.callbacks.delete(callback);
       entry.count -= 1;
+      if (releasePayloadRef.current !== undefined) {
+        socket.emit(`${namespace}:subscribe`, releasePayloadRef.current);
+      }
       if (entry.count <= 0) {
         socket.emit(`${namespace}:unsubscribe`);
         if (entry.connectHandler) socket.off('connect', entry.connectHandler);

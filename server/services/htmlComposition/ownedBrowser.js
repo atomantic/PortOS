@@ -114,6 +114,14 @@ export async function launchCompositionBrowser({
   const observedMs = () => Math.round(performance.now() - observedSince);
   const groupTermination = { term: 'not-attempted', kill: 'not-attempted', error: 'none', failedSignal: 'none', failedPhase: 'none' };
   const termination = { term: 'not-attempted', kill: 'not-attempted', error: 'none' };
+  // Never interpolate arbitrary child properties: only allowlisted status values.
+  const childStatus = () => ({
+    exitCode: proc?.exitCode == null ? 'none' : Number.isSafeInteger(proc.exitCode) ? proc.exitCode : 'other',
+    signalCode: proc?.signalCode == null ? 'none'
+      : typeof proc.signalCode === 'string' && Object.hasOwn(osConstants.signals, proc.signalCode) ? proc.signalCode : 'other',
+  });
+  // Read by the CDP client when a command fails, before close() changes them.
+  const lifecycleFacts = () => ({ childSpawned: spawned, childExited: exited, childClosed: closed, ...childStatus() });
   const safeSignalError = error => ['EPERM', 'ESRCH', 'EINVAL', 'ENOSYS'].includes(error?.code) ? error.code : 'other';
   const cleanupProfile = () => {
     if (!profileCleanup) {
@@ -207,9 +215,7 @@ export async function launchCompositionBrowser({
             // Never interpolate arbitrary child properties, errors or output.
             // Public status and observed events are separate evidence: accepted
             // signals alone do not establish that the child has exited.
-            const exitCode = proc.exitCode == null ? 'none' : Number.isSafeInteger(proc.exitCode) ? proc.exitCode : 'other';
-            const signalCode = proc.signalCode == null ? 'none'
-              : typeof proc.signalCode === 'string' && Object.hasOwn(osConstants.signals, proc.signalCode) ? proc.signalCode : 'other';
+            const { exitCode, signalCode } = childStatus();
             const facts = {
               exit: exited, stdioClosed: Boolean(proc.stderr?.destroyed),
               term: termination.term, kill: termination.kill, signalError: termination.error,
@@ -322,8 +328,8 @@ export async function launchCompositionBrowser({
     signal?.addEventListener('abort', abort, { once: true });
     signal?.throwIfAborted();
     if (startupPipeError) throw new Error('Composition browser failed to start (pipe)');
-    if (piped) return { transport, close, mechanism: plan.mechanism };
-    return { webSocketDebuggerUrl: ready, close };
+    if (piped) return { transport, close, lifecycleFacts, mechanism: plan.mechanism };
+    return { webSocketDebuggerUrl: ready, close, lifecycleFacts };
   } catch (error) {
     await close();
     throw error;

@@ -1,14 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Clock, Image, X, Info, Code2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { processScreenshotUploads } from '../services/apiMedia';
 import { filterSelectableModels } from '../utils/providers';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import PageHeader from '../components/PageHeader';
+import useListResource from '../hooks/useListResource.js';
+import ListLoadError from '../components/ui/ListLoadError';
 
 export function RunnerPage() {
   const location = useLocation();
@@ -21,16 +24,33 @@ export function RunnerPage() {
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState(null);
   const [commandId, setCommandId] = useState(null);
-  const [apps, setApps] = useState([]);
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [timeoutMinutes, setTimeoutMinutes] = useState(30);
-  const [allowedCommands, setAllowedCommands] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [continueContext, setContinueContext] = useState(null);
   const outputRef = useRef(null);
   const continueWorkspaceRef = useRef(location.state?.continueFrom?.workspacePath ?? null);
+
+  const fetchApps = useCallback(async () => {
+    const list = await api.getApps({ silent: true });
+    return (Array.isArray(list) ? list : []).filter(a => a.id !== 'portos-autofixer');
+  }, []);
+  const appsResource = useListResource(fetchApps);
+  const { items: apps, state: appsState, error: appsError, retry: retryApps } = appsResource;
+
+  const fetchAllowedCommands = useCallback(async () => {
+    const list = await api.getAllowedCommands({ silent: true });
+    return Array.isArray(list) ? list : [];
+  }, []);
+  const allowedCommandsResource = useListResource(fetchAllowedCommands);
+  const {
+    items: allowedCommands,
+    state: allowedCommandsState,
+    error: allowedCommandsError,
+    retry: retryAllowedCommands,
+  } = allowedCommandsResource;
 
   // Get the selected app's repoPath
   const selectedApp = apps.find(a => a.id === selectedAppId);
@@ -54,36 +74,34 @@ export function RunnerPage() {
   }, [location.state, navigate]);
 
   useEffect(() => {
-    Promise.all([
-      api.getApps().catch(() => []),
-      api.getProviders().catch(() => ({ providers: [] })),
-      api.getAllowedCommands().catch(() => [])
-    ]).then(([appsData, providersRes, cmds]) => {
-      // Filter out PortOS Autofixer (it's part of PortOS project)
-      const filteredApps = appsData.filter(a => a.id !== 'portos-autofixer');
-      setApps(filteredApps);
-      // Set workspace: prefer continuation context (stored in ref), then PortOS, then first app
-      setSelectedAppId(prev => {
-        if (prev) return prev;
-        if (continueWorkspaceRef.current) {
-          const continueApp = filteredApps.find(a => a.repoPath === continueWorkspaceRef.current);
-          if (continueApp) return continueApp.id;
+    api.getProviders({ silent: true })
+      .then((providersRes) => {
+        const allProviders = providersRes?.providers || [];
+        const enabledProviders = allProviders.filter(p => p.enabled);
+        setProviders(enabledProviders);
+        if (enabledProviders.length > 0) {
+          const active = enabledProviders.find(p => p.id === providersRes.activeProvider) || enabledProviders[0];
+          setSelectedProvider(prev => prev || active.id);
+          setSelectedModel(prev => prev || active.defaultModel || '');
         }
-        const portosApp = filteredApps.find(a => a.name === 'PortOS');
-        if (portosApp) return portosApp.id;
-        return filteredApps.length > 0 ? filteredApps[0].id : prev;
-      });
-      const allProviders = providersRes.providers || [];
-      const enabledProviders = allProviders.filter(p => p.enabled);
-      setProviders(enabledProviders);
-      if (enabledProviders.length > 0) {
-        const active = enabledProviders.find(p => p.id === providersRes.activeProvider) || enabledProviders[0];
-        setSelectedProvider(prev => prev || active.id);
-        setSelectedModel(prev => prev || active.defaultModel || '');
-      }
-      setAllowedCommands(cmds);
-    });
+      })
+      .catch((_err) => {});
   }, []);
+
+  useEffect(() => {
+    if (appsState !== 'ready') return;
+    // Set workspace: prefer continuation context (stored in ref), then PortOS, then first app
+    setSelectedAppId(prev => {
+      if (prev) return prev;
+      if (continueWorkspaceRef.current) {
+        const continueApp = apps.find(a => a.repoPath === continueWorkspaceRef.current);
+        if (continueApp) return continueApp.id;
+      }
+      const portosApp = apps.find(a => a.name === 'PortOS');
+      if (portosApp) return portosApp.id;
+      return apps.length > 0 ? apps[0].id : prev;
+    });
+  }, [apps, appsState]);
 
   // Subscribe to run output
   useEffect(() => {
@@ -111,6 +129,9 @@ export function RunnerPage() {
       socket.off(`run:${runId}:complete`, handleComplete);
     };
   }, [runId]);
+
+  // Command output is only broadcast to subscribed sockets (#12019).
+  useSocketSubscription('command');
 
   // Subscribe to command output
   useEffect(() => {
@@ -346,16 +367,24 @@ ${prompt.trim()}`;
       {/* Configuration Row */}
       <div className="flex flex-wrap gap-3">
         {/* Workspace */}
-        <select
-          aria-label="Workspace"
-          value={selectedAppId}
-          onChange={(e) => setSelectedAppId(e.target.value)}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-        >
-          {apps.map(app => (
-            <option key={app.id} value={app.id}>{app.name}</option>
-          ))}
-        </select>
+        {appsState === 'error' && (
+          <ListLoadError what="workspaces" error={appsError} onRetry={retryApps} />
+        )}
+        {appsState !== 'error' && (
+          <select
+            aria-label="Workspace"
+            value={selectedAppId}
+            onChange={(e) => setSelectedAppId(e.target.value)}
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+          >
+            {appsState === 'ready' && apps.length === 0 && (
+              <option value="">No workspaces found</option>
+            )}
+            {apps.map(app => (
+              <option key={app.id} value={app.id}>{app.name}</option>
+            ))}
+          </select>
+        )}
 
         {mode === 'ai' && (
           <>
@@ -487,9 +516,16 @@ ${prompt.trim()}`;
               </button>
             )}
           </div>
-          <div className="text-xs text-gray-500 break-words">
-            Allowed: {allowedCommands.slice(0, 10).join(', ')}{allowedCommands.length > 10 ? `, +${allowedCommands.length - 10} more` : ''}
-          </div>
+          {allowedCommandsState === 'error' && (
+            <ListLoadError what="allowed commands" error={allowedCommandsError} onRetry={retryAllowedCommands} />
+          )}
+          {allowedCommandsState === 'ready' && (
+            <div className="text-xs text-gray-500 break-words">
+              {allowedCommands.length === 0
+                ? 'No allowed commands configured'
+                : `Allowed: ${allowedCommands.slice(0, 10).join(', ')}${allowedCommands.length > 10 ? `, +${allowedCommands.length - 10} more` : ''}`}
+            </div>
+          )}
         </>
       )}
 

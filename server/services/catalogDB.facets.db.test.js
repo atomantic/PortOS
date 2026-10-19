@@ -160,6 +160,35 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     await query('DELETE FROM creative_director_projects WHERE id = $1', [cdId]).catch(() => {});
   });
 
+  it('counts usage per kind from live targets only, so a deleted universe stops counting', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'character', name: `Usage ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'mentioned');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', DEAD_UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'series', SER_ID, 'cast');
+
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].usage).toEqual({ universe: 1, series: 1 });
+  });
+
+  // Uniquely catches a newer reference sheet / look / plate becoming the card
+  // cover over an older plain reference image.
+  it('never picks a sheet, look or plate image as the card thumbnail', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'place', name: `Thumb ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.attachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    await catalogDB.attachMedia(ing.id, `sheet-${nonce}.png`, 'reference', { role: 'sheet:environment' });
+    await catalogDB.attachMedia(ing.id, `look-${nonce}.png`, 'reference', { role: 'look:night' });
+    await catalogDB.attachMedia(ing.id, `plate-${nonce}.png`, 'reference', { role: 'plate' });
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].thumbnailKey).toBe(`plain-${nonce}.png`);
+
+    await catalogDB.detachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    const after = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(after.items[0].thumbnailKey).toBeNull();
+  });
+
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {
     const linked = await catalogDB.createIngredient({ type: 'character', name: `FacetLinked ${nonce}`, tags: [TAG] });
     const seriesLinked = await catalogDB.createIngredient({ type: 'character', name: `FacetSeries ${nonce}` });
@@ -195,5 +224,25 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     expect(facets.unlinkedCount).toBeGreaterThanOrEqual(1);
     expect(facets.orphanedCount).toBeGreaterThanOrEqual(1);
     expect(facets.total).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe.skipIf(!runDb)('catalogDB.findIngredientsByName', () => {
+  it('matches a live record of the type by trimmed, case-insensitive name or alias, oldest first', async () => {
+    const make = async (type, name, payload = {}) => {
+      const row = await catalogDB.createIngredient({ type, name, payload });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const first = await make('character', `  Juno Example ${nonce} `);
+    const aliased = await make('character', `The Drummer ${nonce}`, { aliases: [`juno example ${nonce}`] });
+    const otherType = await make('place', `Juno Example ${nonce}`);
+    const gone = await make('character', `Juno Example ${nonce}`);
+    await catalogDB.deleteIngredient(gone.id);
+
+    const found = await catalogDB.findIngredientsByName('character', [`JUNO EXAMPLE ${nonce}`]);
+    expect(found.map((r) => r.id)).toEqual([first.id, aliased.id]);
+    expect(found.map((r) => r.id)).not.toContain(otherType.id);
+    expect(await catalogDB.findIngredientsByName('character', ['  '])).toEqual([]);
   });
 });

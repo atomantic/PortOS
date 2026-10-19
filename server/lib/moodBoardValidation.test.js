@@ -112,6 +112,11 @@ describe('moodBoardItemCreateSchema', () => {
   it('rejects a video item whose ref is a bare id (no extension) — it would 404 as a filename', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'video:job-123' }).success).toBe(false);
   });
+  it('accepts the full embedded-upload prompt without truncation', () => {
+    const prompt = 'p'.repeat(16000);
+    expect(moodBoardItemCreateSchema.parse({ type: 'image', mediaKey: 'image:upload.png', prompt }).prompt).toBe(prompt);
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', mediaKey: 'image:upload.png', prompt: prompt + 'x' }).success).toBe(false);
+  });
   it('accepts an image item with prompt alongside imageUrl', () => {
     const item = moodBoardItemCreateSchema.parse({ type: 'image', imageUrl: 'https://x/y.png', prompt: 'a prompt' });
     expect(item.prompt).toBe('a prompt');

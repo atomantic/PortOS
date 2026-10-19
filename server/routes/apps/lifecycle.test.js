@@ -67,6 +67,7 @@ import * as appsService from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import * as history from '../../services/history.js';
 import * as appUpdater from '../../services/appUpdater.js';
+import { parseEcosystemFromPath } from '../../services/streamingDetect.js';
 
 describe('Apps Lifecycle Routes', () => {
   let app;
@@ -576,6 +577,61 @@ describe('Apps Lifecycle Routes', () => {
       const response = await request(app).get('/api/apps/app-001/logs');
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/apps/:id/refresh-config', () => {
+    const staleApp = {
+      id: 'app-001',
+      name: 'Static Site',
+      type: 'express',
+      repoPath: REAL_DIR,
+      buildCommand: 'npm run build',
+      appIconPath: 'icon.svg',
+      apiPort: 6000,
+      uiPort: null,
+      devUiPort: 6001
+    };
+
+    beforeEach(() => {
+      appsService.getAppById.mockResolvedValue(staleApp);
+      appsService.updateApp.mockImplementation(async (id, updates) => ({ ...staleApp, ...updates }));
+    });
+
+    it('clears record ports the config no longer declares', async () => {
+      // The config moved from env PORT (api 6000) to a ui-labeled port.
+      parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'site', ports: { ui: 5570 } }],
+        pm2Home: null
+      });
+
+      const response = await request(app).post('/api/apps/app-001/refresh-config');
+
+      expect(response.status).toBe(200);
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.objectContaining({
+        apiPort: null,
+        uiPort: 5570,
+        devUiPort: null
+      }));
+      expect(response.body.app).toMatchObject({ apiPort: null, uiPort: 5570, devUiPort: null });
+    });
+
+    it('still serves the production UI from the API port when only a dev UI is declared', async () => {
+      parseEcosystemFromPath.mockResolvedValue({
+        processes: [
+          { name: 'site-server', ports: { api: 5570 } },
+          { name: 'site-client', ports: { devUi: 5571 } }
+        ],
+        pm2Home: null
+      });
+
+      await request(app).post('/api/apps/app-001/refresh-config');
+
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.objectContaining({
+        apiPort: 5570,
+        uiPort: 5570,
+        devUiPort: 5571
+      }));
     });
   });
 });

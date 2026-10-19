@@ -94,7 +94,9 @@ export const registerShellHandlers = (socket, _io) => {
   socket.on('shell:resize', (rawData) => {
     const validated = validateSocketData(shellResizeSchema, rawData, socket, 'shell:resize');
     if (!validated) return;
-    shellService.resizeSession(validated.sessionId, validated.cols, validated.rows);
+    if (!shellService.resizeSession(validated.sessionId, validated.cols, validated.rows)) {
+      socket.emit('shell:error', { sessionId: validated.sessionId, error: 'Session not found or resize failed' });
+    }
   });
 
   socket.on('shell:stop', (rawData) => {

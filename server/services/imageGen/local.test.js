@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import os, { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
 
 const admissionFault = vi.hoisted(() => ({ error: null }));
@@ -37,6 +37,7 @@ vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), en
 // touching the real frame-guard implementation the other suites exercise.
 const mockRejectDegenerateFrame = vi.fn(async () => null);
 vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: (...args) => mockRejectDegenerateFrame(...args) }));
+vi.mock('./localRuntime.js', () => ({ diagnoseLocalRuntime: vi.fn(async () => ({ readiness: 'ready' })) }));
 
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
@@ -480,6 +481,16 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
   });
 
+  it('reports no supplied images for the Windows runner that omits image arguments', () => {
+    const { args, providerInputs } = buildArgs({ ...baseInput, platform: 'win32',
+      model: { id: 'dev', steps: 20, guidance: 3.5 },
+      initImagePath: '/example/source.png', referenceImagePaths: ['/example/ref.png'],
+    });
+    expect(args).not.toContain('--image-path');
+    expect(args).not.toContain('--reference-images');
+    expect(providerInputs).toEqual({ initImagePath: null, referenceImagePaths: [] });
+  });
+
   it.skipIf(process.platform === 'win32')('falls back to mflux dispatch for non-flux2 models on macOS', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);
@@ -492,6 +503,104 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).toContain('--model');
     expect(args[args.indexOf('--model') + 1]).toBe('dev');
     expect(args).toContain('--quantize');
+  });
+});
+
+describe('imageGen native MOSS invocation', () => {
+  const input = { model: { id: 'moss-image-sft-bf16', runner: 'moss-swift' },
+    prompt: '--seed', negativePrompt: 'blur', width: 1024, height: 768,
+    steps: 50, guidance: 3, seed: 42, outputPath: '/tmp/example.png' };
+
+  it('preserves flag-like prompt values and selects the pinned native snapshot without Python', () => {
+    const result = buildArgs(input);
+    expect(result.bin).toMatch(/moss-image$/);
+    expect(result.args).toEqual(['--snapshot', expect.stringContaining('fc5de0d56fc910cbca6f6625a70f5f582b26deb1'),
+      '--prompt', '--seed', '--negative', 'blur', '--width', '1024', '--height', '768',
+      '--steps', '50', '--guidance', '3', '--seed', '42', '--output', '/tmp/example.png']);
+    expect(result.providerInputs).toEqual({ initImagePath: null, referenceImagePaths: [] });
+  });
+
+  it.each([
+    { loraPaths: ['/tmp/example.safetensors'] }, { initImagePath: '/tmp/example.png' },
+    { referenceImagePaths: ['/tmp/example.png'] }, { width: 1536 }, { height: 513 },
+    { steps: 101 }, { guidance: Infinity }, { guidance: 1 }, { seed: Number.MAX_SAFE_INTEGER + 1 },
+  ])('refuses unsupported inputs before a native process can start: %j', patch => {
+    expect(() => buildArgs({ ...input, ...patch })).toThrow();
+  });
+});
+
+describe('imageGen native MOSS render workflow', () => {
+  let capabilitiesSpy;
+  let diagnoseLocalRuntime;
+  let imageGenEvents;
+  let manifest;
+  const request = { modelId: 'moss-image-sft-bf16', prompt: '--seed', negativePrompt: 'blur',
+    width: 512, height: 512, steps: 4, guidance: 3, seed: 42 };
+
+  beforeEach(async () => {
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    // Exercise the shipped registry requirements on every CI platform without
+    // requiring a real Apple GPU; only the subprocess boundary is simulated.
+    capabilitiesSpy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true,
+      cpuCount: 8, totalMemoryGb: 64,
+    });
+    ({ diagnoseLocalRuntime } = await import('./localRuntime.js'));
+    ({ imageGenEvents } = await import('../imageGenEvents.js'));
+    ({ MOSS_MANIFEST: manifest } = await import('./mossRuntime.js'));
+    diagnoseLocalRuntime.mockReset().mockResolvedValue({ readiness: 'ready' });
+    mockSpawn.mockReset();
+    mockIsFlux2VenvHealthy.mockClear();
+    releaseClaim.mockClear();
+  });
+
+  afterEach(() => {
+    capabilitiesSpy.mockRestore();
+    diagnoseLocalRuntime.mockReset().mockResolvedValue({ readiness: 'ready' });
+  });
+
+  it('renders without Python and publishes the pinned native model provenance', async () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+
+    const job = await generateImage(request);
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic native output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await expect(completed).resolves.toMatchObject({ generationId: job.jobId, filename: job.filename, mode: 'local' });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const [binary, args] = mockSpawn.mock.calls[0];
+    expect(binary).toMatch(/moss-image$/);
+    expect(args).toEqual(expect.arrayContaining(['--prompt', '--seed', '--negative', 'blur']));
+    expect(diagnoseLocalRuntime).toHaveBeenCalledWith({ modelId: request.modelId });
+    expect(mockIsFlux2VenvHealthy).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledTimes(1);
+    const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(sidecar).toMatchObject({
+      modelId: request.modelId, prompt: request.prompt, sentPrompt: request.prompt,
+      negativePrompt: request.negativePrompt, seed: 42, quantize: null, quantization: 'bf16',
+      modelRepo: manifest.repo, modelRevision: manifest.revision,
+      nativeRuntime: { runtime: 'moss-swift', sourceRevision: manifest.sourceRevision, adapterVersion: manifest.adapterVersion },
+      provenance: { sources: [{ kind: 'model', id: request.modelId, license: 'apache-2.0', sourceUrl: `https://huggingface.co/${manifest.repo}` }] },
+      inputProvenance: 'provider-inputs', initImageFilename: null, referenceImageFilenames: [], loraFilenames: [],
+    });
+  });
+
+  it('refuses an unavailable native runtime before spawning', async () => {
+    diagnoseLocalRuntime.mockResolvedValue({ readiness: 'unavailable', reason: 'Pinned MOSS weights are incomplete.' });
+    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MOSS_NOT_READY', message: 'Pinned MOSS weights are incomplete.' });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockIsFlux2VenvHealthy).not.toHaveBeenCalled();
+  });
+
+  it('refuses raw missing LoRA input before normalization can silently discard it', async () => {
+    await expect(generateImage({ ...request, loraFilenames: ['missing-native-lora.safetensors'] }))
+      .rejects.toMatchObject({ code: 'MOSS_INPUT_UNSUPPORTED' });
+    expect(diagnoseLocalRuntime).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 });
 
@@ -1305,6 +1414,48 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
 });
 
 
+it('persists omitted reference evidence when the LoRA runner drops inputs', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const priorLoras = PATHS.loras;
+  PATHS.loras = join(tmpRegistryDir, 'loras');
+  mkdirSync(PATHS.loras, { recursive: true });
+  writeFileSync(join(PATHS.loras, 'example.safetensors'), 'example');
+  writeFileSync(join(PATHS.images, 'reference.png'), 'example');
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  // Pin host memory, not the registry's hardware verdict: CI may have less
+  // than this model's 32 GiB floor, even though the render child is mocked.
+  const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(8 * 1024 ** 3);
+  try {
+    const request = { modelId: 'flux2-klein-9b', prompt: '--reference-images',
+      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] };
+    const spawnCount = mockSpawn.mock.calls.length;
+    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MODEL_HARDWARE_UNAVAILABLE' });
+    expect(mockSpawn).toHaveBeenCalledTimes(spawnCount);
+    totalmem.mockReturnValue(64 * 1024 ** 3);
+    const job = await generateImage(request);
+    expect(mockSpawn.mock.calls.at(-1)[1]).toContain('--reference-images');
+    expect(mockSpawn.mock.calls.at(-1)[1]).not.toContain(join(PATHS.images, 'reference.png'));
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await completed;
+    const meta = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(meta.inputProvenance).toBe('provider-inputs');
+    expect(meta.referenceImageFilenames).toEqual([]);
+    expect(meta.referenceImageStrengths).toEqual([]);
+    expect(meta.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png' }]);
+    expect(meta.omittedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png', reason: 'unsupported-render-path' }]);
+  } finally {
+    totalmem.mockRestore();
+    PATHS.loras = priorLoras;
+  }
+});
+
 it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
   mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
   mockIsFlux2VenvHealthy.mockResolvedValue(true);
@@ -1400,4 +1551,66 @@ it('drives a child that dies during the heavy-claim handoff to a terminal state 
     expect(getActiveJob()).toBeNull();
     expect(releaseClaim.mock.calls.length).toBe(releasedBefore + 1);
   } finally { claimSpy.mockRestore(); }
+});
+
+describe('local render launch unwind (#11862)', () => {
+  const setup = () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  };
+
+  it('a synchronous spawn throw clears the active job and emits a terminal failure', async () => {
+    setup();
+    mockSpawn.mockImplementationOnce(() => { throw new Error('ERR_INVALID_ARG_VALUE: NUL'); });
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { getActiveJob } = await import('./local.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'spawn throws' })).rejects.toThrow('NUL');
+    expect((await failed).error).toContain('NUL');
+    expect(getActiveJob()).toBeNull();
+  });
+
+  it('a rejected claim handoff kills the spawned child and clears the active process', async () => {
+    const child = setup();
+    child.pid = 5151;
+    mockSpawn.mockReturnValue(child);
+    const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+    const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+      ok: true,
+      release: releaseClaim,
+      handoffTo: async () => { throw new Error('ENOSPC: no space left'); },
+    });
+    const { getActiveJob } = await import('./local.js');
+    try {
+      await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'handoff fails' })).rejects.toThrow('ENOSPC');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(getActiveJob()).toBeNull();
+    } finally { claimSpy.mockRestore(); }
+  });
+
+  it('a spawn ENOENT closes the stepwise watcher, which carries an error listener', async () => {
+    const child = setup();
+    const fsMod = await import('fs');
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    fsMod.watch.mockReturnValueOnce(watcher);
+    mockSpawn.mockReturnValue(child);
+    const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+    const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+      ok: true,
+      release: releaseClaim,
+      handoffTo: async () => { child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })); },
+    });
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    try {
+      await generateImage({ modelId: 'qwen-image-2.1', prompt: 'enoent' });
+      await failed;
+      expect(watcher.close).toHaveBeenCalled();
+      expect(watcher.listenerCount('error')).toBeGreaterThan(0);
+    } finally { claimSpy.mockRestore(); }
+  });
 });

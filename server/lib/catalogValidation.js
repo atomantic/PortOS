@@ -55,6 +55,7 @@ export const REF_KINDS = Object.freeze([
   'issue',
   'work',
   'creative-director',
+  'music-video',
 ]);
 
 // Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
@@ -287,6 +288,11 @@ export const catalogRevisionQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 }).strict();
 
+export const catalogRelatedImagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(24),
+  offset: z.coerce.number().int().min(0).max(1000000).default(0),
+}).strict();
+
 // /ingredients/:id/revisions/:revisionId/restore — re-applies a prior
 // revision's name/payload/tags. Optional `source`/`actor` label the NEW
 // revision the restore itself produces (defaults to 'user').
@@ -377,6 +383,28 @@ export const catalogPortraitSetSchema = z.object({
   role: z.string().trim().max(64).optional().nullable(),
   caption: z.string().trim().max(2_000).optional().nullable(),
 }).strict();
+
+// Reference-sheet render/preview body. The prompt overrides are the user's own
+// words and are sent exactly as typed — no trim (#11317).
+// `wardrobeId` picks the outfit a `look` render dresses the character in: it
+// is required for `look` and refused for every other variant, so a stray id
+// never silently renders a plain sheet. 59 = the 64-char media role cap minus
+// the `look:` prefix the render tags its image with.
+export const CATALOG_LOOK_VARIANT_ID = 'look';
+export const catalogSheetRenderSchema = z.object({
+  variant: z.string().trim().min(1).max(48).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  overridePrompt: z.string().max(8000).optional(),
+  overrideNegativePrompt: z.string().max(2000).optional(),
+  modelId: z.string().trim().max(64).optional(),
+}).strict().superRefine((body, ctx) => {
+  const isLook = body.variant === CATALOG_LOOK_VARIANT_ID;
+  if (isLook && !body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is required for a look render' });
+  } else if (!isLook && body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is only accepted for a look render' });
+  }
+});
 
 // Media detach body — identifies the tuple to soft-delete.
 export const catalogMediaDetachSchema = z.object({
@@ -511,6 +539,17 @@ export const catalogPruneRequestSchema = z.object({
 export const catalogEmbeddingsBackfillSchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   includeStale: z.boolean().optional(),
+}).strict();
+
+// Music video cast import commit (Casting › Import from music videos): one
+// reviewed decision per subject. `local` keeps the subject in its video only.
+export const catalogMusicVideoImportSchema = z.object({
+  selections: z.array(z.object({
+    projectId: z.string().min(1).max(128),
+    subjectId: z.string().min(1).max(64),
+    action: z.enum(['create', 'link', 'local']),
+    ingredientId: z.string().min(1).max(128).optional(),
+  }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
 }).strict();
 
 // /migration/rerun — pass `force: true` to ignore the marker file.
@@ -770,3 +809,17 @@ export const catalogSyncEnvelopeSchema = z.object({
   catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
   portosMeta,
 }).passthrough();
+
+export const catalogMergeSchema = z.object({
+  sourceId: z.string().min(1).max(200),
+  survivorId: z.string().min(1).max(200),
+  dryRun: z.boolean().default(true),
+  previewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  fieldChoices: z.record(z.string(), z.enum(['source', 'survivor'])).default({}),
+}).strict();
+export const catalogMergeRecoverSchema = z.object({}).strict();
+
+export const catalogMergeHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();

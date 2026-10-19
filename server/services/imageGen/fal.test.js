@@ -162,7 +162,9 @@ describe('imageGen/fal — generateImage', () => {
     expect(body.prompt).toContain('visual references for style, characters, and subject matter');
     expect(body).not.toHaveProperty('num_images');
     const sidecar = JSON.parse(await readFile(join(FAKE_IMAGES_DIR, `${job.jobId}.metadata.json`), 'utf8'));
-    expect(sidecar).toMatchObject({ model: 'fal-ai/flux-2-pro/edit', inputImageCount: 9 });
+    expect(sidecar.inputProvenance).toBe('provider-inputs');
+    expect(sidecar).toMatchObject({ model: 'fal-ai/flux-2-pro/edit', inputImageCount: 9,
+      initImageFilename: null, referenceImageFilenames: refs.slice(0, 9) });
   });
 
   it('defaults to Nano Banana Pro and switches to its /edit endpoint when an init image is attached', async () => {
@@ -246,4 +248,21 @@ describe('imageGen/fal — checkConnection', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'nope' }, false, 401)));
     expect(await fal.checkConnection({})).toMatchObject({ connected: false, reason: expect.stringContaining('HTTP 401') });
   });
+});
+
+it('cancels during preparation before starting a render', async () => {
+  const { imageGenEvents: events } = await import('../imageGenEvents.js');
+  const failed = vi.fn();
+  const completed = vi.fn();
+  events.on('failed', failed);
+  events.on('completed', completed);
+  vi.stubGlobal('fetch', vi.fn());
+  const jobId = 'preamble-cancel-imageGen-fal';
+  const pending = fal.generateImage({ prompt: 'a quiet gate', jobId });
+  expect(fal.cancel(jobId)).toBe('pending');
+  await pending;
+  await vi.waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId, error: 'Canceled' })));
+  expect(completed).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(fal.cancel(jobId)).toBe(false);
 });

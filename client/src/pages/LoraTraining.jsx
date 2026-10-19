@@ -6,7 +6,7 @@
  * universe → character and lands on the dataset workbench.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { GraduationCap, Plus, Loader2, Sparkles, Images } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -14,11 +14,15 @@ import Modal from '../components/ui/Modal';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import {
   listLoraDatasets,
   createLoraDataset,
   deleteLoraDataset,
 } from '../services/api';
+
+const loadLoraDatasets = () => listLoraDatasets({}, { silent: true });
 
 const STATUS_CHIP = {
   draft: 'bg-port-border/40 text-gray-300',
@@ -81,15 +85,13 @@ function NewDatasetDialog({ onClose, onCreated }) {
 
 export default function LoraTraining() {
   const navigate = useNavigate();
-  const [datasets, setDatasets] = useState(null);
+  const datasetsResource = useListResource(loadLoraDatasets);
+  const {
+    items: datasets, state, error, retry, setItems: setDatasets,
+  } = datasetsResource;
   const [showNew, setShowNew] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
-
-  const refresh = useCallback(() => {
-    listLoraDatasets().then(setDatasets).catch(() => setDatasets([]));
-  }, []);
-  useEffect(() => { refresh(); }, [refresh]);
 
   const onDelete = async (id) => {
     setDeletingId(id);
@@ -119,11 +121,15 @@ export default function LoraTraining() {
         </button>
       </div>
 
-      {datasets === null && (
+      {state === 'loading' && (
         <div className="text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading datasets…</div>
       )}
 
-      {datasets?.length === 0 && (
+      {state === 'error' && (
+        <ListLoadError what="datasets" error={error} onRetry={retry} />
+      )}
+
+      {state === 'ready' && datasets.length === 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-gray-400">
           <Sparkles className="w-8 h-8 mx-auto mb-3 text-port-accent" />
           <p className="mb-1 text-white">Train a LoRA for consistent universe subjects.</p>
@@ -131,7 +137,8 @@ export default function LoraTraining() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {state === 'ready' && datasets.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {(datasets || []).map((d) => (
           <div key={d.id} className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col gap-3">
             <div className="flex items-start justify-between gap-2">
@@ -185,7 +192,8 @@ export default function LoraTraining() {
             </div>
           </div>
         ))}
-      </div>
+        </div>
+      )}
 
       <div className="mt-6">
         <MediaJobsQueue kind="training" />

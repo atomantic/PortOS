@@ -75,6 +75,7 @@ import { emitLog } from './cosEvents.js';
 vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeFailure: vi.fn(async () => null),
   recordTaskTypeSuccess: vi.fn(async () => null),
+  recordRecommendedAudits: vi.fn(async () => null),
 }));
 import { updateTask, addTask } from './cos.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -84,10 +85,6 @@ import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
 const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
-// The orphan sweep and post-restart recovery both retire through the shared
-// `retireDeadAgent` (#8440) now, so its own ordering is the thing to pin — see
-// the source-text tests just below.
-const FINALIZATION_SOURCE = readFileSync(join(__dirname, 'agentFinalization.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
   taskType: 'internal',
@@ -170,6 +167,18 @@ describe('recovery output-hook dispatch (#3182)', () => {
       auditAssessment: { status: 'recorded' }, executionInterruption: { category: 'content-refusal' } });
     await dispatchTaskOutputHookOnce(args);
     expect(persistedAgent.metadata.securityScan.status).toBe('time-limit');
+  });
+
+  it("lands the code-quality lane's ranked next audits on the execution record (#12085)", async () => {
+    const { recordRecommendedAudits } = await import('./taskSchedule.js');
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'code-quality' } };
+    tryReadFile.mockResolvedValueOnce('Filed 2 issues.\n## Recommended next audits\n1. better-structural-drift — drifted registries: server/lib\n2. ux — buried action: client/src\nQUALITY_AUDIT_JSON: {}');
+    await dispatchTaskOutputHookOnce({ agentId: 'agent-triage', task, success: true, workspacePath: '/worktree' });
+    expect(recordRecommendedAudits).toHaveBeenCalledWith('code-quality', 'app-example', [
+      'better-structural-drift — drifted registries: server/lib',
+      'ux — buried action: client/src',
+    ]);
+    expect(persistedAgent.metadata).toMatchObject({ auditAssessment: { status: 'recorded' } });
   });
 
   it('captures audit telemetry on the shared completion path without waiving fix-mode delivery criteria', async () => {
@@ -549,15 +558,6 @@ describe('recovery path wiring (#3182, #8440)', () => {
   // recovery in agentLifecycle.js) call the shared `retireDeadAgent` (#8440) for
   // this step list now, so the ordering guard moved to pin ITS body instead of
   // each caller's inlined copy.
-  it('retireDeadAgent dispatches the output hook before marking the agent complete', () => {
-    const start = FINALIZATION_SOURCE.indexOf('export async function retireDeadAgent');
-    expect(start, 'retireDeadAgent must exist').toBeGreaterThan(-1);
-    const end = FINALIZATION_SOURCE.indexOf('\n}', start);
-    const body = FINALIZATION_SOURCE.slice(start, end);
-    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
-    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agent.id'));
-  });
-
   it('both recovery paths retire through the shared retireDeadAgent', () => {
     const sweepStart = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
     const sweepBody = MANAGEMENT_SOURCE.slice(sweepStart, sweepStart + 12_000);

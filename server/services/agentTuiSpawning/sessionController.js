@@ -266,7 +266,7 @@ function createPasteRetryController({
     }
     markPromptSubmitted();
     submitEnterTimer = scheduleSubmitEnters(
-      () => write(SUBMIT_KEY),
+      () => write(SUBMIT_KEY, { promptSubmission: true }),
       () => isFinalized()
     );
   };
@@ -556,18 +556,41 @@ export function createTuiSessionController({
   // A local-GPU OOM kills the turn but leaves the TUI session holding the whole
   // conversation, so it is nudged to carry on rather than re-prompted — see
   // createOomNudgeGate for why this is a separate mechanism from the gate above.
-  const detectLocalRuntimeOom = createLocalRuntimeOomDetector();
-  const oomNudgeGate = createOomNudgeGate();
-  // A harness that cut the response off mid-generation (pi's TUI halts the
-  // whole session on its truncation banner). Same shape as the OOM gate — a
-  // dead turn, an intact session — so it nudges rather than re-prompts. See
-  // createTruncationNudgeGate.
-  const detectTruncatedResponse = createTruncatedResponseDetector();
-  const truncationNudgeGate = createTruncationNudgeGate();
-  // A provider-side `model is at capacity` rejection (Codex). Dead turn, intact
-  // session — nudged with `continue`, but only after a much longer quiet spell.
-  const detectModelAtCapacity = createModelAtCapacityDetector();
-  const capacityNudgeGate = createModelCapacityNudgeGate();
+  // A dead turn in an intact session is nudged (not re-prompted) once the
+  // session goes quiet; a signal that outlasts its nudge budget fails over.
+  // One entry per signal, in detection order: handleData arms them, the
+  // provider-signal timer sends the due nudge. A new signal is one entry here.
+  //   OOM: a local-GPU OOM — see createOomNudgeGate for why this is separate from
+  //        the self-clearing gate above.
+  //   truncation: a harness that cut the response off mid-generation (pi's TUI).
+  //   capacity: a provider-side `model is at capacity` rejection (Codex); nudged
+  //        only after a much longer quiet spell.
+  const silenceNudgeSignals = [
+    {
+      detect: createLocalRuntimeOomDetector(),
+      gate: createOomNudgeGate(),
+      pendingLine: () => LIFECYCLE_LINES.localOomPending(),
+      nudgeText: OOM_NUDGE_TEXT,
+      nudgeLabel: 'local-runtime OOM nudge',
+      nudgedLine: (attempt) => LIFECYCLE_LINES.localOomNudged({ attempt, max: OOM_NUDGE_MAX_ATTEMPTS }),
+    },
+    {
+      detect: createTruncatedResponseDetector(),
+      gate: createTruncationNudgeGate(),
+      pendingLine: () => LIFECYCLE_LINES.truncationPending(),
+      nudgeText: TRUNCATION_NUDGE_TEXT,
+      nudgeLabel: 'truncated-response nudge',
+      nudgedLine: (attempt) => LIFECYCLE_LINES.truncationNudged({ attempt, max: TRUNCATION_NUDGE_MAX_ATTEMPTS }),
+    },
+    {
+      detect: createModelAtCapacityDetector(),
+      gate: createModelCapacityNudgeGate(),
+      pendingLine: () => LIFECYCLE_LINES.capacityPending(),
+      nudgeText: CAPACITY_NUDGE_TEXT,
+      nudgeLabel: 'model-capacity nudge',
+      nudgedLine: (attempt) => LIFECYCLE_LINES.capacityNudged({ attempt, max: CAPACITY_NUDGE_MAX_ATTEMPTS }),
+    },
+  ];
   // agy quitting back to its launch shell (see createAgyResumeGate). Only a
   // login-shell launch has a shell to fall back to; runner/direct PTYs die with
   // agy and finish through handleExit instead.
@@ -939,7 +962,7 @@ export function createTuiSessionController({
    * file, re-arms the watcher) — so finish() reopens the phase only after this
    * whole function settles.
    */
-  const runFinishDecision = async ({ success }) => {
+  const runFinishDecision = async ({ success, reason }) => {
     if (terminalRefusal) return { type: 'finalize' };
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
@@ -986,7 +1009,14 @@ export function createTuiSessionController({
     // mergeGateContract.js for the full decision table. The re-prompt expects
     // a fresh completion signal; a trigger that arrived while this was
     // deciding is the only thing that could say the session died meanwhile.
-    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted
+    //
+    // Never when a PTY exit (`shell-*`) is the deciding trigger: a dead
+    // session cannot answer the nudge, and `tui:exit` is already consumed, so
+    // nothing would ever finish the run. `resubmit()` cannot be the liveness
+    // test — a runner proxy accepts writes after its PTY died (#11861). The
+    // still-open PR takes the post-finalize merge path instead.
+    const sessionExited = reason?.startsWith('shell-');
+    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted && !sessionExited
       && await checkMergeGateCompliance(sentinelSummary)) {
       return { type: 'reprompt', replayParked: 'always' };
     }
@@ -1016,7 +1046,7 @@ export function createTuiSessionController({
     }
     sessionPhase = 'finishing';
 
-    let decision = await runFinishDecision({ success });
+    let decision = await runFinishDecision({ success, reason });
     // A refusal observed while a sentinel/probe was awaited outranks its result.
     if (terminalRefusal) {
       decision = { type: 'finalize' };
@@ -1050,8 +1080,16 @@ export function createTuiSessionController({
 
     // Drain pending parsed lines AND raw chunks before the final state
     // writes so completion events don't beat the last output batch to disk.
-    await drainLines();
-    await drainRaw();
+    // Non-fatal: the phase is already 'finalized', so a rejected drain (e.g.
+    // BACKUP_SNAPSHOT_BUSY while a long backup holds the snapshot cut) must not
+    // skip the teardown below — a later exit/Kill would find the run terminal
+    // and no-op, stranding the lane, the PTY and the worktree until restart.
+    for (const [drain, label] of [[drainLines, 'parsed output'], [drainRaw, 'raw PTY spool']]) {
+      await drain().catch(err => {
+        persistence.markUnsettled?.();
+        emitLog('warn', `TUI ${label} drain failed for ${agentId}: ${err.message}`, { agentId });
+      });
+    }
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the final
@@ -1285,6 +1323,56 @@ export function createTuiSessionController({
     }
   };
 
+  // `/low-priority` is a hidden Claude Code TUI command, not a CLI startup
+  // argument or a supported --print/SDK prompt. On an opted-in session
+  // limit, enable the mode and then re-submit the rejected task. A later
+  // limit after that re-submit means the mode was unavailable or exhausted.
+  // A session limit always consumes the chunk: the caller returns afterwards.
+  const handleClaudeSessionLimit = async (sessionLimit) => {
+    if (lowPriorityCommandAttempted) {
+      if (claudeLowPriorityPromptResubmitted) await failOverToFallback(sessionLimit);
+      return;
+    }
+    if (!mayUseClaudeLowPriority) {
+      await failOverToFallback(sessionLimit);
+      return;
+    }
+    lowPriorityCommandAttempted = true;
+    let submitted = false;
+    try {
+      submitted = session.write(sessionId, `/low-priority${SUBMIT_KEY}`) !== false;
+    } catch (err) {
+      emitLog('warn', `TUI agent ${agentId} could not send Claude low-priority command: ${err?.message || err}`, { agentId });
+    }
+    if (submitted) {
+      appendLine(LIFECYCLE_LINES.claudeSessionLimit());
+      claudeLowPriorityResubmitTimer = setTimeout(() => {
+        claudeLowPriorityResubmitTimer = null;
+        if (sessionPhase !== 'running') return;
+        let promptResubmitted = false;
+        try {
+          promptResubmitted = !!pasteController?.resubmit({ label: 'Claude low-priority continuation' });
+        } catch (err) {
+          emitLog('warn', `TUI agent ${agentId} could not re-submit after Claude low-priority: ${err?.message || err}`, { agentId });
+        }
+        if (promptResubmitted) {
+          claudeLowPriorityPromptResubmitted = true;
+          appendLine(LIFECYCLE_LINES.claudeLowPriorityResubmitted());
+          return;
+        }
+        failOverToFallback({
+          ...sessionLimit,
+          message: 'Claude Code low-priority mode was enabled, but the task could not be re-submitted',
+        }).catch((err) => emitLog('error', `TUI agent ${agentId} low-priority re-submit fallback failed: ${err?.message || err}`, { agentId }));
+      }, CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS);
+    } else {
+      await failOverToFallback({
+        ...sessionLimit,
+        message: 'Claude Code session limit reached and /low-priority could not be sent',
+      });
+    }
+  };
+
   const handleData = async (data) => {
     // EventEmitter listeners run outside the request lifecycle — a rejection
     // here on Node ≥15 will kill the process unless we catch locally. The
@@ -1362,55 +1450,10 @@ export function createTuiSessionController({
       }
       recordFirstOutput('tui-pty');
 
-      // `/low-priority` is a hidden Claude Code TUI command, not a CLI startup
-      // argument or a supported --print/SDK prompt. On an opted-in session
-      // limit, enable the mode and then re-submit the rejected task. A later
-      // limit after that re-submit means the mode was unavailable or exhausted.
       if (isClaudeCommand(tuiConfig.command) && promptSubmittedAt) {
         const sessionLimit = detectClaudeSessionLimitBanner(stripped);
         if (sessionLimit) {
-          if (lowPriorityCommandAttempted) {
-            if (claudeLowPriorityPromptResubmitted) await failOverToFallback(sessionLimit);
-            return;
-          }
-          if (!mayUseClaudeLowPriority) {
-            await failOverToFallback(sessionLimit);
-            return;
-          }
-          lowPriorityCommandAttempted = true;
-          let submitted = false;
-          try {
-            submitted = session.write(sessionId, `/low-priority${SUBMIT_KEY}`) !== false;
-          } catch (err) {
-            emitLog('warn', `TUI agent ${agentId} could not send Claude low-priority command: ${err?.message || err}`, { agentId });
-          }
-          if (submitted) {
-            appendLine(LIFECYCLE_LINES.claudeSessionLimit());
-            claudeLowPriorityResubmitTimer = setTimeout(() => {
-              claudeLowPriorityResubmitTimer = null;
-              if (sessionPhase !== 'running') return;
-              let promptResubmitted = false;
-              try {
-                promptResubmitted = !!pasteController?.resubmit({ label: 'Claude low-priority continuation' });
-              } catch (err) {
-                emitLog('warn', `TUI agent ${agentId} could not re-submit after Claude low-priority: ${err?.message || err}`, { agentId });
-              }
-              if (promptResubmitted) {
-                claudeLowPriorityPromptResubmitted = true;
-                appendLine(LIFECYCLE_LINES.claudeLowPriorityResubmitted());
-                return;
-              }
-              failOverToFallback({
-                ...sessionLimit,
-                message: 'Claude Code low-priority mode was enabled, but the task could not be re-submitted',
-              }).catch((err) => emitLog('error', `TUI agent ${agentId} low-priority re-submit fallback failed: ${err?.message || err}`, { agentId }));
-            }, CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS);
-          } else {
-            await failOverToFallback({
-              ...sessionLimit,
-              message: 'Claude Code session limit reached and /low-priority could not be sent',
-            });
-          }
+          await handleClaudeSessionLimit(sessionLimit);
           return;
         }
       }
@@ -1453,12 +1496,6 @@ export function createTuiSessionController({
         return;
       }
 
-      // A local inference runtime that ran out of GPU memory. The turn is dead
-      // but the session is intact, so this arms a nudge instead of killing the
-      // run — the provider-signal timer sends it once the session has actually
-      // gone quiet. Gated on promptSubmittedAt for the same reason
-      // resubmitAfterSignal is: before the prompt is in, there is no turn to
-      // resume and the ordinary paste path still owns first delivery.
       if (agyResumeGate && promptSubmittedAt) {
         agyResumeGate.observe(stripped);
         // A relaunched agy is up once its composer footer paints; only then is the
@@ -1470,51 +1507,30 @@ export function createTuiSessionController({
           }
         }
       }
-      const oomSignal = promptSubmittedAt ? detectLocalRuntimeOom(stripped) : null;
-      if (oomSignal) {
-        const armed = oomNudgeGate.arm(oomSignal, now);
-        if (armed === 'armed') {
-          appendLine(LIFECYCLE_LINES.localOomPending());
-        } else if (armed === 'exhausted') {
-          // Nudged its way through OOM_NUDGE_MAX_ATTEMPTS and it came back
-          // again: the conversation no longer fits this device, and it only
-          // grows from here. Hand the task to a fallback provider.
-          await failOverToFallback(oomSignal);
-          return;
+      // Silence-nudge signals. A local inference OOM, a truncated response and a
+      // model-at-capacity rejection all kill the turn but leave the session
+      // intact, so each arms a nudge instead of killing the run; the
+      // provider-signal timer sends it once the session has actually gone quiet.
+      // Gated on promptSubmittedAt: before the prompt is in there is no turn to
+      // resume and the ordinary paste path still owns first delivery. A budget
+      // spent on a signal that came back again means the provider is not going to
+      // recover (the conversation no longer fits, or it keeps truncating): hand
+      // the task to a fallback provider.
+      if (promptSubmittedAt) {
+        for (const { detect, gate, pendingLine } of silenceNudgeSignals) {
+          const signal = detect(stripped);
+          if (!signal) continue;
+          const armed = gate.arm(signal, now);
+          if (armed === 'armed') {
+            appendLine(pendingLine());
+          } else if (armed === 'exhausted') {
+            await failOverToFallback(signal);
+            return;
+          }
         }
       }
 
-      // A truncated response. Same shape as the OOM above — the turn is dead,
-      // the session is intact — so it arms a nudge instead of killing the run;
-      // the provider-signal timer sends it once the session has actually gone
-      // quiet. Same promptSubmittedAt gating: before the prompt is in there is
-      // no response of ours to have been truncated.
-      const truncationSignal = promptSubmittedAt ? detectTruncatedResponse(stripped) : null;
-      if (truncationSignal) {
-        const armed = truncationNudgeGate.arm(truncationSignal, now);
-        if (armed === 'armed') {
-          appendLine(LIFECYCLE_LINES.truncationPending());
-        } else if (armed === 'exhausted') {
-          // The truncations outlasted every nudge: this provider is not going
-          // to finish this response, so hand the task to a fallback provider.
-          await failOverToFallback(truncationSignal);
-          return;
-        }
-      }
-
-      // Model at capacity: arm a delayed nudge; fail over once they run out.
-      const capacitySignal = promptSubmittedAt ? detectModelAtCapacity(stripped) : null;
-      if (capacitySignal) {
-        const armed = capacityNudgeGate.arm(capacitySignal, now);
-        if (armed === 'armed') {
-          appendLine(LIFECYCLE_LINES.capacityPending());
-        } else if (armed === 'exhausted') {
-          await failOverToFallback(capacitySignal);
-          return;
-        }
-      }
-
-      // Same gating as the OOM nudge above: before the prompt is in there is no
+      // Same gating as the silence nudges above: before the prompt is in there is no
       // request of ours for the provider to be retrying. Acted on by the
       // provider-signal timer, on its own poll, like the other gates.
       if (promptSubmittedAt) retryStallGate.observe(stripped, now);
@@ -1659,7 +1675,9 @@ export function createTuiSessionController({
     pasteController = createPasteRetryController({
       agentId,
       sessionLabel,
-      write: (keys) => session.write(sessionId, keys),
+      write: (keys, options) => options
+        ? session.write(sessionId, keys, options)
+        : session.write(sessionId, keys),
       paste: (text, options) => (sessionId ? session.paste(sessionId, text, options) : false),
       hasLiveChild: () => session.hasLiveChild(pid),
       launchShape,
@@ -1897,30 +1915,15 @@ export function createTuiSessionController({
         }
         return;
       }
-      // Nudge a session a local-GPU OOM parked. Rides this timer rather than one
-      // of its own so the nudge cadence and the fail-over verdict stay on the same
-      // clock — and so there is one fewer interval to leak past finish().
-      const nudge = oomNudgeGate.takeNudge(now, lastOutputAt);
-      if (nudge) {
-        if (pasteController?.resubmit({ text: OOM_NUDGE_TEXT, label: 'local-runtime OOM nudge' })) {
-          appendLine(LIFECYCLE_LINES.localOomNudged({ attempt: nudge, max: OOM_NUDGE_MAX_ATTEMPTS }));
-        }
-        return;
-      }
-      // Nudge a session a truncated response halted — the pi-TUI case where the
-      // only resume is somebody typing `continue`. Same timer, same reasoning.
-      const truncationNudge = truncationNudgeGate.takeNudge(now, lastOutputAt);
-      if (truncationNudge) {
-        if (pasteController?.resubmit({ text: TRUNCATION_NUDGE_TEXT, label: 'truncated-response nudge' })) {
-          appendLine(LIFECYCLE_LINES.truncationNudged({ attempt: truncationNudge, max: TRUNCATION_NUDGE_MAX_ATTEMPTS }));
-        }
-        return;
-      }
-      // Nudge a session parked by a model-at-capacity rejection, after a long quiet.
-      const capacityNudge = capacityNudgeGate.takeNudge(now, lastOutputAt);
-      if (capacityNudge) {
-        if (pasteController?.resubmit({ text: CAPACITY_NUDGE_TEXT, label: 'model-capacity nudge' })) {
-          appendLine(LIFECYCLE_LINES.capacityNudged({ attempt: capacityNudge, max: CAPACITY_NUDGE_MAX_ATTEMPTS }));
+      // Nudge a session parked by a silence-nudge signal (OOM, truncation, model
+      // capacity). Rides this timer rather than one of its own so the nudge
+      // cadence and the fail-over verdict stay on the same clock — and so there
+      // is one fewer interval to leak past finish().
+      for (const { gate, nudgeText, nudgeLabel, nudgedLine } of silenceNudgeSignals) {
+        const nudge = gate.takeNudge(now, lastOutputAt);
+        if (!nudge) continue;
+        if (pasteController?.resubmit({ text: nudgeText, label: nudgeLabel })) {
+          appendLine(nudgedLine(nudge));
         }
         return;
       }

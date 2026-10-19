@@ -121,7 +121,7 @@ describe('collectMessageIds — full pagination', () => {
 // excludable from participants, so the sync fetches the account's send-as addresses.
 describe('fetchSendAsAliases', () => {
   const clientReturning = (sendAs) => ({
-    users: { settings: { sendAs: { list: async () => ({ data: { sendAs } }) } } },
+    listSendAs: async () => ({ sendAs }),
   });
 
   it('returns lowercased alias emails from the sendAs settings', async () => {
@@ -137,7 +137,7 @@ describe('fetchSendAsAliases', () => {
   });
 
   it('returns the null sentinel (keep stored aliases) when the API call fails', async () => {
-    const client = { users: { settings: { sendAs: { list: async () => { throw new Error('boom'); } } } } };
+    const client = { listSendAs: async () => { throw new Error('boom'); } };
     expect(await fetchSendAsAliases(client)).toBeNull();
   });
 });

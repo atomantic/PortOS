@@ -541,12 +541,27 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
   return queuedDeterministicMerge;
 }
 
-async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings }, disposition) {
+// A healthy handoff owns the branch until it merges (#12247); anything else
+// open or unreadable is preserved for recovery.
+const preservedPrState = (pr) => (pr?.mergeHandoffQueued === true ? 'pending-merge handoff'
+  : pr?.autoMergeEnabled === true ? 'pending GitHub auto-merge' : 'unconfirmed PR recovery');
+
+async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings, skipMerge }, disposition) {
   // Default: auto-merge on success, just cleanup on failure.
   // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
   // handled the merge upstream — re-merging the worktree branch into the local
   // source workspace would duplicate the squashed commits.
   const shouldMerge = disposition.merge;
+  if (skipMerge) {
+    const pr = await import('./prProbe.js').then(({ probePrForBranch }) =>
+      probePrForBranch(sourceWorkspace, worktreeBranch)).catch(() => null);
+    if (!pr?.readable || (pr.prState && pr.prState !== 'MERGED')) {
+      // Failed/unreadable CI or unpublished commits need recovery, which needs this
+      // branch. Only a healthy handoff suppresses the post-cleanup audit.
+      emitLog('info', `🌳 Preserving ${preservedPrState(pr)} worktree for ${agentId}`, { agentId, branchName: worktreeBranch });
+      return;
+    }
+  }
   emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${shouldMerge})`, {
     agentId, branchName: worktreeBranch, merge: shouldMerge
   });
@@ -1071,6 +1086,13 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
+  // Recovery belongs to the same durable task. A fresh sys-rl task resets the
+  // spawn budget on every CI/conflict handoff and recursively nests its title.
+  // The id hint also recovers receipts written before the marker was retained.
+  if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch);
+  }
+
   const parsedPr = git.parsePullRequestUrl(prUrl);
   // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
   // forge because the agent invokes the CLI directly. On a GitLab forge, drop
@@ -1301,6 +1323,50 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     taskId: followUpTaskId, prUrl
   });
   return { ...followUpTask, dispatch: { started: true, reason: null } };
+}
+
+async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch) {
+  const { getTaskById } = await import('./cos.js');
+  const task = await getTaskById(taskId);
+  if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
+    || task.metadata.reviewLoopPRUrl !== prUrl || task.metadata.reviewLoopPRBranch !== prBranch) {
+    return { id: taskId, blocked: 'Review coordinator identity could not be verified' };
+  }
+  if (leavesPrForHuman(task) || resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN
+    || isTruthyMeta(task.metadata.readOnly) || isTruthyMeta(task.metadata.reviewLoopLeaveOpen)) {
+    return { id: taskId, blocked: 'Review coordinator leaves this PR for its human owner' };
+  }
+  // Finalization can mark the task complete before its worker finishes cleanup.
+  // Keep the receipt until that owner releases, including across daemon restarts.
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const agents = await readClaimOwnershipAgents();
+  if (!agents) return { id: taskId, deferred: true };
+  if (task.status === 'in_progress' || agents.some(agent => (agent.taskId === taskId
+    || agent.metadata?.reviewLoopMergeTarget?.url === prUrl)
+    && ['running', 'paused', 'orphaned', 'interrupted'].includes(agent.status))) {
+    return { id: taskId, deferred: true };
+  }
+  if (task.status === 'pending') return { id: taskId, duplicate: true };
+  if (task.status !== 'completed') return { id: taskId, blocked: `Review coordinator is ${task.status}` };
+  const { MAX_TOTAL_SPAWNS } = await import('../lib/cosValidation.js');
+  const count = Number(task.metadata.totalSpawnCount);
+  if (!Number.isInteger(count) || count < 1 || count >= MAX_TOTAL_SPAWNS) {
+    return { id: taskId, blocked: 'Review coordinator retry budget exhausted or unreadable' };
+  }
+  const result = await updateTask(taskId, {
+    status: 'pending',
+    metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution' },
+  }, 'internal', {
+    expectedStatus: 'completed',
+    expectedMetadata: Object.fromEntries([
+      'totalSpawnCount', 'reviewLoopFollowUp', 'reviewLoopPRUrl', 'reviewLoopPRBranch',
+      'prCompletion', 'reviewLoopLeaveOpen', 'readOnly', 'jiraTicketId', 'analysisType',
+    ].map(key => [key, task.metadata[key]])),
+  });
+  if (result?.error) throw new Error(result.error);
+  if (result?.statusChanged) return { id: taskId, deferred: true };
+  emitLog('info', `🔁 Resumed review coordinator ${taskId} for PR ${prUrl} (${count}/${MAX_TOTAL_SPAWNS} runs used)`, { taskId, prUrl });
+  return { id: taskId, resumed: true };
 }
 
 /**

@@ -9,6 +9,8 @@ import { isPlainObject } from '../lib/objects.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
+import { createEventLoopLagProbe, phaseGroup, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 
 const retryAfterMs = 5000;
 export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
@@ -23,7 +25,7 @@ export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
 const serverOwner = randomUUID();
 const sweepTokens = new Set();
 const refuse = (reason) => ({ admitted: false, reason, retryAfterMs });
-const repositoryKey = (origin) => origin?.host && origin?.fullName
+export const repositoryKey = (origin) => origin?.host && origin?.fullName
   ? `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase()
   : null;
 const ownerPath = (agent) => agent?.metadata?.sourceWorkspace || agent?.sourceWorkspace
@@ -38,36 +40,58 @@ const validLease = (lease, repository) => isPlainObject(lease) && lease.reposito
     : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
 const expired = (lease) => lease.kind === 'agent' && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
 
+// A settled transaction is logged only at or above this duration; a deadline,
+// pending or failed one always is. See docs/TROUBLESHOOTING.md for the fields.
+export const SLOW_ADMISSION_MS = 1000;
+let clock = systemClock;
+let lagProbe = createEventLoopLagProbe({ clock });
+
+/** Inject a deterministic clock; `null` restores the system clock. */
+export function __setMergeAdmissionClockForTests(next) {
+  clock = next ?? systemClock;
+  lagProbe = createEventLoopLagProbe({ clock });
+}
+
+const REPORTED_PHASES = ['queue', 'trustedState', 'stateLoad', 'origin', 'ownerRecovery', 'persistence'];
+const REPORTED_STAGES = [['trustedState', 'read'], ['trustedState', 'parse'], ['persistence', 'prepare'],
+  ['persistence', 'serialize'], ['persistence', 'write'], ['persistence', 'replace'], ['persistence', 'dirSync']];
+const REPORTED_LAG_PHASES = ['queue', 'trustedState', 'persistence'];
+
 async function transaction(work, operation) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
   // pending merge exists. Admission needs runtime state only on the merge path.
   const { withStateLock, readMergeAdmissionStateForSafetyCheck, loadState, saveState } = await import('./cosState.js');
-  const queuedAt = performance.now();
+  const queuedAt = clock.now();
+  // Each phase runs until the next begins; `phase.stage` names are its stages.
+  const span = lagProbe.begin('queue');
   let started = false;
   let cancelled = false;
-  let phase = 'queue';
-  let phaseStartedAt = queuedAt;
-  const timings = { queue: 0, trustedState: 0, stateLoad: 0, origin: 0, ownerRecovery: 0, persistence: 0 };
-  const elapsed = (since) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(performance.now() - since)));
+  let timerLateMs = 0;
   // Only fixed operation/phase names and bounded numeric timings reach logs.
   const report = (status) => {
+    const summary = status === 'pending' ? span.snapshot() : span.end();
+    if (status === 'settled' && summary.totalMs < SLOW_ADMISSION_MS) return;
     const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
-    log(`🚦 Merge admission operation=${operation} status=${status} phase=${phase} phaseMs=${elapsed(phaseStartedAt)} totalMs=${elapsed(queuedAt)} queueMs=${timings.queue} trustedStateMs=${timings.trustedState} stateLoadMs=${timings.stateLoad} originMs=${timings.origin} ownerRecoveryMs=${timings.ownerRecovery} persistenceMs=${timings.persistence}`);
+    const phases = REPORTED_PHASES.map((name) => `${name}Ms=${phaseGroup(summary, name).ms}`);
+    const stages = REPORTED_STAGES.map(([name, stage]) => `${stage}Ms=${summary.phases[`${name}.${stage}`]?.ms ?? 0}`);
+    const lag = REPORTED_LAG_PHASES.map((name) => `${name}LagMs=${phaseGroup(summary, name).lagMs}`);
+    log(`🚦 Merge admission operation=${operation} status=${status} phase=${summary.phase.split('.')[0]} phaseMs=${summary.phaseMs} totalMs=${summary.totalMs} ${phases.join(' ')} ${stages.join(' ')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} ${lag.join(' ')} timerLateMs=${timerLateMs}`);
   };
   const measure = async (name, fn) => {
-    phase = name;
-    phaseStartedAt = performance.now();
-    try { return await fn(); }
-    finally { timings[name] = elapsed(phaseStartedAt); }
+    span.mark(name);
+    return fn();
   };
+  const stage = (name) => (sub) => span.mark(`${name}.${sub}`);
+  const overdue = () => roundMs(clock.now() - queuedAt - ADMISSION_QUEUE_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
     const expire = () => {
       cancelled = true;
-      timings.queue = elapsed(queuedAt);
       report('queue-timeout');
       resolve(refuse('state-queue-timeout'));
     };
-    const timer = setTimeout(() => {
+    // A late timer is itself evidence of event-loop delay: record by how much.
+    const timer = clock.setTimer(() => {
+      timerLateMs = overdue();
       if (!started) expire();
       else report('pending');
     }, ADMISSION_QUEUE_TIMEOUT_MS);
@@ -75,10 +99,10 @@ async function transaction(work, operation) {
       // Check the clock as well: a delayed timer must not let an expired
       // callback mutate a lease when the state queue resumes first.
       if (cancelled) return;
-      if (performance.now() - queuedAt >= ADMISSION_QUEUE_TIMEOUT_MS) { expire(); return; }
+      if (clock.now() - queuedAt >= ADMISSION_QUEUE_TIMEOUT_MS) { timerLateMs = overdue(); expire(); return; }
       started = true;
-      timings.queue = elapsed(queuedAt);
-      const snapshot = await measure('trustedState', () => readMergeAdmissionStateForSafetyCheck().catch(() => null));
+      const snapshot = await measure('trustedState', () =>
+        readMergeAdmissionStateForSafetyCheck({ onStage: stage('trustedState') }).catch(() => null));
       if (!snapshot?.trusted || !isPlainObject(snapshot.agents) || !isPlainObject(snapshot.mergeAdmissions)) {
         return refuse('ownership-unreadable');
       }
@@ -92,7 +116,7 @@ async function transaction(work, operation) {
       // Copy before mutation: a failed atomic write must not admit from a cache
       // that falsely remembers a successful grant/release.
       const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions } };
-      return work(next, (value) => measure('persistence', () => saveState(value)), measure);
+      return work(next, (value) => measure('persistence', () => saveState(value, { onStage: stage('persistence') })), measure);
     });
     // Once started, the queue owns the entire transaction through durable
     // settlement. The deadline diagnoses a slow phase but cannot return a
@@ -101,7 +125,7 @@ async function transaction(work, operation) {
       if (!cancelled) { report('settled'); resolve(result); }
     }, (error) => {
       if (!cancelled) { report('failed'); reject(error); }
-    }).finally(() => clearTimeout(timer));
+    }).finally(() => clock.clearTimer(timer));
   });
 }
 
@@ -211,11 +235,79 @@ async function verifiedWorktreeDelivery(agent, repository) {
   return checkoutOnBranch(target.workspacePath, target.branch, repository);
 }
 
+const isCleanupRecovery = (agent) => agent.metadata?.isRecovery === true
+  && agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
+
+// Repository-cleanup recovery (#12251): lands the PR of the completed parent
+// whose audit filed it. Its registered target must match the live task, and
+// the parent must carry the server-written backlink to this task, branch and
+// PR. Needs no checkout: the parent's worktree is usually already gone.
+async function verifiedCleanupRecovery(agent, repository, agents) {
+  const meta = agent.metadata;
+  const target = meta.recoveryMergeTarget;
+  const { parentAgentId, parentTaskId } = meta.recoveryOrigin;
+  if (!isPlainObject(target) || !parentTaskId || meta.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) return false;
+  const task = await liveTask(agent);
+  const live = repositoryCleanupMergeTarget(task);
+  if (!live || live.url !== target.url || live.branch !== target.branch || leavesPrForHuman(task)
+    || isTruthyMeta(task.metadata.readOnly) || task.metadata.recoveryOrigin.parentAgentId !== parentAgentId
+    || task.metadata.recoveryOrigin.parentTaskId !== parentTaskId) return false;
+  const pr = parsePullRequestUrl(target.url);
+  if (repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository) return false;
+  let parent = agents[parentAgentId];
+  if (!parent) {
+    const { readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
+    parent = await readAgentRecordOrUnreadable(parentAgentId);
+  }
+  const link = parent?.metadata?.repoStateRecovery;
+  if (!isPlainObject(parent) || parent.id !== parentAgentId || parent.taskId !== parentTaskId || parent.status !== 'completed'
+    || parent.metadata.worktreeBranch !== target.branch || parent.metadata.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || !isPlainObject(link) || link.taskId !== agent.taskId || link.url !== target.url || link.branch !== target.branch
+    || !parent.metadata.sourceWorkspace) return false;
+  return repositoryKey(await getOriginInfo(parent.metadata.sourceWorkspace).catch(() => null)) === repository;
+}
+
 // Claim parents carry their registered claim binding; every other participant
 // must prove its registered target against live task and checkout state.
-async function verifiedParticipant(agent, repository) {
+async function verifiedParticipant(agent, repository, agents) {
   if (isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch) return true;
+  if (isCleanupRecovery(agent)) return verifiedCleanupRecovery(agent, repository, agents);
   return await verifiedReviewCoordinator(agent, repository) || verifiedWorktreeDelivery(agent, repository);
+}
+
+/**
+ * The registered run a pending-merge handoff may bind (#12247): the same live
+ * participant proof acquire uses, plus which branch that run owns and the
+ * registered checkout holding it (null for a claim run, which cuts its own).
+ * Nothing here is taken from the request. Fork review targets are refused —
+ * the coordinator merges same-repository heads only.
+ */
+export async function resolveMergeHandoffOwner(agentId) {
+  const { readMergeAdmissionStateForSafetyCheck } = await import('./cosState.js');
+  const snapshot = await readMergeAdmissionStateForSafetyCheck().catch(() => null);
+  if (!snapshot?.trusted || !isPlainObject(snapshot.agents)) return { refused: 'ownership-unreadable' };
+  const agent = snapshot.agents[agentId];
+  if (!agent || agent.id !== agentId || agent.status !== 'running' || !agent.startedAt || !agent.taskId) {
+    return { refused: 'handoff-owner-unverified' };
+  }
+  const repository = ownerPath(agent) ? repositoryKey(await getOriginInfo(ownerPath(agent)).catch(() => null)) : null;
+  if (!repository) return { refused: 'repository-unreadable' };
+  const task = await liveTask(agent);
+  if (!task) return { refused: 'handoff-owner-unverified' };
+  const meta = agent.metadata || {};
+  if (meta.reviewLoopMergeTarget?.fork || task.metadata?.forkHead) return { refused: 'fork-target-unsupported' };
+  const owner = { agent, task, repository };
+  if (isTruthyMeta(meta.claimPicksOwnBranch) || meta.claimBranch) {
+    const { ownsClaimBranch } = await import('../lib/claimContinuation.js');
+    return { ...owner, owns: (branch) => ownsClaimBranch(agent, branch), workspacePath: null };
+  }
+  if (await verifiedReviewCoordinator(agent, repository) === true) {
+    return { ...owner, owns: (branch) => branch === meta.reviewLoopMergeTarget.branch, workspacePath: meta.workspacePath };
+  }
+  if (await verifiedWorktreeDelivery(agent, repository)) {
+    return { ...owner, owns: (branch) => branch === meta.prDeliveryTarget.branch, workspacePath: meta.prDeliveryTarget.workspacePath };
+  }
+  return { refused: 'handoff-owner-unverified' };
 }
 
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
@@ -230,7 +322,11 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!repository) return refuse('repository-unreadable');
     // Releasing an owned token must remain possible after merge deletes or
     // switches the checkout. Acquire/check still require the assigned target.
-    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository));
+    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository, state.agents));
+    if (!participant && isCleanupRecovery(agent)) {
+      return { admitted: false, reason: 'recovery-merge-target-unverified', retryable: false,
+        message: 'Leave the PR and branch intact and report this blocker: this recovery has no verified registered parent PR target. Retrying cannot change that; only a freshly filed recovery can.' };
+    }
     if (!participant) {
       const task = await liveTask(agent);
       if (agent.metadata?.reviewLoopMergeTarget?.fork || (task?.taskType === 'internal'

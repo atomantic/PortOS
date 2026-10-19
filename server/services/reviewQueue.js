@@ -42,6 +42,7 @@ import * as notifications from './notifications.js';
 import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
 import { NOTIFICATION_ACTION_POLICY } from '../lib/notificationTypes.js';
+import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -223,6 +224,8 @@ const threadMeta = (thread) => ({
     ? { externalSource: thread.source.trim() }
     : {}),
 });
+
+const backupNeedsAttention = (state) => Boolean(state && (state.status === 'error' || state.status === 'degraded' || state.error));
 
 /**
  * Producer registry. Each entry knows how to gather its raw items and map one
@@ -779,15 +782,26 @@ const PRODUCERS = [
     source: 'backup',
     label: 'Failed backups',
     drillTo: '/settings/backup',
+    // Acknowledging clears the recorded failure; the next failed run re-raises it.
+    actionLabel: 'Done',
+    async resolve() {
+      const { getState, saveState } = await import('./backup.js');
+      const state = await getState();
+      if (!backupNeedsAttention(state)) return null;
+      await saveState({ status: state.lastSnapshotId ? 'ok' : 'never', error: null });
+      return { acknowledged: true };
+    },
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      // Disabling backups makes a past failure moot.
+      const { getSettings } = await import('./settings.js');
+      if (resolveBackupConfig((await getSettings())?.backup).enabled === false) return [];
       const { getState } = await import('./backup.js');
       // A backup needing acknowledgement is either a full failure (status
       // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
       // the DB dump failed; it also carries an `error` string). Both warrant a
       // queue item, but they map to different severities below.
       const state = await getState();
-      const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
-      return needsAttention ? [state].slice(0, limit) : [];
+      return backupNeedsAttention(state) ? [state].slice(0, limit) : [];
     },
     map(state) {
       // Degraded = files saved, DB dump failed → a warning, not a full failure.
@@ -798,7 +812,8 @@ const PRODUCERS = [
         summary: (state.error || 'The most recent backup did not complete.').slice(0, 200),
         timestamp: state.lastRun || null,
         severity: degraded ? 'normal' : 'high',
-        drillTo: '/settings/backup'
+        drillTo: '/settings/backup',
+        drillLabel: 'Open backup settings'
       };
     }
   }

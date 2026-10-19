@@ -33,7 +33,7 @@ const PHASE_LABEL = {
  *   onBodyChanged — async () => void; called after a completed run or a revert
  *                 so the editor reloads the server-mutated body
  */
-export default function PolishPanel({ work, dirty, onBodyChanged }) {
+export default function PolishPanel({ work, dirty, blocked = false, onBusyChange, onBodyChanged }) {
   const mountedRef = useMounted();
   const [cycles, setCycles] = useState(1);
   const [sseUrl, setSseUrl] = useState(null);
@@ -43,6 +43,10 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
 
   const { frames, latest, closed } = useSseProgress(sseUrl, { enabled: !!sseUrl });
   const running = !!sseUrl && !closed;
+  useEffect(() => {
+    onBusyChange?.(starting || running || reverting != null);
+    return () => onBusyChange?.(false);
+  }, [starting, running, reverting, onBusyChange]);
 
   const refreshSnapshots = useCallback(async () => {
     const list = await listWritersRoomPolishSnapshots(work.id).catch(() => []);
@@ -81,7 +85,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
   }, [closed]);
 
   const start = async () => {
-    if (running || starting) return;
+    if (blocked || running || starting) return;
     if (dirty) { toast.error('Save your draft first — polish runs on the saved version'); return; }
     setStarting(true);
     const res = await startWritersRoomPolish(work.id, { cycles }, { silent: true }).catch((err) => {
@@ -100,6 +104,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
   };
 
   const revert = async (snapshotId) => {
+    if (blocked) return;
     if (running) { toast.error('Wait for the current run to finish before reverting'); return; }
     setReverting(snapshotId);
     const ok = await revertWritersRoomPolishSnapshot(work.id, snapshotId, { silent: true }).catch((err) => {
@@ -161,7 +166,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
         ) : (
           <button
             onClick={start}
-            disabled={starting || dirty}
+            disabled={blocked || starting || dirty}
             title={dirty ? 'Save your draft first — polish runs on the saved version' : 'Run the polish loop'}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm ${
               starting || dirty ? 'bg-port-bg text-gray-500' : 'bg-port-accent text-white hover:bg-port-accent/80'
@@ -237,7 +242,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
                   padding so the snapshot list keeps its density. */}
               <button
                 onClick={() => revert(s.id)}
-                disabled={running || reverting === s.id}
+                disabled={blocked || running || reverting === s.id}
                 title="Revert the draft to this snapshot"
                 className="shrink-0 flex items-center justify-center gap-1 min-w-[44px] min-h-[44px] px-2 -my-1.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-40 text-[11px]"
               >

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { ChildProcess } from './childProcess.js';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { delimiter, join } from 'path';
 import { tmpdir } from 'os';
 
 // Mock child_process.spawn so we can drive the buffered-spawn machinery without
@@ -31,6 +32,7 @@ const {
   spawnFailureDetail,
   guardChildStdin,
   deliverChildStdin,
+  terminateWithEscalation,
 } = await import('./bufferedSpawn.js');
 
 /**
@@ -397,12 +399,13 @@ describe('prepareWindowsSafeSpawn', () => {
     expect(result).toEqual({ command: 'opencode', args: ['exec', '-'] });
   });
 
-  it('caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
+  it('double-caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
     // foo&calc has no whitespace, so Node's own argv quoting would NOT wrap
-    // it in literal quotes — the bare `&` would reach cmd.exe's raw command
-    // line and be interpreted as a command separator without this.
+    // it in literal quotes. cmd.exe /c consumes one caret level and the batch
+    // file's `%*` re-parse consumes the second; a single caret let the `&`
+    // run as a command separator inside the shim (#12346).
     const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['foo&calc'], true);
-    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^&calc']);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^^^&calc']);
   });
 
   it('does NOT escape metacharacters in an arg that already contains whitespace (Node will quote it)', () => {
@@ -415,7 +418,7 @@ describe('prepareWindowsSafeSpawn', () => {
 
   it('escapes multiple metacharacters in an unquoted arg', () => {
     const result = prepareWindowsSafeSpawn('C:\\npm\\tool.cmd', ['a|b>c<d'], true);
-    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^|b^>c^<d']);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^^^|b^^^>c^^^<d']);
   });
 
   it('never escapes off Windows, even for an unquoted metacharacter arg', () => {
@@ -428,6 +431,95 @@ describe('prepareWindowsSafeSpawn', () => {
     // whitespace, would reach cmd.exe unquoted just like an unquoted arg.
     const result = prepareWindowsSafeSpawn('C:\\Tools&CLIs\\npm\\codex.cmd', ['exec'], true);
     expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\Tools^&CLIs\\npm\\codex.cmd', 'exec'] });
+  });
+});
+
+// The body npm's cmd-shim writes for a node bin, and the legacy layout older
+// npm and pnpm still emit. Both forward `%*` to the script.
+const NPM_CMD_SHIM = [
+  '@ECHO off',
+  'GOTO start',
+  ':find_dp0',
+  'SET dp0=%~dp0',
+  'EXIT /b',
+  ':start',
+  'SETLOCAL',
+  'CALL :find_dp0',
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ') ELSE (',
+  '  SET "_prog=node"',
+  '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+  ')',
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  '',
+].join('\r\n');
+const LEGACY_CMD_SHIM = [
+  '@IF EXIST "%~dp0\\node.exe" (',
+  '  "%~dp0\\node.exe"  "%~dp0\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  ') ELSE (',
+  '  node  "%~dp0\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  ')',
+  '',
+].join('\r\n');
+const HOSTILE_PROMPT = 'Summarize this " & calc & " and %PATH%\nthen stop';
+
+describe('prepareWindowsSafeSpawn — argv cmd.exe cannot carry (#12346)', () => {
+  let shimDir;
+  let script;
+
+  beforeEach(async () => {
+    shimDir = await mkdtemp(join(tmpdir(), 'cmd-shim-'));
+    script = join(shimDir, 'node_modules', 'fake-cli', 'bin', 'cli.js');
+    await mkdir(join(shimDir, 'node_modules', 'fake-cli', 'bin'), { recursive: true });
+    await writeFile(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+  });
+
+  afterEach(async () => {
+    await rm(shimDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['current', NPM_CMD_SHIM],
+    ['legacy', LEGACY_CMD_SHIM],
+  ])('launches the %s npm shim target directly instead of handing a quoted prompt to cmd.exe', async (_layout, body) => {
+    const shim = join(shimDir, 'fake-cli.cmd');
+    await writeFile(shim, body);
+    await writeFile(join(shimDir, 'node.exe'), '');
+    const result = prepareWindowsSafeSpawn(shim, ['--print', HOSTILE_PROMPT], true);
+    expect(result).toEqual({ command: join(shimDir, 'node.exe'), args: [script, '--print', HOSTILE_PROMPT] });
+  });
+
+  it('picks node from the child PATH, as the shim would, when none sits beside it', async () => {
+    await writeFile(join(shimDir, 'fake-cli.cmd'), NPM_CMD_SHIM);
+    const nodeDir = join(shimDir, 'provider-node');
+    await mkdir(nodeDir);
+    await writeFile(join(nodeDir, 'node.exe'), '');
+    const result = prepareCliSpawn('fake-cli', [HOSTILE_PROMPT], { PATH: [shimDir, nodeDir].join(delimiter) }, true);
+    expect(result).toEqual({ command: join(nodeDir, 'node.exe'), args: [script, HOSTILE_PROMPT] });
+  });
+
+  it('refuses a batch file it cannot bypass rather than passing the prompt to cmd.exe', async () => {
+    const shim = join(shimDir, 'custom.bat');
+    await writeFile(shim, '@echo off\r\necho %*\r\n');
+    const result = prepareWindowsSafeSpawn(shim, ['--prompt', HOSTILE_PROMPT], true);
+    expect(result.command).toBe(process.execPath);
+    expect(result.args.join(' ')).not.toContain(HOSTILE_PROMPT);
+    expect(result.args.at(-1)).toMatch(/^WINDOWS_BATCH_ARG_UNSAFE: /);
+  });
+
+  it.runIf(process.platform === 'win32')('delivers hostile arguments verbatim through a real npm shim', async () => {
+    const shim = join(shimDir, 'fake-cli.cmd');
+    await writeFile(shim, NPM_CMD_SHIM);
+    const payloads = [HOSTILE_PROMPT, 'a&echo.INJECTED', 'with space & (parens) | pipe', 'c^d'];
+    for (const payload of payloads) {
+      const { command, args } = prepareWindowsSafeSpawn(shim, ['--print', payload]);
+      const child = nodeSpawn(command, args, { windowsHide: true });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+      expect(JSON.parse(stdout)).toEqual(['--print', payload]);
+    }
   });
 });
 
@@ -475,6 +567,61 @@ describe('prepareCliSpawn (composed resolve+wrap — the CoS spawn fix, #2243)',
     await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
     const result = prepareCliSpawn('opencode', ['run', '-m', 'ollama/x'], { PATH: fakePathDir }, false);
     expect(result).toEqual({ command: 'opencode', args: ['run', '-m', 'ollama/x'] });
+  });
+});
+
+describe.skipIf(IS_WIN32)('terminateWithEscalation (#12021)', () => {
+  // Real children: the contract is that a process which traps SIGTERM still
+  // dies, which a kill spy cannot prove.
+  const spawnReal = (script) => new Promise((resolve) => {
+    const child = nodeSpawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.once('data', () => resolve(child));
+  });
+  const closed = (child) => new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
+
+  it('SIGKILLs a child that ignores SIGTERM once the grace elapses, and close fires', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = await spawnReal("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');");
+    const cancel = terminateWithEscalation(child, { graceMs: 300, label: 'stubborn child' });
+    const result = await closed(child);
+    cancel();
+    expect(result.signal).toBe('SIGKILL');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stubborn child ignored SIGTERM for 300ms'));
+    warn.mockRestore();
+  });
+
+  it('leaves a child that honoured SIGTERM alone: cancel clears the escalation and no SIGKILL warning fires', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = makeFakeChild();
+    const cancel = terminateWithEscalation(child, { graceMs: 300, label: 'polite child' });
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    // The child exits inside the grace window; the caller's close handler cancels.
+    child.signalCode = 'SIGTERM';
+    cancel();
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('skips the SIGKILL timer when a child already exited before the grace elapsed (no stray signal at a reused pid)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const child = makeFakeChild();
+    terminateWithEscalation(child, { graceMs: 300 });
+    child.exitCode = 0;
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Windows the tree kill is already forced, so there is nothing to escalate', () => {
+    const child = makeFakeChild({ pid: 4242 });
+    const taskkill = makeFakeChild();
+    spawnMock.mockReturnValueOnce(taskkill);
+    const cancel = terminateWithEscalation(child, { graceMs: 300 }, true);
+    expect(spawnMock).toHaveBeenCalledWith('taskkill', ['/T', '/F', '/PID', '4242'], expect.anything());
+    expect(cancel).toBeTypeOf('function');
+    cancel();
   });
 });
 

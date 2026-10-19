@@ -1,3 +1,4 @@
+import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
 
@@ -30,10 +31,12 @@ import {
   catalogPruneRequestSchema,
   catalogEmbeddingsBackfillSchema,
   catalogMigrationRerunSchema,
+  catalogMusicVideoImportSchema,
   catalogBulkImportSchema,
   catalogBulkEntrySchema,
   catalogExportQuerySchema,
   catalogRevisionQuerySchema,
+  catalogRelatedImagesQuerySchema,
   catalogRevisionRestoreSchema,
   catalogUrlIngestSchema,
   catalogFileIngestSchema,
@@ -52,9 +55,13 @@ import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
+import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
+import catalogIdentityRouter from './catalogIdentity.js';
+
 const router = Router();
+router.use('/identity', catalogIdentityRouter);
 
 router.get('/stats', asyncHandler(async (req, res) => {
   res.json(await catalogDB.getCatalogStats());
@@ -267,7 +274,7 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
 router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  const [refs, sources, relations, revisions, media, missingMedia] = await Promise.all([
+  const [refs, sources, relations, revisions, media, missingMedia, sharedIdentity] = await Promise.all([
     // Live refs only (#1812): the detail page's "Appears in" panel must not
     // render a chip deep-linking to a soft-deleted universe/series/CD target.
     // The orphan stays recoverable via the Catalog "Orphaned" album.
@@ -277,6 +284,7 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }),
     catalogDB.listMediaForIngredient(req.params.id),
     catalogDB.getMissingMediaForIngredient(req.params.id),
+    getCatalogIdentityAccess(req.params.id),
   ]);
   // "From the same source" (#7617): sibling ingredients extracted from each of
   // THIS ingredient's source scraps, batched in one query so the detail page
@@ -293,6 +301,7 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   const { embedding, ...rest } = ing;
   res.json({
     ingredient: includeEmbedding ? { ...rest, embedding } : rest,
+    sharedIdentity,
     refs,
     sources: sourcesWithSiblings,
     relations,                                 // { outbound, inbound }
@@ -300,6 +309,44 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     media,                                      // array of attachments
     missingMedia,                               // array of { mediaKey, ... }
   });
+}));
+
+// Lazy, bounded provenance lookup for the detail page's References tab.
+router.get('/ingredients/:id/related-images', asyncHandler(async (req, res) => {
+  const pagination = validateRequest(catalogRelatedImagesQuerySchema, req.query);
+  const ingredient = await catalogDB.getIngredient(req.params.id);
+  if (!ingredient) throw new ServerError('Ingredient not found', { status: 404 });
+  const media = await catalogDB.listMediaForIngredient(ingredient.id);
+  const { listRelatedImages } = await import('../services/catalogRelatedImages.js');
+  res.json(await listRelatedImages(ingredient, media, pagination));
+}));
+
+// Merge is preview-first and never unlocks either record.
+router.post('/ingredients/merge', asyncHandler(async (req, res) => {
+  const { catalogMergeSchema } = await import('../lib/catalogValidation.js');
+  const body = validateRequest(catalogMergeSchema, req.body);
+  const { mergeIngredients } = await import('../services/catalogDB/merge.js');
+  res.json(await mergeIngredients(body));
+}));
+
+router.get('/ingredients/:id/merge-history', asyncHandler(async (req, res) => {
+  const { catalogMergeHistoryQuerySchema } = await import('../lib/catalogValidation.js');
+  const params = validateRequest(catalogMergeHistoryQuerySchema, req.query);
+  const { getIngredientMergeHistory } = await import('../services/catalogDB/merge.js');
+  res.json(await getIngredientMergeHistory(req.params.id, params));
+}));
+
+router.get('/ingredient-merges/:id', asyncHandler(async (req, res) => {
+  const { getIngredientMergeReceipt } = await import('../services/catalogDB/merge.js');
+  res.json(await getIngredientMergeReceipt(req.params.id));
+}));
+
+router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
+  const { catalogMergeRecoverSchema } = await import('../lib/catalogValidation.js');
+  validateRequest(catalogMergeRecoverSchema, req.body ?? {});
+  const { recoverIngredientMerge } = await import('../services/catalogDB/merge.js');
+  res.json(await recoverIngredientMerge(req.params.id));
+
 }));
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
@@ -371,7 +418,8 @@ router.get('/ingredients/:id/revisions', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogRevisionRestoreSchema, req.body || {});
   const revision = await catalogDB.getIngredientRevision(req.params.revisionId);
-  if (!revision || revision.ingredientId !== req.params.id) {
+  const identityIds = await catalogDB.getIngredientIdentityIds(req.params.id);
+  if (!revision || !identityIds.includes(revision.ingredientId)) {
     throw new ServerError('Revision not found', { status: 404 });
   }
   // Restore the revision's payload verbatim, INCLUDING its captured
@@ -865,6 +913,18 @@ router.post('/migration/rerun', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMigrationRerunSchema, req.body || {});
   const result = await migrateBibleToCatalog({ force: body.force === true });
   res.json(result);
+}));
+
+// Music video cast import: every video's cast, sets and props not yet in the
+// catalog, each with a proposed create/link (dry run), then the reviewed
+// decisions applied. Deterministic ids make a repeated commit a no-op.
+router.get('/import/music-videos', asyncHandler(async (req, res) => {
+  res.json({ projects: await previewCatalogCastImport() });
+}));
+
+router.post('/import/music-videos', asyncHandler(async (req, res) => {
+  const { selections } = validateRequest(catalogMusicVideoImportSchema, req.body || {});
+  res.json(await commitCatalogCastImport(selections));
 }));
 
 // --- User-defined ingredient types --------------------------------------

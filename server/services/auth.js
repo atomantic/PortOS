@@ -18,7 +18,7 @@ import {
   parseSessionCookies,
   sessionCookieNameFor,
 } from '../../lib/portosAuthCore.js';
-import { getSettings, readSettingsStrict, settingsEvents, updateSettings } from './settings.js';
+import { getSettings, readSettingsStrict, settingsEvents, updateSettingsWith } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Auth gates the PortOS UI + API behind a single user-set password. PortOS is
@@ -218,6 +218,30 @@ export const getPasswordRiskStatus = async () => {
   return { enabled, revision: settings.passwordRiskRevision || 'initial' };
 };
 
+// Persist an auth-config change and revoke every session once the change is on
+// disk. The revocation is keyed on what settings.json actually holds, not on
+// `updateSettingsWith` resolving: save() still runs post-write steps (the cache
+// event, listeners) after the file is replaced, so a failure there used to
+// report the change as failed while the new hash was already live and every
+// pre-existing session — including a stolen token — stayed valid (#12018).
+// `isWritten(auth)` receives the on-disk `secrets.auth` (or null) and decides
+// whether the intended change landed; the original error still propagates.
+const writeAuthConfig = async (mutate, isWritten) => {
+  let written = false;
+  try {
+    await updateSettingsWith(mutate);
+    written = true;
+  } finally {
+    if (!written) {
+      const { settings } = await readSettingsStrict();
+      written = isWritten(settings?.secrets?.auth ?? null);
+    }
+    // Existing sessions are invalidated on every auth change — the user (or
+    // anyone holding a stolen token) starts over.
+    if (written) await revokeAllSessions();
+  }
+};
+
 // Set or replace the password. When `currentPassword` is provided we verify it
 // against the stored hash first; pass `null` for the first-time set. Returns a
 // fresh session token so the caller can stay signed in after a change.
@@ -240,19 +264,20 @@ export const setPassword = async ({ newPassword, currentPassword = null }) => {
   }
   const salt = randomBytes(SALT_BYTES).toString('hex');
   const passwordHash = await hashPassword(newPassword, salt);
-  const settings = await getSettings();
-  const secrets = { ...(settings.secrets || {}) };
-  secrets.auth = {
-    enabled: true,
-    kdf: 'scrypt',
-    passwordHash,
-    salt,
-    updatedAt: new Date().toISOString(),
-  };
-  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
-  // Existing sessions are invalidated on password change — the user (or anyone
-  // holding a stolen token) starts over.
-  await revokeAllSessions();
+  await writeAuthConfig((settings) => ({
+    ...settings,
+    secrets: {
+      ...(settings.secrets || {}),
+      auth: {
+        enabled: true,
+        kdf: 'scrypt',
+        passwordHash,
+        salt,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    passwordRiskRevision: randomBytes(16).toString('hex'),
+  }), (auth) => auth?.passwordHash === passwordHash);
   return createSession();
 };
 
@@ -268,11 +293,11 @@ export const clearPassword = async ({ currentPassword }) => {
   if (!ok) {
     throw new ServerError('Current password is incorrect', { status: 401, code: 'AUTH_BAD_CURRENT' });
   }
-  const settings = await getSettings();
-  const secrets = { ...(settings.secrets || {}) };
-  delete secrets.auth;
-  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
-  await revokeAllSessions();
+  await writeAuthConfig((settings) => {
+    const secrets = { ...(settings.secrets || {}) };
+    delete secrets.auth;
+    return { ...settings, secrets, passwordRiskRevision: randomBytes(16).toString('hex') };
+  }, (auth) => auth === null);
   return { enabled: false };
 };
 

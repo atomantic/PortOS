@@ -1,4 +1,5 @@
 import { isTruthyMeta } from './metadataFlags.js';
+import { renderOrPrependSection } from './promptSectionRenderer.js';
 /**
  * Shared catalog of scheduled AUDIT task types — the ones that can either
  * implement a fix or just file tracker issues, matching the quota-burn
@@ -40,6 +41,13 @@ const filing = ({ slugPrefix, label, issueLabel, labelDescription, noun }) => {
 };
 
 /**
+ * The one redaction rule every audit dispatch carries. Both mode banners own
+ * it; a mission body must not restate it (auditCatalog.test.js, #12080) — the
+ * same goes for "read AGENTS.md first", which the banners also own.
+ */
+export const AUDIT_REDACTION_RULE = 'Never paste a secret, credential, token, hostname, IP address, account id, absolute path containing a username, or any personal record into a title or body — describe its shape and location instead.';
+
+/**
  * The half of every audit dispatch that is about HOW to run, not WHAT to
  * look for. Injected at generation time so a customized stored prompt still
  * honors the chosen mode — this banner overrides any later "fix and commit"
@@ -50,8 +58,6 @@ export const FILE_ISSUES_MODE_CONTRACT = `## Mode: file issues, change nothing
 This banner OVERRIDES any later instruction to edit source, commit, open a PR, create a branch, or \`git checkout\`/\`switch\`. You are standing in the user's live checkout of this repository — an edit or a branch change is felt immediately by whoever is working in it.
 
 Your deliverable is tracker items, not code. The run must end with the same \`git status\` and the same branch it started on.
-
-Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
 
 ## Where to record findings
 
@@ -68,7 +74,7 @@ Every accepted finding requires resolution regardless of severity; warnings and 
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
-6. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
+6. **Redact before you publish.** An issue is world-readable the moment it is filed. ${AUDIT_REDACTION_RULE}
 7. **Report at the end**: the slice and paths reviewed, each item you filed, candidates you deliberately did not file and why, any unreviewed inventory, and the reason you stopped.
 
 Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering the slice) before you start, and honor its conventions and its explicitly declared non-issues.`;
@@ -85,7 +91,7 @@ This banner OVERRIDES any later instruction to stop after one fix, forbid deferr
 
 Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
 
-Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
+Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. Redact before you publish — a filed item is world-readable the moment it lands. ${AUDIT_REDACTION_RULE} A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
 
 ## Where to track deferred findings
 
@@ -161,7 +167,9 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     quotaBurnId: 'test-gap-audit',
     label: 'Test coverage',
     description: 'Test-coverage audit — configurable: file issues or add tests',
-    defaultFileIssues: false,
+    // Files by default (#12087): unattended test addition is a CI-time cost with
+    // no reviewer judging whether the regression named is worth the suite time.
+    defaultFileIssues: true,
     filing: filing({
       slugPrefix: 'test-gap-',
       label: 'test-gap-audit',
@@ -615,6 +623,25 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'workflow-recovery finding(s)',
     }),
   },
+  // Executes the upgrade path and a backup restore against scratch roots built
+  // from fixture shapes. `data-safety` reads migrations and backup code
+  // statically; the failures that reached installs (#6182, #12044, #12046,
+  // #12049) were visible only on the executed path.
+  'upgrade-rehearsal': {
+    quotaBurnId: null,
+    label: 'Upgrade & restore rehearsal',
+    description: 'Upgrade and restore rehearsal (runs migrations over synthetic older installs and a backup restore in scratch directories, never the live data) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'upgrade-rehearsal-',
+      label: 'upgrade-rehearsal-audit',
+      // Same category as the static read; the metric label separates what an
+      // executed rehearsal found from what a read of the code found.
+      issueLabel: 'data-safety',
+      labelDescription: 'Proposed from an upgrade and restore rehearsal',
+      noun: 'upgrade-rehearsal finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
@@ -787,6 +814,90 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
   return `${modeInstructions}\n\n---\n\n${prompt}`;
 }
 
+// better-dependency-freedom's removal bar — the same vocabulary as slashdo's
+// `/do:depfree` / `--heavy` / `--extreme`. `default` keeps large, widely
+// audited libraries; `heavy` exempts only foundational frameworks, runtimes and
+// core tooling; `extreme` exempts only what cannot be owned responsibly (the
+// runtime, security-sensitive protocols and primitives, native bindings,
+// CI-required tooling) and is written for the strongest model at max effort.
+// Catalog-owned, like the mode contracts above, so the sanitizer
+// (lib/cosValidation.js), the generator, and the prompt-expansion guard all
+// read ONE list and a value cannot be settable yet silently absent from the
+// prompt. Absent = default.
+export const DEPFREE_MODES = ['default', 'heavy', 'extreme'];
+export const DEFAULT_DEPFREE_MODE = 'default';
+
+// One block per DEPFREE_MODES entry: where the "Acceptable" line sits for the
+// dependency-freedom audit. Keyed by the same list the sanitizer allowlists, so
+// a mode cannot be settable yet silently absent from the prompt. The wording
+// tracks slashdo's `/do:depfree` default / --heavy / --extreme rules so a
+// PortOS-scheduled audit and a terminal run of the command draw the same line.
+const DEPFREE_MODE_BLOCKS = {
+  default: `## Removal bar for this run: default
+
+Keep large, widely audited libraries that do real work — frameworks, runtimes,
+database drivers, build toolchains, rendering and math libraries — without
+relitigating them. Candidates are small single-purpose packages, wrappers over
+capabilities the platform now provides, micro-packages, and libraries where the
+project uses one or two functions. A replacement above ~300 lines of owned code
+is Infeasible at this bar; prefer a native API or a short owned helper.`,
+  heavy: `## Removal bar for this run: heavy
+
+Only foundational frameworks, core platform tooling, and language runtimes are
+exempt. Popularity and download counts do not exempt a library: utility
+collections, HTTP clients, logging, CLI parsers, date, glob, validation, retry,
+color, and event-emitter libraries are all candidates, and devDependencies get
+the same priority as production ones. Maintenance status is irrelevant — the
+question is whether the project can own the code. The replacement ceiling is
+~300 lines of owned code per package; when a package sits on the line, lean
+toward removal.`,
+  extreme: `## Removal bar for this run: extreme — the goal is zero dependencies
+
+Exempt ONLY what cannot be owned responsibly: the language runtime and its
+standard library, the package manager and compiler the build needs,
+security-sensitive protocol and primitive implementations (TLS, cryptography,
+authentication protocols, database wire protocols with authentication, codecs
+with conformance suites you cannot run), native bindings to the OS or hardware,
+and the lint/format/test tooling CI requires. Everything else is a candidate —
+web frameworks, UI libraries, client SDKs, ORMs, parsers, build plugins — judged
+by whether its USED surface can be rebuilt behind a parity test suite, never by
+its size or popularity. There is no line ceiling.
+
+For any replacement above ~100 lines, write a replacement design first: the
+exact used surface (symbols, options, behaviors relied on), the owned module's
+API, the parity test plan, the edge cases the call sites reach versus the ones
+provably unreachable, and the risk the swap carries. The design is part of the
+finding, and part of the PR when you implement. Work extra hard: read the
+library's source for the behaviors the call sites depend on — option defaults,
+error shapes, ordering guarantees, encoding edge cases — instead of guessing
+from its README, and write the parity tests so they fail against a stub before
+any call site switches over.
+
+A package you leave in place needs a reason a reviewer could argue with;
+"popular", "large", or "too much code" is not one. Record what a future run
+would need instead (a conformance suite, a native addon, a product-level
+rewrite). This bar is written for the strongest available model at maximum
+reasoning effort; if this run is on a budget provider or model, say so at the
+top of the report rather than quietly lowering the bar.`,
+};
+
+/**
+ * Render the operator's dependency-freedom removal bar into the audit prompt.
+ * `depfreeMode` was merged (global → per-app override) and value-constrained
+ * by sanitizeTaskMetadata, so read it straight from the metadata; absent means
+ * the default bar. A customized stored prompt that dropped `{depfreeMode}`
+ * still gets the block PREPENDED, so choosing the heavy or extreme bar is never
+ * a silent no-op on that install. Every other task type passes through.
+ */
+export function applyDepfreeMode(promptTemplate, taskType, metadata) {
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  if (taskType !== 'better-dependency-freedom') return prompt;
+  const mode = DEPFREE_MODES.includes(metadata?.depfreeMode) ? metadata.depfreeMode : DEFAULT_DEPFREE_MODE;
+  // The block carries its own heading, so the prepend path passes null.
+  return renderOrPrependSection(prompt, '{depfreeMode}', null, DEPFREE_MODE_BLOCKS[mode]);
+}
+
+
 /**
  * Scheduled audit types mapped onto the scope table in slashdo's
  * `lib/better-audit.md`. The exported `DO_BETTER_LENS_COVERAGE` name remains
@@ -805,7 +916,7 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
   'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
-  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security', 'infrastructure', 'data-integrity'],
+  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'upgrade-rehearsal', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
   ux: ['ux', 'mobile-responsive', 'copy', 'feature-completeness'],
@@ -878,6 +989,9 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   reliability: Object.freeze(['error-handling']),
   'workflow-recovery': Object.freeze(['error-handling']),
   'cost-efficiency': Object.freeze(['performance']),
+  // The executed rehearsal follows the static read, so it spends its scratch
+  // boots on the hazards the read could not see.
+  'upgrade-rehearsal': Object.freeze(['data-safety']),
 });
 
 // WHY each audit sits where it does in the order above — rationale only. The
@@ -908,4 +1022,5 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'cost-efficiency': 'Follows performance, because a latency fix often changes what the path costs; measure spend on the shape that survived.',
   'feature-completeness': 'Runs before simplify sweeps unreferenced code, so an unfinished feature is decided (finish, hide, or remove) rather than silently deleted.',
   'workflow-recovery': 'Follows call-level failure handling: once each step fails safely, check that a workflow stopped between steps still offers the user a way to finish or cancel it.',
+  'upgrade-rehearsal': 'Follows the static data-safety read: once the hazards a read can see are fixed, execute migrations and a backup restore against scratch installs to catch what only running them shows.',
 });

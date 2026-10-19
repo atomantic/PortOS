@@ -40,6 +40,9 @@ import { derivedContributionId } from '../../server/lib/eidoverseFoundations.js'
 import { foundationSandbox } from '../../server/lib/eidoverseFoundationSandbox.js';
 import { findControllerDefinitionById } from '../../server/services/eidoverseControllerRegistry.js';
 
+/** Derived paths relative to `data/`; never ship reference seeds. */
+export const OWNED_OUTPUT_PATHS = ['eidoverse/foundations.json'];
+
 export default {
   async up({ rootDir }) {
     const file = join(rootDir, 'data', 'eidoverse', 'foundations.json');

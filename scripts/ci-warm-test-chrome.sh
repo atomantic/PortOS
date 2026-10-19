@@ -22,7 +22,15 @@
 set -uo pipefail
 
 BUDGET="${CHROME_WARM_BUDGET_SECONDS:-90}"
-read -r -a CANDIDATES <<< "${CHROME_WARM_CANDIDATES:-${CHROME_PATH:-} /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser}"
+# The default list is resolveTestChrome's (scripts/lib/testChrome.js), the one
+# resolver the suites, pregate and test memo share (#12315): this asks it for the
+# Chrome a suite would launch rather than keeping a shell copy of the paths.
+if [ -n "${CHROME_WARM_CANDIDATES+x}" ]; then
+  read -r -a CANDIDATES <<< "$CHROME_WARM_CANDIDATES"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  CANDIDATES=("$(node -e "import(require('url').pathToFileURL(process.argv[1])).then((m) => process.stdout.write(m.resolveTestChrome() ?? ''))" "$ROOT/scripts/lib/testChrome.js" 2>/dev/null)")
+fi
 
 # Never replace the wall-clock budget with an unbounded read. GNU coreutils
 # installs timeout as gtimeout on some developer machines.

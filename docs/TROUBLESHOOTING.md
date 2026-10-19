@@ -43,7 +43,7 @@ is probed independently and separately bounded, so one unreachable service
 degrades to a single line instead of hanging the report. It exits non-zero when
 a **required** prerequisite is unavailable; optional facts (TLS cert, `gh`,
 ffmpeg/python3/uv, the port block) are reported but never fail the run — a
-running install legitimately occupies ports 5553–5561.
+running install legitimately occupies ports in the PortOS band, 5553–5569.
 
 Details name no hostnames, usernames, IPs, or home-directory paths, so the
 output is safe to paste into a bug report as-is.
@@ -91,6 +91,44 @@ npm run pm2:restart
 `setup:data` (`scripts/setup-data.js`) creates `data/` from `data.reference/` when it is absent. Otherwise it copies only the missing files, adds new starter entries to `providers.json` and the prompt configs without touching yours, and expands `__PORTOS_ROOT__` in `apps.json`. It also skips any path a migration derives from your own records (`scripts/lib/migrationOwnedPaths.js`). Pending migrations run when the server boots.
 
 **Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
+
+### Dynamic import callback missing after profiling
+
+**Symptom**: `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`, followed by an unhandled
+rejection whose original stack names `Timeout._onTimeout (<anonymous>:…)`, near
+`Debugger attached` / `Debugger ending` messages.
+
+Inspect the original stderr stack, not only the normalized `ServerError` stack.
+A profiler cleanup expression injected through Node's inspector can cause this:
+
+```js
+setTimeout(() => import('node:inspector').then(m => m.close()), 500);
+```
+
+The timer's dynamic import can run without an import callback in that evaluation
+context. Its rejected promise escapes the timer, and the inspector stays open.
+An acknowledged `Runtime.evaluate` request only proves the timer was scheduled;
+even `awaitPromise: true` cannot await a promise that the timer callback later
+creates. This pattern alone does not indicate a broken application import.
+See Node's [VM import callback documentation](https://nodejs.org/api/vm.html#when-the-importmoduledynamically-option-is-not-specified-or-undefined).
+
+**Solution**: after stopping your profiling session, use synchronous builtin
+access in the inspector's `Runtime.evaluate` expression:
+
+```js
+setTimeout(() => process.getBuiltinModule('node:inspector').close(), 500);
+'cleanup scheduled';
+```
+
+`process.getBuiltinModule` is available on PortOS's supported Node versions and
+does not depend on the evaluation context's ESM loader. Check the response with
+the matching protocol request ID for both a protocol `error` and
+`result.exceptionDetails` before disconnecting your debugger socket. After the
+delay, verify that the same loopback inspector listener is closed and the server
+remains healthy with no new rejection. Closing the debugger socket alone leaves
+the inspector listener running. Close only the inspector session you own; do not
+restart the live server or change application VM sandbox loaders to repair a
+profiling expression.
 
 ## Connection Issues
 
@@ -476,6 +514,20 @@ npm run pm2:start
 
 The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
 
+### Collection images or pinned covers lost after migration 428
+
+Migration 428 inferred deletion from missing local image bytes. That is invalid for peer-hosted media, whose bytes intentionally remain on the hosting peer, and for temporarily unavailable files. The migration runner now records pending `428-prune-dangling-collection-images.js` without executing its frozen transform, including when the ledger is missing or rebuilt. This policy is persisted before any other pending migration runs, so an interrupted upgrade cannot re-arm it. Explicit gallery deletion still removes the references for the image being deleted.
+
+If 428 already ran, preserve the current collection and recover membership from an unaffected peer or retained backup. Union synchronization may re-add the image items, but the migration also stamped a newer null `coverKey`; scalar last-write-wins synchronization cannot automatically restore that pinned cover. Select the intended cover explicitly after recovery. The peer-hosted media index does not record collection ownership and cannot reconstruct memberships. Do not rerun absence-based cleanup or overwrite newer edits with reconstructed guesses.
+
+### "Another migration run holds data/migrations.lock"
+
+**Symptom**: `npm run migrations` or server boot exits with `Another migration run (pid N) holds …/data/migrations.lock`.
+
+Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `pm2 stop portos`) and retry. A live holder never expires, even during a long upgrade. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it once the recorded pid is gone. An acquisition with a missing or malformed owner can be reclaimed after 30 minutes; other owner-read errors refuse recovery.
+
+Release and stale recovery serialize through `data/migrations.lock/.transition`. If a process dies during that brief transition, the lock stays closed rather than risking duplicate migrations. Stop all migration runners before removing `data/migrations.lock` by hand, then retry. A crash after atomic retirement can also leave a `data/migrations.lock.retired-*` directory; it is no longer an active lock and can be removed once runners have stopped.
+
 ### Lost App Registrations
 
 **Symptom**: Apps disappear after restart.
@@ -508,6 +560,33 @@ cat data/apps.json | jq .
 1. **Large log files**: Clear PortOS logs with `npx pm2 flush portos-server` (or `npx pm2 flush portos-cos`, etc.). Never use bare `npx pm2 flush`, which also clears every other app's logs.
 2. **Many apps**: Pagination added in recent versions
 3. **Network latency**: Use local access when possible
+
+### Agents Page or Merge Admission Stalls (Slow CoS State Operations)
+
+**Symptom**: the Agents page is slow or unavailable while merge admission refuses with `state-queue-timeout`, PM2 reads time out, or peer probes fail around the same time.
+
+CoS runtime records share one serialized state queue (`withStateLock` in `server/services/cosState.js`). Slow operations on it log bounded numbers only: no records, tokens, paths, hostnames or task text.
+
+| Line | When |
+|------|------|
+| `🚦 Merge admission operation=… status=settled …` | a settled admission transaction that took 1 s or more |
+| `🚦 Merge admission … status=queue-timeout\|pending\|failed …` | always |
+| `🐢 CoS state write slow outcome=… totalMs=… prepareMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
+| `🐢 CoS state queue slow hold heldMs=… waitMs=… loopLagMs=… loopLagMaxMs=…` | any operation that held the queue for 1 s or more |
+
+Elapsed time inside an awaited phase is asynchronous wait plus delayed scheduling. While an instrumented operation is open, a 100 ms tick measures how long timers sat overdue (`server/lib/eventLoopLagProbe.js`) and charges that to the current phase as `…LagMs`. Read each slow phase as lag versus the rest:
+
+- **`queueMs` high, `queueLagMs` near 0** — the state queue was held by other operations while the loop stayed responsive. Look for `🐢 CoS state queue slow hold` lines in the same window.
+- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
+- **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. These numbers do not tell those apart; capture a CPU profile ([safely](#dynamic-import-callback-missing-after-profiling)) and host load at the time.
+
+Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted. `timerLateMs` is how late the 15 s admission deadline fired; anything beyond a few milliseconds of timer jitter proves scheduling delay on its own.
+
+**Baseline.** In an isolated synthetic run (a temp directory, a ~1 MiB state-shaped document, real `atomicWrite`, no induced load), a full state write took 14 ms median and 35 ms worst over 20 runs (serialize ~2 ms, write ≤ 20 ms, directory flush ≤ 8 ms) with no measurable lag, and parsing took ~1–2 ms. Multi-second phases are therefore not explained by the size of the document.
+
+**Status of #12329.** The incident that motivated these lines (a 35.9 s persistence phase, and a deadline that fired 9.4 s late) predates them. Whether its persistence time was storage latency or scheduling pressure is **unresolved**; the overdue deadline established scheduling delay only for the queue wait. Choose a latency fix only after a safely observed incident shows which bucket dominates, and record before/after numbers at that boundary. Do not induce overload on a live install, or run concurrent heavy suites, to obtain them.
+
+**Log timestamps.** `LOG_DATE_FORMAT` in `ecosystem.config.cjs` already emits a real UTC offset (#11436). A PM2 process registered before that change keeps its old format, which labels local wall-clock time with a literal `Z`, until it is restarted from the ecosystem file as part of a normal, authorized rollout. Until then, correlate log lines by comparing a fresh line with its file modification time or the health endpoint's timestamp rather than trusting the suffix.
 
 ### High Memory Usage
 
@@ -590,174 +669,49 @@ npm run test:watch
 
 ### CI red with every job "cancelled"
 
-**Symptom**: A pull request's `CI Gate` / `Full CI Gate` goes red. Opening the
-run shows no failing assertion — jobs report `##[error]The operation was
-canceled.` mid-step, the run's top-level conclusion is `cancelled` rather than
-`failure`, and `gh pr checks` lists the long-running shards as `fail` with
-nothing saying why.
+A failing job no longer cancels its siblings, so a real test failure shows as a
+job that concluded `failure`. Open it and read the assertion, or use
+`gh run view --log-failed`. To rerun only that shard, use **Re-run failed jobs**.
 
-**Two very different causes produce that identical surface**, and the run
-and job conclusions do not tell them apart:
+A run where every job reads `cancelled` has one of three causes:
 
-1. **A real test failure.** `scripts/cancel-current-ci-run.js` cancels the
-   sibling jobs the moment one job fails, so the failing job is cancelled out
-   from under its own reporting step and its conclusion reads `cancelled` too.
-   Nothing in the run reads `failure`.
-2. **An external cancel** — the Actions spending limit, or a human pressing
-   cancel.
+1. **A newer push superseded it.** `cancel-in-progress` is per PR, and a
+   supersession always leaves a newer run for the same branch:
 
-**Always rule out (1) first.** It is the common case, it is the one you can fix,
-and assuming billing sends you to a dashboard instead of the one-line assertion
-that is actually red. Two PortOS incidents were misdiagnosed as billing this way
-(#7482 on 2026-09-16, #7571 on 2026-09-17) and burned full-matrix re-runs before
-anyone read a job log.
+   ```bash
+   gh run list --branch "<head-branch>" --workflow CI \
+     --json databaseId,headSha,status,conclusion,createdAt,attempt
+   ```
 
-#### Step 0 — read the annotation, then the gate (usually this is the whole answer)
+2. **A job hit its own `timeout-minutes`.** GitHub records that as `cancelled`,
+   not `timed_out`. The job carries an annotation reading "exceeded the maximum
+   execution time", and the step that was running is the slow one (a stalled
+   package download, a hang). A cancelled job keeps its steps' conclusions, so
+   the `CI Gate` summary (`scripts/ci-gate-report.js`) names any step that
+   failed before the cancel. By hand:
 
-Both now name the job and the failing step, and neither depends on a job
-conclusion, so both survive the cancel:
+   ```bash
+   gh api "/repos/atomantic/PortOS/actions/runs/<run-id>/jobs?per_page=100" \
+     --jq '.jobs[] | select(any(.steps[]?; .conclusion=="failure")) | .name'
+   ```
 
-- **The Checks tab's `::error` annotation.** `scripts/cancel-current-ci-run.js`
-  prints it *before* it POSTs the cancel, and Actions records an annotation the
-  instant the line is printed. It renders above the fold on the pull request.
-- **The `CI Gate` summary.** `scripts/ci-gate-report.js` queries this run's job
-  steps whenever its verdict would otherwise be `cancelled`, and reports a
-  failure naming the culprit instead.
+3. **An external cancel**, such as GitHub cancelling in-flight runs under load,
+   the Actions spending limit, or someone pressing cancel. There is no newer
+   run and no failed step. Only the account owner can check or raise the
+   spending limit (`gh auth refresh -s user`, then
+   `gh api /users/<your-login>/settings/billing/actions`).
 
-Both are best-effort. If the annotation shows only a job-and-shard label, or
-the gate still says `CANCELLED, not failed`, the lookup behind them did not
-land — fall through to step 1 and run it by hand. A run from before #7574 has
-neither.
-
-#### Step 1 — ask whether a STEP failed (this is the primary diagnostic)
-
-This is what step 0's two surfaces do for you; run it by hand when they are
-missing or came back empty. A cancelled job keeps its steps' conclusions, so the
-failing step survives even though the job that owns it reads `cancelled`.
-**`gh run view --json jobs` does not expose steps** — that omission is precisely
-why both incidents above were misread. Go to the REST API instead:
-
-```bash
-gh api "/repos/atomantic/PortOS/actions/runs/<run-id>/jobs?per_page=100" \
-  --jq '.jobs[] | select(any(.steps[]?; .conclusion=="failure"))
-        | "\(.name)  job=\(.conclusion)  failedStep=\([.steps[] | select(.conclusion=="failure") | .name] | join(", "))"'
-```
-
-On a run where every job read `cancelled`, that printed:
-
-```
-Windows server unit tests (3/3)  job=cancelled  failedStep=Run server tests on Windows
-CI Gate                          job=failure    failedStep=Require every selected job to pass
-Full CI Gate                     job=failure    failedStep=Require the aggregate gate to have passed
-```
-
-Ignore the two gate rows — they always fail downstream of a red run. **Any other
-row is your culprit.** This is the same signal
-`scripts/ci-retry-cancelled-run.js` uses (`jobFailed` reads step conclusions,
-not just the job's), which is why the recovery workflow correctly refuses to
-retry a fail-fast run.
-
-Then read the assertion out of that job's log. **`--log-failed` prints nothing
-here** — GitHub populates it only for steps GitHub itself marked failed on a
-job that concluded `failure`, so a self-cancelled job yields an empty result
-and the failure looks absent. Use the full log:
-
-```bash
-gh run view --job <job-id> --log 2>&1 \
-  | grep -nE '🛑 Requested cancellation|FAIL |AssertionError|✕ |Test Files .*failed'
-```
-
-The `🛑 Requested cancellation` line is written by
-`scripts/cancel-current-ci-run.js` and exists **only** when a job really failed
-— it is the confirming tell if the step query is ever inconclusive.
-
-If no job has a failed step and no log shows a failure, go to step 2.
-
-A Windows-only failure is a recurring shape: a test that hardcodes a POSIX
-answer for platform-dependent behaviour (shell quoting, path separators,
-process-group flags) is green locally and on Linux, and red only on the Windows
-shard. See "Windows server unit tests fail but macOS/Linux pass" below.
-
-#### Step 2 — only now consider an external cancel
-
-Confirm there is no successor run. `cancel-in-progress` is per-PR
-(`.github/workflows/ci.yml`), and a legitimate supersession always leaves a
-**newer** run for the same branch; an external cancel leaves none.
-
-```bash
-gh run list --branch "<head-branch>" --workflow CI \
-  --json databaseId,headSha,status,conclusion,createdAt,attempt
-```
-
-Supporting signals for the spending-limit case, none of them sufficient alone:
-
-- Every runner is cancelled within a short window of one another, rather than
-  one job finishing ~30–60 s ahead of the rest.
-- The logs show tests still passing right up to the cancel.
-- `scripts/ci-gate-report.js` distinguishes the two now, so its wording IS a
-  signal — but read which sentence it printed. "Checked every job's STEP
-  conclusions too, and none failed" means the lookup ran and cleared a
-  fail-fast cancel. "could NOT be read" means it did not, and rules nothing
-  out. A run from before #7574 says neither.
-
-Exceeding the concurrent-**job cap** makes GitHub queue runs; cancelling
-in-flight runs is the **spending-limit** behaviour. Full runs are expensive
-because the three Windows shards bill at a 2× minute multiplier.
-
-**Account-level confirmation** (needs a scope an unattended agent cannot grant
-itself — run it yourself):
-
-```bash
-gh auth refresh -s user
-gh api /users/<your-login>/settings/billing/actions
-```
-
-Only the account owner can raise or clear the limit. If that is the cause,
-re-running spends more of the budget the limit is protecting — stop after one
-manual retry, arm auto-merge (`gh pr merge <n> --merge --auto --delete-branch`,
-which branch protection still gates), and leave the PR for the owner.
-
-#### What PortOS already does about it
-
-- One automatic retry. `.github/workflows/ci-cancel-recovery.yml` watches for a
-  completed CI run and re-dispatches it exactly once when it was cancelled on a
-  pull request, **no job failed**, and **no newer run exists for the branch**.
-  The budget is the run attempt: `POST /rerun` produces attempt 2, and attempt
-  2 is never retried. A supersession and a self-cancel after a real failure are
-  both skipped, and the recovery run's own summary page states which of those
-  applied. Its "no job failed" test reads **step** conclusions as well as the
-  job's (`jobFailed` in `scripts/ci-retry-cancelled-run.js`), which is what
-  keeps it from burning an attempt on a fail-fast run — the same signal step 1
-  above uses by hand.
-- The gate reports the difference **when the gate itself runs**.
-  `scripts/ci-gate-report.js` prints `this run was CANCELLED, not failed`,
-  names the cancelled jobs, and points back here — instead of the old
-  undifferentiated "did not pass". Since #7574 it reaches that wording only
-  after querying the run's job **steps** and finding none failed, so a
-  fail-fast cancel is reported as the red run it is rather than sharing the
-  external cancel's line. Two limits remain: `if: always()` defeats an upstream
-  failure, not a run-wide cancellation, so in the full external-cancel case the
-  gate job is cancelled too and prints nothing; and when the step lookup itself
-  fails the gate says so and falls back to the conclusion-only wording, which
-  proves nothing about causes. It covers a partial cancel; the recovery run
-  covers the rest.
-
-**A caveat worth knowing**: the retry re-runs the whole suite, Windows shards
-included, so if the cause really is the spending limit then recovery spends
-more of it. That is the same cost as the manual re-run it replaces, but it
-means recovery is not a substitute for reducing billable minutes — tracked in
-issue #7440.
-
-One deliberate rough edge: a run **you** cancel by hand looks identical to an
-external cancel from the API, so it gets the same single retry. Push a new
-commit (or close the PR) rather than cancelling if you want the run to stay
-stopped.
+**What PortOS does about it.** `.github/workflows/ci-cancel-recovery.yml`
+re-dispatches a cancelled pull-request run exactly once when no job failed, no
+job hit its timeout, and no newer run exists for the branch. Its summary page
+says which of those applied. A run you cancel by hand looks like an external
+cancel and gets the same single retry; push a new commit or close the PR if you
+want it to stay stopped.
 
 ### Windows server unit tests fail but macOS/Linux pass
 
 **Symptom**: `Windows server unit tests (n/3)` is the only shard with a real
-assertion failure. Because that shard fail-fasts, the run then reads as a
-run-wide cancel — see the section above for how to find the assertion at all.
+assertion failure.
 
 The cause is almost always a **test** that hardcodes the POSIX answer to a
 platform-dependent question, not a production bug. Three recurring shapes:

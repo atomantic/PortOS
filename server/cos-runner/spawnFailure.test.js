@@ -52,9 +52,15 @@ describe('cos-runner /spawn survives a failed CLI launch (#11761)', () => {
     await new Promise((resolve) => socket.once('connect', resolve));
   }, 30_000);
 
-  afterAll(() => {
+  afterAll(async () => {
     socket?.close();
-    runner?.kill('SIGKILL');
+    // Windows keeps the runner's data-root files locked until the process is
+    // gone, and kill() only requests that — removing first fails with EPERM.
+    if (runner && runner.exitCode === null && runner.signalCode === null) {
+      const gone = new Promise((resolve) => runner.once('exit', resolve));
+      runner.kill('SIGKILL');
+      await gone;
+    }
     rmSync(dataRoot, { recursive: true, force: true });
   });
 

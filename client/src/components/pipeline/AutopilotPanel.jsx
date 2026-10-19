@@ -706,24 +706,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
-  // One backward walk per frame batch yields everything the live section needs:
-  // the newest `progress` frame (the milestone map's cursor) and the last few
-  // labelled frames (the activity log, whose last line is also the status line).
-  // Walking backward and stopping early matters — `frames` is uncapped, so
-  // labelling the whole array on every arriving frame is quadratic over a run.
-  const { snapshot, activityLines } = useMemo(() => {
-    const lines = [];
-    let found = null;
-    for (let i = frames.length - 1; i >= 0; i -= 1) {
-      const f = frames[i];
-      if (!found && f?.type === 'progress') found = f;
-      if (lines.length < ACTIVITY_LINES) {
-        const label = frameLabel(f);
-        if (label) lines.unshift(label);
-      } else if (found) break;
-    }
-    return { snapshot: found, activityLines: lines };
-  }, [frames]);
+  // `frames` is the hook's bounded history (useSseProgress `maxFrames`), so a
+  // full pass per frame batch stays cheap: the newest `progress` frame is the
+  // milestone map's cursor; the last few labelled frames are the activity log,
+  // whose last line is also the status line.
+  const { snapshot, activityLines } = useMemo(() => ({
+    snapshot: frames.findLast((f) => f?.type === 'progress') ?? null,
+    activityLines: frames.map(frameLabel).filter(Boolean).slice(-ACTIVITY_LINES),
+  }), [frames]);
   // Fall back to the status route's snapshot until this stream emits one of its
   // own — a panel attaching mid-run has no frames yet.
   const progress = snapshot || seedProgress;

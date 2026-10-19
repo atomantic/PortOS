@@ -1,3 +1,4 @@
+import { setFallbackChainCache } from '../lib/providerFallbackChainCache.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Usage-limit tests exercise routing, not the install's persisted usage ledger.
@@ -49,16 +50,15 @@ vi.mock('./providers.js', () => ({
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] }),
 }));
 
-// autoFixer.js is called from runPromptThroughProvider on a successful
-// fallback retry to cancel the deferred investigation task. Mock the export
-// to a spy so tests can assert it was/wasn't invoked without wiring up the
-// full task system.
-vi.mock('./autoFixer.js', () => ({
+// initAutoFixer() registers these at boot; runPromptThroughProvider reports
+// fallback lifecycle through the registry. Spies stand in for the auto-fixer
+// so tests can assert it was/wasn't invoked without wiring up the task system.
+const autoFixer = {
   noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
   noteFallbackFailed: vi.fn(),
   escalateProviderFailure: vi.fn().mockResolvedValue(undefined),
-}));
+};
 
 // aiToolkitState lookups gate the retry path on a real providerStatus
 // service being present. By default the mock returns null so the retry
@@ -81,7 +81,7 @@ const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
 const executionReadiness = await import('./providerExecutionReadiness.js');
 const providers = await import('./providers.js');
-const autoFixer = await import('./autoFixer.js');
+(await import('./providerRecoveryHooks.js')).registerProviderRecoveryHandlers(autoFixer);
 const toolkitState = await import('../lib/aiToolkitState.js');
 const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
@@ -100,6 +100,7 @@ const tuiProvider = (extra = {}) => ({
 });
 
 beforeEach(() => {
+  setFallbackChainCache([]);
   vi.clearAllMocks();
   runner.createRun.mockResolvedValue({ runId: 'run-xyz' });
   // vi.clearAllMocks() clears calls but NOT mockReturnValue overrides,
@@ -1097,6 +1098,30 @@ describe('promptRunner — retry-with-fallback', () => {
     });
     return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
   }
+
+  it('resolves composite fallback candidates through the configured provider lookup', async () => {
+    const primary = apiProvider({ id: 'openai.api@primary', name: 'Primary composite' });
+    const fallback = apiProvider({ id: 'openai.api@fallback', name: 'Fallback composite' });
+    const unavailable = 'openai.api@disabled';
+    const status = mockToolkitWithFallback(fallback);
+    providers.getAllProviders.mockResolvedValue({ providers: [] });
+    providers.getProviderById.mockImplementation(async id => ({ [primary.id]: primary, [fallback.id]: fallback }[id] ?? null));
+    setFallbackChainCache([{ providerId: unavailable }, { providerId: fallback.id }, { providerId: fallback.id }]);
+    status.getFallbackProvider.mockImplementation((failedId, candidates) => {
+      expect(failedId).toBe(primary.id);
+      expect(candidates).toEqual({ [primary.id]: primary, [fallback.id]: fallback });
+      return { provider: candidates[fallback.id], source: 'system' };
+    });
+    runner.executeApiRun
+      .mockImplementationOnce(async ({ onComplete }) => onComplete({ success: false, error: 'Primary unavailable' }))
+      .mockImplementationOnce(async ({ onData, onComplete }) => { onData('recovered'); onComplete({ success: true }); });
+
+    const result = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+    expect(result.text).toBe('recovered');
+    expect(result.usedFallback).toBe(true);
+    expect(providers.getProviderById.mock.calls.filter(([id]) => id === unavailable)).toHaveLength(1);
+    expect(providers.getProviderById.mock.calls.filter(([id]) => id === fallback.id)).toHaveLength(1); // duplicate chain entries reuse the materialized candidate
+  });
 
   it('refuses a stopped caller after local concurrency wait without provider fallback, benching, or escalation', async () => {
     const status = mockToolkitWithFallback();

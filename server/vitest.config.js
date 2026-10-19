@@ -1,9 +1,8 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
-import { vitestCaptureProjects, vitestCiPool } from '../scripts/vitestCiPool.js';
-import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
-import { BROWSER_SUITES } from '../scripts/lib/browserSuites.js';
+import { applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+import { SERVER_TEST_EXCLUDE, SERVER_TEST_INCLUDE, browserOwnerExcludes } from '../scripts/lib/workspaceTests.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a
 // `VITEST_FAST=1 vitest` script is parsed as an executable name on cmd.exe).
@@ -40,11 +39,9 @@ process.env.NODE_ENV = 'test';
 // engines), so every supported Node build respects it.
 process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
-// Linux CI gives these registered contracts one browser-owner job. Only the
-// explicitly opted-in unit profile excludes them; local and Windows defaults
-// retain their current collection, including browser suites outside the registry.
-const browserOwnerExcludes = process.platform === 'linux' && process.env.PORTOS_CI_BROWSER_OWNER === 'unit'
-  ? BROWSER_SUITES.map(path => path.slice('server/'.length)) : [];
+// The CI runner's explicit selection (closure-related files, minus the ones
+// the test memo already verified) arrives as a file, not as CLI selectors.
+const runnerSelection = vitestRunnerSelection();
 
 const config = defineConfig({
   // Anchor to the config, even when --root or the caller cwd differs.
@@ -63,6 +60,11 @@ const config = defineConfig({
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
       // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
       npm_config_logs_max: '0',
+      // The runner's selection is for THIS Vitest process only: a suite that
+      // spawns a nested Vitest on a fixture must not inherit it.
+      PORTOS_CI_TEST_SELECTION: '',
+      // Same for the memo store: a nested Vitest must point at its own directory or stay off.
+      PORTOS_TEST_MEMO_DIR: '',
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform
@@ -117,18 +119,13 @@ const config = defineConfig({
     // environment has no DOM, so DOM-dependent client tests would fail here).
     // The scripts/migrations glob lets each one-shot migration be verified
     // against synthetic fixtures.
-    include: [
-      '**/*.test.js',
-      '../scripts/**/*.test.js',
-      '../lib/**/*.test.js',
-      // The standalone autofixer package ships pure, node-builtin-only helpers
-      // (sandbox.js isolation/promotion primitives) whose adversarial tests run
-      // under this node runner.
-      '../autofixer/**/*.test.js',
-      // docs/deps-doc.test.js guards DEPS.md against dependency drift; it lives
-      // next to the document it checks rather than in server/.
-      '../docs/**/*.test.js',
-    ],
+    // The standalone autofixer package ships pure, node-builtin-only helpers
+    // (sandbox.js isolation/promotion primitives) whose adversarial tests run
+    // under this node runner. docs/deps-doc.test.js guards DEPS.md against
+    // dependency drift; it lives next to the document it checks rather than
+    // in server/. The globs are shared with the CI runner, which enumerates
+    // the same set before Vitest starts (scripts/lib/workspaceTests.js).
+    include: [...SERVER_TEST_INCLUDE],
     // The slashdo submodule ships its own node:test suites; vitest can't
     // parse them and the broad `../lib/**` glob would otherwise pick them up
     // as "no test suite found" failures that break --bail=1 CI runs.
@@ -144,10 +141,8 @@ const config = defineConfig({
     // their real-git describes honor SKIP_HEAVY_INTEGRATION, and the leftover
     // pure-logic cases still run under --fast.
     exclude: [
-      '**/node_modules/**',
-      '../lib/slashdo/**',
-      ...DB_TEST_INCLUDE,
-      ...browserOwnerExcludes,
+      ...SERVER_TEST_EXCLUDE,
+      ...browserOwnerExcludes(),
       ...(process.env.VITEST_FAST ? [
         'services/worktreeReap.test.js',
         'services/sprites/atlas.test.js',
@@ -209,5 +204,6 @@ const config = defineConfig({
 // Both projects share the safety env, setup files and time budgets. The
 // root globalSetup owns one temp root across BOTH groups; project teardown
 // must not remove it while another group still needs it.
-config.test.projects = vitestCaptureProjects(config.test, { cacheDir: config.cacheDir });
+config.test = applyRunnerSelection(config.test, runnerSelection);
+config.test.projects = vitestCaptureProjects(config.test, { cacheDir: config.cacheDir, selection: runnerSelection });
 export default config;

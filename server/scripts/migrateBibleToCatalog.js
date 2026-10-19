@@ -1,3 +1,4 @@
+import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 /**
  * Backfill embedded universe canon into the Creative Ingredients Catalog.
  *
@@ -22,10 +23,12 @@
 import { createHash } from 'crypto';
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
-import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
+import { listUniverses, getUniverse, updateUniverse, ERR_NOT_FOUND } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
 
-const MARKER_VERSION = 1;
+// v2 re-walks every install once: before canon entries were promoted on save,
+// an entry added after the first walk stayed out of the catalog.
+const MARKER_VERSION = 2;
 const MARKER_FILENAME = 'catalog-backfill.applied.json';
 
 // Derived from BIBLE_KINDS so a future kind added there flows through here
@@ -102,6 +105,7 @@ async function promoteEntry({ universeId, universeName, entry, kind, role }) {
 
   const targetId = entry.ingredientId || deterministicIngredientId(universeId, kind, entry.id);
 
+  if (await getCatalogIdentityAccess(targetId)) return { skipped: true, reason: 'shared-identity-context' };
   const existing = await catalogDB.getIngredient(targetId);
   if (existing) {
     await catalogDB.linkIngredientToRef(targetId, 'universe', universeId, role);
@@ -200,6 +204,60 @@ async function migrateUniverse(universe) {
 }
 
 /**
+ * True when a canon entry has no catalog row yet. Exported so the universe
+ * write path can decide, without a DB round-trip, whether to promote.
+ */
+export function hasUnpromotedCanon(universe) {
+  return KINDS.some(({ array }) => (Array.isArray(universe?.[array]) ? universe[array] : [])
+    .some((entry) => entry?.id && entry?.name && !entry.ingredientId));
+}
+
+// One promotion per universe at a time; a save landing mid-walk re-runs once
+// the current walk finishes so its new entries are not missed. The boot walk
+// goes through the same map so a save during it can't race the same
+// deterministic catalog id.
+const promoting = new Map();
+
+// A deleted or missing universe has nothing left to promote.
+async function loadLiveUniverse(universeId) {
+  const universe = await getUniverse(universeId, { includeDeleted: true }).catch((err) => {
+    if (err?.code === ERR_NOT_FOUND) return null;
+    throw err;
+  });
+  return universe && !universe.deleted ? universe : null;
+}
+
+function startPromotion(universeId, firstPass = null) {
+  const state = { again: !firstPass, promise: null };
+  state.promise = (async () => {
+    let stats = firstPass ? await firstPass() : null;
+    while (state.again) {
+      state.again = false;
+      const universe = await loadLiveUniverse(universeId);
+      if (!universe || !hasUnpromotedCanon(universe)) break;
+      stats = await migrateUniverse(universe);
+    }
+    return stats;
+  })().finally(() => promoting.delete(universeId));
+  promoting.set(universeId, state);
+  return state.promise;
+}
+
+/**
+ * Promote one universe's not-yet-promoted canon entries to catalog rows and
+ * stamp the ids back. Called after a universe save adds canon entries, so the
+ * Casting / Environments / Objects pages see them without a manual sync.
+ */
+export function promoteUniverseCanon(universeId) {
+  const running = promoting.get(universeId);
+  if (running) {
+    running.again = true;
+    return running.promise;
+  }
+  return startPromotion(universeId);
+}
+
+/**
  * Public entry point. Runs the migration once, then no-ops on every
  * subsequent boot. Wired into server/index.js after ensureSchema().
  */
@@ -215,7 +273,9 @@ export async function migrateBibleToCatalog({ force = false } = {}) {
   const totals = { universesScanned: 0, promoted: 0, peerReconciled: 0, skipped: 0, errors: 0 };
   for (const universe of universes) {
     if (universe.deleted) continue;
-    const result = await migrateUniverse(universe);
+    while (promoting.has(universe.id)) await promoting.get(universe.id).promise.catch(() => {});
+    let result;
+    await startPromotion(universe.id, async () => { result = await migrateUniverse(universe); });
     totals.universesScanned++;
     totals.promoted += result.promoted;
     totals.peerReconciled += result.peerReconciled;

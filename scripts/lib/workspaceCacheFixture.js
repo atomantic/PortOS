@@ -48,6 +48,8 @@ function checkout(host, name, workspace, configName, dependencies) {
   put(join(parent, 'package.json'), '{"type":"module"}');
   const fixture = createVitestTempFixture(parent, workspace, 'expect(true).toBe(true);', configName);
   delete fixture.options.env.PORTOS_CI_BROWSER_OWNER;
+  // Not a `_test` database: the DB run lock stands down, so the fixture neither needs `pg` nor queues behind a real run.
+  fixture.options.env.PGTESTDATABASE = 'workspace_cache_fixture';
   const root = fixture.args[fixture.args.indexOf('--root') + 1];
   unlinkSync(join(root, 'node_modules'));
   link(dependencies, join(root, 'node_modules'));
@@ -55,13 +57,13 @@ function checkout(host, name, workspace, configName, dependencies) {
   // Copy the real config so import.meta.url names THIS checkout; its existing
   // helpers stay shared read-only, just like dependencies in an ordinary worktree.
   copyFileSync(join(REPO, workspace, configName), join(root, configName));
-  for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
+  for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
   if (workspace === 'server') {
     // Both configs load this environment relative to themselves. Copy its
     // Node-only support closure intact so setup and teardown run in this checkout.
-    for (const file of ['test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
+    for (const file of ['test/dbRunExclusivity.js', 'test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       copyFileSync(join(REPO, 'server', file), join(root, file));
     }

@@ -1529,6 +1529,7 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
         timezone: 'UTC',
       });
       expect(emitted).toHaveBeenCalledTimes(3);
+      await actual.flushSettingsLedger();
       const { recordUserAction } = await import('../services/userActions.js');
       expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({ type: 'settings.update', actor: 'user' }));
     } finally {
@@ -1555,13 +1556,44 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     expect(saved.secrets.example).toBe('private-placeholder');
   });
 
+  // The Media settings drawer saves one slice per changed field group; a
+  // sibling panel's later write to a field the drawer did not touch must
+  // survive, and a cleared render-target pin travels as an explicit null.
+  it('merges the Media drawer slices per field and clears a render-target pin with null', async () => {
+    const app = buildApp();
+    expect((await patch(app, 'imageGen.codex', { model: 'gpt-example', parallelLimit: 4 })).status).toBe(200);
+    expect((await patch(app, 'imageGen', { mode: 'codex' })).status).toBe(200);
+    expect((await patch(app, 'imageGen.local', { modelId: 'example-model', cleanC2PA: false })).status).toBe(200);
+    expect((await patch(app, 'imageGen.expose', { a1111: true })).status).toBe(200);
+    expect((await patch(app, 'renderDefaults', { 'universe-bible': { imageMode: 'codex' }, 'sprite-reference': { imageMode: 'agy' } })).status).toBe(200);
+    expect((await patch(app, 'renderDefaults', { 'universe-bible': null })).status).toBe(200);
+    expect((await patch(app, 'videoGen', { defaultModelId: 'example-video', displaySleep: true })).status).toBe(200);
+    expect((await patch(app, 'videoGen', { mode: 'grok' })).status).toBe(200);
+    expect(persisted()).toMatchObject({
+      imageGen: {
+        mode: 'codex',
+        local: { pythonPath: '/example/python3', denoise: true, modelId: 'example-model', cleanC2PA: false },
+        codex: { enabled: true, model: 'gpt-example', parallelLimit: 4 },
+        expose: { a1111: true },
+      },
+      renderDefaults: { 'universe-bible': null, 'sprite-reference': { imageMode: 'agy' } },
+      videoGen: { mode: 'grok', defaultModelId: 'example-video', displaySleep: true },
+    });
+  });
+
   it('rejects invalid values, unapproved paths and credential/prototype keys without writes', async () => {
     const before = fs.readFileSync(settingsFile, 'utf8');
     for (const [path, partial] of [
       ['secrets.auth', { enabled: false }],
       ['imageGen', { hfToken: 'example-token' }],
+      ['imageGen', { mode: 'not-a-backend' }],
       ['imageGen.local', { hfToken: 'example-token' }],
       ['imageGen.local', { pythonPath: '/example/sh' }],
+      ['imageGen.codex', { parallelLimitBounds: { min: 1, max: 1 } }],
+      ['imageGen.grok', { aspectRatio: 'wide' }],
+      ['renderDefaults', { 'universe-bible': { imageMode: 'not-a-backend' } }],
+      ['videoGen', { acceptedModelTerms: [] }],
+      ['videoGen', { mode: 'not-a-backend' }],
       ['localLlm.mtplx', { idleMinutes: -1 }],
       ['localLlm.mtplx', { launch: { model: [] } }],
       ['autoUpdate', { enabled: 'yes' }],

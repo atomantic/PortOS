@@ -4121,19 +4121,25 @@ describe('peerSync', () => {
       vi.mocked(mergeTracksFromSync).mockClear();
     });
 
+    // Fixtures derive from the live table so a schema bump can't silently turn
+    // an "ahead"/"equal" sender into a "behind" one and disarm the gate.
+    const versionsAhead = (bumps) => ({
+      ...PORTOS_SCHEMA_VERSIONS,
+      ...Object.fromEntries(Object.entries(bumps).map(([cat, n]) => [cat, PORTOS_SCHEMA_VERSIONS[cat] + n])),
+    });
+
     describe('receiver — applyIncomingPush', () => {
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
-        // Local code is at universes:13 (see server/lib/schemaVersions.js).
-        // A push from a sender on universes:14 must NOT touch local state.
+        // A push from a sender one universes version ahead of local code must NOT touch local state.
         const rejection = await applyIncomingPush({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 14 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ universes: 1 }) },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 14, receiverV: 13 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: PORTOS_SCHEMA_VERSIONS.universes + 1, receiverV: PORTOS_SCHEMA_VERSIONS.universes }]);
         expect(rejection.details.senderPortosVersion).toBe('99.0.0');
         // Receiver MUST stamp its OWN PortOS version so the sender can show
         // the user "peer X is on PortOS vY" — without this, the sender would
@@ -4152,11 +4158,11 @@ describe('peerSync', () => {
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 6 } },
+          portosMeta: { portosVersion: '2.7.0', schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 6 } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
         );
       });
 
@@ -4201,11 +4207,11 @@ describe('peerSync', () => {
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ mediaCollections: 1 }) },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 5, mediaCollections: 2 } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: versionsAhead({ mediaCollections: 1 }) },
         );
       });
 
@@ -4216,7 +4222,7 @@ describe('peerSync', () => {
           record: { id: 'ser-1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ pipelineIssues: 1 }) },
         });
         expect(mergeSeriesFromSync).toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
@@ -4231,10 +4237,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ pipelineIssues: 1 }) },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 5, receiverV: 4 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: PORTOS_SCHEMA_VERSIONS.pipelineIssues + 1, receiverV: PORTOS_SCHEMA_VERSIONS.pipelineIssues }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
@@ -4248,10 +4254,10 @@ describe('peerSync', () => {
           linkedCollection: { id: 'col-1', name: 'Universe: U', items: [] },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ mediaCollections: 1 }) },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'mediaCollections', senderV: PORTOS_SCHEMA_VERSIONS.mediaCollections + 1, receiverV: PORTOS_SCHEMA_VERSIONS.mediaCollections }]);
         expect(mergeUniversesFromSync).not.toHaveBeenCalled();
         expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
       });
@@ -4310,11 +4316,11 @@ describe('peerSync', () => {
           record: { id: 'u1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ universes: 1 }) },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1', deleted: true })],
-          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 6 } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: versionsAhead({ universes: 1 }) },
         );
       });
 
@@ -4329,10 +4335,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 5 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ pipelineIssues: 1 }) },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 5, receiverV: 4 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: PORTOS_SCHEMA_VERSIONS.pipelineIssues + 1, receiverV: PORTOS_SCHEMA_VERSIONS.pipelineIssues }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
@@ -4347,14 +4353,14 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 'ser-1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 9 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: versionsAhead({ pipelineSeries: 1, pipelineIssues: 1 }) },
         });
         expect(mergeSeriesFromSync).toHaveBeenCalled();
         expect(mergeIssuesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'i1', deleted: true })],
           {
             source: { via: 'peer-push', peerId: 'peer-a' },
-            senderSchemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 9 },
+            senderSchemaVersions: versionsAhead({ pipelineSeries: 1, pipelineIssues: 1 }),
           },
         );
       });

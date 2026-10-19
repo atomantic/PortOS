@@ -1,4 +1,4 @@
-import { noteReadinessChanged } from './readinessNotify.js';
+import { noteReadinessChanged } from './readinessSignal.js';
 /**
  * Telegram MCP Bridge Service
  *

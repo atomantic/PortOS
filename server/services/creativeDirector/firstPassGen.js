@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from '../catalogDB/identityAccess.js';
 /**
  * Creative Director — first-pass asset generation (#1818, extended by #1867).
  *
@@ -171,6 +172,11 @@ export async function enqueueFirstPassPortraits(members = [], project = null) {
   const decisions = await Promise.all(list.map(async ({ ingredientId }) => {
     const ingredient = await getIngredient(ingredientId);
     if (!ingredient) return { ingredientId, skip: 'gone' };
+    const refused = await assertCatalogIdentityWritable(ingredientId).then(() => null, error => {
+      if (error?.code?.startsWith('CATALOG_IDENTITY_')) return error.code;
+      throw error;
+    });
+    if (refused) return { ingredientId, skip: refused };
     if (await ingredientHasPortrait(ingredientId)) return { ingredientId, skip: 'has-portrait' };
     const prompt = buildPortraitPrompt(ingredient);
     if (!prompt) return { ingredientId, skip: 'no-prompt' };

@@ -32,6 +32,19 @@ export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS))
 
 const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
 
+// New PR tasks default to PortOS-coordinated review and automatic merge. Stored
+// task records retain their legacy resolution below; app defaults never rewrite
+// a run's pinned policy or authorize GitHub native auto-merge.
+export const DEFAULT_PR_COMPLETION = PR_COMPLETIONS.REVIEW_THEN_MERGE;
+
+export function resolveAppPrCompletion(app, metadata = {}) {
+  if (PR_COMPLETION_SET.has(app?.defaultPrCompletion)) return app.defaultPrCompletion;
+  // An explicitly configured legacy review toggle retains its behavior. Only
+  // genuinely missing settings acquire the new reviewed auto-merge default.
+  if ([true, false, 'true', 'false'].includes(metadata?.reviewLoop)) return resolvePrCompletion(metadata);
+  return DEFAULT_PR_COMPLETION;
+}
+
 /**
  * WHO performs the code review an action triggers — orthogonal to
  * `PR_COMPLETIONS` above, which decides whether a review happens at all.

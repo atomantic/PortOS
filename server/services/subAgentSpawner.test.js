@@ -127,51 +127,6 @@ describe('Worktree & metadata flag helpers', () => {
     });
   });
 
-  // --- openPR worktree decision logic (uses imported isTruthyMeta) ---
-  describe('openPR/useWorktree decision logic', () => {
-    function resolveWorktreeFlags(metadata) {
-      const explicitOpenPR = isTruthyMeta(metadata?.openPR);
-      const explicitWorktree = isTruthyMeta(metadata?.useWorktree) || explicitOpenPR;
-      return { explicitOpenPR, explicitWorktree };
-    }
-
-    it('should not use worktree or PR when neither is set', () => {
-      const result = resolveWorktreeFlags({});
-      expect(result.explicitWorktree).toBe(false);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-
-    it('should use worktree but not PR when only useWorktree is set', () => {
-      const result = resolveWorktreeFlags({ useWorktree: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-
-    it('should imply worktree when openPR is set', () => {
-      const result = resolveWorktreeFlags({ openPR: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should use both when both are set', () => {
-      const result = resolveWorktreeFlags({ useWorktree: true, openPR: true });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should handle string "true" values from form/URL params', () => {
-      const result = resolveWorktreeFlags({ useWorktree: 'true', openPR: 'true' });
-      expect(result.explicitWorktree).toBe(true);
-      expect(result.explicitOpenPR).toBe(true);
-    });
-
-    it('should not use worktree when useWorktree is false and openPR is false', () => {
-      const result = resolveWorktreeFlags({ useWorktree: false, openPR: false });
-      expect(result.explicitWorktree).toBe(false);
-      expect(result.explicitOpenPR).toBe(false);
-    });
-  });
-
   // --- applyAppWorktreeDefault logic (imported from production cos.js) ---
   describe('applyAppWorktreeDefault', () => {
     it('should fill defaults when metadata has no worktree/openPR fields', () => {
@@ -207,18 +162,33 @@ describe('Worktree & metadata flag helpers', () => {
       expect(metadata).toMatchObject({ useWorktree: true, openPR: true, prCompletion: 'leave-open' });
     });
 
-    it('keeps a task-level PR completion pin over the app default', () => {
+    it.each(['merge-on-green', 'leave-open', 'draft'])('keeps a task-level %s pin over the app default', policy => {
       // The Schedule tab's "After opening PR" select writes this pin into the
       // interval's taskMetadata — the more specific choice must win.
-      const metadata = { prCompletion: 'merge-on-green' };
+      const metadata = { prCompletion: policy };
       applyAppWorktreeDefault(metadata, { defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' });
-      expect(metadata.prCompletion).toBe('merge-on-green');
+      expect(metadata.prCompletion).toBe(policy);
     });
 
-    it('does not invent a disposition for a legacy app default', () => {
+    it('pins reviewed auto-merge on a new PR task when the app has no completion setting', () => {
       const metadata = {};
       applyAppWorktreeDefault(metadata, { defaultOpenPR: true });
-      expect(metadata.prCompletion).toBeUndefined();
+      expect(metadata.prCompletion).toBe('review-then-merge');
+    });
+
+    it.each([true, false, 'true', 'false'])('preserves an explicit legacy reviewLoop=%s unless the app pins a policy', reviewLoop => {
+      const metadata = { openPR: true, reviewLoop };
+      applyAppWorktreeDefault(metadata, {});
+      expect(metadata.prCompletion).toBe(reviewLoop === true || reviewLoop === 'true' ? 'review-then-merge' : 'merge-on-green');
+      const overridden = { openPR: true, reviewLoop };
+      applyAppWorktreeDefault(overridden, { defaultPrCompletion: 'draft' });
+      expect(overridden.prCompletion).toBe('draft');
+    });
+
+    it('applies app leave-open to self-managed claim PRs without provisioning another worktree', () => {
+      const metadata = { claimFlow: true, useWorktree: false, openPR: false };
+      applyAppWorktreeDefault(metadata, { defaultPrCompletion: 'leave-open' });
+      expect(metadata).toMatchObject({ prCompletion: 'leave-open', useWorktree: false, openPR: false });
     });
 
     it('should not let defaultUseWorktree:false override explicit openPR:true', () => {

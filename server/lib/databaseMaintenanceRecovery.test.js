@@ -3,7 +3,7 @@ vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
   assertLaunchAllowed() {}, launched() {}, completed() {},
 }) }));
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,10 +22,32 @@ const target = { ...source, mode: 'docker', port: 5561 };
 const COLD_START_PID_TIMEOUT_MS = 30_000;
 // PID budget + the worker's ready wait + the rest of the scenario.
 const WORKER_TEST_TIMEOUT_MS = 70_000;
+// The first real PowerShell launcher in a fresh worker pays a one-time host
+// cold start that the PID deadline would charge to the first timed launch: on
+// a loaded runner it took ~19s just to reach `starting-supervisor` (#11911).
+// Pay it once with its own budget, as detachedSpawn.test.js does (#10551).
+const WINDOWS_WARMUP_PID_TIMEOUT_MS = 60_000;
 let root;
 let data;
 let journal;
 let children;
+
+beforeAll(async () => {
+  if (process.platform !== 'win32') return;
+  const controlDir = mkdtempSync(join(tmpdir(), 'portos-coordinator-warmup-'));
+  try {
+    const handle = await spawnDetached(process.execPath, ['-e', ''], {
+      controlDir, pollMs: 25, pidTimeoutMs: WINDOWS_WARMUP_PID_TIMEOUT_MS,
+    });
+    const { code } = await new Promise((resolve, reject) => {
+      handle.once('close', (exitCode) => resolve({ code: exitCode }));
+      handle.once('error', reject);
+    });
+    expect(code).toBe(0);
+  } finally {
+    rmSync(controlDir, { recursive: true, force: true, maxRetries: 5 });
+  }
+}, WINDOWS_WARMUP_PID_TIMEOUT_MS + 15_000);
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'portos-coordinator-'));

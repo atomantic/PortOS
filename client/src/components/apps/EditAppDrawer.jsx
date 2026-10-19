@@ -714,6 +714,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                 </select>
                 <p className="mt-1 text-xs text-gray-500">
                   {prCompletionOption(formData.defaultPrCompletion)?.description}
+                  {' Automatic merging is managed by PortOS, not GitHub native auto-merge. Per-run choices override this default.'}
                 </p>
               </div>
               <label htmlFor="edit-app-verify-repo-state" className="flex items-center gap-2 cursor-pointer">

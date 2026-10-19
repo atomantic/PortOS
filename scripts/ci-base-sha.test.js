@@ -47,12 +47,13 @@ describe('resolveBaseSha', () => {
 describe('ci.yml checkout depth', () => {
   const jobs = workflowJobs(WORKFLOW);
 
-  it('never asks for full history', () => {
-    // fetch-depth: 0 clones every commit in the repo on a job that only ever
-    // diffs the merge ref against its own first parent.
-    expect(WORKFLOW).not.toMatch(/fetch-depth:\s*0\b/);
-    // Negative control: the assertion above can fail.
-    expect('        with:\n          fetch-depth: 0\n').toMatch(/fetch-depth:\s*0\b/);
+  it('fetches full history only for the shipped prompt guard', () => {
+    expect(Object.keys(jobs).length).toBeGreaterThan(0);
+    expect(jobs['prompt-history']).toBeDefined();
+    expect(jobs['prompt-history']).toMatch(/fetch-depth:\s*0\b/);
+    for (const [id, body] of Object.entries(jobs)) {
+      if (id !== 'prompt-history') expect(body, id).not.toMatch(/fetch-depth:\s*0\b/);
+    }
   });
 
   it('resolves the diff base in every job that consumes it', () => {
@@ -74,6 +75,19 @@ describe('ci.yml checkout depth', () => {
       // and needs history the shallow clone no longer has.
       expect(body, id).not.toMatch(/CI_BASE_SHA:\s*\$\{\{/);
     }
+  });
+
+  it('gives the planner the head commit the attestation tree is read from', () => {
+    // The pregate attestation compares the attested tree with `<head>^{tree}`.
+    // At depth 2 the merge-ref checkout carries the head as HEAD^2, which is
+    // the only reason the planner can resolve it without a wider fetch — so
+    // the planner pins the event head to that parent, and the impact job must
+    // keep passing the head and keep the depth that makes it present.
+    const planner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-test-plan.js'), 'utf8');
+    expect(planner).toContain("['rev-parse', '--verify', '--quiet', 'HEAD^2']");
+    expect(jobs.impact).toContain('CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}');
+    expect(jobs.impact).toMatch(/fetch-depth:\s*2\b/);
+    expect(jobs.impact).not.toMatch(/fetch-depth:\s*0\b/);
   });
 });
 
@@ -122,7 +136,7 @@ describe('ci.yml server node_modules cache', () => {
 
   it('caches the installed tree on every job that installs it', () => {
     expect(installers.map(([id]) => id).sort())
-      .toEqual(['database', 'server', 'windows-server']);
+      .toEqual(['browser', 'database', 'server', 'windows-server']);
 
     for (const [, body] of installers) expect(cacheEntry(body)).toMatch(/id: server-modules\b/);
   });
@@ -238,24 +252,29 @@ describe('ci.yml autofixer workspace install', () => {
   const installers = Object.entries(jobs)
     .filter(([, body]) => body.includes('npm ci --prefix autofixer'));
 
-  it('resolves the autofixer lockfile on the job that runs the server suite', () => {
+  it('resolves the autofixer lockfile and checks the server entry point on the job that always runs and each shard', () => {
     // autofixer/ carries its own package.json, its own tracked lockfile, and
     // its own .npmrc, and `npm run setup` / scripts/ensure-deps.js install it
     // on every user's machine. When no CI job ran `npm ci` against it, a
     // lockfile that stopped resolving shipped green and failed at setup time
     // instead — the static parity checks in dependency-overrides.test.js only
-    // parse the JSON. The server job is the one that already globs
-    // autofixer/*.test.js, so it is where the tree belongs.
+    // parse the JSON. It lived on the server job until a pregate attestation
+    // could skip that job; the impact job is the one that always runs, so the
+    // install and the `node --check` of the entry point moved there.
     // Named, so the loop below is never vacuously green on a deleted step.
+    expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
+    expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node --check server\/index\.js/);
+    // Shards are separate checkouts and run ../autofixer tests, which import
+    // express from autofixer/node_modules, so they install it too.
     expect(jobs.server).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
+    expect(jobs.server).not.toContain('node --check server/index.js');
   });
 
   it('never lets a cache hit skip the resolution it exists to prove', () => {
     // The server tree is cached and its `npm ci` is skipped on a hit, which is
     // fine because that job's job is to run tests. This step's whole purpose is
     // the install, so caching it (or gating it on a cache outcome) would put
-    // the hole straight back. The job-level `server_mode != 'skip'` is what
-    // keeps a docs-only plan from paying for it.
+    // the hole straight back. It is cheap enough to pay on every plan.
     for (const [id, body] of installers) {
       const step = body.match(
         /- name: Install autofixer dependencies\n(?<between>(?: {8}.*\n)*?) {8}run: npm ci --prefix autofixer/,

@@ -55,7 +55,7 @@ import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
 import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
-import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
+import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
@@ -401,7 +401,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // in sync.
   const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
   if (!pythonPath && !runtimeBringsOwnVenv
-    && backend !== VIDEO_GEN_MODE.GROK && backend !== VIDEO_GEN_MODE.FAL && backend !== VIDEO_GEN_MODE.REACTOR) {
+    && !CLOUD_VIDEO_GEN_MODES.includes(backend)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
@@ -693,7 +693,7 @@ async function resolvePreparedParams({
     // plain grok render with the reference clip silently dropped. The client's
     // mode bar snaps grok back to text/image, but reject explicitly so a direct
     // caller gets an error instead of a wrong-looking clip.
-    if (body.backend === VIDEO_GEN_MODE.GROK || body.backend === VIDEO_GEN_MODE.FAL || body.backend === VIDEO_GEN_MODE.REACTOR) {
+    if (CLOUD_VIDEO_GEN_MODES.includes(body.backend)) {
       await cleanupStaged();
       throw new ServerError(
         `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${body.backend} backend.`,

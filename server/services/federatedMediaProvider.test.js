@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 const state = vi.hoisted(() => ({
   settings: {},
+  mossStatus: { readiness: 'ready' },
   peer: null,
   jobs: [],
   nextId: 1,
@@ -46,6 +47,8 @@ vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: {
     return fn();
   },
 } }));
+
+vi.mock('./imageGen/localRuntime.js', () => ({ diagnoseLocalRuntime: vi.fn(async () => state.mossStatus) }));
 
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => state.settings),
@@ -619,6 +622,38 @@ describe('federated media provider — image/video kinds', () => {
     expect(status.capabilities[0]).toMatchObject({
       ready: true, runtimeReady: true, unavailableReason: null,
     });
+  });
+
+  it('advertises native MOSS only after its pinned runtime and weights are ready, without image inputs', async () => {
+    state.settings = { federation: { mediaProvider: imageConfig() } };
+    state.imageModels = [{ id: 'flux-dev', runner: 'moss-swift', repo: 'example/moss', supportsImg2Img: false }];
+    state.mossStatus = { readiness: 'unavailable', remedy: { kind: 'install-moss-swift' } };
+    let status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: false, runtimeReady: false, unavailableReason: 'runtime-unavailable', inputAssets: null });
+    state.mossStatus = { readiness: 'unavailable', remedy: { kind: 'download-moss-weights' } };
+    status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: false, runtimeReady: true, unavailableReason: 'model-unavailable' });
+    state.mossStatus = { readiness: 'ready' };
+    status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: true, runtimeReady: true, inputAssets: null });
+  });
+
+  it('keeps other capabilities available when a native cache probe fails', async () => {
+    const { diagnoseLocalRuntime } = await import('./imageGen/localRuntime.js');
+    diagnoseLocalRuntime.mockRejectedValueOnce(Object.assign(new Error('private cache path'), { code: 'EACCES' }));
+    state.settings = { imageGen: { local: { pythonPath: '/usr/bin/python3' } } };
+    state.imageModels = [
+      { id: 'moss', runner: 'moss-swift', repo: 'example/moss' },
+      { id: 'other', runner: 'flux2', repo: 'example/other' },
+    ];
+    state.cachedRepos = new Set(['example/other']);
+    const providerConfig = { ...imageConfig(), imageModels: state.imageModels.map(({ id }) => ({ engine: 'local', modelId: id })) };
+    const status = await getFederatedMediaProviderStatus(providerConfig, { kinds: ['image'] });
+    expect(status.capabilities).toEqual([
+      expect.objectContaining({ modelId: 'moss', ready: false, unavailableReason: 'runtime-unavailable' }),
+      expect.objectContaining({ modelId: 'other', ready: true }),
+    ]);
+    expect(JSON.stringify(status)).not.toContain('private cache path');
   });
 
   it('does not gate BYOV video runtimes on the legacy mflux python path', async () => {

@@ -77,6 +77,9 @@ export default function PageSkeleton({
   //   sideBlocks        — small blocks under the hero: a nav list at
   //                       `grid-cols-1`, a stat grid at `grid-cols-2`.
   sideCollapsed = false,
+  // Container-query twin of the viewport `lg` split, for pages whose rail
+  // stacks on content width (CoS: `@container/cos` + `cos-wide:`).
+  splitContainer = false,
   splitColsClass = sideCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]',
   sideClassName = 'flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-border p-3 lg:p-4 lg:h-full lg:overflow-hidden',
   sideHero = false,
@@ -127,9 +130,12 @@ export default function PageSkeleton({
       </>
     );
 
-    return (
+    const gridClass = splitContainer ? 'cos-wide:grid' : 'lg:grid';
+    const railOnlyClass = splitContainer ? 'hidden cos-wide:block' : 'hidden lg:block';
+    const stackedOnlyClass = splitContainer ? 'cos-wide:hidden' : 'lg:hidden';
+    const split = (
       <div
-        className={`relative flex flex-col lg:grid ${splitColsClass} overflow-hidden ${fullHeight ? 'h-full' : ''}`}
+        className={`relative flex flex-col ${gridClass} ${splitColsClass} overflow-hidden ${fullHeight ? 'h-full' : ''}`}
         role="status"
         aria-busy="true"
         aria-label={label}
@@ -138,8 +144,8 @@ export default function PageSkeleton({
           <>
             {/* Desktop: the rail is collapsed to a zero-width track, but the
                 track still has to exist or the main pane lands in column 1. */}
-            <div className="hidden lg:block overflow-hidden min-w-0" />
-            <div className={`lg:hidden ${sideClassName}`}>{sideRail}</div>
+            <div className={`${railOnlyClass} overflow-hidden min-w-0`} />
+            <div className={`${stackedOnlyClass} ${sideClassName}`}>{sideRail}</div>
           </>
         ) : (
           <div className={sideClassName}>{sideRail}</div>
@@ -153,6 +159,7 @@ export default function PageSkeleton({
         </div>
       </div>
     );
+    return splitContainer ? <div className="@container/cos h-full">{split}</div> : split;
   }
 
   // Built after the `split` return so a two-pane page doesn't allocate the

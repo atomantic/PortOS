@@ -7,7 +7,7 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/paths.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('code-animation-stages-') }));
 // Inject faults into the selected owned staging tree; all other storage stays real.
-const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false }));
+const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false, beforeStart: null, beforeHistory: null }));
 vi.mock('fs/promises', async importOriginal => {
   const real = await importOriginal();
   return {
@@ -41,6 +41,18 @@ vi.mock('./projectStore.js', async importOriginal => {
   const real = await importOriginal();
   return {
     ...real,
+    startStageRun: async (...args) => {
+      const afterStart = await stagingFaults.beforeStart?.();
+      try {
+        return await real.startStageRun(...args);
+      } finally {
+        afterStart?.();
+      }
+    },
+    interruptStageRuns: async (...args) => {
+      await stagingFaults.beforeHistory?.();
+      return real.interruptStageRuns(...args);
+    },
     commitRepairRevision: async (...args) => {
       if (stagingFaults.publication) {
         throw Object.assign(new Error('Synthetic repair publication failure'), { code: 'PUBLICATION_FAILED' });
@@ -82,7 +94,7 @@ if (ready) await ensureSchema();
 const ids = [];
 afterEach(() => {
   vi.useRealTimers(); stopRun.mockReset(); runPromptThroughProvider.mockReset();
-  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false });
+  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false, beforeStart: null, beforeHistory: null });
 });
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM code_animation_projects WHERE id = ANY($1::text[])', [ids]);
@@ -443,6 +455,85 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(saved.data.verdict.unverified.map(item => item.dimension)).toEqual(expect.arrayContaining(['audio', 'semantic-visual']));
     expect(saved.data.verdict.unverified.map(item => item.dimension)).not.toContain('visual-motion');
     expect(saved.id).toBe(run.id);
+  });
+
+  it('lets exactly one of two concurrent starts run and never marks the winner interrupted', async () => {
+    const { id } = await project();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const blocking = vi.fn(async (directory, options) => {
+      if (!options.times.length) return sample(directory, options);
+      await gate;
+      return sample(directory, options);
+    });
+    // Force the later registration to commit first: the earlier caller must
+    // not use its pre-lock active-ID snapshot to interrupt that live winner.
+    let entered = 0;
+    const laterInserted = Promise.withResolvers();
+    stagingFaults.beforeStart = async () => {
+      if (++entered === 1) {
+        await laterInserted.promise;
+        return;
+      }
+      return laterInserted.resolve;
+    };
+    const results = await Promise.allSettled([
+      startProductionStageRun(id, {}, { sample: blocking, repair: unfreeze, render }),
+      startProductionStageRun(id, {}, { sample: blocking, repair: unfreeze, render }),
+    ]).finally(() => { stagingFaults.beforeStart = null; });
+    const won = results.filter(result => result.status === 'fulfilled');
+    const lost = results.filter(result => result.status === 'rejected');
+    try {
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      expect(lost[0].reason).toMatchObject({ code: 'CODE_ANIMATION_RUN_ACTIVE' });
+      expect(activeStageRunIds()).toEqual([won[0].value.run.id]);
+      const { items } = await getProductionHistory(id, { limit: 10, offset: 0 });
+      expect(items.map(item => item.status)).not.toContain('interrupted');
+    } finally {
+      release();
+      await Promise.all(won.map(result => result.value.done));
+    }
+  });
+
+  it('does not interrupt a newly admitted run when an older history request resumes', async () => {
+    const { id } = await project();
+    const historyEntered = Promise.withResolvers();
+    const historyGate = Promise.withResolvers();
+    const executionGate = Promise.withResolvers();
+    stagingFaults.beforeHistory = async () => {
+      historyEntered.resolve();
+      await historyGate.promise;
+    };
+    const history = getProductionHistory(id, { limit: 10, offset: 0 });
+    await historyEntered.promise;
+    let first;
+    try {
+      first = await startProductionStageRun(id, {}, {
+        sample: async (directory, options) => {
+          if (options.times.length) await executionGate.promise;
+          return sample(directory, options);
+        },
+        repair: unfreeze, render,
+      });
+      historyGate.resolve();
+      expect((await history).items.find(item => item.id === first.run.id)).toMatchObject({ status: 'running' });
+      expect(activeStageRunIds()).toEqual([first.run.id]);
+    } finally {
+      stagingFaults.beforeHistory = null;
+      historyGate.resolve();
+      executionGate.resolve();
+      await Promise.allSettled([history, first?.done]);
+    }
+  });
+
+  it('leaves no live run registered when the start insert fails', async () => {
+    const { id } = await project();
+    stagingFaults.beforeStart = async () => { throw new Error('Synthetic insert failure'); };
+    await expect(startProductionStageRun(id, {}, { sample, repair: unfreeze, render }))
+      .rejects.toThrow('Synthetic insert failure')
+      .finally(() => { stagingFaults.beforeStart = null; });
+    expect(activeStageRunIds()).toEqual([]);
   });
 
   it('keeps one live run per project, cancels owned work, retains accepted artifacts, and resumes without re-measuring the style frame', async () => {

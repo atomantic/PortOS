@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { useSocket } from '../hooks/useSocket';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useValidTab } from '../hooks/useValidTab';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -35,6 +36,11 @@ import StatCard from '../components/cos/StatCard';
 import StatusBubble, { StatusPill, isGenericStatusMessage } from '../components/cos/StatusBubble';
 import EventLog from '../components/cos/EventLog';
 import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
+// cos:subscribe task-list modes (server/services/socket.js registerSubscriber):
+// the page fetches its own lists on invalidation; everyone else gets full lists.
+const COS_PAGE_SUBSCRIBE = { taskLists: 'invalidate' };
+const COS_PAGE_RELEASE = { taskLists: 'full' };
+
 const AgentsTab = lazy(() => import('../components/cos/tabs/AgentsTab'));
 
 // Task editing is not needed to view agents, so keep its forms and drag/drop
@@ -124,6 +130,11 @@ export default function ChiefOfStaff() {
   const { tab } = useParams();
   const [searchParams] = useSearchParams();
   const selectedTask = searchParams.get('task') || undefined;
+  // The selection is read through a ref by the page-level reads and the socket
+  // handlers, so changing it changes none of their identities: a click on a
+  // task must not refetch the page or re-register fourteen listeners (#12032).
+  const selectedTaskRef = useRef(selectedTask);
+  selectedTaskRef.current = selectedTask;
   const navigate = useNavigate();
   const activeTab = useValidTab(TABS, 'tasks');
   const { isFeatureEnabled } = useInstanceFeatures();
@@ -135,7 +146,8 @@ export default function ChiefOfStaff() {
   const needsApps = needsProviders || activeTab === 'memory';
   const routeRef = useRef(activeTab);
   routeRef.current = activeTab;
-  const queryKey = `${activeTab}:${selectedTask || ''}`;
+  // Page-level reads are keyed on the tab alone; the selection is not a page.
+  const queryKey = activeTab;
   const queryRef = useRef(queryKey);
   queryRef.current = queryKey;
   const inFlight = useRef(null);
@@ -144,6 +156,8 @@ export default function ChiefOfStaff() {
 
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const [agents, setAgents] = useState([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [agentsError, setAgentsError] = useState(null);
@@ -226,6 +240,10 @@ export default function ChiefOfStaff() {
   // overwrite a fresher optimistic mutation or fetchQueue result.
   const queueSeqRef = useRef(0);
   const socket = useSocket();
+  // The cos:* room, refcounted with the always-mounted Layout consumers, in the
+  // page's lighter "invalidate" task-list mode while it is open; the shared
+  // socket goes back to full task lists when it unmounts.
+  useSocketSubscription('cos', { payload: COS_PAGE_SUBSCRIBE, releasePayload: COS_PAGE_RELEASE });
 
   // Verified animated records for the avatar selector and rigged playback (#5894).
   const { records: riggedAvatars } = useAvatarCapabilities();
@@ -355,7 +373,7 @@ export default function ChiefOfStaff() {
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
         api.getCosStatus().catch(() => null),
-        needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
+        needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
         readAgents(controller),
       ]);
       const healthObservation = healthObservationRef.current;
@@ -439,7 +457,7 @@ export default function ChiefOfStaff() {
       if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
+  }, [activeTab, queryKey, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -458,7 +476,7 @@ export default function ChiefOfStaff() {
       : Promise.resolve(null);
     request.promise = Promise.all([
       api.getCosStatus().catch(() => null),
-      needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : null,
+      needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
       readAgents(controller),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queryRef.current !== queryKey || queueSeqRef.current !== queueSeq) return;
@@ -471,7 +489,7 @@ export default function ChiefOfStaff() {
       if (request.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshQueueData();
     });
     return request.promise;
-  }, [queryKey, needsTasks, selectedTask, readAgents]);
+  }, [queryKey, needsTasks, readAgents]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
   // task invalidations must never trigger a health-check/socket feedback loop.
@@ -490,23 +508,35 @@ export default function ChiefOfStaff() {
     return () => { inFlight.current?.controller.abort(); queuePending.current?.controller.abort(); };
   }, [fetchData]);
 
+  // The selection-dependent read. The mount read already carries `selected`,
+  // so a deep link costs nothing extra; a later selection that is not in the
+  // loaded lists (a historical task opened from a summary link) costs exactly
+  // one record read, merged into the list it belongs to.
+  useEffect(() => {
+    if (!selectedTask || !needsTasks) return undefined;
+    const { user, cos } = tasksRef.current;
+    if (!user && !cos) return undefined;
+    const loaded = [...(user?.tasks || []), ...(cos?.tasks || [])];
+    if (loaded.some(task => task.id === selectedTask)) return undefined;
+    let active = true;
+    api.getCosTask(selectedTask, { silent: true }).then((found) => {
+      if (!active || !found?.task) return;
+      const key = found.source === 'internal' ? 'cos' : 'user';
+      setTasks(prev => {
+        const list = prev[key];
+        if (!list) return prev;
+        return { ...prev, [key]: { ...list, tasks: [...(list.tasks || []).filter(task => task.id !== found.task.id), found.task] } };
+      });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [selectedTask, needsTasks]);
+
 
   useEffect(() => {
     if (!socket) return;
 
-    // Subscribe when socket is connected (or already connected)
-    const subscribe = () => {
-      socket.emit('cos:subscribe', { taskLists: 'invalidate' });
-    };
-
-    // Subscribe now if already connected, AND always re-subscribe on every
-    // (re)connect — the server rebuilds an empty per-socket subscriber Set on
-    // reconnect, so registering the listener only in the else branch left
-    // cos:* events dead after a reconnect when the socket was already connected
-    // at mount. Cleanup below offs this listener.
-    if (socket.connected) subscribe();
+    // Reconnect recovery; the subscription itself lives in useSocketSubscription above.
     const reconnect = () => {
-      subscribe();
       appsReadRef.current = null;
       fetchData();
       setCompletedRevision(value => value + 1);
@@ -527,7 +557,7 @@ export default function ChiefOfStaff() {
 
     const handleTasksUserChanged = (data) => {
       if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, user: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTask), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
+      if (data?.tasks) setTasks(prev => ({ ...prev, user: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
       else refreshQueue();
     };
     socket.on('cos:tasks:user:changed', handleTasksUserChanged);
@@ -538,7 +568,7 @@ export default function ChiefOfStaff() {
     // around. Same full-list payload as the user event, so swap it in directly.
     const handleTasksCosChanged = (data) => {
       if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, cos: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTask), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
+      if (data?.tasks) setTasks(prev => ({ ...prev, cos: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
       else refreshQueue();
     };
     socket.on('cos:tasks:cos:changed', handleTasksCosChanged);
@@ -674,12 +704,7 @@ export default function ChiefOfStaff() {
     socket.on('cos:status:resumed', handleConfigChanged);
     socket.on('apps:changed', handleAppsChanged);
 
-    // Don't emit cos:unsubscribe — the cos:* namespace is shared with
-    // useOpenWorldData (OpenWorld), useAgentFeedbackToast, and other always-mounted
-    // consumers; the server's per-socket subscriber Set has no ref count.
-    // Unsubscribing here would yank events out from under them.
     return () => {
-      socket.emit('cos:subscribe', { taskLists: 'full' });
       socket.off('connect', reconnect);
       socket.off('providers:changed', handleProvidersChanged);
       socket.off('cos:config:changed', handleConfigChanged);
@@ -700,7 +725,7 @@ export default function ChiefOfStaff() {
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
-  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, selectedTask, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await api.startCos({ silent: true }).catch(err => {
@@ -1114,7 +1139,9 @@ export default function ChiefOfStaff() {
         padded
         bodyClassName="p-3 lg:p-4"
         sideCollapsed={desktopPanelCollapsed}
-        sideClassName="flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 lg:px-4 lg:py-6 lg:h-full lg:overflow-hidden"
+        splitContainer
+        splitColsClass={desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'}
+        sideClassName="flex flex-col gap-3 border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 cos-wide:px-4 cos-wide:py-6 cos-wide:h-full cos-wide:overflow-hidden"
         sideHero
         sideBlocks={4}
         sideBlockColsClass="grid-cols-2"
@@ -1136,19 +1163,20 @@ export default function ChiefOfStaff() {
   );
 
   return (
-    <div className={`relative flex flex-col lg:grid ${desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
+    <div className="@container/cos h-full">
+    <div className={`relative flex flex-col cos-wide:grid ${desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
       {/* Agent Panel */}
       {!statusKnown ? (
-        <div className="min-w-0 overflow-hidden border-b lg:border-r border-port-border">
-          <div className={desktopPanelCollapsed ? 'lg:hidden' : ''}>{statusPlaceholder}</div>
+        <div className="min-w-0 overflow-hidden border-b cos-wide:border-r border-port-border">
+          <div className={desktopPanelCollapsed ? 'cos-wide:hidden' : ''}>{statusPlaceholder}</div>
         </div>
       ) : avatarStyle === 'ascii' ? (
         <>
           {/* Desktop: collapsed placeholder or full panel */}
           {desktopPanelCollapsed ? (
-            <div className="hidden lg:block overflow-hidden min-w-0" />
+            <div className="hidden cos-wide:block overflow-hidden min-w-0" />
           ) : (
-            <div className="hidden lg:block relative min-w-0 w-full max-w-full lg:w-[320px] lg:max-w-[320px]">
+            <div className="hidden cos-wide:block relative min-w-0 w-full max-w-full cos-wide:w-[320px] cos-wide:max-w-[320px]">
               <button
                 onClick={toggleDesktopPanel}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 z-10 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
@@ -1170,7 +1198,7 @@ export default function ChiefOfStaff() {
             </div>
           )}
           {/* Keep the mobile queue reachable while retaining terminal identity. */}
-          <div className="lg:hidden">
+          <div className="cos-wide:hidden">
             <button onClick={toggleMobilePanel}
               className="flex items-center justify-between gap-2 w-full px-3 py-2 min-h-[44px]"
               aria-expanded={!agentPanelCollapsed} aria-controls="cos-terminal-mobile">
@@ -1194,9 +1222,9 @@ export default function ChiefOfStaff() {
       ) : desktopPanelCollapsed ? (
         /* Collapsed SVG - desktop placeholder, mobile shows compact header */
         <>
-          <div className="hidden lg:block overflow-hidden min-w-0" />
+          <div className="hidden cos-wide:block overflow-hidden min-w-0" />
           {/* Mobile: still show the compact header */}
-          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
+          <div className="cos-wide:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
             <button
               onClick={toggleMobilePanel}
               className="flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
@@ -1236,11 +1264,11 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 lg:w-[320px] lg:max-w-[320px] overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 cos-wide:w-[320px] cos-wide:max-w-[320px] overflow-x-hidden cos-wide:h-full cos-wide:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
-            className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+            className="min-h-[44px] min-w-[44px] items-center justify-center hidden cos-wide:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
             aria-label="Collapse CoS panel"
             title="Collapse CoS panel"
           >
@@ -1250,7 +1278,7 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={toggleMobilePanel}
-            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
+            className="cos-wide:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
@@ -1277,7 +1305,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 w-full max-w-full relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} cos-wide:flex min-w-0 w-full max-w-full relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] cos-wide:min-h-dvh-cap cos-wide:[--dvh-cap:460px] cos-wide:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
@@ -1297,7 +1325,7 @@ export default function ChiefOfStaff() {
               // + event log without clipping; without this cap the inset-0 canvas
               // grows with the panel on desktop, dragging the framed avatar down
               // into the stats grid below it.
-              <div className="absolute inset-0 lg:bottom-auto lg:h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+              <div className="absolute inset-0 cos-wide:bottom-auto cos-wide:h-dvh-cap cos-wide:[--dvh-cap:460px] cos-wide:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 cos-wide:-translate-y-28 xl:-translate-y-36">
                 {renderAvatar(true)}
               </div>
             )}
@@ -1308,13 +1336,13 @@ export default function ChiefOfStaff() {
                 hasCanvasAvatar
                   ? 'absolute inset-y-0 left-0 w-[46%] p-2 sm:p-3'
                   : 'relative flex-1 w-full p-2'
-              } min-w-0 lg:relative lg:inset-auto lg:w-full lg:max-w-full lg:flex-none lg:min-h-full lg:px-4 lg:py-6 flex flex-col items-center z-10`}
+              } min-w-0 cos-wide:relative cos-wide:inset-auto cos-wide:w-full cos-wide:max-w-full cos-wide:flex-none cos-wide:min-h-full cos-wide:px-4 cos-wide:py-6 flex flex-col items-center z-10`}
             >
-              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
+              <div className="hidden cos-wide:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
               <h1
-                className="hidden lg:block text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold mb-2 lg:mb-4"
+                className="hidden cos-wide:block text-lg sm:text-xl cos-wide:text-2xl xl:text-3xl font-bold mb-2 cos-wide:mb-4"
                 style={{
                   background: COS_TITLE_GRADIENT,
                   WebkitBackgroundClip: 'text',
@@ -1327,28 +1355,28 @@ export default function ChiefOfStaff() {
 
               {isGenericStatusMessage(statusMessage) && <StatusPill state={agentState} message={statusMessage} />}
               {!hasCanvasAvatar && renderAvatar()}
-              {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] lg:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
-              <div className="hidden lg:block">
+              {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] cos-wide:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
+              <div className="hidden cos-wide:block">
                 <StateLabel state={agentState} />
               </div>
-              <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
+              <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 cos-wide:mt-0' : ''} hidden sm:block`}>
                 {!isGenericStatusMessage(statusMessage) && <StatusBubble message={statusMessage} />}
               </div>
 
               {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
-              <div className="hidden lg:grid grid-cols-2 gap-1.5 w-full min-w-0 mt-3 relative z-10">
+              <div className="hidden cos-wide:grid grid-cols-2 gap-1.5 w-full min-w-0 mt-3 relative z-10">
                 {statsGridCards}
               </div>
 
               {status?.running && (
-                <div className="hidden lg:flex flex-1 min-h-0 w-full min-w-0 flex-col">
+                <div className="hidden cos-wide:flex flex-1 min-h-0 w-full min-w-0 flex-col">
                   <EventLog logs={eventLogs} />
                 </div>
               )}
             </div>
 
             {/* Mobile Stats Grid - shows core stats in compact 2-column layout */}
-            <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10`}>
+            <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 cos-wide:hidden relative z-10`}>
               {statsGridCards}
             </div>
           </div>
@@ -1360,7 +1388,7 @@ export default function ChiefOfStaff() {
           grow this region and scroll here as before. */}
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {desktopPanelCollapsed && (
-          <div className="hidden lg:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
+          <div className="hidden cos-wide:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
             <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS
@@ -1528,6 +1556,7 @@ export default function ChiefOfStaff() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

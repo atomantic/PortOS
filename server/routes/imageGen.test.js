@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { resolveImageCleaners } from '../lib/imageCleanDefaults.js';
@@ -185,7 +186,7 @@ vi.mock('../lib/pythonSetup.js', () => ({
 
 // Stat the python binary to key the cache. Override per-test for mtime
 // changes; default to a stable mtime so the cache HIT path works.
-const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000 }));
+const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000, isFile: () => false }));
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, stat: (path) => mockStat(path) };
@@ -496,6 +497,15 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(400);
     });
 
+    it('rejects a NUL character in the prompt or negative prompt with 400 (#11862)', async () => {
+      imageGen.generateImage.mockClear();
+      for (const body of [{ prompt: 'a\u0000b' }, { prompt: 'ok', negativePrompt: 'x\u0000' }]) {
+        const response = await request(app).post('/api/image-gen/generate').send(body);
+        expect(response.status).toBe(400);
+      }
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
     it('should pass optional parameters', async () => {
       imageGen.generateImage.mockResolvedValue({ generationId: 'gen-002', filename: 'test2.png', path: '/data/images/test2.png' });
 
@@ -767,6 +777,13 @@ describe('Image Gen Routes', () => {
     // the page unmounts. The route collapses the raw fields into the tag and
     // drops them from params.
     describe('catalogAttach tag', () => {
+      it('refuses a retained target before provider preparation or enqueue', async () => {
+        const { assertCatalogIdentityWritable } = await import('../services/catalogDB/identityAccess.js');
+        assertCatalogIdentityWritable.mockRejectedValueOnce(Object.assign(new Error('Retained original'), { status: 409, code: 'CATALOG_IDENTITY_RETAINED' }));
+        const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'example', catalogIngredientId: 'retained-original' });
+        expect(response.status).toBe(409);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
       it('folds catalogIngredientId into a catalogAttach job tag and drops the raw field', async () => {
         getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
         mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat', position: 1, status: 'queued' });

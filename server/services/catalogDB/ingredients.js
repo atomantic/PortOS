@@ -25,8 +25,11 @@ import {
   rowToRevision,
   HAS_LIVE_HOMING_REF,
   HAS_ANY_HOMING_REF,
+  HOMING_REF_KINDS_SQL,
+  liveHomingTargetSql,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
+import { assertCatalogIdentityWritable } from './identityAccess.js';
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
@@ -97,10 +100,17 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
 export async function getIngredient(id, { client } = {}) {
   const exec = client ? client.query.bind(client) : query;
   const result = await exec(
-    `SELECT * FROM catalog_ingredients WHERE id = $1 AND deleted = false`,
+    `SELECT * FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false`,
     [id],
   );
   return rowToIngredient(result.rows[0]);
+}
+
+// All stable IDs belonging to a local consolidated identity. The source row
+// stays live for peers; callers can match embedded IDs without rewriting canon.
+export async function getIngredientIdentityIds(id) {
+  const { rows } = await query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [id]);
+  return rows.map(row => row.id);
 }
 
 /**
@@ -111,11 +121,14 @@ export async function getIngredient(id, { client } = {}) {
  * and happens to be stale. Selects two columns, not `*`: the canon→catalog
  * projection needs existence + freshness, never the jsonb payload.
  */
-export async function getIngredientTimestamps(ingredientIds) {
+export async function getIngredientTimestamps(ingredientIds, { excludeAliases = false } = {}) {
   const ids = [...new Set((ingredientIds || []).filter(Boolean))];
   if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT id, updated_at FROM catalog_ingredients WHERE id = ANY($1) AND deleted = false`,
+    `SELECT requested.id, i.updated_at FROM unnest($1::text[]) AS requested(id)
+     JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false${excludeAliases ? ` AND requested.id = i.id AND NOT EXISTS (SELECT 1 FROM catalog_identity_operations o
+       WHERE (o.source_id = i.id OR o.survivor_id = i.id) AND
+       (o.state IN ('prepared', 'recovery_prepared') OR (o.state = 'committed' AND o.local_owner <> o.survivor_owner)))` : ''}`,
     [ids],
   );
   return new Map(result.rows.map((row) => [row.id, row.updated_at.toISOString()]));
@@ -133,6 +146,7 @@ export async function updateIngredient(id, patch = {}, { client, source = 'user'
   if (touchedContent && !client) {
     return withTransaction((tx) => updateIngredient(id, patch, { client: tx, source, actor }));
   }
+  id = await assertCatalogIdentityWritable(id, { client });
   const exec = client ? client.query.bind(client) : query;
   const fields = [];
   const params = [];
@@ -188,7 +202,7 @@ export async function updateIngredient(id, patch = {}, { client, source = 'user'
   // route 404s. Revival of soft-deleted rows is intentionally separate via
   // `reviveDeletedIngredient`, so this filter doesn't conflict with that path.
   const result = await exec(
-    `UPDATE catalog_ingredients SET ${fields.join(', ')} WHERE id = $${idx} AND deleted = false RETURNING *`,
+    `UPDATE catalog_ingredients SET ${fields.join(', ')} WHERE id = catalog_resolve_ingredient_id($${idx}) AND deleted = false RETURNING *`,
     params,
   );
   const updated = rowToIngredient(result.rows[0]);
@@ -246,8 +260,8 @@ export async function recordIngredientRevision(ingredient, { source = 'user', ac
 
 export async function listIngredientRevisions(ingredientId, { limit = 50, offset = 0 } = {}) {
   const result = await query(
-    `SELECT * FROM catalog_ingredient_revisions
-      WHERE ingredient_id = $1
+    `SELECT * FROM catalog_identity_read_revisions
+      WHERE ingredient_id = ANY(catalog_identity_member_ids($1))
       ORDER BY created_at DESC, id DESC
       LIMIT $2 OFFSET $3`,
     [ingredientId, Math.min(Math.max(limit, 1), 200), Math.max(offset, 0)],
@@ -257,13 +271,14 @@ export async function listIngredientRevisions(ingredientId, { limit = 50, offset
 
 export async function getIngredientRevision(revisionId) {
   const result = await query(
-    `SELECT * FROM catalog_ingredient_revisions WHERE id = $1`,
+    `SELECT * FROM catalog_identity_read_revisions WHERE id = $1`,
     [revisionId],
   );
   return rowToRevision(result.rows[0]);
 }
 
 export async function deleteIngredient(id, { hard = false } = {}) {
+  id = await assertCatalogIdentityWritable(id);
   if (hard) {
     await query(`DELETE FROM catalog_ingredients WHERE id = $1`, [id]);
   } else {
@@ -286,6 +301,7 @@ export async function deleteIngredient(id, { hard = false } = {}) {
 export async function reviveDeletedIngredient(id, { type, name, payload = {}, tags = [] } = {}) {
   if (!type || !getActiveCatalogType(type)) throw new Error(`reviveDeletedIngredient: invalid type ${type}`);
   if (!name || !String(name).trim()) throw new Error('reviveDeletedIngredient: name required');
+  id = await assertCatalogIdentityWritable(id);
   // Re-stamp the payload schemaVersion on revive — the revived row is being
   // rewritten with a fresh payload, so it gets this install's current marker
   // (mirrors createIngredient).
@@ -313,19 +329,33 @@ const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, o
 // Correlated subquery that yields the card-thumbnail media key for each row:
 // the live portrait when set, otherwise the most recent live reference image.
 // Non-image media kinds (audio/video/document) are excluded so a card never
-// points an <img> at an unrenderable key. Used only by listIngredients' light
-// path (see the note there).
+// points an <img> at an unrenderable key. Working images filed with a role —
+// reference sheets (`sheet:*`), looks (`look:*`) and plates — never become the
+// cover. Used only by listIngredients' light path (see the note there).
 const THUMBNAIL_KEY_SUBQUERY = `(
-    SELECT m.media_key FROM catalog_ingredient_media m
-     WHERE m.ingredient_id = catalog_ingredients.id
+    SELECT m.media_key FROM catalog_identity_read_media m
+     WHERE catalog_canonical_ingredient_id(m.ingredient_id) = catalog_ingredients.id
        AND m.deleted = false
        AND m.kind IN ('portrait', 'reference')
+       AND (m.role IS NULL OR NOT (m.role LIKE 'sheet:%' OR m.role LIKE 'look:%' OR m.role LIKE 'archive:%' OR m.role = 'plate'))
      ORDER BY (m.kind = 'portrait') DESC, m.created_at DESC
      LIMIT 1
   ) AS thumbnail_key`;
 
+// Per-kind count of the distinct records each row is linked to ({ universe: 1,
+// series: 2 }), for the "used in" line on library cards. Same light-path scope
+// as the thumbnail subquery.
+const REF_USAGE_SUBQUERY = `(
+    SELECT jsonb_object_agg(u.ref_kind, u.n) FROM (
+      SELECT r.ref_kind, COUNT(DISTINCT r.ref_id) AS n FROM catalog_identity_read_refs r
+       WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
+         AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
+       GROUP BY r.ref_kind
+    ) u
+  ) AS ref_usage`;
+
 export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
-  const conditions = ['deleted = false'];
+  const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)'];
   const params = [];
   let idx = 1;
   // Batch-fetch by id (Story Builder catalog→series linking, #1761). When
@@ -334,7 +364,7 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   const byIds = Array.isArray(ids) && ids.length > 0;
   let qIdx = null;
   if (byIds) {
-    conditions.push(`id = ANY($${idx++})`);
+    conditions.push(`id IN (SELECT catalog_canonical_ingredient_id(requested) FROM unnest($${idx++}::text[]) requested)`);
     params.push(ids);
   } else {
     if (type) {
@@ -361,15 +391,15 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
       // ingredient must still land in its parent universe). $refId is referenced
       // twice via one placeholder.
       const refIdx = idx++;
-      conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_refs r
-        WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+      conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_refs r
+        WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
           AND ((r.ref_kind = 'universe' AND r.ref_id = $${refIdx})
             OR (r.ref_kind = 'series' AND r.ref_id IN (
                   SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))))`);
       params.push(refId);
     } else if (refKind && refId) {
-      conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_refs r
-        WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+      conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_refs r
+        WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
           AND r.ref_kind = $${idx++} AND r.ref_id = $${idx++})`);
       params.push(refKind, refId);
     } else if (unlinked) {
@@ -386,8 +416,8 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   // so it composes with any of them (unlike unlinked/orphaned/refKind, which
   // are mutually exclusive album views enforced at the schema level).
   if (scrapId) {
-    conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_sources cis
-      WHERE cis.ingredient_id = catalog_ingredients.id AND cis.scrap_id = $${idx++})`);
+    conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_sources cis
+      WHERE catalog_canonical_ingredient_id(cis.ingredient_id) = catalog_ingredients.id AND cis.scrap_id = $${idx++})`);
     params.push(scrapId);
   }
   if (embeddingMissing) {
@@ -415,13 +445,13 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   // don't pay for the correlated subquery. The field rides ALONGSIDE
   // rowToIngredient's shape (attached below), so the sync/revision payloads
   // that share rowToIngredient stay untouched.
-  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}`;
+  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}, ${REF_USAGE_SUBQUERY}`;
   const result = await query(
     `SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
     params,
   );
   return {
-    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null })),
+    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null, usage: row.ref_usage ?? {} })),
     nextOffset: offset + result.rows.length,
   };
 }
@@ -432,7 +462,7 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
  */
 export async function searchIngredientsByEmbedding(vector, { type, limit = 20, threshold = 0.5 } = {}) {
   if (!vector) return [];
-  const conditions = ['deleted = false', 'embedding IS NOT NULL'];
+  const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', 'embedding IS NOT NULL'];
   const params = [arrayToPgvector(vector), threshold, limit];
   let idx = 4;
   if (type) {
@@ -451,9 +481,29 @@ export async function searchIngredientsByEmbedding(vector, { type, limit = 20, t
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), score: parseFloat(row.score) }));
 }
 
+/**
+ * Live records of `type` whose name or one of whose aliases equals one of
+ * `names` (trimmed, case-insensitive), oldest first. Used to link to an
+ * existing record instead of creating a same-named duplicate.
+ */
+export async function findIngredientsByName(type, names) {
+  const keys = [...new Set((names || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
+  if (!type || !keys.length) return [];
+  const result = await query(
+    `SELECT * FROM catalog_ingredients
+       WHERE deleted = false AND id = catalog_canonical_ingredient_id(id) AND type = $1
+         AND (lower(btrim(name)) = ANY($2)
+           OR (jsonb_typeof(payload->'aliases') = 'array'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE lower(btrim(a)) = ANY($2))))
+       ORDER BY created_at, id`,
+    [type, keys],
+  );
+  return result.rows.map(rowToIngredient);
+}
+
 export async function searchIngredientsByText(q, { type, limit = 20 } = {}) {
   if (!q) return [];
-  const conditions = ['deleted = false', `search_tsv @@ websearch_to_tsquery('english', $1)`];
+  const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', `search_tsv @@ websearch_to_tsquery('english', $1)`];
   const params = [q, limit];
   let idx = 3;
   if (type) {
@@ -484,7 +534,7 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
 
   let ftsRows = [];
   if (queryText) {
-    const conds = ['deleted = false', `search_tsv @@ websearch_to_tsquery('english', $1)`];
+    const conds = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', `search_tsv @@ websearch_to_tsquery('english', $1)`];
     const params = [queryText, fetchLimit];
     let idx = 3;
     if (type) { conds.push(`type = $${idx++}`); params.push(type); }
@@ -499,7 +549,7 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
 
   let vecRows = [];
   if (queryEmbedding) {
-    const conds = ['deleted = false', 'embedding IS NOT NULL', '1 - (embedding <=> $1) >= $2'];
+    const conds = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', 'embedding IS NOT NULL', '1 - (embedding <=> $1) >= $2'];
     const params = [arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit];
     let idx = 4;
     if (type) { conds.push(`type = $${idx++}`); params.push(type); }
@@ -537,7 +587,8 @@ export async function resolveIngredientsByIds(ids) {
     .filter((id) => typeof id === 'string' && id.trim())
     .map((id) => id.trim()))];
   if (list.length === 0) return [];
-  const { items } = await listIngredients({ ids: list, limit: list.length });
-  const byId = new Map(items.map((ing) => [ing.id, ing]));
-  return list.map((id) => byId.get(id)).filter(Boolean);
+  const { rows } = await query(`SELECT i.*, requested.ordinality FROM unnest($1::text[]) WITH ORDINALITY requested(id, ordinality)
+    JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false
+    ORDER BY requested.ordinality`, [list]);
+  return [...new Map(rows.map(row => [row.id, rowToIngredient(row)])).values()];
 }

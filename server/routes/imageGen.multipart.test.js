@@ -68,7 +68,6 @@ vi.mock('../services/imageGen/index.js', async () => {
 // reference-image gate. Default: `mode: 'local'` with a fake pythonPath.
 let mockedSettings = { imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } };
 vi.mock('../services/settings.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   getSettings: vi.fn(async () => mockedSettings),
   settingsEvents: { on: () => {}, emit: () => {} },
 }));

@@ -1,93 +1,201 @@
 #!/usr/bin/env node
-import { readdir, readFile, mkdir, rename } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
-import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
+import { readFile, readdir, mkdir, rm, stat, writeFile, rename } from 'fs/promises';
+import { basename, join, dirname } from 'path';
+import { pathToFileURL } from 'url';
+import { randomUUID } from 'crypto';
+import { isWorktreeRoot } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import {
+  DEFAULT_ROOT_DIR,
+  DEFAULT_MIGRATIONS_DIR,
+  adoptLegacyAppliedList,
+  appliedFilePath,
+  listPendingMigrations,
+  readAppliedList,
+  scanMigrationFiles,
+} from './lib/migrationLedger.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
-// so a process booted from inside a CoS agent git worktree still resolves to
-// the real install (#1947). resolveInstallRoot refuses the pin when the derived
-// path is itself a worktree, so a worktree launch falls through to its own path
-// and the isWorktreeRoot backstop below skips. Falls back to the derived path
-// when the env var is unset.
-const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..'));
-const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'migrations');
+// ---- purge-class probe (#12049) ----
+//
+// The empty-ledger guard below has to know which PENDING migrations are purge
+// migrations before any of them runs. Importing each module to read its
+// `purge` export loaded every pending migration's import graph up front — on a
+// fresh install that is every migration, dozens of which pull in live server
+// services before the toolkit has booted. The marker is read from the source
+// text instead: a `purge: true` property at the two-space indentation of the
+// default export's own properties (how every purge migration writes it), or
+// an `export const purge = true`. Comments are stripped first so the rationale
+// block every purge migration carries cannot match. A `purge: true` nested
+// deeper inside a data literal is data, not the marker.
+// `migrationConventions.guard.test.js` checks every shipped migration's module
+// against this probe so the two cannot drift.
+const stripComments = (source) => source
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+const PURGE_PROPERTY = /^ {2}purge\s*:\s*true\s*,?\s*$/m;
+const PURGE_EXPORT = /^export\s+const\s+purge\s*=\s*true\b/m;
 
-const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
+/** Whether a migration's source text opts into the runner's purge class. */
+export const sourceDeclaresPurge = (source) => {
+  const code = stripComments(source);
+  return PURGE_PROPERTY.test(code) || PURGE_EXPORT.test(code);
+};
+
+// ---- runner lock (#12046) ----
+//
+// The ledger is read-then-written by every runner: the booting server
+// (bootstrap.js) and the documented manual `npm run migrations` both call
+// runMigrations, and a PM2 restart can start a second server mid-run. Two
+// runners that both read the ledger before either persists it each apply the
+// same non-idempotent migration. A `mkdir` is atomic on every filesystem, so
+// the lock is a directory; `owner.json` inside it carries the holder's pid and
+// start time so a runner that died (SIGKILL, power loss) can be recognised and
+// its lock reclaimed instead of blocking every later boot.
+const lockDirPath = (rootDir) => join(rootDir, 'data', 'migrations.lock');
+const LOCK_OWNER_FILE = 'owner.json';
+const LOCK_STALE_MS = 30 * 60 * 1000;
+const LOCK_WAIT_MS = 60 * 1000;
+const LOCK_POLL_MS = 250;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Signal 0 probes existence without delivering anything. EPERM means the pid
+// exists but belongs to another user, which still counts as alive.
+const pidAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
+};
+
+const readLockOwner = (lockDir) => readFile(join(lockDir, LOCK_OWNER_FILE), 'utf-8')
+  .then((raw) => {
+    // A reader can land between the holder's mkdir and a complete owner write;
+    // an unparseable file means "owner unknown", same as a missing one.
+    try { return JSON.parse(raw); } catch { return null; }
+  }, (err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  })
+  .then((owner) => (owner && typeof owner === 'object' ? owner : null));
 
 /**
- * Scan for migration files (*.js, sorted by filename). Co-located vitest
- * files (*.test.js) are excluded — they don't export `up()` and would
- * throw the runner if imported as migrations. The vitest config picks
- * them up via its own scripts test glob in server/vitest.config.js.
- * `_`-prefixed files (e.g. `_lib.js`, `_testHelpers.js`) are shared
- * helpers consumed by migration files and their tests — they're never
- * migrations themselves.
+ * Why a held lock can be reclaimed, or null while its holder may still be
+ * running. The holder's own pid is never judged dead (an in-process second
+ * caller must wait, not steal), and a lock with no readable owner yet — the
+ * window between the holder's mkdir and its owner.json write — is judged by
+ * the directory's age alone.
  */
-async function scanMigrationFiles(migrationsDir) {
-  return (await readdir(migrationsDir))
-    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js') && !f.startsWith('_'))
-    .sort();
+async function lockStaleReason(lockDir, unknownStartedAt) {
+  const owner = await readLockOwner(lockDir);
+  const pid = Number.isInteger(owner?.pid) && owner.pid > 0 ? owner.pid : null;
+  // Age cannot revoke a live runner: large upgrades can outlast the timeout.
+  if (pid !== null) return pidAlive(pid) ? null : `holder pid ${pid} is no longer running`;
+  const startedAt = Number.isFinite(owner?.startedAt)
+    ? owner.startedAt
+    : (unknownStartedAt ?? await stat(lockDir).then((s) => s.mtimeMs, () => null));
+  if (startedAt !== null && Date.now() - startedAt > LOCK_STALE_MS) return `held for over ${LOCK_STALE_MS / 60000} minutes`;
+  return null;
 }
 
-/**
- * Read the applied-migrations list. A missing file defaults to [].
- *
- * When `repair` is true and the file is corrupt (mid-write truncation, bad
- * JSON, wrong shape), rename it aside and rebuild the ledger from scratch so
- * corruption does not brick future boots. Non-ENOENT read errors
- * propagate in repair mode: treating an unreadable ledger as empty could rerun
- * migrations against live data. When `repair` is false (read-only callers like
- * listPendingMigrations), read errors and corrupt content are treated as `[]`
- * WITHOUT mutating anything on disk.
- */
-async function readAppliedList(appliedFile, { repair = false } = {}) {
-  const raw = await readFile(appliedFile, 'utf-8').catch(err => {
-    if (err.code !== 'ENOENT' && repair) throw err;
-    return null;
+/** Serialize release and stale recovery, including their ownership recheck. */
+async function removeMigrationLock(lockDir, token) {
+  const observed = await stat(lockDir).catch(err => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
   });
-  if (raw === null) return [];
-
-  let parsed;
-  let corruptReason = null;
-  try { parsed = JSON.parse(raw); } catch (err) {
-    corruptReason = `invalid JSON: ${err.message}`;
-  }
-  if (corruptReason === null && !Array.isArray(parsed)) {
-    corruptReason = `expected array, got ${typeof parsed}`;
-  }
-  if (corruptReason !== null) {
-    if (repair) {
-      const aside = `${appliedFile}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      await rename(appliedFile, aside);
-      console.warn(`⚠️ Corrupt migrations file ${appliedFile} (${corruptReason}); renamed to ${aside} and rebuilding from scratch`);
+  if (!observed) return false;
+  const transition = join(lockDir, '.transition');
+  const taken = await mkdir(transition).then(() => true, err => {
+    if (err.code === 'EEXIST' || err.code === 'ENOENT') return false;
+    throw err;
+  });
+  if (!taken) return false;
+  let removed = false;
+  try {
+    const current = await stat(lockDir);
+    if (current.dev !== observed.dev || current.ino !== observed.ino) return false;
+    if (token) {
+      if ((await readLockOwner(lockDir))?.token !== token) {
+        throw new Error('Migration lock ownership changed; refusing to release another runner');
+      }
+    } else {
+      // mkdir(.transition) changed the directory mtime. Use its age BEFORE
+      // that mkdir when an interrupted acquisition left no readable owner.
+      const stale = await lockStaleReason(lockDir, observed.mtimeMs);
+      if (!stale) return false;
+      console.warn(`⚠️ Reclaiming stale migration lock ${lockDir}: ${stale}`);
     }
-    return [];
+    // Keep the transition present until the shared path disappears atomically:
+    // recursive rm would remove it first and let another waiter enter mid-rm.
+    const retired = `${lockDir}.retired-${randomUUID()}`;
+    await rename(lockDir, retired);
+    removed = true;
+    await rm(retired, { recursive: true, force: true });
+    return true;
+  } finally {
+    // After deletion a new runner may already own this path. Never clean a
+    // transition in that replacement directory. An interrupted transition
+    // stays fail-closed and uses the runner's explicit manual-recovery error.
+    if (!removed) await rm(transition, { recursive: true, force: true });
   }
-  return parsed;
 }
 
 /**
- * List migration files present on disk that are NOT yet in the applied-list —
- * i.e. migrations a boot would run. Pure read: never applies, renames, or
- * writes anything (so it's safe to call from a status endpoint). Returns the
- * pending filenames in sorted (apply) order.
+ * Take `data/migrations.lock`; resolves to the release function. A second
+ * runner waits up to `waitMs` for the holder to finish, reclaims a stale lock
+ * on sight, and otherwise rejects with the holder's identity so the operator
+ * knows what to wait for rather than racing it.
  */
-export async function listPendingMigrations({
-  rootDir = DEFAULT_ROOT_DIR,
-  migrationsDir = DEFAULT_MIGRATIONS_DIR,
-} = {}) {
-  const applied = await readAppliedList(appliedFilePath(rootDir), { repair: false });
-  const appliedSet = new Set(applied);
-  const files = await scanMigrationFiles(migrationsDir).catch(() => []);
-  return files.filter(f => !appliedSet.has(f));
+async function acquireMigrationLock(lockDir, { waitMs = LOCK_WAIT_MS, pollMs = LOCK_POLL_MS } = {}) {
+  const deadline = Date.now() + waitMs;
+  let announced = false;
+  for (;;) {
+    const taken = await mkdir(lockDir).then(() => true, (err) => {
+      if (err.code === 'EEXIST') return false;
+      throw err;
+    });
+    if (taken) {
+      // temp + rename so a concurrent runner sees no owner file or a whole one.
+      const ownerPath = join(lockDir, LOCK_OWNER_FILE);
+      const token = randomUUID();
+      await writeFile(`${ownerPath}.tmp`, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token }));
+      await rename(`${ownerPath}.tmp`, ownerPath);
+      return async () => {
+        const releaseDeadline = Date.now() + waitMs;
+        while (!await removeMigrationLock(lockDir, token)) {
+          if (Date.now() >= releaseDeadline) {
+            throw new Error('Migration lock release blocked by an unfinished transition; stop all migration runners before recovering the lock');
+          }
+          await sleep(pollMs);
+        }
+      };
+    }
+    const stale = await lockStaleReason(lockDir);
+    if (stale && await removeMigrationLock(lockDir)) {
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      const owner = await readLockOwner(lockDir);
+      throw new Error(
+        `Another migration run (pid ${owner?.pid ?? 'unknown'}) holds ${lockDir} — wait for it to finish (or stop the PortOS server) and retry; `
+        + `an interrupted .transition also keeps the lock closed; remove the directory by hand only if no migration runner is still alive`,
+      );
+    }
+    if (!announced) {
+      console.log(`⏳ Waiting for another migration run holding ${lockDir}`);
+      announced = true;
+    }
+    await sleep(pollMs);
+  }
 }
+
+// The ledger read side lives in scripts/lib/migrationLedger.js; re-exported
+// so existing `listPendingMigrations` callers keep this specifier.
+export { listPendingMigrations };
 
 export async function runMigrations({
   rootDir = DEFAULT_ROOT_DIR,
   migrationsDir = DEFAULT_MIGRATIONS_DIR,
+  lockWaitMs = LOCK_WAIT_MS,
+  lockPollMs = LOCK_POLL_MS,
 } = {}) {
   // Backstop for #1947: a process booted from inside a CoS agent git worktree
   // (data/cos/worktrees/agent-*) has no gitignored data/ runtime tree, so
@@ -104,6 +212,33 @@ export async function runMigrations({
   // Ensure data/ exists so we can persist applied state (migrationsDir
   // ships in the repo and always exists).
   await mkdir(dirname(appliedFile), { recursive: true });
+
+  // Everything from the ledger read to its last persist runs under the lock:
+  // the read is only trustworthy while no other runner can append to it.
+  const releaseLock = await acquireMigrationLock(lockDirPath(rootDir), { waitMs: lockWaitMs, pollMs: lockPollMs });
+  try {
+    return await runPendingMigrations({ rootDir, migrationsDir, appliedFile });
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
+  if (await adoptLegacyAppliedList(rootDir)) {
+    console.log('🧹 Moved data/migrations/.applied.json → data/migrations.applied.json');
+  }
+
+  // A runner killed between writing the ledger's temp file and renaming it
+  // leaves `migrations.applied.json.tmp-<pid>` behind, and no later run (a new
+  // pid) would ever reuse it. Remove only a dead writer's file: a lock reclaimed
+  // by age can still have a live holder mid-write.
+  const tmpPrefix = `${basename(appliedFile)}.tmp-`;
+  for (const name of await readdir(dirname(appliedFile))) {
+    if (!name.startsWith(tmpPrefix)) continue;
+    const pid = Number(name.slice(tmpPrefix.length));
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || pidAlive(pid)) continue;
+    await rm(join(dirname(appliedFile), name), { force: true });
+  }
 
   // Load applied migrations list (repairing a corrupt file aside — see
   // readAppliedList).
@@ -135,24 +270,35 @@ export async function runMigrations({
     await writeJsonAtomic(appliedFile, applied);
   };
 
+  // Retire this frozen transform before ANY pending migration executes, even
+  // with a rebuilt ledger or a later failure. Local absence cannot prove image
+  // deletion: host-mode peers intentionally retain metadata without bytes.
+  let disarmed = 0;
+  const retired = '428-prune-dangling-collection-images.js';
+  if (files.includes(retired) && !applied.includes(retired)) {
+    applied.push(retired);
+    disarmed++;
+    console.warn(`⏭️ Retired migration ${retired}: local image absence is not deletion evidence; recorded without running (#12398)`);
+  }
+
   // Disarm EVERY pending purge migration up front, not as each is reached in
   // the run loop: if this rebuilt-from-empty run aborted on an earlier
   // throwing migration (the documented repair-and-reboot flow), the partial
   // ledger would no longer "start empty" on the next boot — and the purge
-  // would then execute destructively against the rebuilt install.
+  // would then execute destructively against the rebuilt install. The probe
+  // reads source text, never importing a module before its turn in the loop.
   if (ledgerStartedEmpty) {
-    let disarmed = 0;
     for (const file of files) {
       if (applied.includes(file)) continue;
-      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
-      const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
-      if (!migration?.purge) continue;
+      if (!sourceDeclaresPurge(await readFile(join(migrationsDir, file), 'utf-8'))) continue;
       console.warn(`⏭️ Skipping purge migration ${file}: applied-list started empty/rebuilt — recorded as applied without running to avoid a destructive rerun (#2770)`);
       applied.push(file);
       disarmed++;
     }
-    if (disarmed > 0) await persistAppliedList();
   }
+  // Publish both policies together: persisting retirement first would leave a
+  // nonempty ledger after a crash, re-arming pending purge-class migrations.
+  if (disarmed > 0) await persistAppliedList();
 
   let ran = 0;
   for (const file of files) {

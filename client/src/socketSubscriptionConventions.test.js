@@ -20,10 +20,11 @@
  * and optionally refetch via `onResubscribe`. New namespace subscribers must
  * use it instead of re-implementing the reconnect dance (or forgetting it).
  *
- * A handful of hooks predate this fix and already implement the correct
+ * Two hooks predate this fix and already implement the correct
  * `socket.on('connect', subscribe)` pattern by hand; they sit on the
- * allowlist below with a reason rather than being forced to migrate in the
- * same change (explicitly sanctioned by #8110's acceptance criteria).
+ * allowlist below with a reason. The `cos` namespace has NO allowlist left
+ * (#12033): every cos:* consumer goes through the hook, including the one
+ * that changes the server's task-list mode (`payload` / `releasePayload`).
  *
  * ## What this guard CANNOT see
  *
@@ -44,7 +45,7 @@ import { trackedSourceFiles } from './test/trackedFiles.js';
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The namespaces `registerSubscriber` wires up in server/services/socket.js.
-const SUBSCRIBER_NAMESPACES = ['cos', 'errors', 'notifications', 'agents', 'instances', 'loops', 'beeper'];
+const SUBSCRIBER_NAMESPACES = ['cos', 'errors', 'notifications', 'agents', 'instances', 'loops', 'beeper', 'command'];
 
 const SUBSCRIBE_CALL = new RegExp(
   `emit\\(\\s*['"](?:${SUBSCRIBER_NAMESPACES.join('|')}):subscribe['"]`
@@ -61,19 +62,15 @@ const ALLOWED = {
   // Already implement `subscribe(); socket.on('connect', subscribe);` by hand,
   // predating useSocketSubscription — correct today, migration optional per
   // #8110's acceptance criteria rather than mandatory in the same change.
-  'src/hooks/useCosTaskUpdates.js': 're-subscribes cos:* on connect already',
   'src/hooks/useBeeperRealtime.js': 're-subscribes beeper:* on connect already',
   'src/hooks/useMoltworldWs.js': 're-subscribes agents:* on connect already',
-  'src/hooks/useOnDemandTaskToast.js': 're-subscribes cos:* on connect already',
-  'src/pages/ChiefOfStaff.jsx': 're-subscribes cos:* on connect already (two taskLists modes)',
-  // Does not itself re-subscribe on connect, but rides on the shared cos:*
-  // namespace that useCosTaskUpdates (always mounted from Layout) keeps alive
-  // across reconnects — the server Set has no ref count, so any one consumer
-  // re-adding the socket restores every cos:* listener. Out of scope for
-  // #8110, which named only notifications/errors/instances/loops as the
-  // namespaces that went fully dark (no other consumer covering them).
-  'src/hooks/useAgentFeedbackToast.jsx': 'rides on cos:* kept alive by useCosTaskUpdates; not independently broken',
 };
+
+// The namespaces every consumer must reach through the hook — no allowlist
+// row may name one of these. A cos:* row quietly re-admitted the bug class
+// this guard exists for (#12033: a Layout toast hook that never re-subscribed
+// on reconnect, carried by whichever sibling happened to).
+const NO_ALLOWLIST_NAMESPACES = ['cos'];
 
 const scannedFiles = () => trackedSourceFiles(CLIENT_ROOT);
 
@@ -101,6 +98,14 @@ describe('socket namespace subscriptions go through useSocketSubscription', () =
       + 'If this file already re-subscribes correctly on `connect` by hand, add it to '
       + `ALLOWED in this file with a one-line reason.\nOffenders:\n  ${violations.join('\n  ')}`,
     ).toEqual([]);
+  });
+
+  it('never allowlists a cos:* subscriber', () => {
+    const rows = Object.entries(ALLOWED).filter(([file]) => {
+      const source = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      return NO_ALLOWLIST_NAMESPACES.some((ns) => new RegExp(`emit\\(\\s*['"]${ns}:subscribe['"]`).test(source));
+    });
+    expect(rows.map(([file]) => file), 'cos:* subscribers go through useSocketSubscription (#12033)').toEqual([]);
   });
 
   // Burn-down: an allowlist entry that no longer needs to be there must go, or

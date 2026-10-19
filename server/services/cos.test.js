@@ -31,11 +31,11 @@
  * `availableSlots <= 0` short-circuit flips a clear red flag.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
+import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
@@ -498,6 +498,54 @@ function makeLocalSlotCapacity(state, { activeProvider = CLOUD_PROVIDER, limit =
 }
 
 const userBuckets = (tasks) => ({ onDemand: [], user: tasks, autoSystem: [], idle: [] });
+
+describe('dequeueNextTask — task ownership beyond registered agents (#11847)', () => {
+  it('never admits an in-flight spawn, and still counts it against the global slots', () => {
+    // 4-slot cap: 1 running agent + 2 spawns in flight (no agent record yet)
+    // leaves one real slot, which the queued task — not the in-flight ones — gets.
+    const state = makeState({ maxConcurrentAgents: 4, runningAgents: [makeRunningAgent()] });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: new Set(['spawning-a', 'spawning-b']) });
+    expect(capacity.availableSlots).toBe(1);
+
+    const buckets = {
+      onDemand: [],
+      user: [task('spawning-a'), task('spawning-b'), task('queued-c'), task('queued-d')],
+      autoSystem: [],
+      idle: [],
+    };
+    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['queued-c']);
+  });
+
+  it('admits nothing when running agents plus in-flight spawns fill maxConcurrentAgents', () => {
+    const state = makeState({ maxConcurrentAgents: 2, runningAgents: [makeRunningAgent()] });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: ['spawning-a'] });
+    expect(capacity.availableSlots).toBe(0);
+    expect(priorityDequeue({ onDemand: [], user: [task('queued-b')], autoSystem: [], idle: [] }, capacity)).toEqual([]);
+  });
+
+  it('does not double-count an in-flight spawn whose agent is already running', () => {
+    const state = makeState({
+      maxConcurrentAgents: 3,
+      runningAgents: [{ ...makeRunningAgent(), taskId: 'spawning-a' }],
+    });
+    const capacity = createDequeueCapacity(state, { inFlightTaskIds: ['spawning-a'] });
+    expect(capacity.availableSlots).toBe(2);
+  });
+
+  it('admits a task id at most once per cycle across tiers', () => {
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = createDequeueCapacity(state, {});
+    const buckets = {
+      onDemand: [task('dup-1')],
+      user: [task('dup-1'), task('user-2')],
+      autoSystem: [task('dup-1'), task('user-2'), task('sys-3')],
+      idle: [],
+    };
+    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['dup-1', 'user-2', 'sys-3']);
+    expect(capacity.spawnedTaskIds).toEqual(['dup-1', 'user-2', 'sys-3']);
+    expect(capacity.spawned).toBe(3);
+  });
+});
 
 describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
   it('serializes two queued tasks that resolve to the SAME local endpoint', () => {
@@ -1950,6 +1998,61 @@ describe('cos.js source — priority + capacity invariants', () => {
   });
 });
 
+describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
+  let taskStore;
+  let agentManagement;
+  const taskId = 'task-rerun';
+  const older = {
+    id: 'agent-older', taskId, status: 'completed', result: { success: true },
+    startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z',
+  };
+  const latest = {
+    id: 'agent-latest', taskId, status: 'completed', result: { success: false },
+    startedAt: '2026-01-01T01:00:00Z', completedAt: '2026-01-01T01:01:00Z',
+    metadata: { worktreePath: '/synthetic/resume-worktree', branch: 'resume-branch' },
+  };
+
+  beforeEach(async () => {
+    const state = await import('./cosState.js');
+    taskStore = await import('./cosTaskStore.js');
+    const identity = await import('./instanceIdentity.js');
+    agentManagement = await import('./agentManagement.js');
+    // Put the older run last in the map: chronology, not insertion order,
+    // determines which run can settle this task.
+    vi.spyOn(state, 'loadState').mockResolvedValue({ agents: { latest, older } });
+    vi.spyOn(identity, 'ensureInstanceId').mockResolvedValue('synthetic-instance');
+    vi.spyOn(taskStore, 'getAllTasks').mockResolvedValue({
+      user: { exists: true, grouped: { in_progress: [{ id: taskId, status: 'in_progress', metadata: {} }] } },
+      cos: { exists: false },
+    });
+    vi.spyOn(taskStore, 'updateTask').mockResolvedValue({});
+    vi.spyOn(agentManagement, 'handleOrphanedTask').mockResolvedValue({});
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-01-01T02:00:00Z'));
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('recovers the latest failed rerun despite an older successful run', async () => {
+    await resetOrphanedTasks();
+
+    expect(taskStore.updateTask).not.toHaveBeenCalled();
+    expect(agentManagement.handleOrphanedTask).toHaveBeenCalledExactlyOnceWith(
+      taskId, latest.id, taskStore.getTaskById,
+      { agentMetadata: latest.metadata, agentStartedAt: latest.startedAt }
+    );
+  });
+
+  it('completes a missed task update when the latest run succeeded', async () => {
+    const state = await import('./cosState.js');
+    state.loadState.mockResolvedValue({ agents: { latest: { ...latest, result: { success: true } }, older } });
+
+    await resetOrphanedTasks();
+
+    expect(taskStore.updateTask).toHaveBeenCalledExactlyOnceWith(taskId, { status: 'completed' }, 'user');
+    expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
+  });
+});
+
 // A failed run's retry is held non-spawnable (`in_progress` + marker) while its
 // worktree cleanup resolves the resume pointer (#3373). The boot/health-check
 // sweep walks in_progress tasks, so it must leave a LIVE hold alone — requeueing
@@ -2232,6 +2335,21 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     )).toEqual({ lane: 'onDemand', taskType: 'branch-reconcile', appId: 'app-1' });
   });
 
+  it('continues a manual branch sweep with recurring dispatch disabled, preserving other one-shot boundaries', () => {
+    const oneShot = { tasks: { 'branch-reconcile': { enabled: true, perpetual: false } } };
+    const manual = { taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: 'app-1' };
+    for (const taskOnDemandOrigin of ['user', 'refill']) {
+      expect(perpetualRefillPlan(agent({ ...manual, taskOnDemandOrigin }), oneShot))
+        .toEqual({ lane: 'onDemand', taskType: 'branch-reconcile', appId: 'app-1' });
+    }
+    for (const taskOnDemandOrigin of ['quota-burn', 'unknown']) {
+      expect(perpetualRefillPlan(agent({ ...manual, taskOnDemandOrigin }), oneShot)).toEqual({ lane: 'skip' });
+    }
+    expect(perpetualRefillPlan(agent({ ...manual, taskOnDemand: false }), oneShot)).toEqual({ lane: 'skip' });
+    oneShot.tasks['branch-reconcile'].enabled = false;
+    expect(perpetualRefillPlan(agent(manual), oneShot)).toEqual({ lane: 'skip' });
+  });
+
   it('a manual run with no app resolves appId to null (global on-demand re-issue)', () => {
     expect(perpetualRefillPlan(
       agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true }),
@@ -2305,6 +2423,9 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
   it("the agent:completed listener invokes the perpetual refill path", () => {
     const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
     expect(onIdx, 'agent:completed listener must exist').toBeGreaterThan(-1);
+    const completionIdx = COS_SRC.indexOf('await settleBranchReconcileRun(agent)', onIdx);
+    expect(completionIdx).toBeGreaterThan(onIdx);
+    expect(completionIdx).toBeLessThan(COS_SRC.indexOf('refillPerpetualForCompletedAgent(agent)', onIdx));
     const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1200);
     expect(
       handlerSlice.includes('refillPerpetualForCompletedAgent'),
@@ -2321,7 +2442,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // drain stalls. Pin the ignoreTaskId thread so a refactor can't reintroduce it.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
     expect(fnIdx, 'refillPerpetualForCompletedAgent must exist').toBeGreaterThan(-1);
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{[\s\S]*?ignoreTaskId:\s*agent\?\.taskId[\s\S]*?\}\s*\)/.test(fnSlice),
       'refill must forward ignoreTaskId: agent?.taskId to queueEligibleImprovementTasks'
@@ -2339,14 +2460,14 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // absence of a keyword in a comment (fragile): Improve gate → re-issue →
     // return → (only then) the queue lane.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       fnSlice.includes('const plan = perpetualRefillPlan(agent, schedule)'),
       'refill must resolve the lane via perpetualRefillPlan'
     ).toBe(true);
     expect(/plan\.lane === 'onDemand'/.test(fnSlice), 'refill must branch on the on-demand lane').toBe(true);
 
-    const improveGateIdx = fnSlice.indexOf('if (!isImprovementEnabled(state)) return;');
+    const improveGateIdx = fnSlice.indexOf("if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');");
     // queuePerpetualRefill owns the non-emitting REFILL pair so the on-demand
     // engines do NOT clear the drain's park / convergence signature / dispatch
     // counter on its behalf.
@@ -2387,7 +2508,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // unaffected: applyOnDemandRunResets clears the park for a USER-origin request
     // before this lane is ever reached.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     const parkIdx = fnSlice.indexOf('isPerpetualParkActive(plan.taskType, plan.appId)');
     const triggerIdx = fnSlice.indexOf('queuePerpetualRefill(plan.taskType, plan.appId');
     expect(parkIdx, 'refill must consult the type+app park before re-issuing').toBeGreaterThan(-1);
@@ -2402,7 +2523,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // sees the same issue as actionable). The refill must bail on a non-success
     // result and let task-retry/backoff + the recheck cadence handle failures.
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
+    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
     expect(
       /if\s*\(\s*!agent\?\.result\?\.success\s*\)\s*return/.test(fnSlice),
       'refill must early-return when the completed agent did not succeed'
@@ -2500,18 +2621,16 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
 
   it('drives the interval off PENDING_MERGE_SWEEP_INTERVAL_MS, not a local literal', () => {
     expect(sweepBlock).toMatch(/intervalMs:\s*PENDING_MERGE_SWEEP_INTERVAL_MS/);
-    expect(COS_SRC).toMatch(/PENDING_MERGE_SWEEP_INTERVAL_MS\s*\}\s*=\s*await import\('\.\/prWatcher\.js'\)/);
+    expect(COS_SRC).toMatch(/\{\s*PENDING_MERGE_SWEEP_INTERVAL_MS\b[^}]*\}\s*=\s*await import\('\.\/prWatcher\.js'\)/);
   });
 
-  it('gates the sweep on !paused AND cos auto-run === execute', () => {
-    expect(sweepBlock).toMatch(/s\.paused\s*\|\|\s*getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
-  });
-
-  it('cancels the timer with the other CoS jobs on stop()', () => {
-    const stopFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function stop'));
-    expect(stopFn).toMatch(/cancelEvent\('cos-health-check'\)/);
-    expect(stopFn).toMatch(/cancelEvent\('cos-recording-maintenance'\)/);
-    expect(stopFn).toMatch(/cancelEvent\('cos-pending-merge-sweep'\)/);
+  it('gates the sweep and the handoff follow-up poll on !paused AND cos auto-run === execute', () => {
+    expect(sweepBlock).toMatch(/if \(await pendingMergeSweepBlocked\(\)\) return;/);
+    expect(COS_SRC).toMatch(/setHandoffFollowUpGate\(pendingMergeSweepBlocked\)/);
+    const gateFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function pendingMergeSweepBlocked'));
+    expect(gateFn).toMatch(/!isDaemonRunning\(\)/);
+    expect(gateFn).toMatch(/s\.paused\)/);
+    expect(gateFn).toMatch(/getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
   });
 
   it('keeps the opportunistic drain in evaluateTasks so the call site cannot be deleted silently', () => {

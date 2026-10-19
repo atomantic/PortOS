@@ -1,8 +1,8 @@
 /**
  * Shared GitHub Actions REST plumbing for the CI gates in `scripts/`.
  *
- * Extracted because two scripts now talk to the Actions API from inside a
- * workflow — `cancel-current-ci-run.js` and `ci-retry-cancelled-run.js` — and
+ * Extracted because two scripts talk to the Actions API from inside a
+ * workflow — `ci-gate-report.js` and `ci-retry-cancelled-run.js` — and
  * the piece they share is a SECURITY check, not boilerplate: `resolveApiBase`
  * decides which host a step-scoped `GITHUB_TOKEN` is sent to. Two copies of
  * that meant a hardening fix could land on one and silently miss the other.
@@ -123,10 +123,8 @@ export function isSuccess(response) {
 /**
  * The run this step is part of, plus the token to read it with — or null.
  *
- * The single derivation of "which run am I, and with what token". Both the
- * fail-fast reporter and the gate reporter need it, and this module exists
- * precisely so a hardening fix to that reasoning cannot land on one copy and
- * miss the other.
+ * The single derivation of "which run am I, and with what token", kept here
+ * beside the API-host check it depends on.
  *
  * @param {NodeJS.ProcessEnv} env
  * @returns {{token: string, repoPath: string, runId: string}|null}
@@ -174,9 +172,8 @@ const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
  * The steps of one job that actually failed.
  *
  * A cancelled job KEEPS its steps' conclusions, which is the whole reason this
- * exists: `cancel-current-ci-run.js` cancels the run from inside the failing
- * job, so GitHub can record the job as `cancelled` while one of its steps is
- * `failure`. Nothing that reads only job conclusions — `gh pr checks`,
+ * exists: a job cancelled mid-step (a run-wide cancel, or its own timeout) is
+ * recorded as `cancelled` while one of its steps is `failure`. Nothing that reads only job conclusions — `gh pr checks`,
  * `gh run view --json jobs`, `gh run view --log-failed` — can see that (7574).
  */
 const failedSteps = (job) => (Array.isArray(job?.steps) ? job.steps : [])

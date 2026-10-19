@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -133,7 +133,7 @@ describe('makeVideoGenLineHandler', () => {
   const eventsOfType = (t) => emitted.filter((e) => e.type === t).map((e) => e.payload);
 
   // Prompt-encode phase (#4589) — the signal that decides whether a later
-  // SIGABRT is worth one relaunch at a smaller Gemma budget.
+  // SIGABRT is worth one relaunch with smaller command buffers.
   it('tracks the Gemma prompt-encode phase as three distinct states', () => {
     // Never reported: every runtime other than the LTX-2 MLX helper stays here,
     // and an unstamped field must not read as "encoding right now".
@@ -281,6 +281,17 @@ describe('makeVideoGenLineHandler', () => {
     expect(handle('SPEEDPROFILE:{not json')).toBe(false);
     expect(job.speedProfile).toBeUndefined();
   });
+
+  // #12262 — how each LoRA adapter was actually applied on this render.
+  it('LORASTRATEGY:<json> → stamps job.loraStrategy; a malformed payload falls through', () => {
+    const report = { adapters: [{ role: 'ic', name: 'ingredients.safetensors', strategy: 'runtime-delta', stages: ['stage-1'], strength: 1, quantizedTargets: 480, fusedTargets: 0 }] };
+    expect(handle('LORASTRATEGY:{not json')).toBe(false);
+    expect(handle('LORASTRATEGY:{"adapters":"nope"}')).toBe(false);
+    expect(job.loraStrategy).toBeUndefined();
+    expect(handle(`LORASTRATEGY:${JSON.stringify(report)}`)).toBe(true);
+    expect(job.loraStrategy).toEqual(report);
+    expect(sse).not.toHaveBeenCalled();
+  });
 });
 
 describe('finalizeGeneratedVideo runtime persistence', () => {
@@ -363,6 +374,16 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     // render must not read back as a full speed claim.
     expect(saved[0].speedProfileId).toBe('fast');
     expect(saved[0].speedProfileApplied).toEqual(applied);
+  });
+
+  it('persists the LoRA strategy the runner reported, and omits it when none was (#12262)', async () => {
+    const report = { adapters: [{ role: 'user', name: 'character.safetensors', strategy: 'runtime-delta', stages: ['all'], strength: 0.8, quantizedTargets: 480, fusedTargets: 0 }] };
+    let saved = null;
+    const mutateHistory = async (fn) => { saved = await fn([]); return saved; };
+    await finalizeGeneratedVideo({ ...baseCtx({ id: 'job-abcdef12', clients: [], loraStrategy: report }), mutateHistory });
+    expect(saved[0].loraStrategyApplied).toEqual(report);
+    await finalizeGeneratedVideo({ ...baseCtx({ id: 'job-abcdef12', clients: [] }), mutateHistory });
+    expect('loraStrategyApplied' in saved[0]).toBe(false);
   });
 
   it('omits speedProfileApplied when the runner reported none (absent sentinel)', async () => {
@@ -449,16 +470,31 @@ describe('describeSignalDeath (#3101 signal → actionable cause)', () => {
     expect(describeSignalDeath('')).toBeNull();
   });
 
-  it('names the macOS Metal command-buffer watchdog for SIGABRT and points at resolution/frame count', () => {
-    const reason = describeSignalDeath('SIGABRT');
-    expect(reason).toMatch(/SIGABRT/);
-    expect(reason).toMatch(/Metal command-buffer watchdog/i);
-    expect(reason).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
-    expect(reason).toMatch(/resolution/i);
-    expect(reason).toMatch(/frame count/i);
-    // Must NOT send the user hunting a model/PortOS bug (the upstream mistake).
-    expect(reason).toMatch(/not a bug in the model or PortOS/i);
-    expect(reason).not.toMatch(/assertion/i);
+  const MLX = { mlxRuntime: true, platform: 'darwin', arch: 'arm64' };
+
+  it('names the Metal watchdog only for a captured timeout signature on an Apple-silicon MLX runtime', () => {
+    for (const stderr of ['libc++abi: kIOGPUCommandBufferCallbackErrorImpactingInteractivity', 'Caused GPU Timeout Error', 'kIOGPUCommandBufferCallbackErrorTimeout']) {
+      const reason = describeSignalDeath('SIGABRT', { stderr, ...MLX });
+      expect(reason).toMatch(/Metal command-buffer watchdog/i);
+      expect(reason).toMatch(/frame count/i);
+    }
+    // Same evidence on a CUDA/Windows host or a non-MLX runtime is not a Metal watchdog.
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Caused GPU Timeout Error', ...MLX, platform: 'win32' })).toMatch(/unknown/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Caused GPU Timeout Error', ...MLX, mlxRuntime: false })).toMatch(/unknown/);
+  });
+
+  it('reports an unexplained native abort when no diagnostic was captured, never the watchdog', () => {
+    for (const opts of [undefined, { stderr: '', ...MLX }, { stderr: 'Loading weights...', ...MLX }]) {
+      const reason = describeSignalDeath('SIGABRT', opts);
+      expect(reason).toMatch(/native abort with no diagnostic/);
+      expect(reason).not.toMatch(/watchdog/i);
+    }
+  });
+
+  it('keeps OOM, innocent-victim and assertion aborts distinct from the watchdog, even beside a timeout line', () => {
+    expect(describeSignalDeath('SIGABRT', { stderr: 'kIOGPUCommandBufferCallbackErrorOutOfMemory', ...MLX })).toMatch(/ran out of memory/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'kIOGPUCommandBufferCallbackErrorInnocentVictim\nCaused GPU Timeout Error', ...MLX })).toMatch(/innocent victim/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Assertion failed: (x > 0), function f, file a.cpp', ...MLX })).toMatch(/failed assertion/);
   });
 
   it('names a native MLX/Metal crash for SIGBUS and SIGSEGV', () => {
@@ -591,41 +627,6 @@ describe('isPromptEncodingMetalWatchdog', () => {
     expect(isPromptEncodingMetalWatchdog()).toBe(false);
     expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', promptEncodePhase: 'active' })).toBe(false);
     expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr: null, promptEncodePhase: 'active' })).toBe(false);
-  });
-});
-
-describe('planPromptEncodingRetry', () => {
-  const WATCHDOG_ABORT = '[METAL] Command buffer execution failed: (00000004:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)';
-  const qualifying = {
-    signal: 'SIGABRT',
-    stderr: WATCHDOG_ABORT,
-    promptEncodePhase: 'active',
-    retriesUsed: 0,
-    platform: 'darwin',
-  };
-
-  it('plans one relaunch at the reduced Gemma budget', () => {
-    expect(planPromptEncodingRetry(qualifying)).toEqual({ gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH });
-    // The reduced budget is a real cut from what upstream would otherwise use —
-    // a plan that handed back the default would relaunch into the same abort.
-    expect(RETRY_GEMMA_MAX_LENGTH).toBeLessThan(DEFAULT_GEMMA_MAX_LENGTH);
-  });
-
-  it('allows exactly one — a second abort at the reduced budget is a real failure', () => {
-    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 1 })).toBeNull();
-    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 2 })).toBeNull();
-  });
-
-  // The command-buffer watchdog is a macOS construct; a Windows/CUDA render that
-  // somehow produced a matching string must not be relaunched with an
-  // Apple-specific mitigation.
-  it.each([['win32'], ['linux']])('never fires on %s', (platform) => {
-    expect(planPromptEncodingRetry({ ...qualifying, platform })).toBeNull();
-  });
-
-  it('passes the classifier verdict straight through', () => {
-    expect(planPromptEncodingRetry({ ...qualifying, promptEncodePhase: 'done' })).toBeNull();
-    expect(planPromptEncodingRetry({ ...qualifying, signal: 'SIGKILL' })).toBeNull();
   });
 });
 

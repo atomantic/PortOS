@@ -1,3 +1,8 @@
+import { __testing as standardizerInternals } from './pm2Standardizer.js';
+import { mkdtempSync as makeTempDir, writeFileSync as writeFixture, readFileSync as readFixture, rmSync as removeFixture } from 'fs';
+import { join as joinPath, relative as relativePath } from 'path';
+import { symlinkSync } from 'fs';
+import { tmpdir as osTmpDir } from 'os';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -56,10 +61,10 @@ describe('reassignCollidingPorts', () => {
     ];
     const reassigned = reassignCollidingPorts(processes, [5173, 5174]);
 
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
-    expect(processes[1].args).toBe('vite --host --port 6001');
-    expect(reassigned).toEqual([[5173, 6000], [5174, 6001]]);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
+    expect(processes[1].args).toBe('vite --host --port 5571');
+    expect(reassigned).toEqual([[5173, 5570], [5174, 5571]]);
   });
 
   it('keeps the same new value when an old port appears in multiple places of one process', () => {
@@ -67,9 +72,9 @@ describe('reassignCollidingPorts', () => {
       { name: 'client', args: 'vite --host --port 5173', env: { PORT: 5173, VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[0].env.VITE_PORT).toBe(6000);
-    expect(processes[0].args).toBe('vite --host --port 6000');
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[0].env.VITE_PORT).toBe(5570);
+    expect(processes[0].args).toBe('vite --host --port 5570');
   });
 
   it('leaves non-colliding ports untouched', () => {
@@ -86,20 +91,20 @@ describe('reassignCollidingPorts', () => {
     ];
     const reassigned = reassignCollidingPorts(processes, []);
     expect(processes[0].env.PORT).toBe(3000); // first keeps the free port
-    expect(processes[1].env.PORT).toBe(6000); // duplicate bumped to a distinct one
-    expect(reassigned).toEqual([[3000, 6000]]);
+    expect(processes[1].env.PORT).toBe(5570); // duplicate bumped to a distinct one
+    expect(reassigned).toEqual([[3000, 5570]]);
   });
 
   it('does not bump a later process off its valid port to satisfy an earlier collision', () => {
     // server (listed first) is on a taken port; client already holds a valid
-    // 6000. The replacement for server must skip 6000 rather than steal it.
+    // 5570. The replacement for server must skip 5570 rather than steal it.
     const processes = [
       { name: 'server', env: { PORT: 5173 } },
-      { name: 'client', env: { VITE_PORT: 6000 } }
+      { name: 'client', env: { VITE_PORT: 5570 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[1].env.VITE_PORT).toBe(6000); // untouched
-    expect(processes[0].env.PORT).toBe(6001); // skipped 6000
+    expect(processes[1].env.VITE_PORT).toBe(5570); // untouched
+    expect(processes[0].env.PORT).toBe(5571); // skipped 5570
   });
 
   it('gives distinct ports to two processes that both reference the same taken port', () => {
@@ -110,38 +115,61 @@ describe('reassignCollidingPorts', () => {
       { name: 'cli', args: 'vite --host --port 5173', env: { VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
-    expect(processes[1].args).toBe('vite --host --port 6001');
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
+    expect(processes[1].args).toBe('vite --host --port 5571');
     expect(processes[0].env.PORT).not.toBe(processes[1].env.VITE_PORT);
   });
 
   it('never reassigns a colliding port onto a port another process legitimately kept', () => {
-    // server keeps 6000 (free); client's 5173 is taken and must NOT be bumped to 6000.
+    // server keeps 5570 (free); client's 5173 is taken and must NOT be bumped to 5570.
     const processes = [
-      { name: 'server', env: { PORT: 6000 } },
+      { name: 'server', env: { PORT: 5570 } },
       { name: 'client', env: { VITE_PORT: 5173 } }
     ];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
-    expect(processes[1].env.VITE_PORT).toBe(6001);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(processes[1].env.VITE_PORT).toBe(5571);
   });
 
   it('skips already-assigned ports when picking a free replacement', () => {
-    // 6000 is taken, so the first reassignment lands on 6001, the next on 6002.
+    // 5570 is taken, so the first reassignment lands on 5571, the next on 5572.
     const processes = [
       { name: 'a', env: { PORT: 5173 } },
       { name: 'b', env: { PORT: 5174 } }
     ];
-    reassignCollidingPorts(processes, [5173, 5174, 6000]);
+    reassignCollidingPorts(processes, [5173, 5174, 5570]);
+    expect(processes[0].env.PORT).toBe(5571);
+    expect(processes[1].env.PORT).toBe(5572);
+  });
+
+  it('moves a process off a browser-blocked port even when nothing else holds it', () => {
+    const processes = [{ name: 'site', env: { PORT: 6000 } }];
+    const reassigned = reassignCollidingPorts(processes, []);
+    expect(processes[0].env.PORT).toBe(5570);
+    expect(reassigned).toEqual([[6000, 5570]]);
+  });
+
+  it('never picks a browser-blocked replacement when the managed band is exhausted', () => {
+    // 5570–5999 all taken, so the next free candidate is 6000 — which browsers refuse.
+    const taken = [5173];
+    for (let p = 5570; p < 6000; p++) taken.push(p);
+    const processes = [{ name: 'srv', env: { PORT: 5173 } }];
+    reassignCollidingPorts(processes, taken);
     expect(processes[0].env.PORT).toBe(6001);
-    expect(processes[1].env.PORT).toBe(6002);
+  });
+
+  it('remaps the ports label map together with env.PORT', () => {
+    const processes = [{ name: 'site', ports: { ui: 5173 }, env: { PORT: 5173 } }];
+    reassignCollidingPorts(processes, [5173]);
+    expect(processes[0].ports).toEqual({ ui: 5570 });
+    expect(processes[0].env.PORT).toBe(5570);
   });
 
   it('only treats *_PORT / PORT env keys as ports', () => {
     const processes = [{ name: 'a', env: { PORT: 5173, RETRIES: 5173 } }];
     reassignCollidingPorts(processes, [5173]);
-    expect(processes[0].env.PORT).toBe(6000);
+    expect(processes[0].env.PORT).toBe(5570);
     expect(processes[0].env.RETRIES).toBe(5173); // not a port key
   });
 });
@@ -366,5 +394,55 @@ describe('applyStandardization — preserve existing ecosystem.config.cjs', () =
     );
 
     expect(readFileSync(join(dir, '.env'), 'utf-8')).not.toContain('PORT=5261');
+  });
+});
+
+describe('model-authored plan fields at the apply sink', () => {
+  it('emits an ecosystem file PM2 can load even when a model string carries quotes', () => {
+    const hostile = "x' + require('child_process').execSync('id') + '";
+    const content = standardizerInternals.generateEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', ports: { ui: 5570 }, env: { HOSTILE: hostile, 'key"name': 1, 'a: 1, b': 2 } }], 'app');
+    expect(content).toContain(PORTOS_ECOSYSTEM_MARKER);
+    // parseEcosystemConfig (streamingDetect.js) keys on bare identifier keys.
+    expect(content).toMatch(/\n\s+name: "it's",\n/);
+    expect(content).toMatch(/\n\s+ports: \{\n\s+ui: 5570\n/);
+    const module = { exports: {} };
+    new Function('module', content)(module);
+    expect(module.exports.apps[0].env.HOSTILE).toBe(hostile);
+    expect(module.exports.apps[0].env['key"name']).toBe(1);
+    expect(module.exports.apps[0].env['a: 1, b']).toBe(2);
+    expect(module.exports.apps[0].name).toBe("it's");
+  });
+
+  it('refuses stray-port edits that leave the repository or carry a non-identifier variable', async () => {
+    const repo = makeTempDir(joinPath(osTmpDir(), 'stray-repo-'));
+    const outside = makeTempDir(joinPath(osTmpDir(), 'stray-outside-'));
+    try {
+      writeFixture(joinPath(repo, '.env'), 'PORT=3000\nKEEP=1\n');
+      writeFixture(joinPath(outside, '.env'), 'PORT=3000\nSECRET=1\n');
+      writeFixture(joinPath(outside, 'linked.env'), 'PORT=3000\nLINKED=1\n');
+      symlinkSync(joinPath(outside, 'linked.env'), joinPath(repo, 'planted.env'));
+      const escape = relativePath(repo, joinPath(outside, '.env'));
+      const plan = {
+        currentState: { hasGit: false },
+        proposedChanges: {
+          ecosystemContent: `// ${PORTOS_ECOSYSTEM_MARKER}\nmodule.exports = { apps: [] };\n`,
+          createEcosystem: true,
+          strayPorts: [
+            { file: escape, variable: 'PORT', action: 'remove' },
+            { file: 'planted.env', variable: 'PORT', action: 'remove' },
+            { file: '.env', variable: '|', action: 'remove' },
+            { file: '.env', variable: 'PORT', action: 'remove' },
+          ],
+        },
+      };
+      const result = await applyStandardization(repo, plan, { skipBackup: true });
+      expect(readFixture(joinPath(outside, '.env'), 'utf-8')).toBe('PORT=3000\nSECRET=1\n');
+      expect(readFixture(joinPath(outside, 'linked.env'), 'utf-8')).toBe('PORT=3000\nLINKED=1\n');
+      expect(readFixture(joinPath(repo, '.env'), 'utf-8')).toBe('KEEP=1\n');
+      expect(result.filesModified).toEqual(['ecosystem.config.cjs', '.env (removed PORT)']);
+    } finally {
+      removeFixture(repo, { recursive: true, force: true });
+      removeFixture(outside, { recursive: true, force: true });
+    }
   });
 });

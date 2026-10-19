@@ -2,7 +2,7 @@
 // the staged document runs in real Chrome, renderComposition encodes it with
 // real ffmpeg, and the MP4 is compared to direct renderFrame(t) screenshots.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
@@ -31,10 +32,7 @@ const { renderComposition } = await import('../htmlComposition/index.js');
 const { openComposition } = await import('../htmlComposition/browser.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
 

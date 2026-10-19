@@ -48,7 +48,7 @@ import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { isClaudeCliProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveAgentApiEnv } from './agentApiAuth.js';
-import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, isTruthyMeta } from './agentState.js';
+import { runnerAgents, completingAgents, pausedAgents, consumePausedAgentExit, spawningTasks, isTruthyMeta } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { createAgentSpawnContext, prepareAgentSpawn } from './agentSpawnPreparation.js';
@@ -499,10 +499,17 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
  * finalization runs against a live agent.
  */
 export async function handleAgentCompletion(agentId, exitCode, success, duration) {
-  return maintenance.withResource('agent', agentId, async () => {
-    try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
-    catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
-  });
+  if (completingAgents.has(agentId)) return;
+  // Claim before admission's first await: the process may already be gone.
+  completingAgents.add(agentId);
+  try {
+    return await maintenance.withResource('agent', agentId, async () => {
+      try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
+      catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
+    });
+  } finally {
+    completingAgents.delete(agentId);
+  }
 }
 
 async function handleAdmittedAgentCompletion(agentId, exitCode, success, duration) {
@@ -590,7 +597,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // the persisted record stores an ISO string; toEpochMs handles both.
     const runStartedAt = toEpochMs(agent.startedAt);
     let effectiveSuccess = success;
-    if (!effectiveSuccess && task?.id) {
+    if (!effectiveSuccess && task?.id && !agent.startupErrorAnalysis) {
       const commitFound = workspacePath && await committedDuringRun(workspacePath, runStartedAt);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
@@ -611,7 +618,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     }
 
     // Analyze failure if applicable
-    const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
+    const errorAnalysis = effectiveSuccess ? null : agent.startupErrorAnalysis || analyzeAgentFailure(outputBuffer, task, model);
 
     // The gate for finalizeAgent's PR-claim verification (#3358): a PortOS-owned
     // PR is created by `runAgentCompletionCleanup` below, i.e. AFTER finalize, so

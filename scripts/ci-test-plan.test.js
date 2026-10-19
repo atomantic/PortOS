@@ -1,21 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
+import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
+import { workflowJobs } from './lib/workflowJobs.js';
+
+import { encodeAttestation } from './lib/pregateAttestation.js';
 
 import {
   ALWAYS_RUN_TESTS,
+  applyAttestation,
+  attestationDrift,
+  attestationEligibility,
   BROWSER_SUITES,
   buildCiTestPlan,
+  classifyDependencyChange,
+  WINDOWS_INSTALLED_WORKSPACES,
   collectPlanInputs,
+  emitGitHubPlan,
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
+  LINUX_CONTAINMENT_TESTS,
+  MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
+  PLATFORM_PACKAGE_RES,
+  resolveCiAttestation,
   shardIndexes,
   SLASHDO_GITLINK_PATH,
   sourceReferencePattern,
@@ -75,7 +89,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-    'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+    'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
     'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
   ];
@@ -170,6 +184,38 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
     expect(unicodePlan.changed_files).toEqual([unicodeSource, source]);
     expect(JSON.parse(unicodePlan.server_sources)).toContain(unicodeSource);
     expect(JSON.parse(unicodePlan.server_files)).toContain(contract);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('narrows a shared basename to tests that can mean the changed copy, and keeps a unique one by name (#11870)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-basenames-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const alpha = 'server/alpha/index.js';
+  const mirror = 'client/src/lib/mirrorOnly.js';
+  const tests = {
+    inDirectory: ['server/alpha/local.test.js', "readFileSync(new URL('./index.js', import.meta.url));\n"],
+    inSubtree: ['server/alpha/nested/deep.test.js', "readFileSync(new URL('../index.js', import.meta.url));\n"],
+    namesAlpha: ['server/other/namesAlpha.test.js', "readFileSync(join(root, 'alpha', 'index.js'));\n"],
+    namesBeta: ['server/other/namesBeta.test.js', "readFileSync(join(root, 'beta', 'index.js'));\n"],
+    mirror: ['server/other/mirror.test.js', "readFileSync(join(clientLib, 'mirrorOnly.js'));\n"],
+  };
+  try {
+    git('init', '-q');
+    for (const source of [alpha, 'server/beta/index.js', mirror]) write(source, 'export const value = 1;\n');
+    for (const [path, body] of Object.values(tests)) write(path, body);
+    git('add', '--all');
+
+    const { pathContractTests } = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [alpha, mirror], cwd: root });
+    expect(pathContractTests[alpha].sort()).toEqual(
+      [tests.inDirectory[0], tests.inSubtree[0], tests.namesAlpha[0]].sort());
+    // A unique basename keeps the #6363 lookup: the mirror test names no directory.
+    expect(pathContractTests[mirror]).toEqual([tests.mirror[0]]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -544,6 +590,10 @@ describe('CI test impact planner', () => {
     }
   });
 
+  it('runs the migration prompt-drift baseline on every plan', () => {
+    expect(ALWAYS_RUN_TESTS).toContain('scripts/setup-data-drift.test.js');
+  });
+
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {
     const plan = buildCiTestPlan(['docs/GITHUB_ACTIONS.md'], {
       trackedFiles: TRACKED.filter((path) => path !== 'server/services/taskPromptDefaults.test.js'),
@@ -635,6 +685,28 @@ describe('CI test impact planner', () => {
     expect(plan.client.mode).toBe('skip');
     expect(plan.db).toBe(false);
     expect(plan.windows).toBe(false);
+  });
+
+  // One row per structural trigger in structuralTestsFor. Each diff pairs the
+  // trigger with an unrelated path, so a rule that only fires when every changed
+  // file matches (`.some` → `.every`) drops its guard and fails here.
+  const STRUCTURAL_GUARD_ROWS = [
+    { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
+    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/index.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/index.test.js'] },
+    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/index.test.js'] },
+    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/index.test.js'] },
+    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11yConventions.test.js'] },
+  ];
+  it.each(STRUCTURAL_GUARD_ROWS)('schedules the structural guards for $changed in a mixed diff', ({ changed, runner, guards }) => {
+    const trackedFiles = [...TRACKED, changed, ...STRUCTURAL_GUARD_ROWS.flatMap((row) => row.guards)];
+    const plan = buildCiTestPlan([changed, 'server/services/auth.js'], { trackedFiles });
+
+    expect(plan.full).toBe(false);
+    for (const guard of guards) {
+      expect(plan[runner].files, guard).toContain(guard);
+    }
   });
 
   it('does not treat a source .grit or a mistyped biome.json as lint configuration', () => {
@@ -929,7 +1001,7 @@ describe('CI test impact planner', () => {
     });
 
     it('keeps an independent lockfile full-CI trigger authoritative', () => {
-      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'package-lock.json'], {
+      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'server/package-lock.json'], {
         trackedFiles: [...REVIEW_LOOP_TRACKED, ...WINDOWS_CONTRACT_TESTS],
       });
 
@@ -990,7 +1062,7 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('shards full plans and Windows related graphs while keeping exact-file plans on one runner', () => {
+  it('shards full plans and related graphs while keeping small exact-file plans on one runner', () => {
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -1010,12 +1082,86 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
       windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1], client: [1], windows: [1, 2, 3] } });
+      shards: { server: [1, 2], client: [1], windows: [1, 2, 3] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
+  });
+
+  describe('scoped fan-out instead of a full plan (#11871)', () => {
+    const SERVER_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.server);
+    const CLIENT_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.client);
+    const featureTests = (prefix, count, ext = 'js') => Array.from({ length: count },
+      (_, i) => `${prefix}/case${String(i).padStart(3, '0')}.test.${ext}`);
+
+    it('keeps an over-cap server selection scoped, runs every selected test, and fans only the server out', () => {
+      const source = 'server/services/bigfeature/core.js';
+      const tests = featureTests('server/services/bigfeature', MAX_TARGETED_TEST_FILES + 5);
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, ...tests] });
+
+      expect(plan).toMatchObject({ full: false, reason: 'targeted features: bigfeature',
+        server: { mode: 'related', sources: [source] }, client: { mode: 'skip' },
+        lint: { mode: 'files', files: [source] }, build: false, smoke: true, windows: false });
+      // Sharding partitions the selection; it never drops a selector.
+      expect(plan.server.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards).toEqual({ server: SERVER_FANOUT, client: [1], windows: [1] });
+      expect(plan.suiteReasons.server).toMatch(/exceed the 125-file cap, sharded 2 ways/);
+      // A broad shared dependency can still reach the slashdo contracts.
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('fans the client out only when its own selection is over the cap', () => {
+      const source = 'client/src/components/bigfeature/Panel.jsx';
+      const tests = featureTests('client/src/components/bigfeature', MAX_TARGETED_TEST_FILES + 5, 'jsx');
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
+
+      expect(plan).toMatchObject({ full: false, client: { mode: 'related', sources: [source] }, build: true });
+      expect(plan.client.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards.client).toEqual(CLIENT_FANOUT);
+      expect(plan.shards.server).toEqual([1]);
+
+      const underCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, 20)] });
+      expect(underCap.shards.client).toEqual([1]);
+    });
+
+    it('shards a server related graph, but not an exact-file plan under the cap', () => {
+      const source = 'server/services/flat.js';
+      const tests = featureTests('server/services/flatfeature', 3);
+      const trackedFiles = [...TRACKED, source, ...tests];
+      const related = buildCiTestPlan([source, ...tests.slice(0, 2)], { trackedFiles });
+      expect(related.server.mode).toBe('related');
+      expect(related.shards.server).toEqual(SERVER_FANOUT);
+      expect(related.suiteReasons.server).toMatch(/related import graph sharded 2 ways/);
+
+      const exact = buildCiTestPlan(tests, { trackedFiles });
+      expect(exact.server.mode).toBe('files');
+      expect(exact.shards.server).toEqual([1]);
+
+      // A barrel-only edit keeps exact-file selection; over the cap it fans out.
+      const barrel = 'server/lib/index.js';
+      const named = featureTests('server/consumers', MAX_TARGETED_TEST_FILES + 1);
+      const barrelPlan = buildCiTestPlan([barrel], { trackedFiles: [...TRACKED, ...named],
+        pathContractTests: { [barrel]: named } });
+      expect(barrelPlan.server.mode).toBe('files');
+      expect(barrelPlan.server.files).toEqual(expect.arrayContaining(named));
+      expect(barrelPlan.shards.server).toEqual(SERVER_FANOUT);
+    });
+
+    it("stays on one runner when Vitest's shard guard could see fewer files than shards", () => {
+      // Vitest throws when the shard count exceeds the files it resolves. The
+      // Linux job never runs DB or browser suites, so they cannot meet the floor.
+      const source = 'server/services/flat.js';
+      const unit = 'server/services/flat.test.js';
+      const floor = (extra) => buildCiTestPlan([source, unit, ...extra],
+        { trackedFiles: [source, unit, ...extra] }).shards.server;
+
+      expect(floor([])).toEqual([1]);
+      expect(floor(['server/services/appQuality.db.test.js'])).toEqual([1]);
+      expect(floor(['server/lib/filmLook.browser.test.js'])).toEqual([1]);
+      expect(floor(['server/services/flat.contract.test.js'])).toEqual(SERVER_FANOUT);
+    });
   });
 
   it('falls back to full CI for unknown artifacts and wide changes', () => {
@@ -1348,7 +1494,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
     // touches server/index.js downgrades Windows on a diff that must escalate.
     expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
 
-    for (const escalating of ['server/index.js', 'package-lock.json', 'server/lib/validation.js']) {
+    // package-lock.json carries no manifest comparison here, so it fails closed.
+    for (const escalating of ['server/index.js', 'server/package-lock.json', 'server/.npmrc']) {
       const combined = plan(['client/src/App.jsx', escalating]);
       expect(combined.reason, escalating).toContain('client composition root changed');
       expect(combined.windowsMode, escalating).toBe('full');
@@ -1411,6 +1558,7 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/fix-windows-console.js',
       'scripts/ps1-bom.test.js',
       'server/lib/bufferedSpawn.js',
+      'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
       'server/lib/mockPathsDataRoot.js',
       'server/services/cosAgentIndex.completionOrder.test.js',
@@ -1594,5 +1742,528 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan([BROWSER_SUITES[0]], { trackedFiles: BROWSER_SUITES });
 
     expect(plan.browserFiles).toEqual([BROWSER_SUITES[0]]);
+  });
+});
+
+describe('dependency manifest Windows escalation', () => {
+  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
+  const LOCK = 'server/package-lock.json';
+  const lockfile = (packages, root = {}) => JSON.stringify({
+    name: 'portos-server',
+    version: '1.0.0',
+    lockfileVersion: 3,
+    requires: true,
+    packages: { '': { name: 'portos-server', version: '1.0.0', ...root }, ...packages },
+  });
+  const BASE_PACKAGES = {
+    'node_modules/@googleapis/gmail': { version: '16.1.1', resolved: 'https://registry.example.com/g-16.1.1.tgz' },
+    'node_modules/node-pty': { version: '1.2.0', hasInstallScript: true },
+  };
+  const BASE = lockfile(BASE_PACKAGES);
+  const planFor = (files, dependencyChanges) => buildCiTestPlan(files, {
+    trackedFiles: TRACKED_WITH_CONTRACTS,
+    dependencyChanges,
+  });
+  const lockPlan = (headText, baseText = BASE) => planFor([LOCK], { [LOCK]: classifyDependencyChange(LOCK, baseText, headText) });
+
+  it('keeps a pure-JS version bump on the Windows contract baseline and names the package', () => {
+    const plan = lockPlan(lockfile({
+      ...BASE_PACKAGES,
+      'node_modules/@googleapis/gmail': { version: '17.0.0', resolved: 'https://registry.example.com/g-17.0.0.tgz' },
+    }));
+
+    // The Linux side stays complete; only Windows narrows.
+    expect(plan.full).toBe(true);
+    expect(plan.server.mode).toBe('full');
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS);
+    expect(plan.shards.windows).toEqual([1]);
+    expect(plan.suiteReasons.windows).toContain('Windows contract baseline');
+    expect(plan.suiteReasons.windows).toContain('@googleapis/gmail');
+  });
+
+  it('escalates Windows for a native, install-script, platform-gated or optional package', () => {
+    const cases = {
+      'install script': { 'node_modules/fresh-addon': { version: '1.0.0', hasInstallScript: true } },
+      'os field': { 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } },
+      optional: { 'node_modules/maybe-native': { version: '1.0.0', optional: true } },
+      // Removing a trusted rebuild escalates too: either side of the diff counts.
+      'trusted rebuild removed': { 'node_modules/node-pty': undefined },
+      // sharp's entry carries no platform metadata; the family list catches it.
+      'platform family': { 'node_modules/sharp': { version: '0.35.6' } },
+    };
+    for (const [label, change] of Object.entries(cases)) {
+      const packages = Object.fromEntries(Object.entries({ ...BASE_PACKAGES, ...change })
+        .filter(([, entry]) => entry !== undefined));
+      const plan = lockPlan(lockfile(packages));
+      expect(plan.full, label).toBe(true);
+      expect(plan.windowsMode, label).toBe('full');
+      expect(plan.shards.windows, label).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
+      expect(plan.suiteReasons.windows, label).toContain('escalates Windows: platform-sensitive package changed');
+    }
+  });
+
+  it('treats every trusted-rebuild package as platform-sensitive', () => {
+    // The planner mirrors the allowlist instead of importing it (see
+    // PLATFORM_PACKAGE_RES); this keeps the two from drifting.
+    const trusted = Object.values(TRUSTED_REBUILDS).flatMap((groups) => groups.flatMap(({ pkgs }) => pkgs));
+    expect(trusted.length).toBeGreaterThan(0);
+    expect(trusted.filter((name) => !PLATFORM_PACKAGE_RES.some((re) => re.test(name)))).toEqual([]);
+  });
+
+  it('fails closed when the lockfile cannot be compared', () => {
+    for (const [label, baseText, headText] of [
+      ['unparsable head', BASE, '{ "packages": '],
+      ['missing base', null, BASE],
+      ['deleted head', BASE, null],
+      ['no packages map', JSON.stringify({ lockfileVersion: 1 }), BASE],
+    ]) {
+      expect(classifyDependencyChange(LOCK, baseText, headText).escalate, label).toBe(true);
+      expect(lockPlan(headText, baseText).windowsMode, label).toBe('full');
+    }
+    // No verdict at all — a caller that skipped the comparison — escalates too.
+    expect(planFor([LOCK], {}).windowsMode).toBe('full');
+  });
+
+  it('escalates Windows for engines, overrides and npm configuration changes', () => {
+    const manifest = { name: 'portos-server', dependencies: { express: '^5.2.1' }, engines: { node: '>=24.14' } };
+    const verdict = (head) => classifyDependencyChange('server/package.json', JSON.stringify(manifest), JSON.stringify(head));
+
+    expect(verdict({ ...manifest, dependencies: { express: '^5.3.0' } })).toMatchObject({ escalate: false, packages: ['express'] });
+    expect(verdict({ ...manifest, engines: { node: '>=26' } }).escalate).toBe(true);
+    expect(verdict({ ...manifest, overrides: { braces: '3.0.3' } }).escalate).toBe(true);
+    expect(verdict({ ...manifest, dependencies: { ...manifest.dependencies, 'node-pty': '^1.2.0' } }).escalate).toBe(true);
+    // The lockfile mirrors engines into its root entry.
+    expect(classifyDependencyChange(LOCK, BASE, lockfile(BASE_PACKAGES, { engines: { node: '>=26' } })).escalate).toBe(true);
+
+    for (const npmrc of ['server/.npmrc']) {
+      const plan = planFor([npmrc], {});
+      expect(plan.full, npmrc).toBe(true);
+      expect(plan.reason, npmrc).toContain('npm configuration changed');
+      expect(plan.windowsMode, npmrc).toBe('full');
+    }
+  });
+
+  it('keeps the Windows baseline for platform-sensitive changes in workspaces the job does not install', () => {
+    const unsafe = lockfile({ ...BASE_PACKAGES, 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } });
+    for (const path of ['package-lock.json', 'client/package-lock.json', 'autofixer/package-lock.json']) {
+      const plan = planFor([path], { [path]: classifyDependencyChange(path, BASE, unsafe) });
+      expect(plan.full, path).toBe(true);
+      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.suiteReasons.windows, path).toContain('the Windows job does not install that workspace');
+    }
+    for (const path of ['.npmrc', 'client/.npmrc']) {
+      expect(planFor([path], {}).windowsMode, path).toBe('files');
+    }
+    // The same diff in the server lockfile still escalates.
+    expect(lockPlan(unsafe).windowsMode).toBe('full');
+  });
+
+  it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
+    const job = workflowJobs(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8'))['windows-server'];
+    const installed = [...job.matchAll(/npm (?:ci|install)\b[^\n]*/g)].map(([cmd]) => cmd.match(/--prefix\s+(\S+)/)?.[1] ?? '.');
+    expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
+  });
+
+  it('runs the shared server contracts as a full plan on the Windows baseline', () => {
+    for (const path of ['server/lib/validation.js', 'server/lib/schemaVersions.js']) {
+      const plan = planFor([path], {});
+      expect(plan.full, path).toBe(true);
+      expect(plan.server.mode, path).toBe('full');
+      // ci.yml publishes Full CI Gate only for windows_mode 'full' (pinned in
+      // ci-base-sha.test.js), so this plan cannot vouch for Windows coverage.
+      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.windowsFiles, path).toEqual(WINDOWS_CONTRACT_TESTS);
+    }
+  });
+
+  it('compares the manifest at the real diff base through git', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-lockfile-'));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=CI', '-c', 'user.email=ci@example.com',
+      '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-q');
+      mkdirSync(join(root, 'server'));
+      writeFileSync(join(root, LOCK), BASE);
+      git('add', '--all');
+      git('commit', '-q', '--no-verify', '-m', 'base');
+      const bumped = lockfile({ ...BASE_PACKAGES, 'node_modules/@googleapis/gmail': { version: '17.0.0' } });
+      writeFileSync(join(root, LOCK), bumped);
+
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [LOCK], cwd: root });
+      expect(inputs.dependencyChanges[LOCK]).toMatchObject({ escalate: false, packages: ['@googleapis/gmail'] });
+
+      // A base commit that does not exist in the checkout fails closed.
+      const missing = collectPlanInputs({ baseSha: '0'.repeat(40), changedFiles: [LOCK], cwd: root });
+      expect(missing.dependencyChanges[LOCK]).toMatchObject({ escalate: true, reason: 'base version unavailable' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('path-gated single-purpose jobs', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const realPlan = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: repo });
+    return buildCiTestPlan(inputs.changedFiles, inputs);
+  };
+  const gates = (plan) => ({ promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment });
+
+  it('runs each job only when the real diff reaches its inputs', () => {
+    expect(gates(realPlan(['docs/README.md']))).toEqual({ promptHistory: false, linuxContainment: false });
+    // Reached only through the hash-declaring migrations' import closure.
+    expect(gates(realPlan(['server/lib/fileUtils.js']))).toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
+      .toEqual({ promptHistory: false, linuxContainment: true });
+    expect(gates(realPlan(['data.reference/prompts/stages/example.md'])))
+      .toEqual({ promptHistory: true, linuxContainment: false });
+    expect(gates(realPlan(['server/package-lock.json'])).linuxContainment).toBe(true);
+    expect(gates(realPlan(['.github/workflows/ci.yml']))).toEqual({ promptHistory: true, linuxContainment: true });
+  });
+
+  it('gates linux-containment on the whole closure of the tests the job runs', () => {
+    // A transitive dependency of the route test that its name never mentions:
+    // only the import walk can select it.
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
+    const closure = staticImportClosure(join(repo, 'server/routes/codeAnimationExecution.test.js')).files;
+    expect(closure).toContain(join(repo, 'server/services/codeAnimation/execution.js'));
+    for (const file of closure) {
+      expect(inputs.linuxContainmentInputs).toContain(file.slice(repo.length).split('\\').join('/'));
+    }
+  });
+
+  it('runs both jobs when forced full or when an input walk is inconclusive', () => {
+    expect(gates(buildCiTestPlan(['docs/README.md'], { forceFull: true })))
+      .toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: null, linuxContainmentInputs: null })))
+      .toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] })))
+      .toEqual({ promptHistory: false, linuxContainment: false });
+  });
+
+  it('still runs a job when the diff deletes one of its entry points', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-plan-gates-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      const deleted = LINUX_CONTAINMENT_TESTS[0];
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [deleted], cwd: root });
+      expect(buildCiTestPlan(inputs.changedFiles, inputs).linuxContainment).toBe(true);
+      expect(buildCiTestPlan(['docs/README.md'], inputs).linuxContainment).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('emits both decisions and ci.yml gates the jobs on them', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      emitGitHubPlan(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] }));
+      const outputs = JSON.parse(log.mock.calls.at(-1)[0]);
+      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false });
+    } finally {
+      log.mockRestore();
+    }
+
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    expect(jobs.impact).toContain('prompt_history: ${{ steps.plan.outputs.prompt_history }}');
+    expect(jobs.impact).toContain('linux_containment: ${{ steps.plan.outputs.linux_containment }}');
+    expect(jobs['prompt-history']).toContain('needs: impact');
+    expect(jobs['prompt-history']).toContain("if: needs.impact.outputs.prompt_history == 'true'");
+    expect(jobs['linux-containment']).toContain("if: needs.impact.outputs.linux_containment == 'true'");
+    // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
+    const run = jobs['linux-containment'].match(/run: npm test --prefix server -- --run (.*)/)[1];
+    expect(run.split(' ').map((path) => `server/${path}`)).toEqual(LINUX_CONTAINMENT_TESTS);
+    // A skipped gated job still reports to CI Gate, which treats skipped as passing.
+    expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
+    expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
+  });
+});
+
+describe('pregate attestation', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const TREE = 'a'.repeat(40);
+  const HEAD = 'c'.repeat(40);
+  const REPOSITORY = 'acme/widget';
+  const ALL = ['scan', 'lint', 'server', 'smoke', 'client', 'build', 'db', 'browser', 'prompt-history'];
+  const encode = (stages, tree = TREE) => encodeAttestation({ tree, stages, os: 'darwin', node: 26 });
+  const prEnv = {
+    CI_EVENT_NAME: 'pull_request', CI_REPOSITORY: REPOSITORY, CI_REPOSITORY_OWNER: 'acme', CI_PR_HEAD_REPO: REPOSITORY,
+    CI_PR_HEAD_SHA: HEAD, CI_PR_AUTHOR: 'acme', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+  };
+  const status = (overrides = {}) => ({
+    context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z', description: encode(ALL), ...overrides,
+  });
+  const NOW = 1_800_000_000_000;
+  /** An execFileSync double: git answers from the options, gh from `statuses`; a thrown entry throws. */
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], committedAt = Math.floor(NOW / 1000) - 3600, calls = [] } = {}) => (command, args) => {
+    const key = `${command} ${args.join(' ')}`;
+    calls.push(key);
+    if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
+    if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
+    if (key === `git show -s --format=%ct ${HEAD}`) return `${committedAt}\n`;
+    if (key === 'git diff --name-only HEAD^2 HEAD') {
+      if (drift === null) throw new Error('diff failed');
+      return `${drift.join('\n')}\n`;
+    }
+    if (key.startsWith('gh api ')) {
+      if (apiError) throw Object.assign(new Error('gh failed'), { stderr: apiError });
+      expect(key).toBe(`gh api repos/${REPOSITORY}/commits/${HEAD}/statuses?per_page=100`);
+      const page = typeof statuses === 'function' ? statuses() : statuses;
+      return typeof page === 'string' ? page : JSON.stringify(page);
+    }
+    throw new Error(`unexpected ${key}`);
+  };
+  const quiet = () => {};
+  const clock = () => { let t = NOW; return { now: () => t, sleep: (ms) => { t += ms; } }; };
+  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...clock(), ...extra });
+  const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
+
+  it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
+    expect(attestationEligibility(prEnv)).toMatchObject({ eligible: true, headSha: HEAD, owner: 'acme' });
+    expect(attestationEligibility({ ...prEnv, CI_PR_HEAD_REPO: 'someone/widget' }).reason).toMatch(/head repository someone\/widget is not/);
+    expect(attestationEligibility({ ...prEnv, CI_PR_AUTHOR: 'dependabot[bot]' }).reason).toMatch(/is a bot/);
+    expect(attestationEligibility({ ...prEnv, CI_BASE_REF: 'release' }).reason).toMatch(/release gate/);
+    expect(attestationEligibility({ ...prEnv, CI_FORCE_FULL: 'true' }).reason).toMatch(/full CI requested/);
+    expect(attestationEligibility({ ...prEnv, CI_EVENT_NAME: 'schedule' }).reason).toMatch(/not a pull request/);
+    expect(attestationEligibility({ ...prEnv, CI_PR_HEAD_SHA: 'abc' }).reason).toMatch(/head sha unknown/);
+    expect(attestationEligibility({}).eligible).toBe(false);
+  });
+
+  it('honors the owner\'s newest pregate status whose tree is the head tree, and nothing else', () => {
+    const honored = resolve();
+    expect(honored).toMatchObject({ attested: true, sha: HEAD, tree: TREE, creator: 'acme', os: 'darwin', node: 26, baseDrift: [], waitedMs: 0 });
+    expect(honored.stages).toContain('server');
+
+    const older = status({ created_at: '2026-10-18T09:00:00Z', description: encode(['lint']) });
+    const newest = status({ created_at: '2026-10-18T11:00:00Z', description: encode(['db']) });
+    expect(resolve({ statuses: [older, newest] }).stages).toEqual(['db']);
+
+    const reasons = [];
+    const log = (line) => reasons.push(line);
+    const refused = (options, env = prEnv) => {
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log, ...clock() });
+      expect(result.attested).toBe(false);
+      return result.reason;
+    };
+    expect(refused({ statuses: [status({ creator: { login: 'someone' } })] })).toMatch(/created by "someone"/);
+    expect(refused({ statuses: [status(), status({ state: 'failure', description: 'revoked: flaky', created_at: '2026-10-18T12:00:00Z' })] })).toMatch(/newest pregate status is failure, not success \(revoked: flaky\)/);
+    expect(refused({ headTree: 'b'.repeat(40) })).toMatch(/is not the head tree/);
+    expect(refused({ mergeHead: 'd'.repeat(40) })).toMatch(/not the merge ref of head/);
+    expect(refused({ apiError: 'HTTP 403: Resource not accessible by integration' })).toMatch(/statuses API failed: HTTP 403/);
+    expect(refused({ statuses: '<html>captive portal</html>' })).toMatch(/unreadable JSON/);
+    expect(refused({ statuses: [] })).toMatch(/no "pregate" status/);
+    expect(refused({}, { ...prEnv, CI_PR_HEAD_REPO: 'someone/widget' })).toMatch(/head repository/);
+    // Every refusal is logged with its reason — the summary's only evidence.
+    expect(reasons.every((line) => line.startsWith('⏭️ Pregate attestation not honored: '))).toBe(true);
+    expect(reasons).toHaveLength(8);
+  });
+
+  it('waits up to 90 s for a status on a head younger than five minutes, and not on an older one', () => {
+    // The status is posted after the push that started this run, so a young
+    // head with no status yet is re-read at 10 s intervals.
+    let reads = 0;
+    const lateStatuses = () => { reads += 1; return reads < 4 ? [] : [status()]; };
+    const calls = [];
+    const young = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: lateStatuses, committedAt: Math.floor(NOW / 1000) - 60, calls }), log: quiet, ...clock() });
+    expect(young).toMatchObject({ attested: true, waitedMs: 30_000 });
+    expect(reads).toBe(4);
+
+    reads = 0;
+    const lines = [];
+    const never = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }), log: (line) => lines.push(line), ...clock() });
+    expect(never.attested).toBe(false);
+    expect(reads).toBe(10);
+    expect(lines.some((line) => /^⏳ Waited 90s for a pregate status on the 60s-old head/.test(line))).toBe(true);
+
+    reads = 0;
+    expect(resolve({ statuses: () => { reads += 1; return []; } }).attested).toBe(false);
+    expect(reads).toBe(1);
+    // A revocation or a mismatch is final: no waiting for it to change.
+    reads = 0;
+    expect(resolve({ statuses: () => { reads += 1; return [status({ state: 'failure' })]; }, committedAt: Math.floor(NOW / 1000) - 60 }).attested).toBe(false);
+    expect(reads).toBe(1);
+  });
+
+  it('refuses, per stage, the stages a base-side change could reach', () => {
+    const plan = { ...fullPlan(), server: { mode: 'files', files: ['server/lib/picked.test.js'], sources: [] }, client: { mode: 'files', files: ['client/src/picked.test.jsx'], sources: [] }, browserFiles: [BROWSER_SUITES[0]] };
+    const refusedBy = (drift) => Object.keys(attestationDrift(plan, drift)).sort();
+    expect(refusedBy([])).toEqual([]);
+    expect(refusedBy(['docs/GUIDE.md', 'README.md', 'client/public/logo.png'])).toEqual([]);
+    // (a) a test file the plan selected for that runner (every server or
+    // client module is also a lint surface: lint runs the whole tree)
+    expect(refusedBy(['server/lib/picked.test.js'])).toEqual(['lint', 'server']);
+    expect(refusedBy(['client/src/picked.test.jsx'])).toEqual(['client', 'lint']);
+    expect(refusedBy(['server/lib/unpicked.test.js'])).toEqual(['lint']);
+    expect(refusedBy([BROWSER_SUITES[0]])).toEqual(['browser', 'lint']);
+    expect(refusedBy(['server/services/backup.db.test.js'])).toEqual(['db', 'lint']);
+    // (b) a non-test source under the runner's roots
+    expect(refusedBy(['server/services/thing.js'])).toEqual(['browser', 'db', 'lint', 'server', 'smoke']);
+    expect(refusedBy(['client/src/components/Thing.jsx'])).toEqual(['browser', 'build', 'client', 'lint']);
+    expect(refusedBy(['scripts/tool.js'])).toEqual(['server']);
+    expect(refusedBy(['scripts/migrations/999-x.js'])).toEqual(['prompt-history', 'server']);
+    expect(refusedBy(['data.reference/prompts/stages/x.md'])).toEqual(['prompt-history']);
+    // (c) runner config and setup files refuse everything
+    for (const config of ['server/vitest.config.js', 'client/vitest.config.js', 'scripts/vitestCiPool.js', 'server/package-lock.json', '.github/workflows/ci.yml', 'scripts/run-ci-tests.js']) {
+      expect(refusedBy([config]), config).toEqual(['browser', 'build', 'client', 'db', 'lint', 'prompt-history', 'server', 'smoke']);
+    }
+    expect(attestationDrift(plan, ['server/services/thing.js']).server).toBe('base branch moved: server/services/thing.js');
+    // Unreadable drift refuses everything.
+    expect(refusedBy(null)).toHaveLength(8);
+  });
+
+  it('treats every runner-owned test as selected when the plan runs a runner in full mode', () => {
+    const plan = fullPlan();
+    expect(plan.server).toMatchObject({ mode: 'full', files: [] });
+    const refusedBy = (drift) => Object.keys(attestationDrift(plan, drift)).sort();
+    expect(refusedBy(['server/lib/anything.test.js'])).toEqual(['lint', 'server']);
+    expect(refusedBy(['client/src/anything.test.jsx'])).toEqual(['client', 'lint']);
+  });
+
+  it('skips the attested stages, reports full=false, and leaves the CI-only jobs alone', () => {
+    const plan = fullPlan();
+    expect(plan).toMatchObject({ full: true, windows: true, linuxContainment: true, promptHistory: true, db: true, build: true, smoke: true });
+    const attested = applyAttestation(plan, resolve());
+    expect(attested).toMatchObject({
+      full: false,
+      server: { mode: 'skip' }, client: { mode: 'skip' }, lint: { mode: 'skip' },
+      db: false, build: false, smoke: false, browserFiles: [], promptHistory: false,
+      // Untouched: no local run exists for these.
+      windows: plan.windows, windowsMode: plan.windowsMode, windowsFiles: plan.windowsFiles, linuxContainment: true,
+      shards: plan.shards,
+    });
+    expect(attested.attestedStages).toEqual(['prompt-history', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db']);
+    expect(attested.attestation.driftRefused).toEqual({});
+    expect(attested.suiteReasons.server).toBe(`skipped: attested by pregate on ${HEAD.slice(0, 9)} (tree ${TREE.slice(0, 12)}, darwin/node 26)`);
+    expect(attested.suiteReasons.promptHistory).toMatch(/^skipped: attested by pregate/);
+    expect(attested.suiteReasons.windows).toBe(plan.suiteReasons.windows);
+    expect(attested.suiteReasons.attestation).toMatch(/^attested by pregate .*: skipping prompt-history, lint, server/);
+    expect(attested.changedFiles).toEqual(plan.changedFiles);
+  });
+
+  it('keeps every stage the base movement refuses, with the path, and skips the rest', () => {
+    const plan = fullPlan();
+    const moved = resolve({ drift: ['server/services/thing.js', 'docs/x.md'] });
+    const attested = applyAttestation(plan, moved);
+    expect(attested.attestedStages).toEqual(['prompt-history', 'client', 'build']);
+    expect(attested).toMatchObject({ full: false, server: { mode: plan.server.mode }, lint: { mode: plan.lint.mode }, smoke: true, db: true, client: { mode: 'skip' }, build: false, promptHistory: false });
+    expect(attested.browserFiles).toEqual(plan.browserFiles);
+    expect(attested.attestation.driftRefused).toEqual({
+      server: 'base branch moved: server/services/thing.js', lint: 'base branch moved: server/services/thing.js', smoke: 'base branch moved: server/services/thing.js',
+      browser: 'base branch moved: server/services/thing.js', db: 'base branch moved: server/services/thing.js',
+    });
+    expect(attested.suiteReasons.server).toBe(`${plan.suiteReasons.server}; attestation refused: base branch moved: server/services/thing.js`);
+    // The probe: a merge tree that differs from the head tree in runner source attests nothing for that runner.
+    const unreadable = applyAttestation(plan, resolve({ drift: null }));
+    expect(unreadable.attestedStages).toEqual([]);
+    expect(unreadable.server.mode).toBe(plan.server.mode);
+  });
+
+  it('keeps the server job when the boot smoke it owns was not attested', () => {
+    const plan = fullPlan();
+    const partial = { attested: true, reason: 'r', sha: HEAD, tree: TREE, os: 'linux', node: 24, stages: ['scan', 'server', 'lint'], baseDrift: [] };
+    const attested = applyAttestation(plan, partial);
+    expect(attested.server.mode).toBe(plan.server.mode);
+    expect(attested.smoke).toBe(true);
+    expect(attested.lint.mode).toBe('skip');
+    expect(attested.attestedStages).toEqual(['lint']);
+    expect(attested.suiteReasons.server).toMatch(/server job kept: the boot smoke was not attested$/);
+    // With no smoke selected, the server stage alone is enough.
+    const noSmoke = applyAttestation({ ...plan, smoke: false }, partial);
+    expect(noSmoke.server.mode).toBe('skip');
+    expect(noSmoke.attestedStages).toEqual(['lint', 'server']);
+  });
+
+  it('records why no attestation applied without touching the plan', () => {
+    const plan = fullPlan();
+    const untouched = applyAttestation(plan, { attested: false, reason: 'head repository someone/widget is not acme/widget' });
+    expect(untouched).toMatchObject({ ...plan, attestedStages: [] });
+    expect(untouched.full).toBe(true);
+    expect(untouched.suiteReasons.attestation).toBe('not honored: head repository someone/widget is not acme/widget');
+  });
+
+  // Not on Windows: libuv resolves a bare `gh` to the runner's installed
+  // gh.exe ahead of any `.cmd` shim on PATH, so the fake below never runs there
+  // and the real CLI answers without a token. The in-process cases above cover
+  // the decision logic on every platform; this one proves the CLI wiring.
+  it.skipIf(process.platform === 'win32')('emits the attestation through the planner CLI', () => {
+    // A merge-ref checkout (HEAD^2 is the pull request head) with a fake `gh`
+    // on PATH, so the whole wiring — env in, statuses API, base drift, plan
+    // outputs — runs exactly as the impact job does.
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-attest-'));
+    const bin = join(root, 'bin');
+    const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=Example', '-c', 'user.email=ci@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    const write = (path, body) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    };
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      write('server/lib/example.js', 'export const value = 1;\n');
+      write('server/lib/example.test.js', 'import { value } from "./example.js";\n');
+      git('add', '--all');
+      git('commit', '-qm', 'base');
+      git('checkout', '-qb', 'feature');
+      write('server/lib/example.js', 'export const value = 2;\n');
+      git('add', '--all');
+      git('commit', '-qm', 'change');
+      const head = git('rev-parse', 'HEAD');
+      const headTree = git('rev-parse', 'HEAD^{tree}');
+      git('checkout', '-q', 'main');
+      // The base moves by a docs file only: the attestation survives it.
+      write('docs/note.md', 'base moved\n');
+      git('add', '--all');
+      git('commit', '-qm', 'docs on main');
+      git('merge', '-q', '--no-ff', '--no-edit', 'feature');
+      const base = git('rev-parse', 'HEAD^1');
+
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'gh.js'), 'process.stdout.write(process.env.FAKE_GH_STATUSES);\n');
+      writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
+      const statuses = JSON.stringify([status({ description: encode(['scan', 'lint', 'server', 'smoke', 'client', 'build'], headTree) })]);
+      const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
+      }));
+
+      const honored = plan({});
+      expect(JSON.parse(honored.attestation)).toMatchObject({ attested: true, sha: head, tree: headTree, creator: 'acme', os: 'darwin', node: 26, baseDrift: ['docs/note.md'], driftRefused: {} });
+      expect(JSON.parse(honored.attested_stages)).toEqual(['lint', 'server', 'client', 'build', 'smoke']);
+      expect(honored).toMatchObject({ full: false, server_mode: 'skip', client_mode: 'skip', lint_mode: 'skip', build: false, smoke: false });
+      expect(JSON.parse(honored.suite_reasons).attestation).toMatch(/^attested by pregate/);
+
+      const fork = plan({ CI_PR_HEAD_REPO: 'someone/widget' });
+      expect(JSON.parse(fork.attestation)).toEqual({ attested: false, reason: `head repository someone/widget is not ${REPOSITORY}` });
+      expect(fork.server_mode).not.toBe('skip');
+      expect(JSON.parse(fork.attested_stages)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ci.yml gates the impact job on the attestation inputs and prints the decision', () => {
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    // Reading statuses needs the scope; nothing in the impact job may write one.
+    expect(jobs.impact).toMatch(/\n    permissions:\n      contents: read\n      statuses: read\n/);
+    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-test-plan.js'));
+    for (const line of [
+      "CI_EVENT_NAME: ${{ github.event_name }}",
+      'CI_REPOSITORY: ${{ github.repository }}',
+      'CI_REPOSITORY_OWNER: ${{ github.repository_owner }}',
+      'CI_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}',
+      'CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}',
+      'CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}',
+      'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+    ]) expect(planStep).toContain(line);
+    expect(jobs.impact).toContain('attestation: ${{ steps.plan.outputs.attestation }}');
+    expect(jobs.impact).toContain('attested_stages: ${{ steps.plan.outputs.attested_stages }}');
+    // The summary is where a reader learns a stage was skipped on a receipt,
+    // and the attestation JSON carries the platform and Node it ran on.
+    expect(jobs.impact).toContain('ATTESTATION: ${{ steps.plan.outputs.attestation }}');
+    expect(jobs.impact).toMatch(/echo "- Pregate attestation: \\`\$\{ATTESTATION\}\\`"/);
+    // The full gate must stay withheld: `full` is reported false on an attested run.
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
   });
 });

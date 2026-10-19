@@ -1,3 +1,4 @@
+vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the DB layer so the hook's attach/decision logic is exercised without a
@@ -70,6 +71,17 @@ describe('catalogImageAttachHook', () => {
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches a reference sheet taking the portrait slot of a record
+  // with no media, or losing its `sheet:<variant>` role on the way to the row.
+  it('files a role-tagged render as a reference with its role, never the portrait', async () => {
+    mediaJobEvents.emit('completed', completedImageJob({
+      catalogAttach: { ingredientId: 'ing-sheet', kind: 'portrait', role: 'sheet:environment' },
+    }, 'sheet.png'));
+    await waitFor(() => attachMedia.mock.calls.length > 0);
+    expect(attachMedia).toHaveBeenCalledWith('ing-sheet', 'sheet.png', 'reference', { role: 'sheet:environment' });
+    expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
   it('honors an explicit portrait kind even when a portrait already exists', async () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'old.png', kind: 'portrait' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-4', kind: 'portrait' } }, 'new.png'));
@@ -81,8 +93,8 @@ describe('catalogImageAttachHook', () => {
   it('is idempotent — skips when the filename is already attached (client won the race)', async () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'dup.png', kind: 'portrait' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-5' } }, 'dup.png'));
-    // Give the async handler a chance to run, then assert no second write.
-    await new Promise((r) => setTimeout(r, 30));
+    // The handler has finished deciding; only now is "no write" a proof.
+    await hook.__testing.settled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
   });
@@ -96,7 +108,7 @@ describe('catalogImageAttachHook', () => {
       { mediaKey: 'dup.png', kind: 'reference' },
     ]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-8' } }, 'dup.png'));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
   });
@@ -139,7 +151,7 @@ describe('catalogImageAttachHook', () => {
   it('skips attaching when the target ingredient was deleted before the render completed', async () => {
     getIngredient.mockResolvedValue(null); // soft- or hard-deleted: getIngredient filters deleted=false
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-gone' } }, 'orphan.png'));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(listMediaForIngredient).not.toHaveBeenCalled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
@@ -148,7 +160,7 @@ describe('catalogImageAttachHook', () => {
   it('ignores jobs without a catalogAttach tag', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ universeRun: { collectionId: 'c1' } }, 'x.png'));
     mediaJobEvents.emit('completed', completedImageJob({}, 'y.png'));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(listMediaForIngredient).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
@@ -157,7 +169,7 @@ describe('catalogImageAttachHook', () => {
   it('ignores non-image jobs and jobs with no result filename', async () => {
     mediaJobEvents.emit('completed', { kind: 'video', params: { catalogAttach: { ingredientId: 'ing-6' } }, result: { filename: 'v.mp4' } });
     mediaJobEvents.emit('completed', { kind: 'image', params: { catalogAttach: { ingredientId: 'ing-6' } }, result: {} });
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(listMediaForIngredient).not.toHaveBeenCalled();
   });
 
@@ -238,7 +250,7 @@ describe('catalogImageAttachHook', () => {
     listMediaForIngredient.mockRejectedValueOnce(new Error('db down'));
     // Must not throw / leave an unhandled rejection.
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-7' } }, 'z.png'));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
   });

@@ -23,7 +23,7 @@ vi.mock('../lib/fileUtils.js', async (original) => {
   const actual = await original();
   return { ...actual, PATHS: { ...actual.PATHS, get videos() { return uploadState.root; } } };
 });
-vi.mock('../lib/ffmpeg.js', () => ({ generateThumbnail: vi.fn(async () => null), probeVideoDuration: vi.fn(async () => 2) }));
+vi.mock('../lib/ffmpeg.js', () => ({ generateThumbnail: vi.fn(async () => null), probeVideoDuration: vi.fn(async () => 2), probeMediaTags: vi.fn(async () => ({})) }));
 vi.mock('./videoGen/history.js', () => ({ mutateVideoHistory: vi.fn(async (mutate) => {
   if (uploadState.fail) throw new Error('history write failed');
   uploadState.history = mutate(uploadState.history);
@@ -104,3 +104,20 @@ it('imports a large staged video without the JSON ceiling and removes failed imp
   expect(readdirSync(uploadState.root).sort()).toEqual(before);
   expect(existsSync(tempPath)).toBe(true);
 });
+
+ it('projects embedded video tags with the PNG import parser and preserves original bytes', async () => {
+  uploadState.fail = false;
+  const { probeMediaTags } = await import('../lib/ffmpeg.js');
+  const parameters = 'Paper boat\nNegative prompt: text\nSteps: 20, Seed: 42, Size: 512x512, CFG scale: 7, Model: example-model';
+  probeMediaTags.mockResolvedValueOnce({ comment: parameters, title: 'must not become a prompt' });
+  const bytes = ftyp('isom');
+  const entry = await saveUploadedGalleryVideoBuffer(bytes, '../../universe-character.mp4');
+  expect(entry).toMatchObject({ prompt: 'Paper boat', negativePrompt: 'text', seed: 42, source: 'upload', modelId: 'example-model', guidanceScale: 7 });
+  expect(entry.universeId).toBeUndefined();
+  expect(uploadState.history[0]).toEqual(entry);
+  expect(readFileSync(join(uploadState.root, entry.filename))).toEqual(bytes);
+  probeMediaTags.mockResolvedValueOnce({ metadata: '{invalid JSON', title: 'Do not infer this' });
+  expect(await saveUploadedGalleryVideoBuffer(bytes)).not.toHaveProperty('prompt');
+  probeMediaTags.mockResolvedValueOnce(null);
+  expect(await saveUploadedGalleryVideoBuffer(bytes)).toMatchObject({ importWarnings: [expect.stringContaining('could not be inspected')] });
+ });

@@ -112,7 +112,8 @@ describe('startBackupScheduler', () => {
         enabled: true,
         destPath: '/dest-fresh',
         excludePaths: ['fresh/'],
-        disabledDefaultExcludes: ['/loras/*.safetensors']
+        disabledDefaultExcludes: ['/loras/*.safetensors'],
+        retentionCount: 14
       }
     });
 
@@ -123,8 +124,26 @@ describe('startBackupScheduler', () => {
     expect(runBackup).toHaveBeenCalledWith(
       '/dest-fresh',
       null,
-      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: null }
+      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: 14 }
     );
+  });
+
+  it('does not pass an invalid retention count to the backup run', async () => {
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: true, destPath: '/dest', retentionCount: 0 }
+    });
+    await startBackupScheduler();
+
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: true, destPath: '/dest', retentionCount: 0 }
+    });
+
+    const handler = schedule.mock.calls[0][0].handler;
+    await handler();
+
+    expect(runBackup).toHaveBeenCalledWith('/dest', null, {
+      excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
+    });
   });
 
   it('rejects unreadable run-time settings and recovers on the next scheduled invocation', async () => {
@@ -147,6 +166,27 @@ describe('startBackupScheduler', () => {
       excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
     });
     expect(schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a backup refused by the already-running latch as a skipped slot, not a success (#12023)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const settings = { backup: { enabled: true, destPath: '/example-backups' } };
+      getSettings.mockResolvedValueOnce(settings);
+      await startBackupScheduler();
+      const handler = schedule.mock.calls[0][0].handler;
+      getSettings.mockResolvedValueOnce(settings);
+      runBackup.mockResolvedValueOnce({ skipped: true });
+
+      await expect(handler()).resolves.toEqual({ skipped: true, reason: 'already running' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('already running'));
+
+      getSettings.mockResolvedValueOnce(settings);
+      runBackup.mockResolvedValueOnce({ success: true });
+      await expect(handler()).resolves.toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('handler skips the run if backup was disabled since registration', async () => {

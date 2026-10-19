@@ -61,6 +61,18 @@ beforeEach(() => {
 });
 
 describe('applyRemoteChanges — dispatch + stats', () => {
+  it('marks protected reservations for cursor retention across ingredient and association streams', async () => {
+    const pending = { applied: false, protectedIdentity: true, identityPending: true };
+    catalogDB.upsertIngredientFromPeer.mockResolvedValueOnce(pending);
+    catalogDB.upsertMediaFromPeer.mockResolvedValueOnce(pending);
+    const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
+      ingredients: [{ id: 'reserved-survivor', type: 'character', name: 'Example' }],
+      media: [{ ingredientId: 'reserved-survivor', mediaKey: 'later.png', kind: 'reference' }],
+    });
+    expect(stats.ingredients).toMatchObject({ skipped: 1, identityPending: 1, failed: 0 });
+    expect(stats.media).toMatchObject({ skipped: 1, identityPending: 1, failed: 0, applied: 0 });
+  });
   it('routes each kind to its upsert and counts inserts/updates/skips', async () => {
     catalogDB.upsertScrapFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
     catalogDB.upsertIngredientFromPeer.mockResolvedValueOnce({ applied: true, isInsert: false });

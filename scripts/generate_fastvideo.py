@@ -60,11 +60,9 @@ _PERCENT_PATTERN = re.compile(r'\d+%')
 # from the key order of the label table below.
 # NOT "encode-prompt": that exact marker is generate_ltx2.py's Gemma
 # prompt-encode BEGIN sentinel (PROMPT_ENCODE_BEGIN_MARKER in
-# generateVideoHelpers.js), and the server arms an ltx2-specific relaunch on it.
+# generateVideoHelpers.js), and the server names the prompt-encode phase from it.
 # Emitting it here would open a phase this runner never closes, so a FastVideo
-# render killed by the Metal watchdog would be "retried" with ltx2's
-# --gemma-max-length flag, which this script's argparse rejects — replacing the
-# real watchdog error with an exit-2 after a wasted full model re-spawn.
+# watchdog abort would be reported as an encoder abort.
 _PHASE_ORDER = ("load-pipeline", "conditioning", "sampling", "mux")
 
 # Phase id -> the sentence the user reads, emitted once per transition. Ids are

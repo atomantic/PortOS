@@ -51,6 +51,34 @@ function renderCardWithPins(overrides = {}, props = {}) {
 }
 
 describe('AppTaskCard', () => {
+  it('exposes held checkout evidence and recovery prerequisites independently of coordinator success', () => {
+    renderCard({ perpetual: false, reconcileOutcomes: {
+      example: { status: 'incomplete', reason: 'merged-branches-held-back', observedAt: '2026-10-01T00:00:00Z', nextAction: 'Resolve the listed holds and run again.', remaining: [
+        { path: '/example/held', branch: 'fix/example', head: 'abc123', locked: true, lockReason: '<script>owner handoff</script>', managed: false, reason: 'worktree-locked' },
+      ] },
+    } }, { apps: [{ id: 'example', name: 'Example App' }] }, 'branch-reconcile');
+    fireEvent.click(screen.getByText(/Example App · Incomplete/));
+    expect(screen.getByText('/example/held')).toBeVisible();
+    expect(screen.getByText('HEAD: abc123')).toBeVisible();
+    expect(screen.getByText('Lock: <script>owner handoff</script>')).toBeVisible();
+    expect(document.querySelector('script')).toBeNull();
+    expect(screen.getByText('Outside managed worktree roots')).toBeVisible();
+    expect(screen.getByText(/Retiring a checkout is a scoped release/)).toBeVisible();
+    expect(screen.getByText('Resolve the listed holds and run again.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Archive and retire checkout…' })).toBeVisible();
+  });
+
+  it('distinguishes an unreadable inventory from a completed empty scan', () => {
+    renderCard({ reconcileOutcomes: {
+      example: { status: 'incomplete', remaining: null, observedAt: null },
+      empty: { status: 'drained', remaining: [], observedAt: '2026-10-01T00:00:00Z' },
+    } }, {}, 'branch-reconcile');
+    expect(screen.getByText(/example · Incomplete/)).toBeTruthy();
+    expect(screen.getByText('Remaining work is unknown.')).toBeTruthy();
+    expect(screen.getByText('No readable inventory yet.')).toBeTruthy();
+    expect(screen.getByText(/empty · No remaining work in last scan · 0 remaining/)).toBeTruthy();
+  });
+
   it('shows app coverage prominently', () => {
     renderCard();
     expect(screen.getByText('3/5 apps')).toBeTruthy();
@@ -177,6 +205,24 @@ describe('AppTaskCard', () => {
   it('shows never-run state when no prior run', () => {
     renderCard({ globalLastRun: null });
     expect(screen.getByText('Never run')).toBeTruthy();
+  });
+
+  it("lists the last run's recommended next audits when the triage lane recorded them (#12085)", () => {
+    renderCard({ recommendedAudits: { at: '2026-06-20T10:00:00Z', appId: 'app-1', items: [
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ] } }, {}, 'code-quality');
+    expect(screen.getByText('Recommended next audits')).toBeTruthy();
+    const items = screen.getAllByRole('listitem').map((item) => item.textContent);
+    expect(items).toEqual([
+      'better-structural-drift — drifted registries: server/lib/navManifest.js',
+      'ux — buried primary action: client/src/pages/Apps.jsx',
+    ]);
+  });
+
+  it('omits the recommendation block when the last run recorded none', () => {
+    renderCard({ recommendedAudits: null }, {}, 'code-quality');
+    expect(screen.queryByText('Recommended next audits')).toBeNull();
   });
 
   it('shows a swarm badge when swarmCount ≥ 2 and hides it otherwise', () => {

@@ -295,6 +295,7 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
 }));
 vi.mock('fs/promises', () => ({
+  stat: vi.fn(async () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); }),
   unlink: fsMock.unlink,
   // The route stages multipart uploads to data/uploads/ via copyFile. Stub
   // the copy so tests that simulate req.file don't actually touch disk.

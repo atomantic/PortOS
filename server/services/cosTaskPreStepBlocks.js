@@ -1,3 +1,4 @@
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
  * CoS Task Pre-Step Blocks
@@ -287,7 +288,9 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 **Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate partial ship that also records the required \`Done ✓ / Remaining ▢\` reconciliation comment. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
 
 ## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
-Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
+Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, run \`node scripts/pregate-attest.js\` when the repository ships it (on GitHub it posts the pregate receipt as a commit status so CI skips the attested stages; a refusal is reported in the summary, never retried), and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
+
+${forgeKey === 'gh' ? MANAGED_WORKTREE_CLEANUP_CONTRACT : ''}
 
 **Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (write it at the EXACT sentinel path that section gives you — the filename carries your agent id — with a short run summary of the issues claimed + their ${pr}s + merge outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
 
@@ -330,8 +333,8 @@ export function buildPlanConstraintBlock(planId) {
  *
  * @returns {Promise<{skip:boolean}>}
  */
-export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule) {
-  if (interval.perpetual !== true) return { skip: false };
+export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule, { onDemand = false } = {}) {
+  if (interval.perpetual !== true && !(onDemand && taskType === 'branch-reconcile')) return { skip: false };
   // Coerce before validating: this key is not on the schedule route's allowlist, so
   // the only way it arrives non-numeric is a hand-edited schedule.json, where `"5"`
   // is the likeliest shape and reading it as "no cap" would silently unbound the
@@ -460,11 +463,15 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   });
   // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
   // so the next tick retries instead of waiting out a full recheck cadence.
-  if (!result) return { skip: true };
+  if (!result) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
+    return { skip: true };
+  }
   // Same treatment for a cycle the reconciler skipped because `gh` was unreadable
   // (#3358): its empty in-flight set is "we could not ask", not "nothing to do",
   // so parking on it would sit out a full recheck cadence over a network blip.
   if (result.forgeUnavailable) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -474,6 +481,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // rather than parking. Merged branches were still cleaned (git truth), so log
   // that before bailing.
   if (result.prStateUnavailable) {
+    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile deferred for ${app.name}: PR state unreadable this cycle (cleaned ${result.cleaned.length} merged branch(es))`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -501,10 +509,24 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // A detached worktree has no branch to list anywhere else, so name it here too.
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   const allActionable = filterActionable(result.inFlight, actions);
+  const actionableNames = new Set(allActionable.map(branch => branch.branch));
   const idlePark = describeIdleReconcilePark(result.skipped || [], heldLive, {
     wip: result.wip, detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
+    worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
     gated: result.inFlight.filter(branch => !allActionable.includes(branch))
+  });
+  // This is a scan outcome, not the coordinator's success flag or a claim that
+  // the repository contains only its default branch. Keep known holds visible.
+  await taskSchedule.recordBranchReconcileOutcome(app.id, {
+    status: 'running', reason: 'batch-pending',
+    remaining: [
+      ...idlePark.remaining,
+      ...allActionable.map(b => ({ branch: b.branch, reason: 'actionable' })),
+      ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
+      ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
+    ],
+    nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
   if (allActionable.length === 0) {
     // Definitive idle: nothing in-flight to drive. Park on the recheck cadence,

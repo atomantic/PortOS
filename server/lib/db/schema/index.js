@@ -24,6 +24,8 @@ import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { aiGraphDdl } from './aiGraph.js';
 import { peerExecutionDdl } from './peerExecution.js';
 import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
+import { catalogIdentityDdl } from './catalogIdentity.js';
+import { buildCatalogIdentityViewsDdl } from './catalogIdentityViews.js';
 import { mediaDdl } from './media.js';
 import { universesDdl } from './universes.js';
 import { libraryDdl } from './library.js';
@@ -51,6 +53,8 @@ export {
   aiGraphDdl,
   peerExecutionDdl,
   catalogDdl,
+  catalogIdentityDdl,
+  buildCatalogIdentityViewsDdl,
   catalogUserTypesDdl,
   catalogPendingAppliesDdl,
   mediaDdl,
@@ -101,6 +105,8 @@ export function buildUpgradeDdl() {
 export function buildCatalogDdl() {
   return [
     ...catalogDdl,
+    ...catalogIdentityDdl,
+    ...buildCatalogIdentityViewsDdl(),
     ...mediaDdl,
     ...catalogUserTypesDdl,
     ...universesDdl,

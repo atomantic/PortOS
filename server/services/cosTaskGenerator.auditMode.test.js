@@ -156,6 +156,19 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     applicability.inapplicable = {};
   });
 
+  it.each([
+    [undefined, 'review-then-merge', 'codex'],
+    ['merge-on-green', 'merge-on-green', 'none'],
+    ['leave-open', 'leave-open', 'codex'],
+  ])('resolves app completion %s before rendering scheduled reviewers', async (appPolicy, expectedPolicy, reviewers) => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: false, openPR: true, useWorktree: true } });
+    promptTemplate.body = 'Reviewers: {reviewers}';
+    const task = await generateManagedAppImprovementTaskForType('security', makeApp({ defaultPrCompletion: appPolicy }), STATE, { skipPreconditions: true });
+    expect(task.metadata.prCompletion).toBe(expectedPolicy);
+    expect(task.description).toContain(`Reviewers: ${reviewers}`);
+  });
+
   it.each([true, false])('cognitive-load comment policy survives dispatch with fileIssues=%s', async (fileIssues) => {
     const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
     const { getTaskInterval } = await import('./taskSchedule.js');
@@ -165,14 +178,21 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     const task = await generate('better-cognitive-load');
     const prompt = renderPrompt(task);
     expect(prompt).toContain('Excessive code comments');
-    expect(prompt).toContain('Every accepted finding requires resolution regardless of severity');
-    expect(prompt).toContain('Previously accepted rules are revisable');
-    expect(prompt).toContain('Prefer investing effort in high-quality fixes');
-    expect(prompt).toContain('Difficulty alone is not an exemption');
-    expect(prompt).toContain('no current solution worth pursuing');
-    expect(prompt).toContain('not permission to hide a known important defect');
-    expect(prompt).toContain('warnings and nits are not exemptions');
-    expect(prompt).toContain('Never hide findings, weaken tests, or disable useful checks');
+    // The resolve-every-finding contract binds the agent that CHANGES code; a
+    // file-issues run changes nothing, so only the do-work banner carries it (#12080).
+    const resolveEveryFinding = [
+      'Every accepted finding requires resolution regardless of severity',
+      'Previously accepted rules are revisable',
+      'Prefer investing effort in high-quality fixes',
+      'Difficulty alone is not an exemption',
+      'no current solution worth pursuing',
+      'not permission to hide a known important defect',
+      'warnings and nits are not exemptions',
+      'Never hide findings, weaken tests, or disable useful checks',
+    ];
+    for (const sentence of resolveEveryFinding) {
+      expect(prompt.split(sentence).length - 1, sentence)[fileIssues ? 'toBe' : 'toBeGreaterThanOrEqual'](fileIssues ? 0 : 1);
+    }
     expect(prompt).toContain('safety rationale, external contracts, and justified workarounds');
     expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
     expect(prompt).toContain('not a rewrite of user-facing documentation');
@@ -426,7 +446,7 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('## Merge Gate');
-    expect(prompt).toContain('--merge --delete-branch');
+    expect(prompt).toContain('--merge --match-head-commit <verified-head>');
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 

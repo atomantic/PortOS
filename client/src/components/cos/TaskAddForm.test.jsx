@@ -256,6 +256,24 @@ describe('TaskAddForm responsive layout', () => {
     expect(options).not.toHaveClass('grid-cols-2');
   });
 
+  it('disables worktree and PR with an explanation only for a non-git app', async () => {
+    const apps = [
+      { id: 'git-app', name: 'Git App', repoPath: 'example.com/git', isGitRepo: true },
+      { id: 'plain-app', name: 'Plain App', repoPath: 'example.com/plain', isGitRepo: false },
+    ];
+    render(<TaskAddForm providers={[]} apps={apps} defaultApp="git-app" onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(worktreeToggle()).toBeChecked());
+    expect(worktreeToggle()).toBeEnabled();
+    expect(screen.queryByText(/is not a git repository/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Target application'), { target: { value: 'plain-app' } });
+    await waitFor(() => expect(worktreeToggle()).toBeDisabled());
+    expect(worktreeToggle()).not.toBeChecked();
+    expect(openPrToggle()).toBeDisabled();
+    expect(openPrToggle()).not.toBeChecked();
+    expect(screen.getByText(/Plain App is not a git repository/)).toBeInTheDocument();
+  });
+
   it('restores the description draft and clears it after a successful submit', async () => {
     const user = userEvent.setup();
     const description = 'Keep this task after an accidental navigation';

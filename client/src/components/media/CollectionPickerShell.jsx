@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Search } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
@@ -77,6 +78,8 @@ export default function CollectionPickerShell({
   // every prop combination through the shell.
   renderItem,
   collections: collectionsProp,
+  error = null,
+  onRetry = null,
   onCollectionsLoaded,
   onCollectionsChange,
   onCreated,
@@ -133,10 +136,10 @@ export default function CollectionPickerShell({
     if (collectionsProp !== undefined) setCollectionsState(collectionsProp);
   }, [collectionsProp]);
 
-  // Auto-load only when uncontrolled (no `collections` prop). Mirrors the old
+  // Auto-load only when uncontrolled (no `collections` prop) and no error. Mirrors the old
   // AddToCollectionMenu behavior of fetching when the popover opens.
   useEffect(() => {
-    if (collectionsProp !== undefined) return undefined;
+    if (collectionsProp !== undefined || error) return undefined;
     if (!open) return undefined;
     let cancelled = false;
     loadItems({ silent: true }).then(
@@ -238,22 +241,30 @@ export default function CollectionPickerShell({
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {collectionsState == null && (
-          <div className="text-[11px] px-2 py-2"><BrailleSpinner text="Loading…" /></div>
-        )}
-        {collectionsState != null && collectionsState.length === 0 && (
-          <div className="text-[11px] text-gray-500 px-2 py-2">{emptyMessage}</div>
-        )}
-        {list != null && collectionsState?.length > 0 && list.length === 0 && (
-          <div className="text-[11px] text-gray-500 px-2 py-2">{noMatchMessage(query)}</div>
-        )}
-        {list != null && list.length > 0 && (
-          // A real list — "list, N items" is the honest announcement for these
-          // rows; the roles menu/menuitem promised arrow-key navigation this
-          // popover does not implement.
-          <ul>
-            {list.map((c) => <li key={c.id}>{renderItem(c, { updateCollections })}</li>)}
-          </ul>
+        {error ? (
+          <div className="p-2">
+            <ListLoadError what="collections" error={error} onRetry={onRetry} />
+          </div>
+        ) : (
+          <>
+            {collectionsState == null && (
+              <div className="text-[11px] px-2 py-2"><BrailleSpinner text="Loading…" /></div>
+            )}
+            {collectionsState != null && collectionsState.length === 0 && (
+              <div className="text-[11px] text-gray-500 px-2 py-2">{emptyMessage}</div>
+            )}
+            {list != null && collectionsState?.length > 0 && list.length === 0 && (
+              <div className="text-[11px] text-gray-500 px-2 py-2">{noMatchMessage(query)}</div>
+            )}
+            {list != null && list.length > 0 && (
+              // A real list — "list, N items" is the honest announcement for these
+              // rows; the roles menu/menuitem promised arrow-key navigation this
+              // popover does not implement.
+              <ul>
+                {list.map((c) => <li key={c.id}>{renderItem(c, { updateCollections })}</li>)}
+              </ul>
+            )}
+          </>
         )}
       </div>
       <form onSubmit={handleCreate} className="mt-1.5 pt-1.5 border-t border-port-border flex gap-1 shrink-0">

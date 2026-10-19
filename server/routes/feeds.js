@@ -25,6 +25,16 @@ const addFeedSchema = z.object({
   url: z.string().url()
 });
 
+const feedIdQuery = { feedId: z.string().min(1).max(200).optional() };
+const itemsQuerySchema = z.object({
+  ...feedIdQuery,
+  unreadOnly: z.enum(['true', 'false']).optional(),
+  // parsePagination clamps these; the schema only refuses non-scalar values.
+  limit: z.string().max(20).optional(),
+  offset: z.string().max(20).optional(),
+});
+const readAllQuerySchema = z.object(feedIdQuery);
+
 // GET /api/feeds — list all feeds with unread counts
 router.get('/', asyncHandler(async (req, res) => {
   const feeds = await feedsService.getFeeds();
@@ -39,8 +49,9 @@ router.get('/stats', asyncHandler(async (req, res) => {
 
 // GET /api/feeds/items — get feed items (supports limit/offset pagination, default limit 100)
 router.get('/items', asyncHandler(async (req, res) => {
-  const { feedId, unreadOnly } = req.query;
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
+  const query = validateRequest(itemsQuerySchema, req.query);
+  const { feedId, unreadOnly } = query;
+  const { limit, offset } = parsePagination(query, { defaultLimit: 100, maxLimit: 500 });
   const items = await feedsService.getItems({
     feedId: feedId || undefined,
     unreadOnly: unreadOnly === 'true',
@@ -68,7 +79,7 @@ router.post('/refresh-all', asyncHandler(async (req, res) => {
 
 // POST /api/feeds/items/read-all — mark all items as read
 router.post('/items/read-all', asyncHandler(async (req, res) => {
-  const { feedId } = req.query;
+  const { feedId } = validateRequest(readAllQuerySchema, req.query);
   const result = await feedsService.markAllRead(feedId || undefined);
   res.json(result);
 }));

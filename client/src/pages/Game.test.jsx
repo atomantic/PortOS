@@ -9,7 +9,7 @@
  * so unkeyed integrity state would enable Start game on an unverified bundle).
  */
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -45,6 +45,17 @@ vi.mock('../services/api.js', () => ({
       spriteBindings: [],
       musicBindings: [],
       artworkBindings: [],
+      feedbackHistory: [],
+      compiledManifest: null,
+      updatedAt: '2026-07-28T12:00:00.000Z',
+    },
+    {
+      id: 'artwork-game',
+      appId: 'app-1',
+      name: 'Artwork Game',
+      spriteBindings: [],
+      musicBindings: [],
+      artworkBindings: [{ id: 'art-1', role: 'title-key-art', imageFilename: 'cover.png', label: 'Cover', destinationPath: 'game/assets/art/title/title-key-art.png' }],
       feedbackHistory: [],
       compiledManifest: null,
       updatedAt: '2026-07-28T12:00:00.000Z',
@@ -121,6 +132,22 @@ describe('Game page', () => {
         },
         assets: { sprites: [], music: [], artwork: [] },
       },
+      'artwork-game': {
+        readyToCompile: true,
+        canLaunch: false,
+        bundle: { status: 'missing' },
+        issues: [],
+        counts: {
+          spriteReady: 0,
+          spriteTotal: 0,
+          musicReady: 0,
+          musicTotal: 0,
+          artworkReady: 1,
+          artworkTotal: 1,
+          verifiedFiles: 0,
+        },
+        assets: { sprites: [], music: [], artwork: [] },
+      },
     };
   });
 
@@ -172,5 +199,28 @@ describe('Game page', () => {
     release();
     await waitFor(() => expect(screen.getByText('Not built')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
+  });
+
+  it('renders ListLoadError with retry when gallery images fail to load', async () => {
+    const { getGalleryImages } = await import('../services/api.js');
+    getGalleryImages.mockReset();
+    getGalleryImages.mockRejectedValueOnce(new Error('Gallery unavailable'));
+
+    renderAt('/game/artwork-game?gameTab=assets');
+    expect(await screen.findByText(/Could not load artwork images/)).toBeInTheDocument();
+    expect(screen.queryByText(/No world or interface artwork is bound yet/)).not.toBeInTheDocument();
+
+    getGalleryImages.mockResolvedValueOnce([{ filename: 'cover.png', prompt: 'Cover Art' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not load artwork images/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders empty copy when a game has no artwork bindings', async () => {
+    renderAt('/game/verified-game?gameTab=assets');
+    expect(await screen.findByText(/No world or interface artwork is bound yet/)).toBeInTheDocument();
+    expect(screen.queryByText('Could not load artwork images.')).not.toBeInTheDocument();
   });
 });

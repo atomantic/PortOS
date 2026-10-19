@@ -1,3 +1,4 @@
+import { catalogIdentityEvents } from './catalogIdentity/events.js';
 import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
 import { registerFleetHostSocket } from './fleetHostNotify.js';
@@ -65,7 +66,8 @@ import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
-import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
+import { bindSystemActivityIo } from './systemActivityNotify.js';
+import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 
@@ -87,6 +89,10 @@ const codeAnimationSubscribers = new Set();
 // global emit.
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
+// Operator command-runner output (#12019). Never a global emit: the stream
+// carries host command output, and a peer relay socket (restricted to
+// `cos:subscribe`) must not receive it.
+const commandSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -99,10 +105,15 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers];
 
 export function emitCodeAnimationChanged(id) {
   broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', { id });
+}
+
+/** Emit a `command:<id>:*` frame to sockets that sent `command:subscribe`. */
+export function broadcastToCommandSubscribers(event, data) {
+  broadcastToSet(commandSubscribers, event, data);
 }
 
 function broadcastToSet(set, event, data) {
@@ -214,6 +225,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'code-animation', codeAnimationSubscribers);
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
+  registerSubscriber(socket, 'command', commandSubscribers);
 }
 
 function registerErrorHandlers(socket, io) {
@@ -305,6 +317,7 @@ const SIMPLE_BRIDGES = [
   // client ignores stragglers from a prior run.
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
+  { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
   { emitter: aiStatusEvents, event: 'status', channel: 'ai:status' },
   // The call-host tab already gets `voice:call:state` from its own socket
   // handler (server/sockets/voice.js); this fans it out to every OTHER tab.
@@ -334,6 +347,7 @@ const SIMPLE_BRIDGES = [
   // The release cover art was composed, or its source image was queued or failed.
   { emitter: musicVideoEvents, event: 'cover-art', channel: 'music-video:cover-art' },
   // A shot's cached render segment rendering, rendered, or failed (shotSegments.js).
+  { emitter: musicVideoEvents, event: 'render-cleanup', channel: 'music-video:render-cleanup' },
   { emitter: musicVideoEvents, event: 'shot-render', channel: 'music-video:shot-render' },
 ];
 

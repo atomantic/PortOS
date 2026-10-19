@@ -67,7 +67,8 @@ describe('browser suite CI ownership', () => {
     ['linux', undefined, false],
     ['linux', 'browser', false],
     ['linux', 'unit', true],
-    ['win32', 'unit', false],
+    ['win32', 'unit', true],
+    ['darwin', 'unit', true],
   ])('collects the intended contracts on %s with owner %s', async (platform, owner, excluded) => {
     restorePlatform = pinPlatform(platform);
     vi.stubEnv('PORTOS_CI_BROWSER_OWNER', owner);

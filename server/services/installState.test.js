@@ -6,7 +6,7 @@ import { join } from 'path';
 // Mock the migration-status reader so the migration-ledger-root test below can
 // assert which rootDir the DEFAULT wiring passes (the rest of the suite injects
 // its own `listPending`, so the mock is inert for them).
-vi.mock('../../scripts/run-migrations.js', () => ({
+vi.mock('../../scripts/lib/migrationLedger.js', () => ({
   listPendingMigrations: vi.fn(async () => [])
 }));
 
@@ -30,7 +30,7 @@ import {
   __setBootCommitForTest,
   __internal
 } from './installState.js';
-import { listPendingMigrations } from '../../scripts/run-migrations.js';
+import { listPendingMigrations } from '../../scripts/lib/migrationLedger.js';
 import { PATHS } from '../lib/fileUtils.js';
 
 // All external effects are injected, so these tests never touch real git/fs.

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 import * as api from '../services/api';
 import OutputBlocks from '../components/cos/OutputBlocks';
 import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
@@ -162,10 +163,12 @@ export function useAgentFeedbackToast() {
     }
   }, []);
 
-  useEffect(() => {
-    // Subscribe to CoS events
-    socket.emit('cos:subscribe');
+  // Refcounted with the other cos:* consumers and re-emitted on every reconnect
+  // (the server clears its subscriber Set on disconnect); a bare emit here only
+  // worked while a sibling Layout hook happened to re-subscribe the same socket.
+  useSocketSubscription('cos');
 
+  useEffect(() => {
     // Handle agent completion events
     const handleAgentCompleted = (data) => {
       const agentId = data?.id || data?.agentId;
@@ -221,7 +224,6 @@ export function useAgentFeedbackToast() {
 
     return () => {
       socket.off('cos:agent:completed', handleAgentCompleted);
-      // Don't unsubscribe from cos since other components may use it
     };
   }, [submitFeedback]);
 

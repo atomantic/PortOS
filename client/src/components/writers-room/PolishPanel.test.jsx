@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup } from '@testing-library/react';
 
 vi.mock('../../services/apiWritersRoom', () => ({
   startWritersRoomPolish: vi.fn(),
@@ -17,6 +17,8 @@ import PolishPanel from './PolishPanel';
 import {
   getWritersRoomPolishStatus,
   listWritersRoomPolishSnapshots,
+  startWritersRoomPolish,
+  revertWritersRoomPolishSnapshot,
 } from '../../services/apiWritersRoom';
 
 describe('PolishPanel', () => {
@@ -41,4 +43,26 @@ describe('PolishPanel', () => {
     expect(revertBtn.className).toContain('min-h-[44px]');
     expect(revertBtn.className).toContain('min-w-[44px]');
   });
+});
+
+
+it('blocks server body mutations during a draft transition and reports pending revert ownership', async () => {
+  getWritersRoomPolishStatus.mockResolvedValue({ active: false });
+  listWritersRoomPolishSnapshots.mockResolvedValue([{ id: 'snap-1', label: 'Earlier draft', createdAt: '2026-01-01T00:00:00Z' }]);
+  const busy = vi.fn();
+  let resolve;
+  revertWritersRoomPolishSnapshot.mockReturnValueOnce(new Promise((yes) => { resolve = yes; }));
+  const props = { work: { id: 'work-1' }, dirty: false, onBusyChange: busy };
+  const view = render(<PolishPanel {...props} blocked />);
+  const revert = await screen.findByRole('button', { name: /revert/i });
+  expect(revert).toBeDisabled();
+  fireEvent.click(revert);
+  expect(revertWritersRoomPolishSnapshot).not.toHaveBeenCalled();
+  expect(startWritersRoomPolish).not.toHaveBeenCalled();
+  view.rerender(<PolishPanel {...props} />);
+  fireEvent.click(revert);
+  expect(busy).toHaveBeenLastCalledWith(true);
+  await act(async () => { resolve({ ok: true }); });
+  expect(busy).toHaveBeenLastCalledWith(false);
+  expect(revert).toBeEnabled();
 });

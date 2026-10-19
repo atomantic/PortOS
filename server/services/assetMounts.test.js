@@ -80,7 +80,7 @@ describe('the server-owned namespace terminators', () => {
     expect(preview.headers['content-disposition']).toBeUndefined();
     const download = await request(app).get('/data/videos/example.mp4?download=1');
     expect(download.status).toBe(200);
-    expect(download.headers['content-disposition']).toBe('attachment; filename="example.mp4"');
+    expect(download.headers['content-disposition']).toBe('attachment; filename=example.mp4');
     expect(download.headers['content-type']).toContain('video/mp4');
     expect(download.headers['content-security-policy']).toContain('sandbox');
     expect(download.headers['x-content-type-options']).toBe('nosniff');

@@ -22,9 +22,15 @@ No `tailcat serve all`, no exit-node mode, and no Tailscale daemon are used.
 
 Managed serve exposes the **remote** PortOS API on loopback `:5565`, with the same
 HTTP/HTTPS mode and optional instance authentication as the main API. The listener
-marks requests as remote before dispatch, so Agent Context MCP and its manifest
-reject them even though Tailcat connects from localhost. Headers cannot claim local
-authority. Local MCP clients on the main API or HTTP mirror continue to work.
+marks requests as remote before dispatch — HTTP requests and the Socket.IO
+handshake alike — so a Tailcat caller is never a *local connection*: on a
+password-free install the host-control routes and socket events (command
+execution, shells, CoS spawns, setting the first password) refuse it with
+`HOST_CONTROL_FORBIDDEN`, and Agent Context MCP and its manifest reject it. Set an
+instance password and sign in to use host control through Tailcat. Headers cannot
+claim local authority. Local MCP clients on the main API or HTTP mirror continue to
+work. Starting managed serve or a forward is itself a host-control action (it
+installs the `tailcat` binary and starts relay processes).
 
 A Tailcat capability still grants normal remote PortOS API access. Share it only
 with trusted peers; this is not a restricted API for an untrusted sandbox.

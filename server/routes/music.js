@@ -117,25 +117,36 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
     send({ type: 'error', message: `Another ${engine.name} install is already running. Wait for it to finish or restart PortOS.` });
     return safeEnd();
   }
+  // Claim synchronously before platform/CUDA probes can yield, so concurrent
+  // requests cannot both pass the guard while readiness is being checked.
+  runtimeInstallInFlight.set(engine.id, null);
   if (!isEnginePlatformSupported(engine.id)) {
+    runtimeInstallInFlight.delete(engine.id);
     send({ type: 'error', message: `${engine.name} requires ${enginePlatformLabel(engine.id)} and cannot be installed on this host.` });
     return safeEnd();
   }
   if (engine.cudaRequired) {
-    const cuda = await getCudaCapability();
+    let cuda;
+    try {
+      cuda = await getCudaCapability();
+    } catch (error) {
+      runtimeInstallInFlight.delete(engine.id);
+      throw error;
+    }
     if (cuda.status !== 'available') {
       send({ type: 'error', message: cuda.status === 'unknown'
         ? `${engine.name} cannot be installed because CUDA availability could not be determined.`
         : `${engine.name} requires an NVIDIA CUDA GPU and cannot be installed on this host.` });
+      runtimeInstallInFlight.delete(engine.id);
       return safeEnd();
     }
     const vram = resolveEngineVramReadiness(engine.id, cuda);
     if (vram.state !== MUSIC_VRAM_READINESS.SUFFICIENT) {
       send({ type: 'error', message: formatEngineVramReadinessMessage(engine.id, vram, 'installed') });
+      runtimeInstallInFlight.delete(engine.id);
       return safeEnd();
     }
   }
-  runtimeInstallInFlight.set(engine.id, null);
 
   // Force a fresh probe: a cached `true` from before the venv broke would
   // short-circuit the very install meant to repair it.

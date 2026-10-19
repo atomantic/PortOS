@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { __createManualClock } from '../lib/eventLoopLagProbe.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'cos-state-test-' });
 
@@ -415,6 +416,32 @@ describe('live CoS restore boundary', () => {
     expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Partial restore');
   });
 
+  // A pre-#6182 snapshot keeps its config in state.json and ships no
+  // config.json, so the live config.json is newer than the restore point.
+  it.each([
+    { name: 'first restore', liveSlice: null, landed: true, legacy: true, expected: 7, parked: true },
+    { name: 'repeat restore', liveSlice: { maxConcurrentAgents: 7 }, landed: true, legacy: true, expected: 7, parked: true },
+    // 339 can leave a config-first copy in both files; a failed transfer installed nothing.
+    { name: 'failed transfer over a matching live slice', liveSlice: { maxConcurrentAgents: 7 }, landed: false, legacy: true, expected: 3, parked: false },
+    { name: 'snapshot has config.json', liveSlice: null, landed: true, legacy: false, expected: 5, parked: false },
+  ])('restores the snapshot config over a newer config.json: $name', async ({ liveSlice, landed, legacy, expected, parked }) => {
+    writeConfig({ maxConcurrentAgents: 3 });
+    writeState(liveSlice ? { agents: {}, config: liveSlice } : { agents: {} });
+    const store = await freshModule();
+    const restore = store.withLiveCosRestore(async () => {
+      if (!landed) throw new Error('rsync failed');
+      if (!legacy) writeConfig({ maxConcurrentAgents: 5 });
+      writeState({ agents: {}, config: { maxConcurrentAgents: 7 } });
+    }, { snapshotLegacyConfig: legacy ? { maxConcurrentAgents: 7 } : null });
+    if (landed) await restore;
+    else await expect(restore).rejects.toThrow('rsync failed');
+    expect((await store.getConfig()).maxConcurrentAgents).toBe(expected);
+    expect(readJson(CONFIG_PATH).maxConcurrentAgents).toBe(expected);
+    const aside = readdirSync(COS_DIR).filter(f => f.startsWith('config.pre-restore-'));
+    expect(aside).toHaveLength(parked ? 1 : 0);
+    if (parked) expect(readJson(join(COS_DIR, aside[0]))).toEqual({ maxConcurrentAgents: 3 });
+  });
+
   it.each([
     { running: true, agents: {} },
     { agents: { example: { status: 'running' } } },
@@ -437,5 +464,37 @@ describe('live CoS restore boundary', () => {
     await expect(store.withLiveCosRestore(transfer)).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
     expect(transfer).not.toHaveBeenCalled();
     expect(readFileSync(STATE_PATH, 'utf8')).toBe('{broken');
+  });
+});
+
+// #12329: a slow state operation must separate durable-write stages and
+// event-loop lag, logging only bounded numbers.
+describe('state operation slow diagnostics', () => {
+  it('reports each persistence stage and splits a slow write into I/O wait and loop lag', async () => {
+    const store = await freshModule();
+    const clock = __createManualClock();
+    store.__setCosStateDiagnosticsClockForTests(clock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const stages = [];
+      await store.saveState(await store.loadState(), { onStage: (stage) => {
+        stages.push(stage);
+        if (stage === 'write') clock.advance(1500);
+        if (stage === 'dirSync') clock.stall(600);
+      } });
+      expect(stages).toEqual(['prepare', 'serialize', 'write', 'replace', 'dirSync']);
+      expect(readJson(STATE_PATH).agents).toEqual({});
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^🐢 CoS state write slow outcome=saved totalMs=2100 prepareMs=0 serializeMs=0 writeMs=1500 replaceMs=0 dirSyncMs=600 loopLagMs=500 loopLagMaxMs=500 sizeKiB=\d+$/);
+
+      warn.mockClear();
+      await store.withStateLock(async () => clock.advance(200));
+      expect(warn).not.toHaveBeenCalled();
+      await store.withStateLock(async () => clock.stall(1200));
+      expect(warn.mock.calls.map(([line]) => line)).toEqual(['🐢 CoS state queue slow hold heldMs=1200 waitMs=0 loopLagMs=1100 loopLagMaxMs=1100']);
+    } finally {
+      store.__setCosStateDiagnosticsClockForTests(null);
+      warn.mockRestore();
+    }
   });
 });

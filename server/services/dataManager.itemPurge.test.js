@@ -149,3 +149,25 @@ describe('training-run source details', () => {
     expect(detail.items[0].sourceHref).toBeUndefined();
   });
 });
+
+// data/backup/ is shared with the backup service's own state (state.json) and
+// the staging directory an in-flight archive writes into. A category-wide purge
+// must take the archives and nothing else (#11864).
+describe('purgeCategory — backup keeps the service state (#11864)', () => {
+  it('removes only archive files and leaves state.json and staging intact', async () => {
+    const archiveA = 'images-2026-10-01T10-00-00.tar.gz';
+    const archiveB = 'images-2026-10-02T10-00-00-0123abcd-1234-1234-1234-123456789abc.tar.gz';
+    mkdirSync(dataPath('backup', '.archive-inflight'), { recursive: true });
+    writeFileSync(dataPath('backup', '.archive-inflight', 'partial.tar.gz'), 'partial');
+    writeFileSync(dataPath('backup', 'state.json'), '{"lastRun":"2026-10-01"}');
+    writeFileSync(dataPath('backup', archiveA), 'a');
+    writeFileSync(dataPath('backup', archiveB), 'b');
+
+    const result = await purgeCategory('backup');
+    expect(result).toEqual({ category: 'backup', subPath: null });
+    expect(existsSync(dataPath('backup', archiveA))).toBe(false);
+    expect(existsSync(dataPath('backup', archiveB))).toBe(false);
+    expect(existsSync(dataPath('backup', 'state.json'))).toBe(true);
+    expect(existsSync(dataPath('backup', '.archive-inflight', 'partial.tar.gz'))).toBe(true);
+  });
+});

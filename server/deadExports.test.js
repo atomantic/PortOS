@@ -70,8 +70,11 @@ function addedExportNames() {
   return addedExportNamesFromDiff(diff);
 }
 
+// Untracked (non-ignored) files count as callers too: addedExportNames diffs the
+// working tree, and pregate validates uncommitted work, so a new caller file
+// that is not yet `git add`ed must not make its import look orphaned.
 function trackedFiles() {
-  return execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, maxBuffer: GIT_MAX_BUFFER })
+  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, maxBuffer: GIT_MAX_BUFFER })
     .toString('utf8').split('\0').filter(Boolean)
     .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
     .filter(file => existsSync(join(ROOT, file)))

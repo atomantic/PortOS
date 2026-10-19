@@ -1,9 +1,12 @@
 import { StrictMode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
+
+const mockUploadRequest = vi.fn();
+vi.mock('../services/apiCore.js', async importOriginal => ({ ...await importOriginal(), request: (...args) => mockUploadRequest(...args) }));
 
 const mockGetMoodBoard = vi.fn();
 const mockUpdateMoodBoard = vi.fn();
@@ -15,6 +18,7 @@ const mockImportMoodBoardXPost = vi.fn();
 const mockLocalizeMoodBoardMedia = vi.fn();
 const mockRenderMoodBoardItem = vi.fn();
 const socketHandlers = new Map();
+const mockNavigate = vi.fn();
 
 vi.mock('../services/socket', () => ({
   default: {
@@ -52,6 +56,7 @@ vi.mock('../components/ui/Toast', () => ({
 // test is the page's own wiring (open, persist via onResult, stored-analysis
 // children), not the analyzer internals, which have their own suite.
 let analysisDelay = null;
+vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: ({ open, onSelect }) => open ? <button onClick={() => onSelect({ key: 'image:pic.png', previewUrl: '/data/images/pic.png' })}>Choose fixture</button> : null }));
 vi.mock('../components/moodBoard/MoodBoardGeneratePanel', () => ({ default: () => <div data-testid="generate-more-panel" /> }));
 vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
   default: () => <div data-testid="board-style-panel" />,
@@ -97,7 +102,7 @@ vi.mock('react-router', async (importOriginal) => {
   return {
     ...actual,
     useParams: () => ({ id: currentId }),
-    useNavigate: () => vi.fn(),
+    useNavigate: () => mockNavigate,
   };
 });
 
@@ -124,9 +129,11 @@ const renderPage = (initialEntries = ['/mood-boards/a']) => render(
 );
 
 const boardNameValue = () => screen.getByLabelText('Name').value;
+const openTool = (name) => fireEvent.click(screen.getByRole('tab', { name }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
@@ -275,6 +282,7 @@ describe('MoodBoardDetail stale-response guards', () => {
     mockSyncMoodBoardPinterest.mockReturnValueOnce(oldSync.promise);
     const { rerender } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    openTool('Import');
     fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
 
     currentId = 'missing';
@@ -310,6 +318,7 @@ describe('MoodBoardDetail private Pinterest import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Board URL'), { target: { value: boardUrl } });
     fireEvent.click(screen.getByRole('button', { name: 'Import pins' }));
 
@@ -357,6 +366,7 @@ describe('MoodBoardDetail X post import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
 
@@ -371,6 +381,7 @@ describe('MoodBoardDetail X post import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
 
@@ -613,6 +624,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     expect(screen.getByTestId('item-indicator-prompt')).toHaveTextContent('Prompt');
     const input = screen.getByLabelText('Item prompt');
     expect(input).toHaveValue('explicit prompt text');
+    expect(input).toHaveAttribute('maxlength', '16000');
   });
 
   it('displays only default caption with no indicator when item has not been analyzed or given a prompt', async () => {
@@ -634,8 +646,8 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
   });
 });
 
-describe('MoodBoardDetail desktop layout', () => {
-  it('puts the add panel before the items list in the single-column source order', async () => {
+describe('MoodBoardDetail layout', () => {
+  it('shows pins first with every board tool one tap away in the side rail', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({
       id: 'a',
       name: 'Board A',
@@ -645,47 +657,84 @@ describe('MoodBoardDetail desktop layout', () => {
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
     const itemsSection = screen.getByRole('region', { name: 'Mood board items' });
-    const addAside = screen.getByRole('complementary', { name: 'Add to mood board' });
+    const tools = screen.getByRole('complementary', { name: 'Board tools' });
+    expect(itemsSection.parentElement).toBe(tools.parentElement);
+    expect(itemsSection.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(itemsSection.parentElement.className).toContain('@4xl/board:grid-cols-[minmax(0,1fr)_24rem]');
 
-    const parentGrid = itemsSection.parentElement;
-    expect(parentGrid).toBe(addAside.parentElement);
-    // Wide boards keep the 22rem side column. Source order is the stacked
-    // order; order-last plus reading-flow put the aside on the right and
-    // keep tab order with that visual column.
-    expect(parentGrid.className).toContain('@4xl/board:grid-cols-[minmax(0,1fr)_22rem]');
-    expect(parentGrid.className).toContain('[reading-flow:grid-order]');
-    expect(parentGrid.firstElementChild).toBe(addAside);
-    expect(parentGrid.lastElementChild).toBe(itemsSection);
-    expect(addAside.className).toContain('@4xl/board:order-last');
-    expect(addAside.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    expect(addAside).toContainElement(screen.getByRole('heading', { name: 'Add item' }));
-    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
-
-    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
-    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-    expect(disclosure.className).toContain('@4xl/board:hidden');
-    const imports = document.getElementById('mood-board-import-panels');
-    expect(addAside).toContainElement(imports);
-    expect(imports.className).toContain('hidden');
-    expect(imports.className).toContain('@4xl/board:block');
-    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
-    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import' }));
-    expect(disclosure.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Add is the default tool; the others stay mounted but hidden.
+    expect(tools).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+    expect(screen.queryByRole('button', { name: 'Import pins' })).toBeNull();
+    openTool('Import');
+    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pin to board' })).toBeNull();
+    expect(screen.getByTestId('generate-more-panel')).toBeInTheDocument();
   });
 
-  it('reveals Pinterest and X import in one click on the stacked layout', async () => {
-    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+  it('edits the board prompt as a multi-line field in the tool panel', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'Old prompt', items: [] });
+    mockUpdateMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'New prompt\nSecond line', items: [] });
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Import from Pinterest or X' }));
-    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
-    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    const imports = document.getElementById('mood-board-import-panels');
-    expect(imports.className).not.toContain('hidden');
-    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
+    const tools = screen.getByRole('complementary', { name: 'Board tools' });
+    const field = screen.getByLabelText('Board prompt');
+    expect(tools).toContainElement(field);
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(Number(field.getAttribute('rows'))).toBeGreaterThan(1);
+    expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull();
+
+    fireEvent.change(field, { target: { value: 'New prompt\nSecond line' } });
+    expect(screen.queryByRole('button', { name: 'Save', exact: true })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save prompt' }));
+    await waitFor(() => expect(mockUpdateMoodBoard).toHaveBeenCalledWith('a', { name: 'Board A', description: 'New prompt\nSecond line' }, { silent: true }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull());
+  });
+
+  it('remembers the last tool used for the next board', async () => {
+    mockGetMoodBoard.mockResolvedValue({ id: 'a', name: 'Board A', items: [] });
+    const { unmount } = renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    openTool('Import');
+    unmount();
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.getByRole('tab', { name: 'Import' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Import pins' })).toBeInTheDocument();
+  });
+});
+
+describe('MoodBoardDetail phone tool sheet', () => {
+  const desktopWidth = window.innerWidth;
+  beforeEach(() => { window.innerWidth = 390; });
+  afterEach(() => { window.innerWidth = desktopWidth; });
+
+  it('opens a tool as a sheet on its own history entry and closes it with one step back', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
+
+    const row = screen.getByRole('navigation', { name: 'Board tools' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Import' }));
+    const sheet = screen.getByRole('dialog', { name: 'Board tools' });
+    expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Pinterest board' }));
+
+    // Switching tools inside the sheet keeps it open on the same entry.
+    fireEvent.click(screen.getByRole('tab', { name: 'Add' }));
+    expect(screen.getByRole('dialog', { name: 'Board tools' })).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close board tools' }));
+    expect(mockNavigate).toHaveBeenCalledWith(-1);
+  });
+
+  it('does not pop the sheet open for a ?tool= link from the desktop rail', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage(['/mood-boards/a?tool=style']);
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Board tools' })).toBeInTheDocument();
   });
 });
 
@@ -720,4 +769,84 @@ describe('MoodBoardDetail note render', () => {
     expect(await screen.findByText('Render failed: out of memory')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Render' })).toBeEnabled();
   });
+});
+
+
+describe('MoodBoardDetail direct upload', () => {
+  const image = new File(['synthetic image'], 'reference.png', { type: 'image/png' });
+  const video = new File(['synthetic video'], 'motion.mp4', { type: 'video/mp4' });
+  const savedImage = { filename: 'upload-image.png', path: '/data/images/upload-image.png', metadata: { prompt: 'Paper boat' } };
+  const savedVideo = { id: 'upload-video', filename: 'upload-video.mp4', thumbnail: 'upload-video-thumb.jpg', prompt: 'Clouds' };
+  const pick = files => fireEvent.change(screen.getByLabelText('Upload'), { target: { files } });
+
+  it('uploads mixed files once, preserves embedded prompts, and retries a lost pin response without reuploading or duplicating the pin', async () => {
+    const upload = deferred();
+    const pins = new Map();
+    let loseResponse = true;
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockUploadRequest.mockImplementation(async (path, options) => {
+      if (path === '/image-gen/upload') return upload.promise;
+      if (path === '/video-gen/upload') return savedVideo;
+      const payload = JSON.parse(options.body);
+      if (!pins.has(payload.mediaKey)) pins.set(payload.mediaKey, { ...payload, id: `pin-${pins.size}` });
+      if (loseResponse) { loseResponse = false; throw new Error('Response lost'); }
+      return pins.get(payload.mediaKey);
+    });
+    renderPage();
+    await screen.findByLabelText('Upload');
+    expect(screen.getByLabelText('Upload')).toHaveAttribute('multiple');
+    expect(screen.getByRole('button', { name: 'Pick from gallery' })).toBeInTheDocument();
+    pick([image, video]);
+    pick([image, video]);
+    expect(screen.getByLabelText('Upload')).toBeDisabled();
+    expect(mockUploadRequest).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent('queued');
+    await act(async () => upload.resolve(savedImage));
+    await screen.findByText(/mood board assignment failed: Response lost/);
+    await screen.findByText('1 of 2 imported');
+    expect(screen.queryByRole('list', { name: 'Import queue' })).toBeNull();
+    const retry = screen.getByRole('button', { name: 'Retry failed / cancelled' });
+    await act(async () => { fireEvent.click(retry); fireEvent.click(retry); });
+    await screen.findByText('2 of 2 imported');
+    expect(screen.queryByRole('region', { name: 'Imports needing attention' })).toBeNull();
+    expect(mockUploadRequest.mock.calls.filter(([path]) => path.endsWith('/upload'))).toHaveLength(2);
+    expect([...pins.values()]).toEqual([
+      expect.objectContaining({ type: 'image', mediaKey: 'image:upload-image.png', prompt: 'Paper boat' }),
+      expect.objectContaining({ type: 'video', mediaKey: 'video:upload-video.mp4', imageUrl: '/data/video-thumbnails/upload-video-thumb.jpg', prompt: 'Clouds' }),
+    ]);
+    expect(screen.getAllByLabelText('Item prompt')).toHaveLength(2);
+  });
+
+  it('finishes the active upload on its original board and stops queued files after navigation', async () => {
+    const upload = deferred();
+    mockGetMoodBoard.mockImplementation(async id => ({ id, name: `Board ${id}`, items: [] }));
+    mockUploadRequest.mockImplementation(async (path, options) => {
+      if (path === '/image-gen/upload') return upload.promise;
+      return { id: 'pin-old', ...JSON.parse(options.body) };
+    });
+    const view = renderPage();
+    await screen.findByLabelText('Upload');
+    pick([image, video]);
+    currentId = 'b';
+    view.rerender(<MemoryRouter><MoodBoardDetail /></MemoryRouter>);
+    await waitFor(() => expect(boardNameValue()).toBe('Board b'));
+    await act(async () => upload.resolve(savedImage));
+    expect(mockUploadRequest.mock.calls.map(([path]) => path)).toEqual(['/image-gen/upload', '/mood-boards/a/items']);
+    expect(screen.queryByLabelText('Item prompt')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Import queue' })).toBeNull();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+});
+
+
+it('keeps one visible item when the gallery returns an already pinned asset', async () => {
+  const item = { id: 'existing-pin', type: 'image', mediaKey: 'image:pic.png', imageUrl: '/data/images/pic.png', caption: 'Legacy gallery caption' };
+  mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [item] });
+  mockAddMoodBoardItem.mockResolvedValue(item);
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'Pick from gallery' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
+  expect(screen.getAllByRole('button', { name: 'Preview image' })).toHaveLength(1);
+  expect(screen.getByLabelText('Item prompt')).toHaveAttribute('maxlength', '2000');
 });

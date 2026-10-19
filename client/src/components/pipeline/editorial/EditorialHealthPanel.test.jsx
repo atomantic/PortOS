@@ -57,11 +57,10 @@ beforeEach(() => {
 
 describe('EditorialHealthPanel', () => {
   it('renders nothing without a series', async () => {
-    const { container } = await renderPanel({ seriesId: '' });
+    await renderPanel({ seriesId: '' });
     // The router + probe still render; the panel itself renders null.
     expect(screen.queryByText('Editorial Health')).toBeNull();
     expect(getEditorialHealth).not.toHaveBeenCalled();
-    expect(container).toBeTruthy();
   });
 
   it('shows the score, readiness, severity breakdown and trend delta', async () => {

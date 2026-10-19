@@ -28,7 +28,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
-| `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
+| `@googleapis/gmail` | — | REPLACED | Messages/Gmail integration | Issue #12219 → `server/services/gmailApi.js`, a six-operation adapter over the `@googleapis/calendar` OAuth client's `request()` (fixed Gmail v1 origin; auth, refresh and transport stay upstream). Calendar still retains `googleapis-common`, Google auth and their transport dependencies, so this trims a direct dependency and its update churn, not that transitive supply chain |
 | `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
@@ -42,6 +42,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
+| `trash` | — | REPLACED | Recoverable image/video history deletion (`server/lib/trashFiles.js`) | Issue #12246 → PortOS-owned adapters in `server/lib/nativeTrash.js` / `nativeTrashXdg.js` (ADR `docs/decisions/2026-10-18-native-trash-without-dependency.md`): `osascript` + `NSFileManager.trashItemAtURL` per file on macOS, Windows PowerShell 5.1 + shell32 `SHFileOperationW` with a fixed-drive pre-flight, freedesktop Trash 1.0 on `node:fs` for Linux. Removed the package's 57 lockfile entries, its ad-hoc-signed macOS binary and unsigned Windows executable |
 | `undici` | 1 | KEEP | HTTP client | Node core team project |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
@@ -149,11 +150,23 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier 2/3 and become replacement candidates regardless of popularity:
 
-- `@googleapis/calendar` / `@googleapis/gmail` — narrow surface used; could be replaced with direct REST calls + owned auth.
+- `@googleapis/calendar` — narrow surface used; could be replaced with direct REST calls + owned auth (Gmail already is, via `gmailApi.js`).
 - Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts` deps would be re-evaluated.
 - `pm2` would NOT be replaced (foundational process manager).
 
 This is intentionally NOT done in default mode — current dependency footprint is reasonable for the project's deployment context (single-user, Tailscale-private).
+
+## Extreme-Mode Notes
+
+`/do:depfree --extreme` (and the `better-dependency-freedom` scheduled audit with its removal bar set to **Extreme**) aims at zero dependencies: it forces the strongest model tier at maximum reasoning effort, drops the line ceiling in favor of a parity-test gate, and keeps only what cannot be owned responsibly — the Node runtime and npm, security-sensitive protocol implementations (the `pg` wire protocol and its authentication, TLS), native bindings (`node-pty`, `better-sqlite3-multiple-ciphers`, `sharp`), and the CI-required test runner. Under that bar the following Tier 1 entries become candidates, each needing a written replacement design and a parity suite before any call site switches:
+
+- `express` and `compression` — the used surface is routing, middleware chaining, static files, body parsing, and Brotli/gzip negotiation over `node:http` and `node:zlib`.
+- `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
+- `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
+- `@googleapis/*` — direct REST calls plus owned OAuth signing.
+- `chokidar`, `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts`, `three` — re-evaluated by used surface, not size.
+
+An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring it, so this section is a forecast, not a decision log; the decision log is the tables above, which record the mode each row was reached under.
 
 ## Override Pins (`overrides`)
 

@@ -632,7 +632,10 @@ describe('validation.js', () => {
     });
 
     it('accepts only known app PR completion defaults', () => {
-      expect(appUpdateSchema.safeParse({ defaultPrCompletion: 'leave-open' }).success).toBe(true);
+      for (const policy of ['review-then-merge', 'merge-on-green', 'leave-open', 'draft']) {
+        expect(appUpdateSchema.parse({ defaultPrCompletion: policy }).defaultPrCompletion).toBe(policy);
+        expect(appSchema.parse({ name: 'Example', repoPath: '/repo', defaultPrCompletion: policy }).defaultPrCompletion).toBe(policy);
+      }
       expect(appUpdateSchema.safeParse({ defaultPrCompletion: 'later' }).success).toBe(false);
     });
 
@@ -2186,6 +2189,9 @@ describe('validation.js', () => {
     it('rejects ".." traversal segments and absolute paths', () => {
       expect(subdirFilterSchema.safeParse('../other-dir').success).toBe(false);
       expect(subdirFilterSchema.safeParse('data/../../etc').success).toBe(false);
+      for (const v of ['brain/', './brain', 'brain/./x', 'brain//x']) {
+        expect(subdirFilterSchema.safeParse(v).success).toBe(false);
+      }
       expect(subdirFilterSchema.safeParse('/etc/passwd').success).toBe(false);
     });
 

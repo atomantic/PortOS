@@ -47,7 +47,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, posix } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles as trackedJsx, trackedSourceFiles as trackedSources } from './test/trackedFiles.js';
 import { escapeRegExp } from './lib/textUtils.js';
@@ -1384,9 +1384,11 @@ function wrapperShapes(body, params) {
 // Resolve a relative import specifier to a client-relative path, the way the
 // bundler would. Restricted to git-tracked sources for the same reason the scan
 // is: an untracked scratch file must not be able to name a control either.
+// posix join: tracked paths come from `git ls-files` with `/` separators, and
+// win32 `join` would emit `\\` and never match them.
 function resolveRelativeImport(fromFile, specifier) {
   if (!specifier.startsWith('.')) return null;
-  const base = join(dirname(fromFile), specifier);
+  const base = posix.join(posix.dirname(fromFile), specifier);
   const candidates = [base, `${base}.jsx`, `${base}.js`, `${base}/index.jsx`, `${base}/index.js`];
   // The virtual set is consulted without being folded into `trackedSourceSet()`
   // — that Set is memoized for the whole suite, and seeding it would outlive
@@ -2200,11 +2202,15 @@ describe('a11y conventions', () => {
   // chevrons + a layered Esc cascade Modal's stack would swallow) and supplies
   // the dialog semantics itself: role="dialog"/aria-modal, useFocusTrap, and a
   // window-level Esc handler.
+  // MoodBoardDetail's phone tool sheet is the same element as the desktop tool
+  // rail, so its tools stay mounted (running jobs keep state) across open,
+  // close and resize; it carries role="dialog", useFocusTrap and useEscLayer.
   const MODAL_BACKDROP_ALLOWLIST = new Set([
     'src/components/ui/Modal.jsx',
     'src/components/Drawer.jsx',
     'src/components/Layout.jsx',
     'src/components/media/MediaLightbox.jsx',
+    'src/pages/MoodBoardDetail.jsx',
   ]);
 
   it('routes full-screen dark overlays through the shared <Modal>', () => {
@@ -4009,7 +4015,6 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     'src/pages/CapabilityMap.jsx',
     'src/pages/ImageClean.jsx',
     'src/pages/MoodBoardDetail.jsx',
-    'src/pages/RoundEditor.jsx',
     'src/pages/Security.jsx',
     'src/pages/UniverseBuilder.jsx',
     'src/pages/Uploads.jsx',

@@ -992,7 +992,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       }
       throw manifestReadFailure('data stat', err);
     });
-    if (!info || !info.isFile()) continue;
+    if (!info || !info.isFile() || isOsMetadataFile(basename(entry))) continue;
     files[entry] = await sha256File(filePath)
       .catch(err => { throw manifestReadFailure('data hash', err); });
   }
@@ -1098,7 +1098,8 @@ export async function listSnapshots(destPath) {
           : source === MACHINE_HOST ? `${source} (current machine)` : source,
         selectionKey: `${source}/${id}`,
         currentMachine: source === MACHINE_HOST,
-        createdAt: manifest?.generatedAt ?? null,
+        createdAt: typeof manifest?.generatedAt === 'string' && !Number.isNaN(Date.parse(manifest.generatedAt))
+          ? manifest.generatedAt : null,
         fileCount: manifest?.fileCount ?? 0,
         incomplete,
         failed,
@@ -1118,8 +1119,8 @@ export async function listSnapshots(destPath) {
 /**
  * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
  * namespace beyond `retentionCount`. Called only from `runBackup()` after a
- * run reaches a completed snapshot (rsync + a pg_dump attempt, even a
- * degraded one) — a run that fails earlier never reaches this call, so an
+ * run reaches a completed snapshot with a successful or explicitly skipped
+ * database dump — a run that fails earlier never reaches this call, so an
  * in-progress or `.failed` snapshot is never a candidate; both are re-checked
  * here anyway via `snapshotState` in case an unrelated run left one behind.
  * Only ever walks `snapshots/<MACHINE_HOST>/` — never another machine's
@@ -1147,21 +1148,27 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     const snapshotDir = join(sourceRoot, id);
     const { incomplete, failed } = await snapshotState(snapshotDir, id, true);
     if (incomplete || failed) return null;
-    // Read-only listing metadata; matches listSnapshots' own read.
-    const manifest = await readJSONFile(join(snapshotDir, 'manifest.json'), null, { logError: false });
-    return { id, snapshotDir, createdAt: manifest?.generatedAt ?? null };
+    // Share restore's structural admission, without hashing old payloads.
+    // Only confirmed absence is legacy; JSON null is an invalid manifest.
+    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
+    const valid = manifestRead.ok && (manifestRead.value === MANIFEST_ABSENT
+      || manifestDataEntries(manifestRead.value, join(snapshotDir, 'data'), null) !== null);
+    return { id, snapshotDir, protectedFromPrune: !valid };
   }))).filter(Boolean);
 
-  // Newest-first, same tiebreak as listSnapshots: dated entries by date, then
-  // undated (pre-manifest legacy-in-namespace) entries by id.
-  descriptors.sort((a, b) => {
-    if (a.createdAt && b.createdAt) return b.createdAt.localeCompare(a.createdAt);
-    if (a.createdAt) return -1;
-    if (b.createdAt) return 1;
-    return b.id.localeCompare(a.id);
-  });
+  // Newest-first by snapshot id (an ISO-style timestamp that never depends on
+  // reading the manifest). IDs are unique within this source namespace.
+  descriptors.sort((a, b) => b.id.localeCompare(a.id));
 
-  const toDelete = descriptors.slice(retentionCount);
+  // Keep protected snapshots in addition to the readable retention budget,
+  // even when a bad clock placed a protected snapshot ahead of healthy ones.
+  const toDelete = descriptors.filter(d => {
+    if (d.protectedFromPrune) {
+      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable or invalid)`);
+      return false;
+    }
+    return true;
+  }).slice(retentionCount);
   let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
     // A snapshot a restore or download is reading stays; a later run prunes it
@@ -1390,6 +1397,15 @@ async function reconcileLiveFileRestore(subdirFilter) {
         const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
         await reconcileMediaAssets({ rebuild: true });
       } }] : []),
+    // Migration 359 converts this plan once, at boot, so a plan restored from a
+    // pre-359 snapshot would otherwise stay legacy and unrunnable: a folder
+    // restore keeps the live ledger (359 never re-runs), and a full restore's
+    // ledger only re-runs it on the next boot.
+    ...(!subdirFilter || subdirFilter === 'cos' || subdirFilter === 'cos/quota-burn.json'
+      ? [{ label: 'quota-burn plan conversion', run: async () => {
+        const { reconcileRestoredQuotaBurnPlan } = await import('./quotaBurnConversion.js');
+        await reconcileRestoredQuotaBurnPlan();
+      } }] : []),
   ];
   const results = await Promise.allSettled(
     refreshes.map(({ run }) => Promise.resolve().then(run)),
@@ -1439,7 +1455,9 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
     if (dataPaths.has(normalized)) return null;
     dataPaths.add(normalized);
 
-    if (isRestorePreservedPath(normalized)) continue;
+    // Still recorded in dataPaths (inventory consistency), but never hashed:
+    // Finder may rewrite a hashed metadata file that restore never transfers.
+    if (isRestorePreservedPath(normalized) || isOsMetadataFile(segments.at(-1))) continue;
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
@@ -1560,6 +1578,36 @@ async function snapshotScopeInventory(srcDir, subdirFilter) {
   return { paths, largestFileBytes };
 }
 
+// These exact metadata shapes belonged to six marker-gated file→DB imports.
+// Sibling assets and parked .imported evidence remain file-primary recovery data.
+const LEGACY_DB_METADATA = [
+  ['universes', /^universes\/[^/]+\/index\.json$/],
+  ['pipeline-issues', /^pipeline-issues\/iss-[A-Za-z0-9-]+\/index\.json$/],
+  ['pipeline-series', /^pipeline-series\/ser-[A-Za-z0-9-]+\/index\.json$/],
+  ['story-builder', /^story-builder\/stb-[A-Za-z0-9-]+\/index\.json$/],
+  ['writers-room', /^writers-room\/(?:(?:folders|exercises)\.json|works\/[^/]+\/manifest\.json)$/],
+  ['creative-director', /^creative-director-projects\.json$/],
+];
+
+async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
+  // Match dumpPostgres: an uninitialized backend still requires PostgreSQL.
+  if (process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file') return;
+  if (!inventory) throw snapshotFileIntegrityError(snapshotId);
+  const domains = new Set(LEGACY_DB_METADATA
+    .filter(([, pattern]) => inventory.paths.some(path => pattern.test(path)))
+    .map(([domain]) => domain));
+  if (inventory.paths.includes('universes/index.json')) {
+    const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
+    if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
+  }
+  if (domains.size) {
+    throw new ServerError(
+      `Historical file metadata for ${[...domains].join(', ')} cannot restore database-primary records. Convert this backup in a disposable offline upgrade install, verify its records, then restore a current-format file/database backup (docs/BACKUP.md).`,
+      { status: 409, code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: [...domains] } },
+    );
+  }
+}
+
 async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
   // A unique fallback distinguishes a genuinely absent legacy manifest from an
   // existing file whose parsed value is JSON null.
@@ -1576,10 +1624,11 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   }
   if (manifestRead.value === MANIFEST_ABSENT) {
     // No manifest to verify against, but the restore's idle-deadline floor
-    // still needs the largest in-scope file. Walk it best-effort: a scope that
-    // can't be surveyed keeps the default deadline rather than failing a
-    // restore that would previously have run.
+    // still needs the largest in-scope file. PostgreSQL also needs a complete
+    // inventory to reject ignored legacy metadata; only the file escape hatch
+    // can retain the old best-effort behavior when inventory fails.
     const legacyInventory = await snapshotScopeInventory(srcDir, subdirFilter).catch(() => null);
+    await assertRestoreStorageCompatible(srcDir, legacyInventory, snapshotId);
     return {
       status: 'unverified',
       reason: 'manifest_absent',
@@ -1603,6 +1652,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   const inventory = await snapshotScopeInventory(srcDir, subdirFilter)
     .catch(() => null);
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
+  await assertRestoreStorageCompatible(srcDir, inventory, snapshotId);
   const { paths: snapshotPaths, largestFileBytes } = inventory;
   const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry));
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);
@@ -1642,7 +1692,13 @@ function restoreIdleTimeoutMs(largestFileBytes = 0) {
  * @param {boolean} [options.dryRun=true] - If true, do not write any files
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
  */
-export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null, source } = {}) {
+export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter: requestedFilter = null, source } = {}) {
+  // Canonicalize once: manifest selection, the inventory and the rsync include
+  // chain each spell the filter differently, so `brain/` or `./brain` would
+  // select nothing yet verify clean. An all-dot/empty filter means no filter.
+  const subdirFilter = typeof requestedFilter === 'string'
+    ? requestedFilter.split('/').filter(part => part && part !== '.').join('/') || null
+    : requestedFilter;
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
 
@@ -1651,8 +1707,8 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // so a `*` would override the filter chain (restoring everything) and `..`
   // would traverse out of the snapshot subdir. Reuse the same predicate the
   // schema does so the two can't drift — see issue #1822.
-  if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
-    throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
+  if (requestedFilter != null && (String(requestedFilter).startsWith('/') || (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)))) {
+    throw new Error(`Invalid subdirFilter: ${requestedFilter}`);
   }
   // Refused for previews too, before any verification or transfer, so a preview
   // never promises a restore that execution would silently skip.
@@ -1679,6 +1735,10 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
   const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter);
+  // A full restore installs the snapshot's ledger too, so the next boot re-runs
+  // whatever it lacks; only a folder restore can leave restored files behind
+  // migrations the live ledger already records.
+  const ledgerGap = subdirFilter ? await migrationLedgerGap(srcDir) : undefined;
 
   // Restore must compare destination bytes even when size and mtime match.
   // Rsync's default quick-check would otherwise report a successful no-op for
@@ -1731,26 +1791,66 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
-    return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+    return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
   }
 
-  // Applicability uses the normalized scope; reconciliation keeps the raw filter.
-  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  const changedFiles = await withLiveFileRestoreOwners(scope, () => transferAndReconcileLiveFiles({
+  const scope = subdirFilter;
+  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
     subdirFilter,
     transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
   }));
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
+}
+
+const MIGRATION_LEDGER_FILE = 'migrations.applied.json';
+
+async function readMigrationLedger(path) {
+  const { ok, value } = await readJSONFileStrict(path, null, { logError: false });
+  return ok && Array.isArray(value) ? value.filter(name => typeof name === 'string') : null;
+}
+
+/**
+ * Migrations the live install has applied that the snapshot's ledger lacks:
+ * files a folder restore installs from that snapshot may predate them, and no
+ * runner revisits a migration the live ledger already records. `null` means
+ * unknown — the snapshot (or the live install) has no readable ledger.
+ */
+async function migrationLedgerGap(srcDir) {
+  const snapshotLedger = await readMigrationLedger(join(srcDir, MIGRATION_LEDGER_FILE));
+  const liveLedger = snapshotLedger && await readMigrationLedger(join(PATHS.data, MIGRATION_LEDGER_FILE));
+  if (!snapshotLedger || !liveLedger) return null;
+  const recorded = new Set(snapshotLedger);
+  const names = liveLedger.filter(name => !recorded.has(name));
+  return { count: names.length, names };
 }
 
 const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'];
+
+/**
+ * The CoS config a restore of `scope` installs from a snapshot taken before the
+ * #6182 split: such a snapshot has no cos/config.json and keeps the settings in
+ * the `config` slice of cos/state.json. Null when the snapshot carries its own
+ * config.json or the scope leaves cos/state.json alone.
+ */
+async function snapshotLegacyCosConfig(srcDir, scope) {
+  if (scope && scope !== 'cos' && scope !== 'cos/state.json') return null;
+  const carriesConfigFile = await stat(join(srcDir, 'cos', 'config.json')).then(
+    info => info.isFile(),
+    error => { if (error.code === 'ENOENT') return false; throw error; },
+  );
+  if (carriesConfigFile) return null;
+  const { ok, value } = await readJSONFileStrict(join(srcDir, 'cos', 'state.json'), null, { logError: false });
+  const config = ok ? value?.config : null;
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : null;
+}
 
 /**
  * Owners a live file restore holds, OUTERMOST FIRST — this array order IS the
  * acquisition order, and each owner is released in reverse after everything
  * inside it (transfer plus partial-failure reconciliation) has settled.
  * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
- * `hold` acquires the owner, runs `inner`, and releases on every exit. Domain
+ * `hold(inner, { srcDir, scope })` acquires the owner, runs `inner`, and
+ * releases on every exit; `srcDir` is the verified snapshot's data directory. Domain
  * modules are imported only once every outer owner is held.
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
@@ -1794,9 +1894,10 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
     name: 'CoS config and runtime',
     appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
-    hold: async (inner) => {
+    hold: async (inner, { srcDir, scope }) => {
+      const snapshotLegacyConfig = await snapshotLegacyCosConfig(srcDir, scope);
       const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(inner);
+      return withLiveCosRestore(inner, { snapshotLegacyConfig });
     },
   },
   {
@@ -1818,9 +1919,9 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
 ]);
 
 /** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
-function withLiveFileRestoreOwners(scope, operation) {
+function withLiveFileRestoreOwners(scope, srcDir, operation) {
   const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
-    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner) : inner),
+    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir, scope }) : inner),
     operation,
   );
   return nested();

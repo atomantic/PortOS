@@ -167,6 +167,8 @@ export const updateCosConfig = (config, options = {}) => request('/cos/config', 
 });
 // Today's per-domain autonomy usage (#711) for the Domain Budgets panel.
 export const getCosBudgetUsage = (options = {}) => request('/cos/budget-usage', options);
+// One task plus its queue (`{ task, source }`), for a selection outside the lists a page holds.
+export const getCosTask = (id, options = {}) => request(`/cos/tasks/${encodeURIComponent(id)}`, options);
 export const getCosTasks = ({ view, source, cursor, limit, selected, ...options } = {}) => request(`/cos/tasks${runEventQuery({ view, source, cursor, limit, selected })}`, options);
 export const addCosTask = (task, options = {}) => request('/cos/tasks', {
   method: 'POST',
@@ -393,6 +395,16 @@ export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => 
   method: 'POST',
   body: JSON.stringify({ taskType, appId }),
   ...options
+});
+// Archive and retire one held checkout named exactly as the last branch-reconcile inventory reported it.
+export const retireBranchReconcileCheckout = ({ appId, path, head, branch = null, locked, lockReason = null, review }, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/retire', {
+  method: 'POST',
+  body: JSON.stringify({ appId, path, head, branch, locked, lockReason, review }),
+  ...options
+});
+
+export const reviewBranchReconcileCheckout = (body, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/review', {
+  method: 'POST', body: JSON.stringify(body), ...options
 });
 
 // Autonomous Jobs

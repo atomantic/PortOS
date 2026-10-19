@@ -58,6 +58,15 @@ pool.on('error', (err) => {
   console.error(`🗄️ Database pool error: ${err.message}`);
 });
 
+// pg-pool only installs its error handler while a client is idle. Every
+// checked-out client needs a temporary listener of its own because pg emits
+// unexpected socket errors while a transaction or other operation is active.
+// Keep one stable callback and remove it before release so client reuse cannot
+// accumulate listeners.
+function logCheckedOutClientError(err) {
+  console.error(`🗄️ Checked-out database client error: ${err.message}`);
+}
+
 /**
  * Is the configured database a DESIGNATED test database?
  *
@@ -328,6 +337,7 @@ export async function withTransaction(fn) {
 
 async function runTransaction(fn) {
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   // Guard the client's row writes with the same backstop as query(). The raw
   // pg client bypasses query() entirely, so without this wrapper a test-runner
   // process pointed at the real `portos` DB writes through every store's
@@ -354,6 +364,7 @@ async function runTransaction(fn) {
     if (began) await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
+    client.removeListener('error', logCheckedOutClientError);
     client.release(releaseErr);
   }
 }
@@ -423,6 +434,7 @@ export async function verifyDatabaseMaintenanceTarget(id) {
   const operation = readTarget();
   if (isTestRunner() && !/_test$/.test(POOL_CONFIG.database) && process.env.TEST_DB_OK !== '1') throw refuse();
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   let discard = false;
   try {
     await client.query({ text: 'BEGIN READ ONLY', query_timeout: 10_000 });
@@ -443,6 +455,7 @@ export async function verifyDatabaseMaintenanceTarget(id) {
     return { id, stage: operation.stage, target: operation.target.mode, targetHealthy: true, fenced: true };
   } finally {
     await client.query({ text: 'ROLLBACK', query_timeout: 10_000 }).catch(() => { discard = true; });
+    client.removeListener('error', logCheckedOutClientError);
     client.release(discard);
   }
 }
@@ -490,16 +503,64 @@ export async function ensureSchema(options = {}) {
   return databaseOperation(() => ensureSchemaReady(options));
 }
 
+/**
+ * Owned function signatures declared by the schema DDL: name -> argument type
+ * lists. Argument names, modes and defaults are stripped so each list can be
+ * resolved through `to_regprocedure`.
+ */
+function ownedFunctionSignatures(statements) {
+  const owned = new Map();
+  const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/gi;
+  for (const sql of statements) {
+    for (const [, name, rawArgs] of sql.matchAll(pattern)) {
+      const types = rawArgs.split(',').map((arg) => arg.trim()).filter(Boolean).map((arg) => {
+        const words = arg.replace(/\s+(?:DEFAULT|=)\s.*$/i, '').replace(/^(?:IN|INOUT|VARIADIC)\s+/i, '').split(/\s+/);
+        return words.length > 1 ? words.slice(1).join(' ') : words[0];
+      });
+      if (!owned.has(name)) owned.set(name, []);
+      owned.get(name).push(types);
+    }
+  }
+  return owned;
+}
+
+// `CREATE OR REPLACE FUNCTION` only replaces the same argument list, so an
+// overload another branch left behind survives a forced reset and can later
+// collide with a restore. Drops public overloads of schema-owned names that no
+// owned definition declares. Test database only: on a real install an unknown
+// overload may belong to the operator.
+async function dropStrayOwnedFunctionOverloads(client, statements) {
+  for (const [name, signatures] of ownedFunctionSignatures(statements)) {
+    const ownedOids = [];
+    for (const types of signatures) {
+      const { rows: [row] } = await client.query('SELECT to_regprocedure($1)::oid AS oid', [`public.${name}(${types.join(',')})`]);
+      if (!row?.oid) { ownedOids.length = 0; break; }
+      ownedOids.push(row.oid);
+    }
+    if (!ownedOids.length) continue;
+    const { rows } = await client.query(
+      `SELECT p.oid::regprocedure::text AS signature FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = $1 AND p.prokind = 'f' AND NOT (p.oid = ANY($2::oid[]))`,
+      [name, ownedOids],
+    );
+    for (const { signature } of rows) {
+      await client.query(`DROP FUNCTION ${signature}`);
+      console.warn(`🧹 Dropped stray test-database function overload ${signature}`);
+    }
+  }
+}
+
 async function ensureSchemaReady({ force = false } = {}) {
   if (ensureSchemaInFlight) return ensureSchemaInFlight;
   if (schemaEnsured && !force) return;
   schemaEnsured = false;
-  ensureSchemaInFlight = ensureSchemaImpl().then(() => { schemaEnsured = true; })
+  ensureSchemaInFlight = ensureSchemaImpl({ force }).then(() => { schemaEnsured = true; })
     .finally(() => { ensureSchemaInFlight = null; });
   return ensureSchemaInFlight;
 }
 
-async function ensureSchemaImpl() {
+async function ensureSchemaImpl({ force = false } = {}) {
   // The DDL composer is imported lazily, not at module load. `db.js` is reached
   // by ~400 server test files through pgFileFacade.js, and eagerly importing
   // ./db/schema/index.js pulled its 17 per-domain DDL modules into every one of
@@ -541,6 +602,7 @@ async function ensureSchemaImpl() {
   // deliberately not wrapped in one either — see the comment block above), so
   // nothing here may be wrapped in withTransaction()/BEGIN.
   const client = await pool.connect();
+  client.on('error', logCheckedOutClientError);
   try {
     const { rows: [{ locked }] } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
     if (!locked) {
@@ -572,6 +634,7 @@ async function ensureSchemaImpl() {
     for (const sql of catalogDDL) {
       await client.query(sql);
     }
+    if (force && isTestDatabase()) await dropStrayOwnedFunctionOverloads(client, [...upgrades, ...catalogDDL]);
     if (!schemaUpgradeLogged) {
       console.log('🗄️ Database schema upgrades applied');
       schemaUpgradeLogged = true;
@@ -585,6 +648,7 @@ async function ensureSchemaImpl() {
     // itself fails, destroy the connection instead: closing it releases the
     // lock automatically, same as a hard kill mid-boot.
     const unlocked = await client.query('SELECT pg_advisory_unlock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]).then(() => true, () => false);
+    client.removeListener('error', logCheckedOutClientError);
     client.release(!unlocked);
   }
 }

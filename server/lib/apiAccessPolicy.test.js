@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { isAlwaysPublicApiPath, isPeerApiRequestAllowed, isPeerBasicBootstrapRequest } from './apiAccessPolicy.js';
+import { ALWAYS_PUBLIC_API_PATHS, isAlwaysPublicApiPath, isPeerApiRequestAllowed, isPeerBasicBootstrapRequest } from './apiAccessPolicy.js';
 
 const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -36,6 +36,22 @@ const reachable = (path) => ['GET', 'POST'].some((method) => isAlwaysPublicApiPa
   || isPeerApiRequestAllowed(method, `${path}${path.endsWith('/') ? '' : '/'}x`));
 
 describe('peer API surface (#8387)', () => {
+  it('matches only the exact always-public API paths', () => {
+    for (const path of ALWAYS_PUBLIC_API_PATHS) {
+      expect(isAlwaysPublicApiPath(path), path).toBe(true);
+    }
+
+    for (const path of [
+      '/api/auth/status-extra',
+      '/api/auth/status/',
+      '/api/system/health/details',
+      '/api/system/health/warnings/x/dismiss',
+      '/api/eidoverse/travel/guest/x',
+    ]) {
+      expect(isAlwaysPublicApiPath(path), path).toBe(false);
+    }
+  });
+
   it('admits every endpoint this version of PortOS calls on a peer', () => {
     const sites = peerCallSitePaths();
     // Guard against a scanner that silently stops finding call sites.
@@ -73,6 +89,8 @@ describe('peer API surface (#8387)', () => {
       '/api/peer-sync//manifest',
       '/data/images/%2e%2e/secret.json',
       '/data/images/a%2fb.png',
+      '/data/images/a%5cb.png',
+      '/data/images/a\\b.png',
       '/data/images/..',
     ]) {
       expect(isPeerApiRequestAllowed('GET', path)).toBe(false);

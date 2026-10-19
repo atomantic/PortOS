@@ -258,7 +258,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     const modelKeys = JSON.stringify(['transformer_blocks.0.attn1.to_q.weight']);
     // `rename` is the runtime's own SDOps map in production; identity here keeps
     // the test off the MLX wheel while exercising the same intersection.
-    expect(call(`runner.assert_adapter_fuses(${JSON.stringify(foreign)}, ${modelKeys}, lambda name: name)`))
+    expect(call(`runner.assert_adapter_targets_resolve(${JSON.stringify(foreign)}, ${modelKeys}, lambda name: name)`))
       .toMatch(/^REJECTED:.*do not address any weight/);
 
     const matching = join(scratch, 'matching.safetensors');
@@ -266,7 +266,32 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
       'transformer_blocks.0.attn1.to_q.lora_A.weight': {},
       'transformer_blocks.0.attn1.to_q.lora_B.weight': {},
     });
-    expect(call(`runner.assert_adapter_fuses(${JSON.stringify(matching)}, ${modelKeys}, lambda name: name)`)).toBe('1');
+    expect(call(`runner.assert_adapter_targets_resolve(${JSON.stringify(matching)}, ${modelKeys}, lambda name: name)`)).toBe('1');
+  }, PY_TEST_TIMEOUT_MS);
+
+  // #12262: the runtime attach refuses ANY unplaceable target, because a
+  // partially-applied adapter renders plausibly while silently missing part
+  // of its effect. The header pre-check holds the same line before a load.
+  it('refuses an adapter that only partly addresses the transformer, or carries a half pair', () => {
+    const modelKeys = JSON.stringify(['transformer_blocks.0.attn1.to_q.weight']);
+    const partial = join(scratch, 'partial.safetensors');
+    writeSafetensors(partial, {
+      'transformer_blocks.0.attn1.to_q.lora_A.weight': {},
+      'transformer_blocks.0.attn1.to_q.lora_B.weight': {},
+      'transformer_blocks.7.attn1.to_q.lora_A.weight': {},
+      'transformer_blocks.7.attn1.to_q.lora_B.weight': {},
+    });
+    expect(call(`runner.assert_adapter_targets_resolve(${JSON.stringify(partial)}, ${modelKeys}, lambda name: name)`))
+      .toMatch(/^REJECTED:.*1 weight\(s\).*transformer_blocks\.7\.attn1\.to_q\.weight/);
+
+    const halfPair = join(scratch, 'half-pair.safetensors');
+    writeSafetensors(halfPair, {
+      'transformer_blocks.0.attn1.to_q.lora_A.weight': {},
+      'transformer_blocks.0.attn1.to_q.lora_B.weight': {},
+      'transformer_blocks.0.attn1.to_k.lora_A.weight': {},
+    });
+    expect(call(`runner.assert_adapter_targets_resolve(${JSON.stringify(halfPair)}, ${modelKeys}, lambda name: name)`))
+      .toMatch(/^REJECTED:.*to_k\.weight/);
   }, PY_TEST_TIMEOUT_MS);
 
   // An unreadable transformer means the guard cannot answer its own question.
@@ -274,7 +299,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
   // would defeat the guard — so it refuses on its own blindness instead.
   it('refuses when the transformer weight names could not be read at all', () => {
     const matching = join(scratch, 'matching.safetensors');
-    expect(call(`runner.assert_adapter_fuses(${JSON.stringify(matching)}, set(), lambda name: name)`))
+    expect(call(`runner.assert_adapter_targets_resolve(${JSON.stringify(matching)}, set(), lambda name: name)`))
       .toMatch(/^REJECTED:.*Could not read the LTX-2\.5 transformer/);
   }, PY_TEST_TIMEOUT_MS);
 });

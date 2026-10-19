@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('exposes requested reference filenames without leaking local paths or inferring missing history', () => {
+    const params = { initImagePath: '/private/gallery/source.png', referenceImagePaths: [
+      'C:\\private\\refs\\character.png', '/private/refs/character.png', null, '/private/secret.txt',
+    ] };
+    const local = sanitizeJob({ kind: 'image', params });
+    expect(local.requestedInputImages).toEqual([
+      { role: 'initImage', filename: 'source.png' },
+      { role: 'referenceImages', filename: 'character.png' },
+      { role: 'referenceImages', filename: 'character.png' },
+    ]);
+    expect(local.params).not.toHaveProperty('initImagePath');
+    expect(local.params).not.toHaveProperty('referenceImagePaths');
+    expect(sanitizeJob({ kind: 'image', params: {} })).not.toHaveProperty('requestedInputImages');
+    const remote = sanitizeJob({ kind: 'image', params: { remoteMedia: {
+      wireVersion: 1, peerId: 'example-peer', request: { kind: 'image' },
+      inputAssets: [{ role: 'referenceImages', path: '/private/gallery/reference.webp' }],
+    } } });
+    expect(remote.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.webp' }]);
+    expect(JSON.stringify(remote)).not.toContain('/private');
+  });
+
   it('projects cancellation only while the job is still active', () => {
     const projectCancellation = (status) => sanitizeJob({
       id: 'job-cancel-example',
@@ -239,5 +260,15 @@ describe('sanitizeJob', () => {
 
     expect(sanitized.renderer).toBe('local');
     expect(sanitized.executionLane).toBe('cloud');
+  });
+
+  it('explains a queued job held behind an unsettled earlier peer job, and only while queued', () => {
+    const peerHold = { reason: 'peer-settling', blockingJobId: 'job-earlier-example', internal: 'x' };
+    const held = sanitizeJob({ id: 'job-held-example', kind: 'video', status: 'queued', statusMsg: 'Queued', peerHold });
+    expect(held.peerHold).toEqual({ reason: 'peer-settling', blockingJobId: 'job-earlier-example' });
+    expect(held.statusMsg).toBe('Waiting for peer to settle an earlier job');
+    const running = sanitizeJob({ id: 'job-held-example', kind: 'video', status: 'running', statusMsg: 'Starting', peerHold });
+    expect(running).not.toHaveProperty('peerHold');
+    expect(running.statusMsg).toBe('Starting');
   });
 });

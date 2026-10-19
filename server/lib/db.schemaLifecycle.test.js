@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  query: vi.fn(), release: vi.fn(), connect: vi.fn(),
+  query: vi.fn(), on: vi.fn(), removeListener: vi.fn(), release: vi.fn(), connect: vi.fn(),
 }));
 vi.mock('pg', async (importOriginal) => ({ default: {
   Client: (await importOriginal()).default.Client,
@@ -20,7 +20,12 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   state.query.mockImplementation(async () => ({ rows: [{ locked: true }] }));
-  state.connect.mockResolvedValue({ query: state.query, release: state.release });
+  state.connect.mockResolvedValue({
+    query: state.query,
+    on: state.on,
+    removeListener: state.removeListener,
+    release: state.release,
+  });
 });
 
 describe('schema readiness across store startup', () => {
@@ -34,6 +39,8 @@ describe('schema readiness across store startup', () => {
       'repair catalog', 'SELECT pg_advisory_unlock($1)',
     ]);
     expect(state.release).toHaveBeenCalledWith(false);
+    expect(state.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(state.removeListener).toHaveBeenCalledWith('error', state.on.mock.calls[0][1]);
   });
 
   it('allows forced repair and retries after its failure without caching partial work', async () => {

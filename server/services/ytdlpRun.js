@@ -86,6 +86,18 @@ const STALE_YTDLP_SIGNATURE = /HTTP Error 403|PO Token|nsig|Failed to extract an
 const STALE_YTDLP_HINT = 'the installed yt-dlp is likely out of date for YouTube\'s current player — update it (`yt-dlp -U`, or `brew upgrade yt-dlp`) and retry';
 
 /**
+ * `connect()` failing with EBADF is not a network fault: it is how a macOS
+ * outbound filter (Little Snitch, or another NetworkExtension) reports a DENIED
+ * connection — seen both from a stale per-binary rule after a Homebrew upgrade
+ * and from the filter's extension staying loaded while its app was not running.
+ * It reads like an x.com or yt-dlp bug, and an upgrade cannot fix it,
+ * so it gets its own source-agnostic remedy.
+ */
+const BLOCKED_CONNECT_SIGNATURE = /Failed to establish a new connection: \[Errno 9\] Bad file descriptor/i;
+
+const BLOCKED_CONNECT_HINT = 'the connection was blocked on this machine, which usually means an outbound network filter (e.g. Little Snitch) denied yt-dlp — check that the filter is running and allows yt-dlp and its Python, then retry';
+
+/**
  * Compose the user-facing reason for a failed yt-dlp run.
  *
  * Exported because both importers need it for the case the runner cannot
@@ -107,6 +119,7 @@ export function describeYtDlpFailure(code, output, { fallback, url } = {}) {
   const base = fallback
     ? [fallback, said].filter(Boolean).join(' — yt-dlp said: ')
     : (said ? `yt-dlp failed: ${said}` : `yt-dlp exited ${code}`);
+  if (BLOCKED_CONNECT_SIGNATURE.test(said)) return `${base} — ${BLOCKED_CONNECT_HINT}`;
   const stalePlayer = isYoutubeVideoUrl(url) && STALE_YTDLP_SIGNATURE.test(said);
   return stalePlayer ? `${base} — ${STALE_YTDLP_HINT}` : base;
 }

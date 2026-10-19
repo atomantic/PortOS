@@ -15,7 +15,8 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // In-memory settings store the route's getSettings/updateSettings read/write.
 let store = {};
-vi.mock('../services/settings.js', () => ({
+vi.mock('../services/settings.js', async () => ({
+  settingsEvents: new (await import('node:events')).EventEmitter(),
   getSettings: vi.fn(async () => ({ ...store })),
   updateSettings: vi.fn(async (patch) => { store = { ...store, ...patch }; return { ...store }; }),
 }));

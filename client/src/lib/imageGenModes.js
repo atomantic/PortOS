@@ -61,6 +61,7 @@ import {
 import {
   IMAGE_RUNTIME_READINESS,
   IMAGE_RUNTIME_REMEDY,
+  MOSS_IMAGE_MODEL_ID,
 } from '../../../server/lib/imageRuntimeRemedies.js';
 import {
   FAL_IMAGE_DEFAULT_MODEL,
@@ -103,6 +104,7 @@ export {
   // remedy kind is a button that silently stops matching the server.
   IMAGE_RUNTIME_READINESS,
   IMAGE_RUNTIME_REMEDY,
+  MOSS_IMAGE_MODEL_ID,
   // The local model a blank `imageGen.local.modelId` resolves to, so the
   // Settings Local tab can name the install default instead of showing a blank
   // select whose meaning the user has to guess.
@@ -178,6 +180,7 @@ export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
   [VIDEO_GEN_MODE.FAL]: 'fal.ai',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
+  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
 });
 
 // The fal.ai model picker rows — one per catalog family, keyed by its

@@ -381,6 +381,7 @@ describe.each(ENGINES)('%s — deferred perpetual-dispatch recording', (_name, m
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
 
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledWith('code-quality', APP, STATE, expect.objectContaining({ onDemand: true }));
     expect(mocks.recordDeferredPerpetualDispatch).toHaveBeenCalledWith(
       { taskType: 'code-quality', appId: 'acme', signature: 'sig-1' },
       expect.anything()

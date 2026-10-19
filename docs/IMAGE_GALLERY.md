@@ -71,3 +71,38 @@ restart the first window to account for shifted offsets; collection bulk selecti
 says Select loaded while more pages remain. Deep-linked previews resolve directly.
 Sidecar enrichment, recovered prompts, imported images, and peer asset arrivals
 refresh the existing image-index hook after their authoritative writes.
+
+## File sizes and recoverable deletion
+
+Image and video gallery rows include `fileSizeBytes` when the original file can
+be measured. Compact pages keep it, and the shared `MediaCard` displays it next
+to resolution/FPS using `formatBytes`; the lightbox uses the same formatter.
+The server measures only the selected page with bounded concurrency, so older
+records need no backfill. Missing or unreadable files omit the field rather
+than reporting a false zero. A measured empty file reports zero bytes.
+
+Deleting gallery images or video-history entries moves their originals,
+sidecars, thumbnails and video audio masters to the operating system's Trash
+or Recycle Bin on the **PortOS server machine**. Video deletion also recycles
+a `<filename>.metadata.json` snapshot of that video's history record, preserving
+its prompt/settings without moving the shared history store. Temporary render
+cleanup still permanently removes temporary files.
+
+Recycling uses facilities the operating system already ships, with no
+third-party package or bundled binary: on macOS each file is trashed in its
+own `osascript` process so Finder keeps a *Put Back* record for every one; on
+Linux files land in the freedesktop trash (`~/.local/share/Trash` or the
+volume's `.Trash-<uid>`) under their original names, where `gio`, `trash-cli`
+and desktop file managers can list and restore them; on Windows the Recycle
+Bin is used through the shell, and a file the shell could not recycle — one
+on a volume without a Recycle Bin (a network share or removable media), one
+larger than that volume's Recycle Bin capacity, or any file when the Recycle
+Bin is disabled for the volume — is refused and left in place rather than
+permanently deleted.
+
+Recycling errors fail the request; there is no permanent-delete fallback.
+History and derived index rows are retired only after the file operation
+confirms the files are gone. Native recycling can partially succeed, so after
+a failure some files may already be in Trash; a retry processes remaining
+files. Restore files using the host OS. Restoring a video file does not
+automatically recreate its PortOS history entry or collection membership.

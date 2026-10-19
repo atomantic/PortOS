@@ -15,9 +15,11 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ProgressBar from '../components/ui/ProgressBar';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
 import { timeAgo } from '../utils/formatters';
 import { DECK_KIND, DECK_KINDS, DECK_KIND_LABELS } from '../lib/decks';
+import useListResource from '../hooks/useListResource';
 import Pill from '../components/ui/Pill';
 import { createDeck, deleteDeck, listDecks, listUniverseSummaries } from '../services/api';
 
@@ -26,7 +28,9 @@ const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3
 export default function Decks() {
   const navigate = useNavigate();
   const [decks, setDecks] = useState([]);
-  const [universes, setUniverses] = useState([]);
+  const fetchUniverses = useCallback(() => listUniverseSummaries({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const { items: universes } = universesResource;
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [confirmingId, setConfirmingId] = useState(null);
@@ -37,13 +41,9 @@ export default function Decks() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [rows, worlds] = await Promise.all([
-      listDecks({ silent: true }).catch(() => null),
-      listUniverseSummaries({ silent: true }).catch(() => []),
-    ]);
+    const rows = await listDecks({ silent: true }).catch(() => null);
     if (rows) setDecks(Array.isArray(rows) ? rows : []);
     else toast.error('Failed to load decks');
-    setUniverses(Array.isArray(worlds) ? worlds : []);
     setLoading(false);
   }, []);
 
@@ -99,6 +99,9 @@ export default function Decks() {
               <option value="">— none —</option>
               {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
+            {universesResource.state === 'error' ? (
+              <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} className="mt-2" />
+            ) : null}
             {universeId ? (
               <label htmlFor="deck-new-seed" className="mt-1.5 flex items-center gap-2 text-xs text-gray-400">
                 <input id="deck-new-seed" type="checkbox" checked={seedStyle} onChange={(e) => setSeedStyle(e.target.checked)} />

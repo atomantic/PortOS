@@ -217,6 +217,14 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         return false;
       }
     }
+    if (line.startsWith(LORA_STRATEGY_LINE_PREFIX)) {
+      const report = parseLoraStrategyLine(line);
+      // Malformed payload — fall through to raw-logging (same as RUNTIME: above).
+      if (!report) return false;
+      job.loraStrategy = report;
+      console.log(`🧩 LoRA strategy [${jobId.slice(0, 8)}] ${report.adapters.map((a) => `${a?.name || '?'}=${a?.strategy || '?'}`).join(', ')}`);
+      return true;
+    }
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
@@ -233,7 +241,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       // 'active' = encoding right now, 'done' = finished — so a later SIGABRT can
       // be attributed to the encode without conflating "never reported" with
       // "finished". Compared exactly: the '-done' marker is a prefix extension of
-      // the begin marker. See planPromptEncodingRetry.
+      // the begin marker. Used only to name the phase in the recovery status.
       if (line === PROMPT_ENCODE_BEGIN_MARKER) job.promptEncodePhase = 'active';
       else if (line === PROMPT_ENCODE_END_MARKER) job.promptEncodePhase = 'done';
       const parts = line.split(':');
@@ -380,6 +388,28 @@ export function parseRuntimeFingerprintLine(line) {
   }
 }
 
+// How each LoRA adapter was applied (#12262): `scripts/ltx_runtime_lora.py
+// AdapterReport.emit`. A quantized pack can apply a delta at inference or merge
+// and re-quantize it (which can erase most of it), so the record keeps the
+// outcome beside the request. Shared by the render path and the upscale job.
+export const LORA_STRATEGY_LINE_PREFIX = 'LORASTRATEGY:';
+
+/**
+ * The `{ adapters: [...] }` payload of a `LORASTRATEGY:<json>` line, or null
+ * when the line is not one or its payload is malformed.
+ * @param {string} line - one trimmed child-output line
+ * @returns {{ adapters: object[] }|null}
+ */
+export function parseLoraStrategyLine(line) {
+  if (typeof line !== 'string' || !line.startsWith(LORA_STRATEGY_LINE_PREFIX)) return null;
+  try {
+    const report = JSON.parse(line.slice(LORA_STRATEGY_LINE_PREFIX.length));
+    return Array.isArray(report?.adapters) ? report : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Render a runtime fingerprint (either the `RUNTIME:` payload a helper script
  * emits — `{ runtime, versions, chip, os, python }` — or the Node-side
@@ -400,14 +430,15 @@ export function formatRuntimeFingerprint(fp) {
 
 // Signal → actionable cause for a render child that died on a signal.
 //
-// Apple Silicon reality drives this map. The dominant real-world render abort is
+// Apple Silicon reality drives this map. A common real-world render abort is
 // the macOS Metal command-buffer watchdog killing an over-long GPU command
 // buffer (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), which the
 // MLX/Metal layer surfaces as SIGABRT (exit -6) — NOT as a Python-level
 // assertion. Reporting that as a bare `Killed by signal SIGABRT` (or as a
 // "C-level assertion failed" hint, the mistake upstream made) sends users
 // hunting a model/PortOS bug when the fix is to shrink the work per command
-// buffer. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
+// buffer — but only captured stderr can prove it (see abortCause); a bare SIGABRT
+// is reported as an unexplained native abort. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
 // layer. SIGKILL stays the OOM message it has always been.
 //
 // Keys are the signal NAMES Node reports on `close` (spawnDetached decodes the
@@ -424,44 +455,55 @@ const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fa
 
 const SIGNAL_DEATH_CAUSES = Object.freeze({
   SIGKILL: 'Process killed (likely out of memory — try a smaller model or resolution)',
-  SIGABRT: 'Render aborted (SIGABRT) — on Apple Silicon this is almost always the macOS Metal command-buffer watchdog killing an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and quit other GPU-heavy apps so the render is not competing for the GPU with WindowServer compositing (driving this machine headless over SSH avoids that contention entirely).',
+  // SIGABRT is evidence-dependent — see abortCause.
   SIGBUS: nativeCrashCause('SIGBUS'),
   SIGSEGV: nativeCrashCause('SIGSEGV'),
 });
+
+const WATCHDOG_ABORT_CAUSE = 'Render aborted (SIGABRT) — the macOS Metal command-buffer watchdog killed an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and quit other GPU-heavy apps so the render is not competing for the GPU with WindowServer compositing (driving this machine headless over SSH avoids that contention entirely).';
+const OOM_ABORT_CAUSE = 'Render aborted (SIGABRT) — Metal reported the GPU ran out of memory. Try a smaller model, resolution or frame count.';
+const VICTIM_ABORT_CAUSE = 'Render aborted (SIGABRT) — Metal reported this render was an innocent victim of another process wedging the GPU. Retry once other GPU-heavy apps are closed.';
+const ASSERTION_ABORT_CAUSE = 'Render aborted (SIGABRT) — the native layer hit a failed assertion. See the runtime log for the assertion text.';
+const UNEXPLAINED_ABORT_CAUSE = 'Render aborted (SIGABRT) — a native abort with no diagnostic line captured, so the cause is unknown. Check the runtime log; retrying at a lower resolution/frame count may help.';
+const NATIVE_ASSERTION_RE = /\bassertion\b.*\bfailed\b|\bfailed\b.*\bassertion\b|__assert_rtn|Assertion`/i;
+
+// Classify from the child's ORIGINAL stderr only, before any explanatory text
+// exists, so an enum name quoted in our own advice can never act as proof. The
+// veto and signature regexes are the same ones that gate retry eligibility.
+function abortCause(stderr, { platform, arch, mlxRuntime }) {
+  const text = typeof stderr === 'string' ? stderr : '';
+  if (/kIOGPUCommandBufferCallbackErrorOutOfMemory/i.test(text)) return OOM_ABORT_CAUSE;
+  if (/kIOGPUCommandBufferCallbackErrorInnocentVictim/i.test(text)) return VICTIM_ABORT_CAUSE;
+  if (METAL_WATCHDOG_RE.test(text) && platform === 'darwin' && arch === 'arm64' && mlxRuntime) return WATCHDOG_ABORT_CAUSE;
+  if (NATIVE_ASSERTION_RE.test(text)) return ASSERTION_ABORT_CAUSE;
+  return UNEXPLAINED_ABORT_CAUSE;
+}
 
 /**
  * Failure reason for a render child that exited on a signal. Pure.
  *
  * Unmapped signals keep the historical `Killed by signal <SIG>` wording so a
- * novel signal is still reported verbatim rather than mis-attributed. The
- * resolved runtime fingerprint is appended when known, so the report names the
- * mlx / mlx-metal / chip / macOS stack that died without the user having to go
- * look it up (matching what RuntimeFingerprint.jsx surfaces on the page).
+ * novel signal is still reported verbatim rather than mis-attributed. SIGABRT is
+ * explained only from captured evidence: the Metal watchdog is named solely for a
+ * recognised timeout/interactivity signature on an Apple-silicon MLX runtime;
+ * otherwise OOM, innocent-victim, assertion or a generic unexplained abort. The
+ * resolved runtime fingerprint is appended when known.
  *
  * @param {string|null} signal - signal name from `proc.on('close', (code, signal))`
  * @param {object} [opts]
  * @param {object|null} [opts.fingerprint] - runtime fingerprint (see `pickDeathFingerprint` in runtimes.js)
+ * @param {string} [opts.stderr] - captured stderr tail of the dead child (original evidence)
+ * @param {boolean} [opts.mlxRuntime] - whether the render ran on an MLX runtime
  * @returns {string|null} reason, or null when the child did not die on a signal
  */
-export function describeSignalDeath(signal, { fingerprint = null } = {}) {
+export function describeSignalDeath(signal, { fingerprint = null, stderr = '', mlxRuntime = false, platform = process.platform, arch = process.arch } = {}) {
   if (!signal) return null;
-  const cause = SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
+  const cause = signal === 'SIGABRT'
+    ? abortCause(stderr, { platform, arch, mlxRuntime })
+    : SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
   const fp = formatRuntimeFingerprint(fingerprint);
   return fp ? `${cause} [runtime: ${fp}]` : cause;
 }
-
-/**
- * Gemma prompt-encode sequence length. `LTX2_GEMMA_MAX_LENGTH` is read by
- * ltx-2-mlx at encode time (`utils/blocks.py#PromptEncoder.encode`) and defaults
- * to 1024 there; the retry halves it so the encoder's attention matrices are a
- * quarter the size and each Metal command buffer finishes well inside the
- * watchdog window. Halving (rather than a deeper cut) keeps a long prompt's
- * tail intact — the tokenizer truncates from the LEFT, so a smaller budget
- * silently drops the START of the prompt, which is where the subject usually
- * is.
- */
-export const DEFAULT_GEMMA_MAX_LENGTH = 1024;
-export const RETRY_GEMMA_MAX_LENGTH = 512;
 
 // The macOS Metal command-buffer watchdog reports WHY it killed a buffer via a
 // `kIOGPUCommandBufferCallbackError*` enum name in the abort text. Two of those
@@ -513,33 +555,6 @@ export function isPromptEncodingMetalWatchdog({ signal = null, stderr = '', prom
 }
 
 /**
- * Decide whether one render may be relaunched after a prompt-encode watchdog
- * abort, and with what Gemma budget. Pure — returns the plan, never acts.
- *
- * Returns `null` for "do not retry" and `{ gemmaMaxLength }` for "relaunch this
- * same job once with that budget". Exactly one retry is ever allowed: a second
- * watchdog abort at the reduced budget is a real failure the user must see, not
- * something to keep grinding the GPU over.
- *
- * @param {object} [opts]
- * @param {string|null} [opts.signal]
- * @param {string} [opts.stderr]
- * @param {'active'|'done'|null} [opts.promptEncodePhase]
- * @param {number} [opts.retriesUsed] - retries already spent on this job
- * @param {string} [opts.platform] - `process.platform` of the host
- * @returns {{ gemmaMaxLength: number }|null}
- */
-export function planPromptEncodingRetry({ signal = null, stderr = '', promptEncodePhase = null, retriesUsed = 0, platform = process.platform } = {}) {
-  // The command-buffer watchdog is a macOS construct. A Windows/CUDA render
-  // that somehow produced a matching string must not be relaunched with an
-  // Apple-specific mitigation.
-  if (platform !== 'darwin') return null;
-  if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
-  if (!isPromptEncodingMetalWatchdog({ signal, stderr, promptEncodePhase })) return null;
-  return { gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH };
-}
-
-/**
  * Per-command-buffer caps MLX reads at startup (`MLX_MAX_OPS_PER_BUFFER` /
  * `MLX_MAX_MB_PER_BUFFER`). Smaller values only move command-buffer boundaries —
  * same kernels, same output, slightly slower — so each buffer finishes inside the
@@ -552,8 +567,10 @@ export const METAL_BUFFER_RETRY_ENV = Object.freeze({
 
 /**
  * Decide whether a render may be relaunched once with tiny MLX command buffers
- * after a Metal watchdog abort ANYWHERE in the render (the prompt-encode case has
- * its own plan, planPromptEncodingRetry). Pure — returns the plan, never acts.
+ * after a Metal watchdog abort ANYWHERE in the render, including inside the Gemma
+ * prompt encoder. The prompt token sequence is never shortened to recover: the
+ * encoder keeps only the LAST max_length tokens, so a lowered sequence budget
+ * would silently drop the start of an accepted prompt. Pure — returns the plan, never acts.
  * Apple-silicon MLX runtimes only; OutOfMemory / InnocentVictim aborts never
  * qualify (smaller buffers do not fix them). One retry per job.
  *
@@ -868,6 +885,10 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
           // decision, and (when active) the render's peak MLX memory. Absent on
           // a resident-by-default render and on runners that don't report one.
           ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
+          // How each LoRA adapter was actually applied (#12262) — at inference
+          // beside the packed weights or fused into float ones, resident or
+          // block-streamed (#12327). Absent on adapter-free renders.
+          ...(job.loraStrategy ? { loraStrategyApplied: job.loraStrategy } : {}),
         });
         return history;
       });

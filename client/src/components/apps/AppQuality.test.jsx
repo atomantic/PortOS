@@ -5,6 +5,8 @@ import AppQuality from './AppQuality';
 vi.mock('./AppQualityRunner', () => ({ default: ({ children }) => children(<div>Runner</div>) }));
 // The schedule form owns its own async load and is covered by its own suite.
 vi.mock('./AppQualityScheduleForm', () => ({ default: () => <div>Schedule form</div> }));
+// The lane-health table owns its own read and is covered by its own suite.
+vi.mock('./AppLaneHealth', () => ({ default: () => <div>Lane health table</div> }));
 vi.mock('../../services/apiApps', () => ({
   getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }),
   publishAppQualitySnapshot: vi.fn(),
@@ -83,6 +85,25 @@ it('keeps secondary category actions in a row menu beside the run shortcut', asy
   fireEvent.click(screen.getByRole('button', { name: 'Security actions' }));
   expect(screen.getByRole('menuitem', { name: 'Runner settings' })).toHaveAttribute('href', '/cos/schedule?task=security');
   expect(screen.getByRole('menuitem', { name: 'View audit run' })).toHaveAttribute('href', '/cos/agents/run-1');
+});
+
+// #12076: the row's score is a rolling window; the tooltip names the latest
+// slice and how many runs fed the figure. A pre-window server sends neither.
+it('shows the rolling window and the latest slice behind the category score', async () => {
+  const app = { id: 'example', quality: { score: 48, ratedCategories: 1, categories: [
+    { id: 'security', label: 'Security', score: 48, runScore: 60, slice: 'server/services/auth', coverage: 'partial', confidence: 'high',
+      summary: 'Credential handling is sound; one stale allowlist.', scannedFiles: 12, totalFiles: 12, worstSeverity: 4, window: { runs: 3, worstSeverity: 7 } },
+    { id: 'ux', label: 'UX', score: 80, coverage: 'broad', confidence: 'high' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  const security = screen.getByRole('row', { name: /Security/ });
+  expect(security).toHaveTextContent('48/100');
+  expect(security).toHaveTextContent('partial · high · 3 runs');
+  fireEvent.click(screen.getByRole('button', { name: 'Security assessment details' }));
+  expect(screen.getByRole('tooltip')).toHaveTextContent('Latest slice: server/services/auth · rated 60/100');
+  expect(screen.getByRole('tooltip')).toHaveTextContent('Score: mean of the last 3 qualifying runs · worst severity in window: 7/10');
+  expect(screen.getByRole('row', { name: /UX/ })).not.toHaveTextContent(/run/);
 });
 
 it('sorts the category breakdown by worst score or oldest last run', async () => {

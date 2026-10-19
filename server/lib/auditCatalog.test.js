@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { QUOTA_BURN_PROMPT_PRESETS } from './quotaBurnPresets.js';
 import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import {
+  applyDepfreeMode,
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
   AUDIT_TASK_TYPE_LIST,
@@ -25,6 +26,7 @@ import {
   DO_BETTER_LENS_COVERAGE,
   AUDIT_RUN_GUIDANCE,
   AUDIT_SUGGESTED_AFTER,
+  AUDIT_REDACTION_RULE,
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
@@ -77,6 +79,7 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(defaultFileIssuesFor('data-safety')).toBe(true);
     expect(defaultFileIssuesFor('simplify')).toBe(true);
     expect(defaultFileIssuesFor('module-hygiene')).toBe(true);
+    expect(defaultFileIssuesFor('test-coverage')).toBe(true); // #12087
     expect(defaultFileIssuesFor('security')).toBe(false);
     expect(defaultFileIssuesFor('accessibility')).toBe(false);
     expect(defaultFileIssuesFor('unknown')).toBe(false);
@@ -101,6 +104,15 @@ describe('AUDIT_DEFINITIONS', () => {
     // has the most to say about. Its sibling assesses tests that exist.
     expect(auditCapabilityRequirement('test-coverage')).toBeNull();
     expect(auditCapabilityRequirement('better-test-quality')).toBe('tests');
+  });
+
+  // The executed rehearsal shares data-safety's category and follows it in the
+  // advisory order; its metric label keeps the two sets of findings apart.
+  it('registers upgrade-rehearsal as data-safety\'s executed, ungated successor', () => {
+    expect(AUDIT_SUGGESTED_AFTER['upgrade-rehearsal']).toEqual(['data-safety']);
+    expect(AUDIT_DEFINITIONS['upgrade-rehearsal'].filing).toMatchObject({ issueLabel: 'data-safety', extraLabels: ['upgrade-rehearsal'] });
+    expect(auditCapabilityRequirement('upgrade-rehearsal')).toBeNull();
+    expect(defaultFileIssuesFor('upgrade-rehearsal')).toBe(true);
   });
 
   it('enumerates the audits in catalog order without a second vocabulary', () => {
@@ -387,4 +399,126 @@ it('keeps the quota-burn maintenance preset on registered tasks in the advisory 
       expect(MAINTENANCE_TASK_ORDER.indexOf(predecessor), predecessor).toBeLessThan(index);
     }
   }
+});
+
+describe('applyDepfreeMode — the dependency-freedom {depfreeMode} block', () => {
+  const TYPE = 'better-dependency-freedom';
+
+  it('renders the default bar when no mode is stored', () => {
+    const out = applyDepfreeMode('Bar:\n{depfreeMode}\nEnd', TYPE, {});
+    expect(out).toContain('## Removal bar for this run: default');
+    expect(out).toContain('Keep large, widely audited libraries');
+    expect(out).not.toContain('{depfreeMode}');
+    expect(out.startsWith('Bar:')).toBe(true);
+  });
+
+  it('renders the extreme bar with its design and parity requirements', () => {
+    const out = applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'extreme' });
+    expect(out).toContain('## Removal bar for this run: extreme — the goal is zero dependencies');
+    expect(out).toContain('There is no line ceiling.');
+    expect(out).toContain('write a replacement design first');
+    expect(out).toContain('parity test');
+    // The security-sensitive classes stay exempt at every bar.
+    expect(out).toContain('TLS, cryptography');
+    expect(out).toContain('native bindings');
+    expect(out).toContain('strongest available model at maximum');
+  });
+
+  it('renders the heavy bar', () => {
+    const out = applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'heavy' });
+    expect(out).toContain('## Removal bar for this run: heavy');
+    expect(out).toContain('Popularity and download counts do not exempt a library');
+  });
+
+  it('prepends the block once to a customized prompt that dropped the token', () => {
+    const out = applyDepfreeMode('my custom depfree prompt', TYPE, { depfreeMode: 'extreme' });
+    expect(out.startsWith('## Removal bar for this run: extreme')).toBe(true);
+    expect(out.match(/## Removal bar for this run/g)).toHaveLength(1);
+    expect(out.endsWith('my custom depfree prompt')).toBe(true);
+  });
+
+  it('falls back to the default bar for a value the sanitizer would have dropped', () => {
+    expect(applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'zero' })).toContain('Removal bar for this run: default');
+  });
+
+  it('leaves every other task type untouched', () => {
+    expect(applyDepfreeMode('{depfreeMode}', 'better-complexity', { depfreeMode: 'extreme' })).toBe('{depfreeMode}');
+  });
+});
+
+// One owner per rule (#12080): redaction and "read AGENTS.md first" live in the
+// two mode banners, resolve-every-finding only in the do-work banner, and the
+// scan-then-bound contract only in the discovery block — so an assembled prompt
+// says each once. A mission body that restates any of them is the regression.
+describe('banner-owned rules are not restated by mission bodies (#12080)', () => {
+  const BANNER_OWNED = [
+    AUDIT_REDACTION_RULE,
+    'Redact before you publish',
+    /[Nn]ever paste/,
+    /Read (?:the|this) (?:project|repository)'s (?:own )?(?:instruction files|`AGENTS\.md`)/,
+    'Every accepted finding requires resolution',
+    /cheap repository-wide inventory/,
+  ];
+
+  it('no audit mission body carries a banner-owned sentence', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    for (const taskType of AUDIT_TASK_TYPE_LIST) {
+      const body = DEFAULT_TASK_PROMPTS[taskType];
+      expect(body, taskType).toBeTruthy();
+      for (const rule of BANNER_OWNED) {
+        expect(body, `${taskType} restates ${rule}`).not.toMatch(rule);
+      }
+    }
+  });
+
+  it.each([true, false])('an assembled code-quality prompt states each rule once (fileIssues=%s)', async (fileIssues) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const { auditQualityInstructions } = await import('./auditQuality.js');
+    const banner = `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions('code-quality')}`;
+    const prompt = applyAuditModeWrapper(DEFAULT_TASK_PROMPTS['code-quality'], banner)
+      .replace('{modeInstructions}', banner);
+    const count = (needle) => prompt.split(needle).length - 1;
+    expect(count(AUDIT_REDACTION_RULE)).toBe(1);
+    expect(count('`AGENTS.md`')).toBe(1);
+    expect(count('Every accepted finding requires resolution')).toBe(fileIssues ? 0 : 1);
+    expect(count('cheap repository-wide signal scan')).toBe(1);
+  });
+});
+
+// Lane boundaries decided in the 2026-10-17 prompt audit. Each cession names
+// the owning lane so two lanes cannot both file one class of finding.
+describe('lane ownership cessions', () => {
+  const hunted = (body) => body.split('\n').filter((line) => /^\s*(?:-|\d+\.) \*\*/.test(line)).join('\n');
+
+  it('only data-integrity hunts read-modify-write races; data-safety and runtime-safety cede them (#12082)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(hunted(DEFAULT_TASK_PROMPTS['data-integrity'])).toContain('read-modify-write');
+    for (const lane of ['data-safety', 'better-runtime-safety']) {
+      expect(hunted(DEFAULT_TASK_PROMPTS[lane]), lane).not.toContain('read-modify-write');
+      expect(DEFAULT_TASK_PROMPTS[lane], lane).toMatch(/read-modify-write races[^.]*data-integrity\s+work/);
+    }
+    expect(DEFAULT_TASK_PROMPTS['better-runtime-safety']).toContain('check-then-act sequences on module-level');
+  });
+
+  it('simplify cedes file splits to module-hygiene (#12083)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(DEFAULT_TASK_PROMPTS.simplify).not.toContain('outgrew their file');
+    expect(DEFAULT_TASK_PROMPTS.simplify).toContain('File splits and responsibility boundaries belong to the\nmodule-hygiene work');
+  });
+
+  it('error-handling cedes sensitive error detail to privacy and partial writes to data-integrity (#12086)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const body = DEFAULT_TASK_PROMPTS['error-handling'];
+    expect(body).not.toContain('Sensitive detail in an error path');
+    expect(body).not.toContain('Partial writes with no recovery');
+    expect(body).toContain('Sensitive detail\nleaking through an error path belongs to the privacy work; partial writes to\nthe data-integrity work');
+  });
+
+  it('structural-drift hunts behaviour twins (#12092) and ui-lifecycle hunts failed loads rendered as empty (#12094)', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    expect(hunted(DEFAULT_TASK_PROMPTS['better-structural-drift'])).toContain('**Behaviour twins**');
+    expect(DEFAULT_TASK_PROMPTS['better-structural-drift']).toContain('one shared primitive or\n   a parity test, never a copied patch');
+    expect(hunted(DEFAULT_TASK_PROMPTS['ui-lifecycle'])).toContain('**Failed loads rendered as empty**');
+    expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('loading/ready/error state with a retry, not a toast');
+  });
 });

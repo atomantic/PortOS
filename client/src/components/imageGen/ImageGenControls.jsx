@@ -17,6 +17,7 @@ import { formatCount } from '../../utils/formatters';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -29,6 +30,13 @@ const QUANTIZE_OPTIONS = [
 export default function ImageGenControls({
   mode,
   models = [],
+  // `useListResource` state of the local model catalog. `null` (the default
+  // for callers that hand in a resolved list) renders as before; 'error' and
+  // an empty 'ready' list get their own rows so a failed read never looks
+  // like "no models".
+  modelsState = null,
+  modelsError = null,
+  onRetryModels,
   modelId, onModelChange,
   width, height, onResolutionChange,
   steps, onStepsChange,
@@ -39,6 +47,7 @@ export default function ImageGenControls({
   showSeed = false,
   showQuantize = true,
   showModel = true,
+  remoteTargetActive = false,
   disabled = false,
   // Optional column override — defaults to 2/3 like the Image Gen page.
   // Pass e.g. "grid-cols-2 sm:grid-cols-4" to fit a denser layout.
@@ -72,18 +81,29 @@ export default function ImageGenControls({
   const isCloudCli = isCloudCliMode(mode);
   const showCloudModel = !!onCloudModelChange && cloudModels.length > 0;
 
-  const currentModel = models.find((m) => m.id === modelId);
+  // A peer chooses its own model; the retained local selection cannot constrain it.
+  const currentModel = remoteTargetActive ? null : models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
+  const isMoss = isLocal && currentModel?.runner === 'moss-swift';
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
   // falls through to the custom inputs (rendered by ResolutionField) so the
   // value stays visible and editable until the user picks a supported preset.
-  const availableResolutions = filterResolutions(mode, currentModel?.runner);
+  const availableResolutions = filterResolutions(mode, currentModel?.runner)
+    .filter(size => !isMoss || [size.w, size.h].every(edge => edge >= 256 && edge <= 1024 && edge % 16 === 0));
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
   return (
     <div className={className}>
+      {showModel && isLocal && modelsState === 'error' && (
+        <ListLoadError className="col-span-2 sm:col-span-3" what="the local model catalog" error={modelsError} onRetry={onRetryModels} />
+      )}
+      {showModel && isLocal && modelsState === 'ready' && models.length === 0 && (
+        <p role="status" className="col-span-2 sm:col-span-3 text-xs text-port-warning">
+          No local image models are compatible with this machine.
+        </p>
+      )}
       {showModel && isLocal && models.length > 0 && (
         <FormField label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
@@ -139,13 +159,13 @@ export default function ImageGenControls({
         width={width}
         height={height}
         onChange={onResolutionChange}
-        min={64}
-        max={MAX_IMAGE_EDGE}
-        step={1}
+        min={isMoss ? 256 : 64}
+        max={isMoss ? 1024 : MAX_IMAGE_EDGE}
+        step={isMoss ? 16 : 1}
         maxPixels={MAX_IMAGE_PIXELS}
         disabled={disabled}
         inputClassName={inputCls}
-        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${formatCount(MAX_IMAGE_PIXELS)} px. Multiples of 8 render best on local models.`}
+        note={isMoss ? 'MOSS requires 256–1024 pixels per side, in multiples of 16.' : `Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${formatCount(MAX_IMAGE_PIXELS)} px. Multiples of 8 render best on local models.`}
       />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
@@ -182,7 +202,7 @@ export default function ImageGenControls({
           labelClassName="block text-xs font-medium text-gray-400 mb-1"
         >
           <input
-            type="number" min={1} max={150}
+            type="number" min={1} max={isMoss ? 100 : 150}
             value={steps ?? ''}
             onChange={(e) => onStepsChange?.(e.target.value)}
             placeholder={String(currentModel?.steps || 25)}
@@ -202,7 +222,7 @@ export default function ImageGenControls({
           labelClassName="block text-xs font-medium text-gray-400 mb-1"
         >
           <input
-            type="number" min={0} max={20} step={0.5}
+            type="number" min={0} max={isMoss ? 10 : 20} step={0.5}
             value={guidance ?? ''}
             onChange={(e) => onGuidanceChange?.(e.target.value)}
             placeholder={String(currentModel?.guidance ?? '')}
@@ -212,7 +232,7 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {!isCloudCli && isLocal && showQuantize && !isFlux2 && (
+      {!isCloudCli && isLocal && showQuantize && !isFlux2 && currentModel?.runner !== 'moss-swift' && (
         <FormField label="Quantize (bits)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={quantize ?? '8'}

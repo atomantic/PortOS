@@ -7,7 +7,7 @@
  * visual editor lives at /fableloom/:loomId/:episodeId.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Sparkles, Trash2, Waypoints } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
@@ -16,8 +16,10 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import { FormField } from '../components/ui/FormField.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 import Pill from '../components/ui/Pill';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import useListResource from '../hooks/useListResource';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useProviderModels from '../hooks/useProviderModels';
 import toast from '../components/ui/Toast';
@@ -37,9 +39,15 @@ const emptyForm = () => ({
 
 export default function FableLoom() {
   const navigate = useNavigate();
-  const [looms, setLooms] = useState(null);
-  const [universes, setUniverses] = useState([]);
-  const [series, setSeries] = useState([]);
+  const fetchLooms = useCallback(() => listLooms({ silent: true }), []);
+  const loomsResource = useListResource(fetchLooms);
+  const { items: looms, setItems: setLooms } = loomsResource;
+  const fetchUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
+  const universesResource = useListResource(fetchUniverses);
+  const fetchSeries = useCallback(() => listPipelineSeriesNames({ silent: true }), []);
+  const seriesResource = useListResource(fetchSeries);
+  const universes = universesResource.items;
+  const series = seriesResource.items;
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm());
   const [planRoute, setPlanRoute] = useState({ providerId: '', model: '', effort: '' });
@@ -47,12 +55,6 @@ export default function FableLoom() {
     allowDefault: true, enabled: showForm, silent: true, withEffort: true,
   });
   const del = useConfirmDelete();
-
-  useEffect(() => {
-    listLooms().then(setLooms).catch(() => setLooms([]));
-    listUniverseNames({ silent: true }).then(setUniverses).catch(() => {});
-    listPipelineSeriesNames({ silent: true }).then(setSeries).catch(() => {});
-  }, []);
 
   const universeNames = useMemo(() => new Map(universes.map((u) => [u.id, u.name])), [universes]);
   const seriesNames = useMemo(() => new Map(series.map((s) => [s.id, s.name])), [series]);
@@ -179,6 +181,9 @@ export default function FableLoom() {
                   <option value="">No universe</option>
                   {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
+                {universesResource.state === 'error' && (
+                  <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} className="mt-2" />
+                )}
               </FormField>
               <FormField label="Part of series (optional)" labelClassName={labelClass}>
                 <select
@@ -189,6 +194,9 @@ export default function FableLoom() {
                   <option value="">Standalone</option>
                   {series.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
+                {seriesResource.state === 'error' && (
+                  <ListLoadError what="series" error={seriesResource.error} onRetry={seriesResource.retry} className="mt-2" />
+                )}
               </FormField>
             </div>
             <FormField label="Premise" labelClassName={labelClass}>
@@ -263,8 +271,10 @@ export default function FableLoom() {
           </form>
         )}
 
-        {looms === null ? (
+        {loomsResource.state === 'loading' ? (
           <PageSkeleton header="none" label="Loading branching narratives" cards={4} sidebar={false} layout="grid" />
+        ) : loomsResource.state === 'error' ? (
+          <ListLoadError what="branching narratives" error={loomsResource.error} onRetry={loomsResource.retry} />
         ) : looms.length === 0 ? (
           <div className="text-center py-16 border border-dashed border-port-border rounded-lg">
             <Waypoints size={32} className="mx-auto text-port-text-muted mb-3" />

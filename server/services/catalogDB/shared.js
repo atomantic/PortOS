@@ -165,6 +165,7 @@ export function rowToMedia(row) {
   if (!row) return null;
   return {
     ingredientId: row.ingredient_id,
+    ...(row.identity_retained ? { retained: true } : {}),
     mediaKey: row.media_key,
     kind: row.kind,
     role: row.role ?? null,
@@ -257,13 +258,13 @@ export const liveHomingTargetSql = (r) => `(
 // SQL predicate matching ingredients that have at least one LIVE homing ref
 // (target row still resolves).
 export const HAS_LIVE_HOMING_REF = `EXISTS (
-    SELECT 1 FROM catalog_ingredient_refs r
-     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+    SELECT 1 FROM catalog_identity_read_refs r
+     WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
        AND ${liveHomingTargetSql('r')})`;
 
 // At least one homing ref row exists (live OR dangling) — distinguishes
 // "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
 export const HAS_ANY_HOMING_REF = `EXISTS (
-    SELECT 1 FROM catalog_ingredient_refs r
-     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+    SELECT 1 FROM catalog_identity_read_refs r
+     WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
        AND r.ref_kind IN (${HOMING_REF_KINDS_SQL}))`;

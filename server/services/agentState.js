@@ -13,6 +13,10 @@ export const activeAgents = new Map();
 // runnerAgents: runner-spawned agents (Map<agentId, { taskId, task, runId, model, ... }>)
 export const runnerAgents = new Map();
 
+// Completion events can outlive the runner process (hooks, forge checks and
+// persistence all await). Sweeps must not race them to the first terminal write.
+export const completingAgents = new Set();
+
 // userTerminatedAgents: agents the user explicitly killed (Set<agentId>)
 export const userTerminatedAgents = new Set();
 
@@ -119,7 +123,7 @@ export const setUseRunner = (val) => { useRunner = val; };
 // at the default branch's HEAD, so a reaper reads it as clean and merged. Listing
 // the id in `getActiveAgentIds()` hands every reaper that already consults it the
 // protection, without reordering branch-reconcile's MERGED-before-owner check.
-const dispatchingAgentIds = new Set();
+export const dispatchingAgentIds = new Set();
 export const markAgentDispatching = (agentId) => { dispatchingAgentIds.add(agentId); };
 export const clearAgentDispatching = (agentId) => { dispatchingAgentIds.delete(agentId); };
 

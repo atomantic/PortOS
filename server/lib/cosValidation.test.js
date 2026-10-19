@@ -59,6 +59,19 @@ describe('branch-reconcile batch metadata', () => {
   });
 });
 
+describe('dependency-freedom removal bar metadata', () => {
+  it('keeps each slashdo depfree mode and drops anything else', () => {
+    for (const depfreeMode of ['default', 'heavy', 'extreme']) {
+      expect(sanitizeTaskMetadata({ depfreeMode })).toEqual({ depfreeMode });
+    }
+    // A hand-edited schedule cannot smuggle in a bar the prompt block has no
+    // text for — it would render as the default bar while claiming otherwise.
+    for (const depfreeMode of ['EXTREME', 'zero', true, 2, null]) {
+      expect(sanitizeTaskMetadata({ depfreeMode })).toBeNull();
+    }
+  });
+});
+
 describe('cosValidation pipeline stage metadata', () => {
   const validStage = {
     name: 'Eligibility Gate',

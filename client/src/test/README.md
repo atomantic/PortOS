@@ -19,6 +19,7 @@ a new one.
 | `formValidityPolyfill.js` | Fixes happy-dom's constraint-validation (`stepMismatch`) so implicit form submission behaves like a real browser. |
 | `imageGenPageMocks.jsx` | Shared `vi.mock` scaffold + fixtures + `renderImageGenPage()` for the ImageGen page suites. |
 | `mockEventSource.js` | Minimal `EventSource` stand-in for jsdom, with manual `emit`/`emitRaw`/`fail` control. |
+| `mockFrameWindows.js` | `mockFrameWindows` — per-iframe postMessage identities for protocol tests while remote frame loading stays disabled; callers restore spies at teardown. |
 | `pageLoadBarrier.js` | `awaitPageLoaded` — waits for a page's loading skeleton (by its accessible label) to be removed. |
 | `pageNavTabAssertions.js` | Pins a tabbed page's rendered tab id/label list against drift from the nav manifest it was built from. |
 | `settledInput.js` | `typeSettled`/`clearSettled`/`retypeSettled` — waits for a controlled input's value to actually reflect the typed text before it's read. |

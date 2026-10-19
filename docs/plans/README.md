@@ -9,6 +9,12 @@ implementation.
 - Each plan typically opens with a **Context** section (the problem and intended
   outcome), then the architecture, data model, and a verification section.
 
+Index of plans other docs point at:
+
+- [2026-10-18 — local-first merge gate](./2026-10-18-ci-local-first-merge-gate.md):
+  the CI/test latency audit and the six changes behind the test memo, the
+  resource suites in pregate, and the pregate attestation CI honors.
+
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,
 and the topic docs elsewhere under `docs/`.

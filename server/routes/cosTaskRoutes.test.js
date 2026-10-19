@@ -14,7 +14,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -48,6 +49,7 @@ vi.mock('../services/cos.js', () => ({
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
   getTaskById: vi.fn(),
+  findTaskWithSource: vi.fn(),
   deleteTask: vi.fn(),
   reorderTasks: vi.fn(),
   approveTask: vi.fn(),
@@ -145,6 +147,32 @@ describe('CoS task collection selectors', () => {
   });
 });
 
+describe('GET /api/cos/tasks/:id', () => {
+  it('returns the task as stored with its source queue', async () => {
+    const task = { id: 'task-old', description: 'Example archived task', status: 'completed', taskType: 'documentation' };
+    cos.findTaskWithSource.mockResolvedValue({ task, source: 'user' });
+
+    const res = await request(buildApp()).get('/api/cos/tasks/task-old');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ task, source: 'user' });
+    expect(cos.findTaskWithSource).toHaveBeenCalledWith('task-old');
+  });
+
+  it('is a 404 for an unknown id and never shadows the literal list routes', async () => {
+    cos.findTaskWithSource.mockResolvedValue(null);
+    cos.getUserTasks.mockResolvedValue({ tasks: [] });
+
+    const missing = await request(buildApp()).get('/api/cos/tasks/no-such-task');
+    expect(missing.status).toBe(404);
+    expect(missing.body.code).toBe('NOT_FOUND');
+
+    const list = await request(buildApp()).get('/api/cos/tasks/user');
+    expect(list.status).toBe(200);
+    expect(cos.findTaskWithSource).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('CoS task responses after action-ledger failures', () => {
   it.each(['post', 'delete'])('keeps a committed %s successful when the ledger cannot write', async (method) => {
     const ledgerPath = join(tempRoot, 'user-action-events.json');
@@ -164,6 +192,29 @@ describe('CoS task responses after action-ledger failures', () => {
       rmSync(ledgerPath, { recursive: true, force: true });
       log.mockRestore();
     }
+  });
+});
+
+describe('POST /api/cos/tasks — managed app completion defaults', () => {
+  it.each([undefined, 'draft', 'leave-open', 'merge-on-green'])('inherits %s for a newly queued PR task', async policy => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: policy });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', useWorktree: true });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0].prCompletion).toBe(policy ?? 'review-then-merge');
+  });
+
+  it.each(['draft', 'leave-open'])('preserves explicit %s over app automatic merge', async policy => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: 'review-then-merge' });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', openPR: true, prCompletion: policy });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0].prCompletion).toBe(policy);
+  });
+
+  it('does not add a PR completion policy when the caller explicitly disables PR creation', async () => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: 'review-then-merge' });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', useWorktree: true, openPR: false });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0]).not.toHaveProperty('prCompletion');
   });
 });
 
@@ -295,6 +346,20 @@ describe('POST /api/cos/tasks — client-queued investigations (#6043)', () => {
     const [first, second] = cos.addTask.mock.calls.map(call => call[0].investigationFingerprint);
     expect(first).not.toBe(second);
     expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE })).toBe(first);
+  });
+
+  it('refuses a worktree/PR task for an app whose directory is not a git repository', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-nongit-'));
+    getAppById.mockResolvedValue({ id: 'app-1', name: 'Example App', repoPath: dir });
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: 'Do a thing', app: 'app-1', useWorktree: true, openPR: true });
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('NOT_A_GIT_REPO');
+    expect(res.body.error).toContain('Example App is not a git repository');
+    expect(cos.addTask).not.toHaveBeenCalled();
   });
 
   it('leaves an ordinary task untouched by the investigation path', async () => {

@@ -31,6 +31,11 @@ vi.mock('../../services/apiWritersRoom', async (importOriginal) => ({
   listWritersRoomWorks: vi.fn(async () => []),
   getWritersRoomWork: vi.fn(),
   saveWritersRoomDraft: vi.fn(),
+  updateWritersRoomWork: vi.fn(),
+  setWritersRoomActiveDraft: vi.fn(),
+  snapshotWritersRoomDraft: vi.fn(),
+  listWritersRoomExercises: vi.fn(async () => []),
+  promoteWritersRoomExercise: vi.fn(),
   runWritersRoomAnalysis: vi.fn(),
   listWritersRoomCharacters: vi.fn(async () => []),
   listWritersRoomPlaces: vi.fn(async () => []),
@@ -47,7 +52,7 @@ vi.mock('./LibraryPane', () => ({ default: () => <div>Library controls</div> }))
 
 import WorkEditor from './WorkEditor';
 import WritersRoom from '../../pages/WritersRoom';
-import { getWritersRoomWork, runWritersRoomAnalysis, saveWritersRoomDraft } from '../../services/apiWritersRoom';
+import { getWritersRoomWork, runWritersRoomAnalysis, saveWritersRoomDraft, updateWritersRoomWork, setWritersRoomActiveDraft, snapshotWritersRoomDraft, listWritersRoomExercises, promoteWritersRoomExercise } from '../../services/apiWritersRoom';
 
 const work = {
   id: 'wr-work-1',
@@ -445,4 +450,172 @@ describe('WorkEditor async buffer ownership (#9738)', () => {
     expect(container.querySelector('textarea').value).toBe('Polished body.');
     expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
   });
+});
+
+
+describe('Writers Room metadata and draft transition safety', () => {
+  const versioned = { ...work, drafts: [...work.drafts, { id: 'draft-2', label: 'v2', wordCount: 2 }] };
+  const destination = { ...versioned, activeDraftVersionId: 'draft-2', activeDraftBody: 'Destination prose.' };
+  const deferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  };
+  const renderPage = async () => {
+    getWritersRoomWork.mockResolvedValue(versioned);
+    const router = createMemoryRouter([
+      { path: '/writers-room/works/:workId', element: <WritersRoom /> },
+      { path: '/dashboard', element: <div>Destination page</div> },
+    ], { initialEntries: ['/writers-room/works/wr-work-1'] });
+    const view = render(<RouterProvider router={router} />);
+    await act(async () => {});
+    return { ...view, router, area: view.container.querySelector('textarea') };
+  };
+  const versions = async () => {
+    fireEvent.click(screen.getByLabelText('Work menu'));
+    fireEvent.click(screen.getByRole('button', { name: 'Versions' }));
+    await act(async () => {});
+  };
+
+  it('merges delayed metadata without restoring prose after a newer save or overwriting unrelated fields', async () => {
+    const status = deferred();
+    updateWritersRoomWork.mockImplementation((_id, patch) => patch.status ? status.promise : Promise.resolve({ ...versioned, title: 'New title' }));
+    const { area } = await renderPage();
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'complete' } });
+    fireEvent.change(screen.getByLabelText('Work title'), { target: { value: 'New title' } });
+    await act(async () => { fireEvent.blur(screen.getByLabelText('Work title')); });
+    fireEvent.change(area, { target: { value: 'New saved prose.' } });
+    saveWritersRoomDraft.mockResolvedValueOnce({ ...versioned, title: 'New title', activeDraftBody: 'New saved prose.' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    await act(async () => { status.resolve({ ...versioned, status: 'complete' }); });
+    expect(area).toHaveValue('New saved prose.');
+    expect(screen.getByLabelText('Status')).toHaveValue('complete');
+    expect(screen.getByLabelText('Work title')).toHaveValue('New title');
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+  });
+
+  it('keeps unsaved prose and drops metadata completion owned by a previous draft', async () => {
+    const first = deferred();
+    updateWritersRoomWork.mockReturnValueOnce(first.promise);
+    const { area } = await renderPage();
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'complete' } });
+    fireEvent.change(area, { target: { value: 'Unsaved prose.' } });
+    await act(async () => { first.resolve({ ...versioned, status: 'complete' }); });
+    expect(area).toHaveValue('Unsaved prose.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    saveWritersRoomDraft.mockResolvedValueOnce({ ...versioned, status: 'complete', activeDraftBody: 'Unsaved prose.' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    const stale = deferred();
+    updateWritersRoomWork.mockReturnValueOnce(stale.promise);
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'drafting' } });
+    setWritersRoomActiveDraft.mockResolvedValueOnce(destination);
+    await versions();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /v2/ })); });
+    await act(async () => { stale.resolve({ ...versioned, status: 'drafting' }); });
+    expect(area).toHaveValue('Destination prose.');
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+  });
+
+  it('holds editing, repeated switches, shortcuts, snapshots and navigation until a pending switch settles', async () => {
+    const pending = deferred();
+    setWritersRoomActiveDraft.mockReturnValueOnce(pending.promise);
+    const { area, router } = await renderPage();
+    await versions();
+    fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+    expect(area).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Snapshot' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Switching draft');
+    fireEvent.change(area, { target: { value: 'Must not enter old draft' } });
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    expect(saveWritersRoomDraft).not.toHaveBeenCalled();
+    expect(snapshotWritersRoomDraft).not.toHaveBeenCalled();
+    expect(setWritersRoomActiveDraft).toHaveBeenCalledOnce();
+    expect(area).toHaveValue(work.activeDraftBody);
+    await act(async () => { await router.navigate('/dashboard'); });
+    expect(router.state.location.pathname).toContain('/writers-room/');
+    await act(async () => { pending.resolve(destination); });
+    expect(screen.getByText('Destination page')).toBeInTheDocument();
+  });
+
+  it('restores controls after switch rejection and prevents switching while saving', async () => {
+    const pending = deferred();
+    setWritersRoomActiveDraft.mockReturnValueOnce(pending.promise);
+    const { area } = await renderPage();
+    await versions();
+    fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+    await act(async () => { pending.reject(new Error('offline')); });
+    expect(area).not.toHaveAttribute('readonly');
+    expect(area).toHaveValue(work.activeDraftBody);
+    expect(screen.getByRole('button', { name: /v2/ })).toBeEnabled();
+    const save = deferred();
+    saveWritersRoomDraft.mockReturnValueOnce(save.promise);
+    fireEvent.change(area, { target: { value: 'New prose' } });
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    expect(screen.getByRole('button', { name: /v2/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+    expect(setWritersRoomActiveDraft).toHaveBeenCalledOnce();
+    await act(async () => { save.resolve({ ...versioned, activeDraftBody: 'New prose' }); });
+    expect(screen.getByRole('button', { name: /v2/ })).toBeEnabled();
+  });
+
+  const openExercise = async () => {
+    listWritersRoomExercises.mockResolvedValue([{
+      id: 'exercise-1', workId: work.id, status: 'finished', appendedText: 'Sprint prose.', wordsAdded: 2,
+    }]);
+    fireEvent.click(screen.getByLabelText('Work menu'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Write for 10' })); });
+  };
+
+  it('holds promotion ownership after panel dismissal and excludes save, snapshot, switch, and navigation', async () => {
+    const promotion = deferred();
+    promoteWritersRoomExercise.mockReturnValueOnce(promotion.promise);
+    const { area, router } = await renderPage();
+    await openExercise();
+    fireEvent.click(screen.getByRole('button', { name: 'Add sprint text to draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close exercise' }));
+    expect(area).toHaveAttribute('readonly');
+    expect(screen.getByRole('status')).toHaveTextContent('Adding sprint text');
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Snapshot' }));
+    await versions();
+    expect(screen.getByRole('button', { name: /v2/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+    expect(saveWritersRoomDraft).not.toHaveBeenCalled();
+    expect(snapshotWritersRoomDraft).not.toHaveBeenCalled();
+    expect(setWritersRoomActiveDraft).not.toHaveBeenCalled();
+    await act(async () => { await router.navigate('/dashboard'); });
+    expect(router.state.location.pathname).toContain('/writers-room/');
+    await act(async () => { promotion.resolve({ work: { ...versioned, activeDraftBody: 'The hero wakes. Sprint prose.' } }); });
+    expect(screen.getByText('Destination page')).toBeInTheDocument();
+    expect(promoteWritersRoomExercise).toHaveBeenCalledOnce();
+  });
+
+  it('refuses promotion during a version transaction, then adopts a matching promotion into that destination', async () => {
+    const switching = deferred();
+    const promotion = deferred();
+    setWritersRoomActiveDraft.mockReturnValueOnce(switching.promise);
+    promoteWritersRoomExercise.mockReturnValueOnce(promotion.promise);
+    const { area } = await renderPage();
+    await openExercise();
+    await versions();
+    const promote = screen.getByRole('button', { name: 'Add sprint text to draft' });
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: /v2/ }));
+      fireEvent.click(promote);
+    });
+    expect(promoteWritersRoomExercise).not.toHaveBeenCalled();
+    expect(promote).toBeDisabled();
+    await act(async () => { switching.resolve(destination); });
+    expect(promote).toBeEnabled();
+    fireEvent.click(promote);
+    fireEvent.click(promote);
+    expect(promoteWritersRoomExercise).toHaveBeenCalledOnce();
+    await act(async () => { promotion.resolve({ work: { ...destination, activeDraftBody: 'Destination prose. Sprint prose.' } }); });
+    expect(area).toHaveValue('Destination prose. Sprint prose.');
+    expect(area).not.toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+  });
+
 });

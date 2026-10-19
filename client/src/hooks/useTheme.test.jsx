@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe('useTheme applies the manifest to <html>', () => {
   const withEffects = THEMES['kestrel-neon'];
-  const withoutEffects = THEMES[DEFAULT_THEME_ID];
+  const withoutEffects = THEMES['classic-midnight'];
   // Declared only by the effects theme — it must not survive the switch.
   const privateToken = '--port-fx-overlay-blend';
 
@@ -50,6 +50,12 @@ describe('useTheme applies the manifest to <html>', () => {
 });
 
 describe('useTheme localStorage resilience', () => {
+  it('starts a fresh instance with Kestrel Neon', () => {
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe('kestrel-neon');
+    expect(document.documentElement.dataset.portTheme).toBe('kestrel-neon');
+  });
+
   it('initializes to the default theme when reads throw (blocked storage)', () => {
     vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
@@ -88,10 +94,14 @@ describe('useTheme localStorage resilience', () => {
     expect(result.current.theme.id).toBe(OTHER_THEME_ID);
   });
 
-  it('applies a valid stored theme on init when storage is healthy', () => {
-    window.localStorage.setItem('portos-theme', OTHER_THEME_ID);
+  it.each([
+    ['classic-midnight', 'classic-midnight'],
+    ['midnight', 'classic-midnight'],
+  ])('preserves stored theme %s as %s', (saved, expected) => {
+    window.localStorage.setItem('portos-theme', saved);
     const { result } = renderHook(() => useTheme());
-    expect(result.current.themeId).toBe(OTHER_THEME_ID);
+    expect(result.current.themeId).toBe(expected);
+    expect(document.documentElement.dataset.portTheme).toBe(expected);
   });
 
   it('does not warn when the login screen receives the expected auth challenge', async () => {

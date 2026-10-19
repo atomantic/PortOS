@@ -203,6 +203,10 @@ function normalizeItem(input, { id, now = nowIso() } = {}) {
 
 export function addItem(board, itemInput) {
   const items = Array.isArray(board.items) ? board.items : [];
+  // Runs inside the store's row lock: retrying a lost assignment response
+  // returns the original pin without overwriting its edited prompt/caption.
+  const existing = itemInput.mediaKey && items.find(item => item.mediaKey === itemInput.mediaKey);
+  if (existing) return { board, item: existing };
   if (items.length >= MAX_ITEMS_PER_BOARD) {
     throw new ServerError(`Board is full (max ${MAX_ITEMS_PER_BOARD} items)`, {
       status: 400,

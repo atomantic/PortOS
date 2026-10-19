@@ -1,3 +1,4 @@
+import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog image-attach hook (issue #1359).
  *
@@ -42,7 +43,8 @@ const portraitGuard = createNewestWinsGuard();
 // ('portrait' | 'reference'), 'duplicate' when the client already filed it,
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
 // error (caught by the factory).
-async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) {
+async function attachGeneratedImage({ ingredientId, kind, role, filename, queuedAt }) {
+  await assertCatalogIdentityWritable(ingredientId);
   // The ingredient can be deleted between enqueue and completion (a render
   // outlives its editor by minutes). `getIngredient` filters `deleted = false`,
   // so this skips a hard-deleted ingredient (FK would throw) AND a soft-deleted
@@ -63,11 +65,15 @@ async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) 
     return 'duplicate';
   }
   const hasPortrait = existing.some((m) => m.kind === 'portrait');
-  // Explicit kind wins; otherwise auto: first image → portrait, later → reference
-  // (mirrors CatalogIngredient.jsx `handleGeneratedImage`).
-  let target = kind === 'portrait' || kind === 'reference'
-    ? kind
-    : (hasPortrait ? 'reference' : 'portrait');
+  // A role-tagged render (a reference sheet, `sheet:<variant>`) is always a
+  // reference: it must never take the portrait slot. Otherwise explicit kind
+  // wins; else auto: first image → portrait, later → reference (mirrors
+  // CatalogIngredient.jsx `handleGeneratedImage`).
+  const mediaRole = typeof role === 'string' && role.trim() ? role.trim() : null;
+  let target = mediaRole ? 'reference'
+    : kind === 'portrait' || kind === 'reference'
+      ? kind
+      : (hasPortrait ? 'reference' : 'portrait');
   // A stale would-be-portrait must not demote a newer portrait. Keep the image
   // as a reference rather than dropping it (references are additive).
   if (target === 'portrait' && portraitGuard.isStale(ingredientId, queuedAt)) {
@@ -80,7 +86,8 @@ async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) 
     else await setPortraitMedia(ingredientId, filename);
     portraitGuard.mark(ingredientId, queuedAt);
   } else {
-    if (metadataOptions) await attachMedia(ingredientId, filename, 'reference', metadataOptions);
+    const referenceOptions = { ...(mediaRole ? { role: mediaRole } : {}), ...(metadataOptions || {}) };
+    if (Object.keys(referenceOptions).length > 0) await attachMedia(ingredientId, filename, 'reference', referenceOptions);
     else await attachMedia(ingredientId, filename, 'reference');
   }
   return target;
@@ -99,7 +106,7 @@ const hook = createMediaJobImageHook({
   serializeKey: ({ ingredientId }) => ingredientId,
   describe: ({ ingredientId }) => ingredientId,
   attach: ({ ingredientId, tag, filename, queuedAt }) => attachGeneratedImage({
-    ingredientId, kind: tag.kind, filename, queuedAt,
+    ingredientId, kind: tag.kind, role: tag.role, filename, queuedAt,
   }),
   onAttached: ({ ingredientId, filename }, status) => {
     if (status === 'portrait' || status === 'reference') {
@@ -118,4 +125,5 @@ export const __testing = {
     hook.__testing.reset();
     portraitGuard.clear();
   },
+  settled: hook.__testing.settled,
 };

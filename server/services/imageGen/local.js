@@ -20,6 +20,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { trashFiles } from '../../lib/trashFiles.js';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -29,7 +30,8 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
-import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
+import { usesTorchVenv, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
+import { mossRenderArgs, mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -40,7 +42,6 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../videoGen/generateVideoHelpers.js';
 
-const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
@@ -90,201 +91,217 @@ export const cancel = () => {
   return true;
 };
 
-export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [], referenceImageStrengths = [] }) => {
+const diffusersRenderArgs = ({ model, prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [] }) => {
   const modelId = model?.id;
-  if (usesDiffusersRunner(model)) {
-    const runnerLabel = isErnie(model) ? 'ERNIE' : isHiDream(model) ? 'HiDream' : isQwen(model) ? 'Qwen' : 'Z-Image';
-    const errCode = isErnie(model)
-      ? 'IMAGE_GEN_ERNIE_MISCONFIGURED'
-      : isHiDream(model)
-        ? 'IMAGE_GEN_HIDREAM_MISCONFIGURED'
-        : isQwen(model)
-          ? 'IMAGE_GEN_QWEN_MISCONFIGURED'
-          : 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED';
-    if (!model.repo) {
-      throw new ServerError(
-        `${runnerLabel} model "${modelId}" is missing the 'repo' field in data/media-models.json`,
-        { status: 500, code: errCode },
-      );
-    }
-    // Z-Image / ERNIE / HiDream / Qwen all reuse the FLUX.2 venv (same
-    // diffusers + torch stack, no extra setup). Same not-installed error code
-    // so the UI's existing "run setup" CTA fires for any of these runners.
-    const torchPython = resolveFlux2Python();
-    if (!torchPython) {
-      throw new ServerError(
-        `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). FLUX.2, Z-Image, ERNIE, HiDream, and Qwen share this venv.`,
-        { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
-      );
-    }
-    const scriptPath = join(PATHS.root, 'scripts', 'z_image_turbo.py');
-    const args = [
-      scriptPath,
-      '--model', modelId,
-      '--repo', model.repo,
-      '--prompt', prompt,
-      '--height', String(height),
-      '--width', String(width),
-      '--steps', String(steps),
-      '--guidance', String(guidance ?? 1.0),
-      '--seed', String(seed),
-      '--output', outputPath,
-    ];
-    if (model.pipelineClass === 'QwenImage21Pipeline') {
-      if (referenceImagePaths.length + (initImagePath ? 1 : 0) > 10) {
-        throw new ServerError('Qwen Image 2.1 accepts at most 10 input images', { status: 400, code: 'TOO_MANY_INPUT_IMAGES' });
-      }
-      if (referenceImagePaths.length) args.push('--reference-images', ...referenceImagePaths);
-    }
-    if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-    if (initImagePath) args.push('--image-path', initImagePath);
-    if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-    if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-    if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
-    if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-    if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
-    if (model.usePromptEnhancer) args.push('--use-pe');
-    // HiDream needs a 4th text encoder loaded separately (Llama-3.1-8B) —
-    // the Diffusers HiDreamImagePipeline expects `text_encoder_4` /
-    // `tokenizer_4` kwargs at from_pretrained() time. The runner script
-    // branches on these flags; Z-Image / ERNIE / Qwen leave them unset.
-    if (model.textEncoderRepo) args.push('--text-encoder-repo', String(model.textEncoderRepo));
-    if (model.textEncoderClass) args.push('--text-encoder-class', String(model.textEncoderClass));
-    if (model.tokenizerClass) args.push('--tokenizer-class', String(model.tokenizerClass));
-    return { bin: torchPython, args };
+  const runnerLabel = isErnie(model) ? 'ERNIE' : isHiDream(model) ? 'HiDream' : isQwen(model) ? 'Qwen' : 'Z-Image';
+  const errCode = isErnie(model)
+    ? 'IMAGE_GEN_ERNIE_MISCONFIGURED'
+    : isHiDream(model)
+      ? 'IMAGE_GEN_HIDREAM_MISCONFIGURED'
+      : isQwen(model)
+        ? 'IMAGE_GEN_QWEN_MISCONFIGURED'
+        : 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED';
+  if (!model.repo) {
+    throw new ServerError(
+      `${runnerLabel} model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+      { status: 500, code: errCode },
+    );
   }
-  if (isFlux2(model)) {
-    if (!model.repo) {
-      throw new ServerError(
-        `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
-        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-      );
-    }
-    let repo = model.repo;
-    let quantization = model.quantization || 'sdnq';
-    let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
-    let refImagePaths = referenceImagePaths;
-    let refImageStrengths = referenceImageStrengths;
-    // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
-    // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
-    // into a base render (lora_utils.apply_loras), so the LoRA silently does
-    // nothing. The adapter was trained against the bf16 base anyway — route the
-    // render onto it.
-    if (loraPaths?.length && quantization !== 'none') {
-      const bf16 = flux2Bf16BaseRepo(model);
-      if (!bf16) {
-        throw new ServerError(
-          `Can't render a LoRA on "${modelId}" — a LoRA needs a bf16 FLUX.2 base and the size variant couldn't be resolved`,
-          { status: 400, code: 'IMAGE_GEN_LORA_NEEDS_BF16' },
-        );
-      }
-      console.log(`🎚️  flux2 LoRA render → routing ${modelId} (${quantization}) onto bf16 base ${bf16}`);
-      repo = bf16;
-      quantization = 'none';
-      tokenizerRepo = null;
-      basePipelineRepo = null;
-      // Multi-reference editing needs the `-kv` sibling repo, which the bf16
-      // LoRA route doesn't load (and the 4B variant has none). Drop the refs so
-      // the LoRA render proceeds as txt2img/i2i instead of the runner hard-
-      // failing on the missing kv pipeline — the LoRA is the primary intent
-      // when one is attached. i2i (single init image) is unaffected.
-      kvRepo = null;
-      if (refImagePaths?.length) {
-        console.log(`⚠️ flux2 LoRA render dropped ${refImagePaths.length} reference image(s) — multi-ref editing isn't supported on the bf16 LoRA route`);
-        refImagePaths = [];
-        refImageStrengths = [];
-      }
-    }
-    if (quantization !== 'sdnq' && quantization !== 'int8' && quantization !== 'none') {
-      throw new ServerError(
-        `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8, none)`,
-        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-      );
-    }
-    if (quantization === 'sdnq' && !tokenizerRepo) {
-      throw new ServerError(
-        `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
-        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-      );
-    }
-    if (quantization === 'int8' && !basePipelineRepo) {
-      throw new ServerError(
-        `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
-        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-      );
-    }
-    // quantization=none uses model.repo directly (gated base repo). No
-    // sibling-repo flag required, but the repo must be the gated base.
-    const flux2Python = resolveFlux2Python();
-    if (!flux2Python) {
-      throw new ServerError(
-        `FLUX.2 venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}).`,
-        { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
-      );
-    }
-    const scriptPath = join(PATHS.root, 'scripts', 'flux2_macos.py');
-    // No --metadata flag: local.js's proc.on('close') already writes the
-    // canonical sidecar at <jobId>.metadata.json after a successful exit.
-    // Letting the runner write its own would duplicate work and the JS
-    // sidecar would clobber any flux2-specific fields anyway.
-    const args = [
-      scriptPath,
-      '--model', modelId,
-      '--quantization', quantization,
-      '--repo', repo,
-      '--prompt', prompt,
-      '--height', String(height),
-      '--width', String(width),
-      '--steps', String(steps),
-      '--guidance', String(guidance ?? 0),
-      '--seed', String(seed),
-      '--output', outputPath,
-    ];
-    if (tokenizerRepo) args.push('--tokenizer-repo', tokenizerRepo);
-    if (basePipelineRepo) args.push('--base-pipeline-repo', basePipelineRepo);
-    // bf16 multi-reference editing loads the `-kv` sibling repo (whose
-    // transformer is tuned for reference editing) instead of `repo`.
-    // The runner only uses --kv-repo when --reference-images is also present;
-    // the plain text/i2i bf16 path stays on the base repo.
-    if (kvRepo) args.push('--kv-repo', kvRepo);
-    if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-    if (initImagePath) args.push('--image-path', initImagePath);
-    if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-    // Multi-reference editing for FLUX.2. When the path list is non-empty,
-    // scripts/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
-    // single-image Flux2KleinPipeline) and passes the refs as image=[PIL...].
-    // The route always emits parallel referenceImageStrengths (defaulting to
-    // 1.0 per ref); the runner honors them per-reference via a runtime patch
-    // on Flux2KVLayerCache.store + _flux2_kv_causal_attention.
-    if (refImagePaths?.length) {
-      args.push('--reference-images', ...refImagePaths);
-      if (refImageStrengths?.length) {
-        args.push('--reference-strengths', ...refImageStrengths.map(String));
-      }
-    }
-    if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-    if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
-    if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-    return { bin: flux2Python, args };
+  // Z-Image / ERNIE / HiDream / Qwen all reuse the FLUX.2 venv (same
+  // diffusers + torch stack, no extra setup). Same not-installed error code
+  // so the UI's existing "run setup" CTA fires for any of these runners.
+  const torchPython = resolveFlux2Python();
+  if (!torchPython) {
+    throw new ServerError(
+      `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). FLUX.2, Z-Image, ERNIE, HiDream, and Qwen share this venv.`,
+      { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
+    );
   }
+  const scriptPath = join(PATHS.root, 'scripts', 'z_image_turbo.py');
+  const args = [
+    scriptPath,
+    '--model', modelId,
+    '--repo', model.repo,
+    '--prompt', prompt,
+    '--height', String(height),
+    '--width', String(width),
+    '--steps', String(steps),
+    '--guidance', String(guidance ?? 1.0),
+    '--seed', String(seed),
+    '--output', outputPath,
+  ];
+  if (model.pipelineClass === 'QwenImage21Pipeline') {
+    if (referenceImagePaths.length + (initImagePath ? 1 : 0) > 10) {
+      throw new ServerError('Qwen Image 2.1 accepts at most 10 input images', { status: 400, code: 'TOO_MANY_INPUT_IMAGES' });
+    }
+    if (referenceImagePaths.length) args.push('--reference-images', ...referenceImagePaths);
+  }
+  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
+  if (initImagePath) args.push('--image-path', initImagePath);
+  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
+  if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
+  if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
+  if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
+  if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
+  if (model.usePromptEnhancer) args.push('--use-pe');
+  // HiDream needs a 4th text encoder loaded separately (Llama-3.1-8B) —
+  // the Diffusers HiDreamImagePipeline expects `text_encoder_4` /
+  // `tokenizer_4` kwargs at from_pretrained() time. The runner script
+  // branches on these flags; Z-Image / ERNIE / Qwen leave them unset.
+  if (model.textEncoderRepo) args.push('--text-encoder-repo', String(model.textEncoderRepo));
+  if (model.textEncoderClass) args.push('--text-encoder-class', String(model.textEncoderClass));
+  if (model.tokenizerClass) args.push('--tokenizer-class', String(model.tokenizerClass));
+  return { bin: torchPython, args, providerInputs: {
+    initImagePath: initImagePath || null,
+    referenceImagePaths: model.pipelineClass === 'QwenImage21Pipeline' ? referenceImagePaths : [],
+  } };
+};
 
-  if (IS_WIN) {
-    // imagine_win.py does not implement i2i — silently drop the init-image
-    // args here so the request still produces a normal txt2img result rather
-    // than failing argparse with "unrecognized arguments".
-    const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
-    return {
-      bin: pythonPath,
-      args: [scriptPath, '--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata',
-        ...(guidance > 0 ? ['--guidance', String(guidance)] : []),
-        ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
-        ...(loraPaths.length ? ['--lora-paths', ...loraPaths] : []),
-        ...(loraScales.length ? ['--lora-scales', ...loraScales.map(String)] : []),
-      ],
-    };
+// Resolves the repo / quantization / sibling repos / reference images FLUX.2
+// actually renders with. A LoRA reroutes a quantized base onto bf16.
+const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageStrengths }) => {
+  const modelId = model?.id;
+  let repo = model.repo;
+  let quantization = model.quantization || 'sdnq';
+  let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
+  let refImagePaths = referenceImagePaths;
+  let refImageStrengths = referenceImageStrengths;
+  // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
+  // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
+  // into a base render (lora_utils.apply_loras), so the LoRA silently does
+  // nothing. The adapter was trained against the bf16 base anyway — route the
+  // render onto it.
+  if (loraPaths?.length && quantization !== 'none') {
+    const bf16 = flux2Bf16BaseRepo(model);
+    if (!bf16) {
+      throw new ServerError(
+        `Can't render a LoRA on "${modelId}" — a LoRA needs a bf16 FLUX.2 base and the size variant couldn't be resolved`,
+        { status: 400, code: 'IMAGE_GEN_LORA_NEEDS_BF16' },
+      );
+    }
+    console.log(`🎚️  flux2 LoRA render → routing ${modelId} (${quantization}) onto bf16 base ${bf16}`);
+    repo = bf16;
+    quantization = 'none';
+    tokenizerRepo = null;
+    basePipelineRepo = null;
+    // Multi-reference editing needs the `-kv` sibling repo, which the bf16
+    // LoRA route doesn't load (and the 4B variant has none). Drop the refs so
+    // the LoRA render proceeds as txt2img/i2i instead of the runner hard-
+    // failing on the missing kv pipeline — the LoRA is the primary intent
+    // when one is attached. i2i (single init image) is unaffected.
+    kvRepo = null;
+    if (refImagePaths?.length) {
+      console.log(`⚠️ flux2 LoRA render dropped ${refImagePaths.length} reference image(s) — multi-ref editing isn't supported on the bf16 LoRA route`);
+      refImagePaths = [];
+      refImageStrengths = [];
+    }
   }
+  return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths };
+};
+
+const flux2RenderArgs = (model, inputs) => {
+  const { prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength } = inputs;
+  const modelId = model?.id;
+  if (!model.repo) {
+    throw new ServerError(
+      `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+    );
+  }
+  const { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths } = flux2LoraRoute(model, inputs);
+  if (quantization !== 'sdnq' && quantization !== 'int8' && quantization !== 'none') {
+    throw new ServerError(
+      `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8, none)`,
+      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+    );
+  }
+  if (quantization === 'sdnq' && !tokenizerRepo) {
+    throw new ServerError(
+      `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
+      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+    );
+  }
+  if (quantization === 'int8' && !basePipelineRepo) {
+    throw new ServerError(
+      `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
+      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+    );
+  }
+  // quantization=none uses model.repo directly (gated base repo). No
+  // sibling-repo flag required, but the repo must be the gated base.
+  const flux2Python = resolveFlux2Python();
+  if (!flux2Python) {
+    throw new ServerError(
+      `FLUX.2 venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}).`,
+      { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
+    );
+  }
+  const scriptPath = join(PATHS.root, 'scripts', 'flux2_macos.py');
+  // No --metadata flag: local.js's proc.on('close') already writes the
+  // canonical sidecar at <jobId>.metadata.json after a successful exit.
+  // Letting the runner write its own would duplicate work and the JS
+  // sidecar would clobber any flux2-specific fields anyway.
+  const args = [
+    scriptPath,
+    '--model', modelId,
+    '--quantization', quantization,
+    '--repo', repo,
+    '--prompt', prompt,
+    '--height', String(height),
+    '--width', String(width),
+    '--steps', String(steps),
+    '--guidance', String(guidance ?? 0),
+    '--seed', String(seed),
+    '--output', outputPath,
+  ];
+  if (tokenizerRepo) args.push('--tokenizer-repo', tokenizerRepo);
+  if (basePipelineRepo) args.push('--base-pipeline-repo', basePipelineRepo);
+  // bf16 multi-reference editing loads the `-kv` sibling repo (whose
+  // transformer is tuned for reference editing) instead of `repo`.
+  // The runner only uses --kv-repo when --reference-images is also present;
+  // the plain text/i2i bf16 path stays on the base repo.
+  if (kvRepo) args.push('--kv-repo', kvRepo);
+  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
+  if (initImagePath) args.push('--image-path', initImagePath);
+  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
+  // Multi-reference editing for FLUX.2. When the path list is non-empty,
+  // scripts/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
+  // single-image Flux2KleinPipeline) and passes the refs as image=[PIL...].
+  // The route always emits parallel referenceImageStrengths (defaulting to
+  // 1.0 per ref); the runner honors them per-reference via a runtime patch
+  // on Flux2KVLayerCache.store + _flux2_kv_causal_attention.
+  if (refImagePaths?.length) {
+    args.push('--reference-images', ...refImagePaths);
+    if (refImageStrengths?.length) {
+      args.push('--reference-strengths', ...refImageStrengths.map(String));
+    }
+  }
+  if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
+  if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
+  if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
+  return { bin: flux2Python, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: refImagePaths } };
+};
+
+// imagine_win.py does not implement i2i — silently drop the init-image
+// args so the request still produces a normal txt2img result rather
+// than failing argparse with "unrecognized arguments".
+const mfluxWindowsArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [] }) => {
+  const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
+  return {
+    bin: pythonPath,
+    providerInputs: { initImagePath: null, referenceImagePaths: [] },
+    args: [scriptPath, '--model', model?.id, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata',
+      ...(guidance > 0 ? ['--guidance', String(guidance)] : []),
+      ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
+      ...(loraPaths.length ? ['--lora-paths', ...loraPaths] : []),
+      ...(loraScales.length ? ['--lora-scales', ...loraScales.map(String)] : []),
+    ],
+  };
+};
+
+const mfluxArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
   const bin = join(dirname(pythonPath), 'mflux-generate');
-  const args = ['--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
+  const args = ['--model', model?.id, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
   if (guidance > 0) args.push('--guidance', String(guidance));
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (loraPaths.length) args.push('--lora-paths', ...loraPaths);
@@ -295,7 +312,17 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   // stream the latest frame back to the client as `currentImage` for the
   // live-preview area.
   if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-  return { bin, args };
+  return { bin, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: [] } };
+};
+
+export const buildArgs = ({ loraPaths = [], loraScales = [], referenceImagePaths = [], referenceImageStrengths = [], platform = process.platform, ...rest }) => {
+  const inputs = { ...rest, loraPaths, loraScales, referenceImagePaths, referenceImageStrengths };
+  const { model } = inputs;
+  if (usesMossSwift(model)) return mossRenderArgs(inputs);
+  if (usesDiffusersRunner(model)) return diffusersRenderArgs(inputs);
+  if (isFlux2(model)) return flux2RenderArgs(model, inputs);
+  if (platform === 'win32') return mfluxWindowsArgs(inputs);
+  return mfluxArgs(inputs);
 };
 
 // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
@@ -489,8 +516,8 @@ export function buildSidecarMeta({
     model: {
       id: modelId,
       name: model?.name || modelId,
-      license: model?.license,
-      repo: model?.repo,
+      license: usesMossSwift(model) ? 'apache-2.0' : model?.license,
+      repo: usesMossSwift(model) ? MOSS_MANIFEST.repo : model?.repo,
       disclosure: model?.disclosure,
     },
     loras: validLoraFilenames.map((filename) => ({
@@ -621,7 +648,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
-  if (!usesTorchVenv(model) && !pythonPath) {
+  if (usesMossSwift(model)) {
+    // Check raw requests before sidecar normalization can discard a missing input file or LoRA.
+    if (loraFilenames.length || loraPaths.length || initImagePath || referenceImagePaths.length) {
+      throw new ServerError('MOSS SFT supports text-to-image only; remove LoRAs and input images.', { status: 400, code: 'MOSS_INPUT_UNSUPPORTED' });
+    }
+    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
+    const runtime = await diagnoseLocalRuntime({ modelId });
+    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MOSS_NOT_READY' });
+  }
+  if (!usesTorchVenv(model) && !usesMossSwift(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
@@ -711,6 +747,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
+  if (usesMossSwift(model)) {
+    meta.quantize = null;
+    meta.quantization = 'bf16';
+    meta.modelRepo = MOSS_MANIFEST.repo;
+    meta.modelRevision = MOSS_MANIFEST.revision;
+    meta.nativeRuntime = { runtime: 'moss-swift', sourceRevision: MOSS_MANIFEST.sourceRevision, adapterVersion: MOSS_MANIFEST.adapterVersion };
+  }
   if (addedTriggerWords.length) {
     console.log(`🔤 LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
   }
@@ -738,14 +781,42 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     maintenance.markCurrentUnsettled();
     console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
   });
-  let bin, args;
+  let bin, args, providerInputs;
   let proc;
   let claimHandedOff = false;
   let takeEarlyExit = null;
+  let startedEmitted = false;
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
-    ({ bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    // Record only inputs the selected runner actually receives. Unsupported
+    // references and Windows mflux init images remain explicit request evidence.
+    const requestedInputs = [
+      ...(meta.initImageFilename ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+      ...meta.referenceImageFilenames.map(filename => ({ role: 'referenceImages', filename })),
+    ];
+    const omittedInputs = [
+      ...(validInitImagePath && !providerInputs.initImagePath ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+      ...validReferenceImagePaths.filter(path => !providerInputs.referenceImagePaths.includes(path))
+        .map(path => ({ role: 'referenceImages', filename: basename(path) })),
+    ];
+    if (omittedInputs.length) {
+      meta.requestedInputImages = requestedInputs;
+      meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
+    }
+    meta.inputProvenance = 'provider-inputs';
+    meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
+    meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
+    if (!providerInputs.initImagePath) {
+      meta.initImageFilename = null;
+      meta.initImageStrength = null;
+      for (const key of ['cleanedFrom', 'regenerated', 'regenMethod', 'regenStrength', 'regenSteps', 'regenModelId']) {
+        delete meta[key];
+        delete job[key];
+      }
+    }
+    Object.assign(job, meta);
     heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
     if (!heavyClaim.ok) {
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
@@ -760,14 +831,15 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
-    const childEnv = await hfChildEnv();
+    const childEnv = usesMossSwift(model) ? mossChildEnv() : await hfChildEnv();
     // Last spawn gate: a cancel() during the awaits above found no child to signal.
     if (preparation.cancelRequested) {
       throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
     }
 
-    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${validReferenceImagePaths.length}`);
+    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${meta.referenceImageFilenames.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
+    startedEmitted = true;
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
@@ -785,7 +857,20 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // event — unwind it exactly the way the busy branch above does, or a refusal
     // strands a `running` entry and its stepwise dir every time.
     if (!claimHandedOff) {
-      if (proc?.pid) maintenance.markCurrentUnsettled();
+      if (proc?.pid) {
+        maintenance.markCurrentUnsettled();
+        // No close handler is wired yet, so nothing else will ever reap this child.
+        try {
+          killWithEscalation(proc, { label: 'abandoned image child', stillRunning: () => true });
+        } catch (killErr) {
+          console.error(`❌ Abandoned image child would not stop [${jobId.slice(0, 8)}]: ${killErr.message}`);
+        }
+      }
+      if (activeProcess === proc) activeProcess = null;
+      if (activeJob?.generationId === jobId) activeJob = null;
+      if (startedEmitted) {
+        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message });
+      }
       await releaseHeavyClaim();
       jobs.delete(jobId);
       await removeStepwise();
@@ -809,6 +894,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
     void releaseHeavyClaim();
+    // The close handler skips its own watcher.close() once finalized.
+    if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     void removeStepwise();
     dispatchTerminalEvent(
       jobId,
@@ -862,6 +949,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   try {
     watcher = fsWatch(stepwiseDir, (event) => {
       if (event === 'rename') processLatestFrame();
+    });
+    // Windows raises EPERM here when the watched dir is deleted; with no listener
+    // that is an uncaught exception and the server exits.
+    watcher.on?.('error', (err) => {
+      console.warn(`⚠️ Stepwise watcher error [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
   } catch { /* if watch fails, we still get final image — degrade gracefully */ }
 
@@ -1390,6 +1482,7 @@ export async function listGallery() {
         path: `/data/images/${f}`,
         createdAt: metadata.createdAt || s.birthtime.toISOString(),
         ...metadata,
+        fileSizeBytes: s.size,
       };
     },
   });
@@ -1398,39 +1491,20 @@ export async function listGallery() {
 
 export async function deleteImage(filename) {
   assertGalleryFilename(filename);
-  return withBackupAssetPublication(async () => {
-    await unlinkGuarded(join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
-    await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
-    // Drop the derived index row with the file (#2738). Without this the row
-    // survives until the next boot reconcile, so anything counting the index
-    // (the Character sheet's Auteur skill / Media Assets tile) reads high in
-    // between. Non-fatal + dynamically imported: a broken index must never fail
-    // the user's delete, and this keeps the pg stack out of this module's static
-    // graph (the mirror of how the index dynamically imports the media stack).
-    //
-    // Gated on the PNG being CONFIRMED gone. The unlink above swallows its error,
-    // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
-    // listGallery() — unindexing it there would swap this bug for its mirror and
-    // UNDERcount a live image. Failed-to-delete is not deleted.
-    //
-    // The probe is tri-state, NOT existsSync: that collapses "absent" and "I
-    // couldn't tell" (EACCES on the dir, EIO) into the same `false`, which is the
-    // absent-vs-failed sentinel trap — an unreadable gallery would read as "every
-    // image is gone" and retire live rows. Only a definitive ENOENT retires the
-    // row; present-or-unknown leaves it for the reconcile, which reads disk.
-    const probeErr = await stat(join(PATHS.images, filename)).then(() => null, (err) => err);
-    if (probeErr?.code === 'ENOENT') {
-      await import('../mediaAssetIndex/index.js')
-        .then((m) => m.unindexImage(filename))
-        .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
-    } else {
-      console.error(`❌ Image file not confirmed gone (${probeErr?.code || 'still present'}), keeping its index row: ${filename}`);
-    }
-    console.log(`🗑️ Deleted image: ${filename}`);
+  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
+    await trashFiles([
+      join(PATHS.images, filename),
+      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+      join(PATHS.images, `${filename}.metadata.json`),
+      join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
+    ]);
+    // trashFiles verifies removal before derived records can be retired.
+    await import('../mediaAssetIndex/index.js')
+      .then((m) => m.unindexImage(filename))
+      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+    console.log(`🗑️ Trashed image: ${filename}`);
     return { ok: true };
-  });
+  }));
 }
 
 // Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
@@ -1447,6 +1521,17 @@ function editImageSidecar(filename, mutate) {
     const { path: sidecarPath, metadata } = await readImageSidecar(filename);
     const result = mutate(metadata);
     if (result === null) return null;
+    // A stale edit queued after deletion must not recreate its sidecar/index.
+    // Sidecar-only records remain editable while peer media bytes are pending.
+    const present = await Promise.all([
+      join(PATHS.images, filename),
+      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+      join(PATHS.images, `${filename}.metadata.json`),
+    ].map(path => stat(path).then(() => true, error => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    })));
+    if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
     await atomicWrite(sidecarPath, metadata);
     await refreshImageIndex(filename);
     return result;

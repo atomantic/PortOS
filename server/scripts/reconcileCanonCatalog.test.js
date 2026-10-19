@@ -1,3 +1,4 @@
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null) }));
 /**
  * Tests for the boot-time canon↔catalog reconciliation.
  *

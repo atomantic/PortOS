@@ -14,9 +14,11 @@
  *
  * Writes data to a temp file, then renames atomically so readers never see
  * a partial write. Accepts a string, a Buffer, or any JSON-serializable value.
+ * The temp file is fsynced before the rename and the directory after it
+ * (#12025), so a crash cannot leave the rename durable without its bytes.
  */
 
-import { chmod, mkdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { chmod, mkdir, open, stat, writeFile, rename, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 
@@ -44,6 +46,31 @@ export async function ensureDir(dir) {
   await mkdir(dir, { recursive: true });
 }
 
+// Directories whose fsync already failed once this process, so a filesystem
+// that rejects directory fsync (EINVAL on some network mounts) warns once
+// instead of on every write.
+const unsyncableDirs = new Set();
+
+/**
+ * fsync a directory so a just-completed rename inside it survives a crash.
+ * Best-effort once the rename is visible: the bytes are already in place, so a
+ * filesystem that cannot sync its directory degrades to the pre-#12025
+ * guarantee with one warning rather than failing a write that succeeded.
+ * Windows cannot open a directory for fsync, so it is skipped there.
+ */
+async function syncDirectory(dir) {
+  if (isWindows()) return;
+  try {
+    const handle = await open(dir, 'r');
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (err) {
+    if (!err?.code) throw err;
+    if (unsyncableDirs.has(dir)) return;
+    unsyncableDirs.add(dir);
+    console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);
+  }
+}
+
 export async function atomicWrite(filePath, data) {
   // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
@@ -59,7 +86,8 @@ export async function atomicWrite(filePath, data) {
   try {
     // A failed write may already have produced partial bytes; cleanup owns the
     // entire preparation, including restoring mode bits tightened by umask.
-    await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+    // `flush` fsyncs the temp file's bytes before the handle closes.
+    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
     if (existingMode !== null) await chmod(tmp, existingMode);
     // Persistent Windows lock: fail without moving the destination aside.
     const err = await renameWithWindowsRetries(tmp, filePath);
@@ -68,4 +96,5 @@ export async function atomicWrite(filePath, data) {
     await unlink(tmp).catch(() => {});
     throw err;
   }
+  await syncDirectory(dirname(filePath));
 }

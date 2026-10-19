@@ -17,8 +17,12 @@ vi.mock('../instances.js', async () => ({
 }));
 
 let settings = {};
+let settingsError = null;
 vi.mock('../settings.js', () => ({
-  getSettings: async () => settings,
+  getSettings: async () => {
+    if (settingsError) throw settingsError;
+    return settings;
+  },
 }));
 
 const {
@@ -57,6 +61,7 @@ const universePeer = (overrides = {}) => ({
 describe('peerPullAuthorization', () => {
   beforeEach(() => {
     settings = {};
+    settingsError = null;
     setPeers();
     __resetPullWarnThrottleForTests();
     vi.restoreAllMocks();
@@ -192,8 +197,12 @@ describe('peerPullAuthorization', () => {
     });
 
     it('treats an unreadable settings file as strict-off (warn, do not break sync)', async () => {
-      settings = null;
-      await expect(authorizePeerPull(req(null), { recordKind: 'universe' })).resolves.toBeDefined();
+      settingsError = new Error('EACCES');
+      const decision = await authorizePeerPull(req(null), { recordKind: 'universe' });
+      expect(decision.allowed).toBe(false);
+      expect((await authorizePeerPull(req(null), { recordKind: 'universe' })).allowed).toBe(false);
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(console.warn.mock.calls[0][0]).toContain('⚠️ Serving peer-sync pull to an unidentified caller');
     });
   });
 

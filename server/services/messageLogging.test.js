@@ -28,13 +28,14 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));
-vi.mock('./readinessNotify.js', () => ({ noteReadinessChanged: () => {} }));
+vi.mock('./readinessSignal.js', () => ({ noteReadinessChanged: () => {} }));
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({ getAccessToken: async () => ({ token: 'synthetic-token' }) }), GOOGLE_API_TIMEOUT_MS: 30_000 }));
-vi.mock('@googleapis/gmail', () => ({
-  gmail: () => ({ users: {
-    messages: { send: doubles.send, list: doubles.list, get: doubles.get, trash: doubles.trash, modify: doubles.modify },
-    settings: { sendAs: { list: async () => ({ data: { sendAs: [] } }) } }
-  } })
+vi.mock('./gmailApi.js', () => ({
+  createGmailApi: () => ({
+    sendMessage: doubles.send, listMessages: doubles.list, getMessage: doubles.get,
+    trashMessage: doubles.trash, modifyMessage: doubles.modify,
+    listSendAs: async () => ({ sendAs: [] })
+  })
 }));
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: doubles.fetch }));
 vi.mock('./messageTokenExtractor.js', () => ({ getToken: doubles.token, clearTokenCache: () => {} }));
@@ -82,9 +83,9 @@ function seedMessage(account) {
 beforeEach(() => {
   vi.clearAllMocks();
   doubles.files.clear();
-  doubles.send.mockResolvedValue({ data: { id: 'api-message-1' } });
-  doubles.list.mockResolvedValue({ data: { messages: [] } });
-  doubles.get.mockResolvedValue({ data: {} });
+  doubles.send.mockResolvedValue({ id: 'api-message-1' });
+  doubles.list.mockResolvedValue({ messages: [] });
+  doubles.get.mockResolvedValue({});
   doubles.token.mockResolvedValue({ token: 'synthetic-token' });
   doubles.evaluate.mockResolvedValue({ notInInbox: true, error: 'Not found' });
   logs = ['log', 'warn', 'error'].map(method => vi.spyOn(console, method).mockImplementation(() => {}));

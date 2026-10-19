@@ -113,6 +113,10 @@ export const coreDdl = [
       PRIMARY KEY (app_id, category, agent_id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC)`,
+    // The AUDIT_SLICE line of the run's completion summary (#12090): which paths
+    // or areas the lane deep-reviewed, so later runs rotate. Null for runs that
+    // predate it; the report JSON stays the scoring record.
+    `ALTER TABLE app_quality_measurements ADD COLUMN IF NOT EXISTS slice TEXT`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id)`,

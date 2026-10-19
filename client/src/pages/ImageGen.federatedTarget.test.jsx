@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
+  imageGenModel,
   imageGenPeer,
   loadImageGenPage,
   renderImageGenPage,
@@ -51,6 +52,37 @@ describe('ImageGen federated render target', () => {
     for (const field of ['mode', 'quantize', 'cleanC2PA', 'denoise', 'loraFilenames', 'cloudModel']) {
       expect(state.generateImage.mock.calls[0][0]).not.toHaveProperty(field);
     }
+  });
+
+  it('uses peer input capabilities and controls when the retained local model is MOSS', async () => {
+    state.models = [imageGenModel('moss-image-sft-bf16', { runner: 'moss-swift', supportsImg2Img: false, supportsLoras: false })];
+    state.settings.imageGen.local.modelId = 'moss-image-sft-bf16';
+    state.peers[0].mediaProviderStatus.snapshot.capabilities[0].inputAssets = {
+      roles: ['initImage', 'referenceImages'], required: false,
+    };
+    state.initImagePickerFactory = ({ initImage }) => <span data-testid="peer-init">{initImage.name}</span>;
+    state.referenceImagePickerFactory = ({ referenceImages }) => <span data-testid="peer-references">{referenceImages.length}</span>;
+    await renderImageGenPage('/media/image?initImageFile=fixture.png');
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a lighthouse at dusk' } });
+    await waitFor(() => expect(screen.getByLabelText('Model').value).toBe('moss-image-sft-bf16'));
+    expect(screen.getByRole('button', { name: /^Generate$/ })).toBeDisabled();
+    expect(screen.queryByTestId('peer-init')).not.toBeInTheDocument();
+    expect(state.resolutionFieldProps.max).toBe(1024);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    expect(screen.getByTestId('peer-init')).toHaveTextContent('fixture.png');
+    expect(screen.getByTestId('peer-references')).toHaveTextContent('4');
+    expect(screen.queryByText('This model cannot use the selected input image.')).not.toBeInTheDocument();
+    expect(state.resolutionFieldProps.max).toBe(3840);
+    expect(screen.getByLabelText(/^Steps/)).toHaveAttribute('max', '150');
+    expect(screen.getByLabelText(/^Guidance/)).toHaveAttribute('max', '20');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).not.toBeDisabled());
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
+    const { buildFormData, generateImageMultipart } = await import('../services/api');
+    await waitFor(() => expect(generateImageMultipart).toHaveBeenCalled());
+    expect(buildFormData).toHaveBeenCalledWith(expect.objectContaining({
+      mediaProviderPeerId: 'peer-example', modelId: 'peer-flux', initImageFile: 'fixture.png',
+    }));
   });
 
   it('adds the selected universe positive and negative style tokens to the image payload', async () => {

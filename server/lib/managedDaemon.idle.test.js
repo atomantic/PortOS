@@ -178,13 +178,21 @@ describe('managedDaemon idle reaper', () => {
     });
 
     it('stops sweeping once disarmed', async () => {
-      const stop = vi.fn().mockResolvedValue(undefined);
-      // Window 0 so a stray sweep can't stop it — this asserts the timer, not the policy.
-      registerIdleDaemon({ name: 'daemon-a', getIdleMs: () => 0, stop });
-      startIdleReaper({ intervalMs: 5 });
-      stopIdleReaper();
-      await new Promise((r) => setTimeout(r, 25));
-      expect(stop).not.toHaveBeenCalled();
+      // Fake time makes "five intervals passed" exact rather than a real sleep a
+      // loaded worker can outrun (#12047).
+      vi.useFakeTimers();
+      try {
+        const stop = vi.fn().mockResolvedValue(undefined);
+        // Window 0 so a stray sweep can't stop it — this asserts the timer, not the policy.
+        registerIdleDaemon({ name: 'daemon-a', getIdleMs: () => 0, stop });
+        startIdleReaper({ intervalMs: 5 });
+        stopIdleReaper();
+        await vi.advanceTimersByTimeAsync(25);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(stop).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

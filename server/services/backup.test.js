@@ -522,6 +522,24 @@ describe('listSnapshots', () => {
     readdirSpy.mockRestore();
   });
 
+  it('lists healthy snapshots alongside malformed or absent manifest timestamps', async () => {
+    const generatedAt = [{ malformed: true }, ['2026-01-01'], 'not-a-date', null, '2026-01-05T00:00:00Z'];
+    const ids = generatedAt.map((_, index) => `2026-01-0${index + 1}T00-00-00`);
+    vi.spyOn(fs, 'readdir').mockImplementation(async path =>
+      String(path) === joinPath('/dest', 'snapshots')
+        ? [dirent(machineHost, true)]
+        : ids.map(id => dirent(id, true)));
+    vi.spyOn(fs, 'readFile').mockImplementation(async path =>
+      JSON.stringify({ generatedAt: generatedAt[ids.indexOf(basename(dirname(String(path))))], fileCount: 0 }));
+
+    const result = await listSnapshots('/dest');
+
+    expect(result.map(({ id, createdAt }) => ({ id, createdAt }))).toEqual([
+      { id: ids[4], createdAt: generatedAt[4] },
+      ...ids.slice(0, 4).reverse().map(id => ({ id, createdAt: null })),
+    ]);
+  });
+
   it('discovers legacy and machine snapshots with collision-safe identities', async () => {
     const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-sources-'));
     const snapshotId = '2026-06-08T15-18-34';
@@ -2190,6 +2208,19 @@ describe('generateManifest', () => {
     expect(manifest.files).not.toHaveProperty('dangling-link');
     expect((await fsp.lstat(joinPath(dataDir, 'dangling-link'))).isSymbolicLink()).toBe(true);
   });
+
+  it('records no OS metadata files in a new manifest', async () => {
+    const fsp = await vi.importActual('fs/promises');
+    const dataDir = joinPath(tmpRoot, 'data');
+    await fsp.mkdir(joinPath(dataDir, 'images'), { recursive: true });
+    await fsp.writeFile(joinPath(dataDir, 'images', 'example.png'), 'png');
+    await fsp.writeFile(joinPath(dataDir, 'images', '.DS_Store'), 'finder');
+    await fsp.writeFile(joinPath(dataDir, 'images', '._example.png'), 'appledouble');
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, joinPath(tmpRoot, 'manifest.json'));
+    expect(Object.keys(manifest.files)).toEqual([joinPath('images', 'example.png')]);
+    expect(manifest.fileCount).toBe(1);
+  });
 });
 
 describe('restoreSnapshot manifest verification', () => {
@@ -2242,6 +2273,82 @@ describe('restoreSnapshot manifest verification', () => {
     return pending;
   }
 
+  it.each([
+    ['universes', 'universes/universe-example/index.json', { id: 'universe-example' }],
+    ['universes', 'universes/index.json', { config: { runs: [{ id: 'run-example' }] } }],
+    ['pipeline-issues', 'pipeline-issues/iss-example/index.json', { id: 'iss-example' }],
+    ['pipeline-series', 'pipeline-series/ser-example/index.json', { id: 'ser-example' }],
+    ['story-builder', 'story-builder/stb-example/index.json', { id: 'stb-example' }],
+    ['writers-room', 'writers-room/folders.json', [{ id: 'folder-example' }]],
+    ['writers-room', 'writers-room/exercises.json', [{ id: 'exercise-example' }]],
+    ['writers-room', 'writers-room/works/wr-work-aabb/manifest.json', { id: 'wr-work-aabb' }],
+    ['creative-director', 'creative-director-projects.json', [{ id: 'project-example' }]],
+  ])('refuses %s legacy metadata at %s before preview or execution (#12397)', async (domain, path, record) => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    const markerPath = joinPath(PATHS.data, `${domain === 'creative-director' ? 'creative-director-projects' : domain}.migrated.json`);
+    await realFs.writeFile(markerPath, '{"imported":1}');
+    try {
+      const hash = await writeSnapshotFile(path, JSON.stringify(record));
+      await writeManifest({ [path]: hash });
+      // Both empty and overlapping destination databases must refuse: this is
+      // source compatibility, not an opportunistic ON CONFLICT merge.
+      for (const rows of [[], [{ id: 'existing-record' }]]) {
+        query.mockResolvedValue({ rows });
+        for (const dryRun of [true, false]) {
+          for (const subdirFilter of [null, path.split('/')[0], path]) {
+            await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
+              .rejects.toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: [domain] } });
+          }
+        }
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(await realFs.readFile(markerPath, 'utf8')).toBe('{"imported":1}');
+      // Pre-manifest snapshots get the same compatibility preflight.
+      await realFs.rm(joinPath(snapshotDir, 'manifest.json'));
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+        .rejects.toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA' });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+      query.mockResolvedValue({ rows: [] });
+      await realFs.rm(markerPath);
+    }
+  });
+
+  it('admits current file-primary siblings and parked recovery evidence on PostgreSQL', async () => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const paths = [
+        'universes/universe-example/assets/sheet.png', 'universes.imported/universe-example/index.json',
+        'universes/index.json', 'pipeline-issues/iss-example/render.png',
+        'pipeline-series/ser-example/manuscript-review.json', 'pipeline-series/ser-example/index.json.imported',
+        'story-builder.imported/stb-example/index.json', 'writers-room/folders.imported.json',
+        'writers-room/exercises.imported.json', 'writers-room/works/wr-work-aabb/manifest.imported.json',
+        'writers-room/works/wr-work-aabb/drafts/draft-example.md', 'creative-director-projects.imported.json',
+      ];
+      const files = {};
+      for (const path of paths) files[path] = await writeSnapshotFile(path, '{}');
+      await writeManifest(files);
+      await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ verification: { status: 'verified' } });
+      // A mixed snapshot still permits selecting only the current draft body.
+      files['writers-room/folders.json'] = await writeSnapshotFile('writers-room/folders.json', '[]');
+      await writeManifest(files);
+      spawn.mockReset();
+      await expect(finishRestore({ dryRun: false, subdirFilter: 'writers-room/works/wr-work-aabb/drafts' }))
+        .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
   it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
     const relativePath = 'restore-integrity/example.json';
     const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
@@ -2282,6 +2389,87 @@ describe('restoreSnapshot manifest verification', () => {
     expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
   });
 
+  // A pre-#6182 snapshot keeps the CoS config in state.json's `config` slice.
+  it.each([
+    { name: 'pre-split snapshot, full restore', files: ['cos/state.json'], subdirFilter: undefined, expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, state.json scope', files: ['cos/state.json'], subdirFilter: 'cos/state.json', expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, agents scope', files: ['cos/state.json'], subdirFilter: 'cos/agents', expected: null },
+    { name: 'snapshot with config.json', files: ['cos/state.json', 'cos/config.json'], subdirFilter: undefined, expected: null },
+  ])('hands CoS restore the legacy config slice the snapshot installs: $name', async ({ files, subdirFilter, expected }) => {
+    const bodies = { 'cos/state.json': '{"agents":{},"config":{"maxConcurrentAgents":7}}', 'cos/config.json': '{"maxConcurrentAgents":5}' };
+    const manifest = {};
+    for (const file of files) manifest[file] = await writeSnapshotFile(file, bodies[file]);
+    await writeManifest(manifest);
+    withLiveCosRestore.mockClear();
+    await finishRestore({ dryRun: false, subdirFilter });
+    expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+  });
+
+  describe('folder restore of an older snapshot (#12355)', () => {
+    const liveLedgerPath = () => joinPath(PATHS.data, 'migrations.applied.json');
+    const liveQuotaBurnPath = () => joinPath(PATHS.cos, 'quota-burn.json');
+    const liveJobsPath = () => joinPath(PATHS.cos, 'autonomous-jobs.json');
+    const legacyPlan = JSON.stringify({ families: { grok: { enabled: true, jobs: [{
+      id: 'step-1', enabled: true, label: 'Example pass', jobType: 'agent-prompt',
+      params: { appId: 'app-example', prompt: 'Rewrite the example copy.' },
+    }] } } });
+
+    afterEach(async () => {
+      for (const path of [liveLedgerPath(), liveQuotaBurnPath(), liveJobsPath()]) await realFs.rm(path, { force: true });
+    });
+
+    async function seedSnapshot({ ledger } = {}) {
+      const manifest = { 'cos/quota-burn.json': await writeSnapshotFile('cos/quota-burn.json', legacyPlan) };
+      if (ledger) manifest['migrations.applied.json'] = await writeSnapshotFile('migrations.applied.json', JSON.stringify(ledger));
+      await writeManifest(manifest);
+    }
+
+    it('reports the migrations the live ledger has applied that the snapshot lacks, in preview and execution', async () => {
+      await seedSnapshot({ ledger: ['001-example.js'] });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+      const gap = { count: 1, names: ['359-example.js'] };
+
+      await expect(finishRestore({ dryRun: true, subdirFilter: 'cos' })).resolves.toMatchObject({ ledgerGap: gap });
+      spawn.mockReset();
+      await expect(finishRestore({ dryRun: false, subdirFilter: 'cos' })).resolves.toMatchObject({ ledgerGap: gap });
+    });
+
+    it.each([
+      { name: 'matching ledger', ledger: ['001-example.js'], expected: { count: 0, names: [] } },
+      { name: 'snapshot without a ledger', ledger: undefined, expected: null },
+    ])('reports $name as $expected', async ({ ledger, expected }) => {
+      await seedSnapshot({ ledger });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js']));
+      expect((await finishRestore({ dryRun: true, subdirFilter: 'cos' })).ledgerGap).toEqual(expected);
+    });
+
+    it('omits the gap from a full restore, which installs the snapshot ledger itself', async () => {
+      await seedSnapshot({ ledger: ['001-example.js'] });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+      expect(await finishRestore({ dryRun: true })).not.toHaveProperty('ledgerGap');
+    });
+
+    it('converts a restored legacy quota-burn plan to task references, once', async () => {
+      await seedSnapshot();
+      // rsync is faked, so stand in for its transfer of the snapshot plan.
+      await realFs.mkdir(PATHS.cos, { recursive: true });
+      await realFs.writeFile(liveQuotaBurnPath(), legacyPlan);
+
+      await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      const converted = JSON.parse(await realFs.readFile(liveQuotaBurnPath(), 'utf8')).families.grok.jobs[0];
+      expect(converted).toMatchObject({ jobType: null, taskRef: { kind: 'custom', jobId: 'job-burn-grok-step-1' } });
+
+      // A second restore of the same snapshot finds the job it created last time.
+      await realFs.writeFile(liveQuotaBurnPath(), legacyPlan);
+      spawn.mockReset();
+      await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      const jobs = JSON.parse(await realFs.readFile(liveJobsPath(), 'utf8')).jobs;
+      expect(jobs.filter(job => job.id === 'job-burn-grok-step-1')).toHaveLength(1);
+      expect(JSON.parse(await realFs.readFile(liveQuotaBurnPath(), 'utf8')).families.grok.jobs[0].taskRef)
+        .toEqual({ kind: 'custom', jobId: 'job-burn-grok-step-1' });
+    });
+  });
+
   it('names the unmanifested file so the operator can act on it', async () => {
     const relativePath = 'restore-integrity/example.json';
     await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });
@@ -2308,6 +2496,36 @@ describe('restoreSnapshot manifest verification', () => {
       '--exclude=.DS_Store', '--exclude=._*',
     ]));
   });
+
+  it.each(['modified', 'deleted'])('restores a snapshot whose manifest hashed a .DS_Store that was later %s', async (change) => {
+    // Manifests written before OS metadata was excluded still list it; Finder
+    // rewriting that file must not fail verification of an intact snapshot.
+    const relativePath = 'images/example.png';
+    const metaPath = 'images/.DS_Store';
+    await writeManifest({
+      [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data'),
+      [metaPath]: await writeSnapshotFile(metaPath, 'original finder metadata'),
+    });
+    if (change === 'modified') await writeSnapshotFile(metaPath, 'finder rewrote this');
+    else await realFs.unlink(joinPath(snapshotDataDir, metaPath));
+
+    await expect(finishRestore({ dryRun: true }))
+      .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+  });
+
+  it.each(['brain/', './brain', 'brain/.', 'brain//'])(
+    'selects and verifies the same files for the equivalent scope %s',
+    async (spelling) => {
+      const relativePath = 'brain/example.json';
+      await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data') });
+
+      await expect(finishRestore({ dryRun: true, subdirFilter: spelling })).resolves.toMatchObject({
+        subdirFilter: 'brain',
+        verification: { status: 'verified', checkedFiles: 1 },
+      });
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--include=/brain', '--include=/brain/***']));
+    },
+  );
 
   it.each([
     ['missing', async (path) => realFs.unlink(path)],
@@ -4759,7 +4977,7 @@ describe('runBackup lifecycle', () => {
       const dir = joinPath(destRoot, 'snapshots', source, id);
       await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
       if (generatedAt) {
-        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0 }));
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0, files: {} }));
       }
       if (marker) await fsp.writeFile(joinPath(dir, marker), '');
       return dir;
@@ -4907,6 +5125,96 @@ describe('runBackup lifecycle', () => {
       const result = await pending;
       expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'skipped' }, prunedSnapshots: 1 });
       await expect(fsp.stat(old)).rejects.toThrow();
+    });
+
+    it('retains the readable snapshot budget in addition to corrupt manifests (#12340)', async () => {
+      const fsp = await actualFs();
+      const oldest = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const readable = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2099-01-01T00:00:00.000Z' });
+      const corrupt = await seedSnapshot(machineHost, '2020-01-03T00-00-00');
+      await fsp.writeFile(joinPath(corrupt, 'manifest.json'), '{truncated');
+      const unreadable = await seedSnapshot(machineHost, '2019-12-31T00-00-00');
+      await fsp.writeFile(joinPath(unreadable, 'manifest.json'), '{truncated');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 2 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 1 });
+
+      await expect(fsp.stat(oldest)).rejects.toThrow();
+      await expect(fsp.stat(readable)).resolves.toBeDefined();
+      await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, result.snapshotId))).resolves.toBeDefined();
+      await expect(fsp.stat(corrupt)).resolves.toBeDefined();
+      await expect(fsp.stat(unreadable)).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2019-12-31T00-00-00 (manifest unreadable or invalid)');
+    });
+
+    it('keeps a completed backup after clock correction when a future snapshot manifest cannot be read (#12340)', async () => {
+      const fsp = await actualFs();
+      const future = await seedSnapshot(machineHost, '2099-01-01T00-00-00', { generatedAt: '2099-01-01T00:00:00.000Z' });
+      const manifestPath = joinPath(future, 'manifest.json');
+      fs.readFile.mockImplementation((path, ...args) => path === manifestPath
+        ? Promise.reject(Object.assign(new Error('unreadable'), { code: 'EACCES' }))
+        : fsp.readFile(path, ...args));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+      try {
+        const rsync = fakeProc();
+        spawn.mockReturnValue(rsync);
+        const pending = runBackup(destRoot, null, { retentionCount: 1 });
+        await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+        rsync.emit('close', 0);
+        const result = await pending;
+        expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 0 });
+        await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, result.snapshotId))).resolves.toBeDefined();
+        await expect(fsp.stat(future)).resolves.toBeDefined();
+        expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2099-01-01T00-00-00 (manifest unreadable or invalid)');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('excludes every invalid manifest shape from a successful dump retention budget (#12396)', async () => {
+      const fsp = await actualFs();
+      const valid = { generatedAt: '2099-01-01T00:00:00Z', fileCount: 0, files: {} };
+      const invalid = [null, [], {}, { ...valid, generatedAt: {} }, { ...valid, fileCount: 1 },
+        { ...valid, fileCount: 1, files: { '../escape': 'a'.repeat(64) } },
+        { ...valid, fileCount: 1, files: { 'record.json': 'bad-hash' } }];
+      const protectedIds = [];
+      for (const [index, manifest] of invalid.entries()) {
+        const id = `2099-01-0${index + 1}T00-00-00`;
+        const dir = await seedSnapshot(machineHost, id);
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify(manifest));
+        protectedIds.push(id);
+        await expect(restoreSnapshot(destRoot, id, { dryRun: true }))
+          .rejects.toMatchObject({ code: 'BACKUP_MANIFEST_INVALID' });
+      }
+      const legacy = await seedSnapshot(machineHost, '2019-01-01T00-00-00');
+      const healthy = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: valid.generatedAt });
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const dump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(dump);
+      const pending = runBackup(destRoot, null, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      const args = spawn.mock.calls[1][1];
+      await fsp.writeFile(args[args.indexOf('-f') + 1], 'CREATE TABLE example (id integer);');
+      dump.emit('close', 0);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
+      for (const id of [...protectedIds, result.snapshotId]) {
+        await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, id))).resolves.toBeDefined();
+      }
+      await expect(fsp.stat(legacy)).rejects.toThrow();
+      await expect(fsp.stat(healthy)).rejects.toThrow();
     });
 
     it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {

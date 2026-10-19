@@ -1,5 +1,5 @@
 /** Cross-cutting filesystem, time, formatting, and hashing helpers. */
-import { access, appendFile, chmod, copyFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
+import { access, appendFile, chmod, copyFile, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
 import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { basename, dirname, extname, join } from 'path';
@@ -39,9 +39,32 @@ const WIN_RETRY_DELAY_MS = 10;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
-// read failures with the same transient meaning on the reader side.
-const _WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
 const FILE_WATCH_FALLBACK_POLL_MS = 5000;
+
+// Directories whose fsync already failed once this process, so a filesystem
+// that rejects directory fsync (EINVAL on some network mounts) warns once
+// instead of on every write.
+const unsyncableDirs = new Set();
+
+/**
+ * fsync a directory so a just-completed rename inside it survives a crash.
+ * Best-effort once the rename is visible: the bytes are already in place, so a
+ * filesystem that cannot sync its directory degrades to the pre-#12025
+ * guarantee with one warning rather than failing a write that succeeded.
+ * Windows cannot open a directory for fsync, so it is skipped there.
+ */
+async function syncDirectory(dir) {
+  if (isWindows()) return;
+  try {
+    const handle = await open(dir, 'r');
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (err) {
+    if (!err?.code) throw err;
+    if (unsyncableDirs.has(dir)) return;
+    unsyncableDirs.add(dir);
+    console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);
+  }
+}
 
 /** Normalize Node statfs block counts into byte totals and compatibility aliases. */
 export function parseFilesystemStats(stats) {
@@ -226,15 +249,24 @@ export async function ensureDirs(dirs) {
  * to be followed. Callers that genuinely need follow-the-link semantics must
  * resolve `realpath(filePath)` themselves before calling.
  *
+ * Crash durability (#12025): the temp file is fsynced before the rename and
+ * the parent directory after it, so a power loss or OS crash cannot make the
+ * rename durable while the bytes are not — the zero-length or stale store that
+ * strict readers (settings, auth sessions, the media-jobs persist latch) treat
+ * as permanent corruption. The rename alone only protects concurrent readers.
+ * Windows gets the file sync only; see `syncDirectory`.
+ *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
+ * @param {{ onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
+ *   `onStage` is called as each durable stage begins, for slow-write diagnostics.
  * @returns {Promise<void>}
  *
  * @example
  * await atomicWrite(FILE, { version: 1, items: [] });
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
-export async function atomicWrite(filePath, data) {
+export async function atomicWrite(filePath, data, { onStage } = {}) {
   // #6176 — the filesystem analogue of db.js's row-write backstop. Refuses
   // before any bytes are produced, so a leaking suite cannot even leave a temp
   // file behind in the real tree.
@@ -242,6 +274,7 @@ export async function atomicWrite(filePath, data) {
   // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
+  onStage?.('write');
   await ensureDir(dirname(filePath));
   // Preserve the destination's existing permission bits. A plain
   // writeFile(existing) truncated the inode in place and kept its mode, but
@@ -295,13 +328,18 @@ export async function atomicWrite(filePath, data) {
   try {
     // writeFile can create a partial temp file before rejecting (e.g. ENOSPC).
     // Own cleanup from that first write, and publish only once its mode is set.
-    await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+    // `flush` fsyncs the temp file's bytes before the handle closes, so the
+    // rename below never publishes an inode the disk has not yet received.
+    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
     if (existingMode !== null) await chmod(tmp, existingMode);
+    onStage?.('replace');
     await replace();
   } catch (err) {
     await unlink(tmp).catch(() => {});
     throw err;
   }
+  onStage?.('dirSync');
+  await syncDirectory(dirname(filePath));
 }
 
 /**

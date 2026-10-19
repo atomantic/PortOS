@@ -13,7 +13,9 @@
  * the host, or when it sets what one will run (a repo path, a start command, a
  * task prompt, a shell job), or accesses live camera/microphone streams.
  * Ordinary read-only GETs stay open; raw backup archives require operator
- * authority because they export private records and credentials. Mutating routes in the
+ * authority because they export private records and credentials, and so does
+ * the directory picker (GET /api/scaffold/directories), which enumerates any
+ * readable host directory rather than a PortOS record. Mutating routes in the
  * same families that are deliberately left OUT:
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
@@ -102,6 +104,17 @@
  *     its non-loopback opt-in, the MortalLoom store path (all change-gated,
  *     below) and `PUT /api/lmstudio/config` (base URL plus timeout, in
  *     memory, with no UI writer).
+ *   - Caller-named host paths: a request body that names a host directory or
+ *     file PortOS then reads, writes or runs against is the same choice as a
+ *     stored host-file setting, made once. A remote password-free caller
+ *     could otherwise point PortOS at any path the host user owns. Gated:
+ *     reference-repo create (and a PATCH that names `repoUrl` or `branch`,
+ *     which the scheduled reference-watch runs git in and hands to an
+ *     analysis agent), share-bucket create (PortOS writes records into and
+ *     imports manifests from the folder), the sprite source-tree import and
+ *     the path-based Gmail mbox import. Rename/notes/mode PATCHes, bucket
+ *     export into an operator-chosen bucket, and the upload-based importers
+ *     stay open: they name no host path.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
  *     downloads DELETE removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
@@ -321,6 +334,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Instances: runs the Tailscale CLI and writes a TLS certificate and private
   // key into the install's cert directory.
   'POST /api/instances/provision-cert',
+  // Tailcat: installs the binary (brew / go install) and starts the relay
+  // processes; serve opens the remote ingress and reveals its bearer address.
+  // GET status and the DELETEs (they stop a relay) stay open.
+  'POST /api/instances/peers/tailcat',
+  'POST /api/instances/peers/tailcat/forwards/:id/retry',
+  'POST /api/instances/peers/tailcat/serve',
+  'POST /api/instances/peers/tailcat/serve/retry',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
@@ -358,6 +378,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // CoS: queue, release or steer an agent that runs shell commands in a
   // worktree, or a job that runs a shell command directly.
   'POST /api/cos/merge-admission',
+  'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
   'POST /api/cos/start',
   'POST /api/cos/resume',
@@ -384,6 +405,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/tools/:id',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
+  // Archives and removes a checkout and its merged branch under a scoped release.
+  'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
+  'POST /api/cos/schedule/branch-reconcile/checkouts/review',
   'POST /api/cos/schedule/maintenance-runs',
   // Editing a pending stage changes the provider used by deferred host work.
   'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
@@ -453,9 +477,6 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/digital-twin/import/spotify/browser/import',
   'POST /api/digital-twin/twin-evidence/interpret',
 
-  'POST /api/tools',
-  'PUT /api/tools/:id',
-
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
@@ -477,7 +498,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/backup/restore',
   'POST /api/backup/restore-db',
 
-  // Scaffolding writes a new repo and runs git/npm in it.
+  // Scaffolding writes a new repo and runs git/npm in it. The picker lists
+  // directory and file names anywhere on the host (not only under the
+  // workspace roots: the same component browses /Applications for a Chrome
+  // binary), so it is operator-only too; the template catalog stays open.
+  'GET /api/scaffold/directories',
   'POST /api/scaffold',
   'POST /api/scaffold/templates/create',
 
@@ -866,6 +891,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/ingest/file',
   'POST /api/catalog/ingest/voice',
   'POST /api/catalog/ingest/brain',
+  // A catalog reference sheet queues the same image render as the universe
+  // sheet route above, whose backend may be an agent harness (Codex). The
+  // preview only builds text and stays open.
+  'POST /api/catalog/ingredients/:id/sheets',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize
@@ -956,7 +985,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Reference repos (#8742): a check that finds new commits queues a CoS
   // analysis agent against them. `reviewed` only advances a recorded SHA.
+  // Create names the repo — a local path is a host directory the weekly
+  // reference-watch task runs git in and hands to that agent unattended, so
+  // choosing it is operator work; a PATCH gates per body (repoUrl/branch).
+  'POST /api/apps/:appId/reference-repos',
   'POST /api/apps/:appId/reference-repos/:refId/check',
+
+  // Caller-named host paths (rationale in the header): the folder, source
+  // tree or mailbox file each body names. Their record-only and upload-based
+  // neighbours stay open.
+  'POST /api/sharing/buckets',
+  'POST /api/sprites/import',
+  'POST /api/timeline/import/gmail',
 
   // Persistent Mind lifecycle (#8742): starting/waking/resuming the mind arms
   // its own agentic loop, which can queue CoS tasks on its own initiative
@@ -1094,6 +1134,10 @@ const COMPILED_BODY_ROUTES = [
   // Importer commit runs one LLM reformat call per excerpt only when asked to
   // (#11036); the default deterministic commit stays open.
   ['POST /api/importer/commit', (body) => body?.cleanupFormatting === true ? ['cleanupFormatting'] : []],
+  // A reference-repo PATCH that re-points the repo or branch chooses what the
+  // scheduled reference-watch runs git in; name, notes and the reviewed SHA
+  // are records.
+  ['PATCH /api/apps/:appId/reference-repos/:refId', (body) => ['repoUrl', 'branch'].filter((key) => body?.[key] !== undefined)],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { readFileSync, lstatSync } from 'fs';
-import { dirname, join } from 'path';
+import { readFileSync, lstatSync, existsSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 // Regression guard for #4852. `AGENTS.md` is the cross-vendor agent-instructions
@@ -106,6 +106,30 @@ describe('agent-instructions files (#4852)', () => {
       .filter(({ text }) => !text.includes('AGENTS.md'));
 
     expect(hits.map((h) => h.line)).toEqual([]);
+  });
+
+  it('every tracked .claude/ symlink resolves to an existing file (#11855)', () => {
+    // Git symlinks (mode 120000) under .claude/ point into lib/slashdo, which
+    // upstream renames or removes. A dangling one fails any tool that enumerates
+    // tracked markdown with ENOENT. Targets inside lib/slashdo are skipped when
+    // the submodule is not checked out, because CI only initializes it on demand.
+    const submoduleReady = existsSync(join(REPO_ROOT, 'lib/slashdo/package.json'));
+    const links = git('ls-files', '-s', '--', '.claude')
+      .split('\n')
+      .filter((line) => line.startsWith('120000'))
+      .map((line) => line.split('\t')[1]);
+
+    expect(links.length, 'detector self-check: .claude/ must track symlinks').toBeGreaterThan(0);
+
+    const dangling = links.filter((link) => {
+      // The blob content IS the link target; a Windows checkout without symlink
+      // support materializes a text file, so the disk entry can't be trusted.
+      const target = git('cat-file', 'blob', `:${link}`);
+      if (!submoduleReady && target.includes('lib/slashdo/')) return false;
+      return !existsSync(resolve(dirname(join(REPO_ROOT, link)), target));
+    });
+
+    expect(dangling).toEqual([]);
   });
 
   it('the scan actually reads tracked files (detector self-check)', () => {

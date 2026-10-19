@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import useListResource from './useListResource';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
@@ -39,6 +40,11 @@ const revokeIfBlob = (url) => {
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
 };
 
+// Stable fetchers for useListResource — the hook re-runs on identity change.
+// Silent: the form renders a failed catalog read itself, with Retry.
+const loadImageModels = () => listImageModels({ silent: true });
+const loadLoraLibrary = () => listLorasFull({ silent: true });
+
 export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const {
     status,
@@ -53,12 +59,17 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     setSelectedMode,
     configureBackends,
   } = backend;
-  const [models, setModels] = useState([]);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
-  const [availableLoras, setAvailableLoras] = useState([]);
-  const [lorasLoaded, setLorasLoaded] = useState(false);
-  const [lorasLoadFailed, setLorasLoadFailed] = useState(false);
+  // The local model catalog and LoRA library. A failed read stays distinct
+  // from an empty list: the form shows it with Retry, and a Remix handoff that
+  // needs the catalog waits for it or reports the failure (never "no models").
+  const modelCatalog = useListResource(loadImageModels);
+  const loraCatalog = useListResource(loadLoraLibrary);
+  const models = modelCatalog.items;
+  const modelsLoaded = modelCatalog.state !== 'loading';
+  const modelsLoadFailed = modelCatalog.state === 'error';
+  const availableLoras = loraCatalog.items;
+  const lorasLoaded = loraCatalog.state !== 'loading';
+  const lorasLoadFailed = loraCatalog.state === 'error';
   const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   const loraFilenameFromUrl = searchParams.get('lora');
   const loraLookupSequenceRef = useRef(0);
@@ -161,31 +172,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     setDenoise(savedDenoiseByMode[next] === true);
   }, [savedCleanC2PAByMode, savedDenoiseByMode, setSelectedMode]);
 
-  useEffect(() => {
-    let active = true;
-    listImageModels().then((loadedModels) => {
-      if (!active) return;
-      setModels(loadedModels);
-      setModelsLoadFailed(false);
-      setModelsLoaded(true);
-    }).catch(() => {
-      if (!active) return;
-      setModelsLoadFailed(true);
-      setModelsLoaded(true);
-    });
-    listLorasFull().then((loadedLoras) => {
-      if (!active) return;
-      setAvailableLoras(loadedLoras);
-      setLorasLoadFailed(false);
-      setLorasLoaded(true);
-    }).catch(() => {
-      if (!active) return;
-      setLorasLoadFailed(true);
-      setLorasLoaded(true);
-    });
-    reloadBackends();
-    return () => { active = false; };
-  }, [reloadBackends]);
+  useEffect(() => { reloadBackends(); }, [reloadBackends]);
 
   const restoreActiveJob = useCallback((activeJob) => {
     setStylePreset(null);
@@ -471,9 +458,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
-  const i2iCapable = isI2iCapableMode(effectiveMode);
+  const i2iCapable = remoteTargetActive
+    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
+    : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
-  const referenceSlotCount = referenceSlotsFor(effectiveMode, {
+  const referenceSlotCount = remoteTargetActive
+    ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
+    : referenceSlotsFor(effectiveMode, {
     hasInitImage: initImage.source != null,
     // fal.ai's edit models take 9–14 references (a mood board is the point),
     // so it gets every form slot; the per-model cap below still bounds it.
@@ -502,6 +493,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     () => referenceImages.slice(referenceSlotCount).filter((slot) => slot.file != null).length,
     [referenceImages, referenceSlotCount],
   );
+  const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
+    && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTargetActive) return null;
     const model = remoteTarget.model;
@@ -641,31 +634,11 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     const filename = remixHandoff?.filename;
     if (!filename) return;
     if (remixHandoff.failure === 'catalog') {
-      if (modelsLoadFailed) {
-        setModelsLoaded(false);
-        setModelsLoadFailed(false);
-        listImageModels().then((loadedModels) => {
-          setModels(loadedModels);
-          setModelsLoaded(true);
-        }).catch(() => {
-          setModelsLoadFailed(true);
-          setModelsLoaded(true);
-        });
-      }
-      if (lorasLoadFailed) {
-        setLorasLoaded(false);
-        setLorasLoadFailed(false);
-        listLorasFull().then((loadedLoras) => {
-          setAvailableLoras(loadedLoras);
-          setLorasLoaded(true);
-        }).catch(() => {
-          setLorasLoadFailed(true);
-          setLorasLoaded(true);
-        });
-      }
+      if (modelsLoadFailed) modelCatalog.retry();
+      if (lorasLoadFailed) loraCatalog.retry();
     }
     lookupRemixHandoff(filename);
-  }, [remixHandoff, modelsLoadFailed, lorasLoadFailed, lookupRemixHandoff]);
+  }, [remixHandoff, modelsLoadFailed, lorasLoadFailed, lookupRemixHandoff, modelCatalog.retry, loraCatalog.retry]);
 
   const dismissRemixHandoff = useCallback(() => {
     remixLookupSequenceRef.current += 1;
@@ -716,7 +689,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     },
     catalogs: {
       models,
+      modelsState: modelCatalog.state,
+      modelsError: modelCatalog.error,
+      retryModels: modelCatalog.retry,
       availableLoras,
+      lorasState: loraCatalog.state,
+      lorasError: loraCatalog.error,
+      retryLoras: loraCatalog.retry,
     },
     settings: {
       savedAgyModel,
@@ -736,11 +715,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       handleClearInitImage,
       handlePickReferenceImage,
       handleClearReferenceImage,
+      clearReferenceImages: () => referenceImages.forEach((_, index) => handleClearReferenceImage(index)),
       handleReferenceStrengthChange,
       handleGallerySelect,
     },
     derived: {
       loraHandoffBlocked,
+      unsupportedLocalInputs,
       currentModel,
       isFlux2Model,
       sharesFlux2Venv,
