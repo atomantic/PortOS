@@ -281,6 +281,17 @@ describe('makeVideoGenLineHandler', () => {
     expect(handle('SPEEDPROFILE:{not json')).toBe(false);
     expect(job.speedProfile).toBeUndefined();
   });
+
+  // #12262 — how each LoRA adapter was actually applied on this render.
+  it('LORASTRATEGY:<json> → stamps job.loraStrategy; a malformed payload falls through', () => {
+    const report = { adapters: [{ role: 'ic', name: 'ingredients.safetensors', strategy: 'runtime-delta', stages: ['stage-1'], strength: 1, quantizedTargets: 480, fusedTargets: 0 }] };
+    expect(handle('LORASTRATEGY:{not json')).toBe(false);
+    expect(handle('LORASTRATEGY:{"adapters":"nope"}')).toBe(false);
+    expect(job.loraStrategy).toBeUndefined();
+    expect(handle(`LORASTRATEGY:${JSON.stringify(report)}`)).toBe(true);
+    expect(job.loraStrategy).toEqual(report);
+    expect(sse).not.toHaveBeenCalled();
+  });
 });
 
 describe('finalizeGeneratedVideo runtime persistence', () => {
@@ -363,6 +374,16 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     // render must not read back as a full speed claim.
     expect(saved[0].speedProfileId).toBe('fast');
     expect(saved[0].speedProfileApplied).toEqual(applied);
+  });
+
+  it('persists the LoRA strategy the runner reported, and omits it when none was (#12262)', async () => {
+    const report = { adapters: [{ role: 'user', name: 'character.safetensors', strategy: 'runtime-delta', stages: ['all'], strength: 0.8, quantizedTargets: 480, fusedTargets: 0 }] };
+    let saved = null;
+    const mutateHistory = async (fn) => { saved = await fn([]); return saved; };
+    await finalizeGeneratedVideo({ ...baseCtx({ id: 'job-abcdef12', clients: [], loraStrategy: report }), mutateHistory });
+    expect(saved[0].loraStrategyApplied).toEqual(report);
+    await finalizeGeneratedVideo({ ...baseCtx({ id: 'job-abcdef12', clients: [] }), mutateHistory });
+    expect('loraStrategyApplied' in saved[0]).toBe(false);
   });
 
   it('omits speedProfileApplied when the runner reported none (absent sentinel)', async () => {

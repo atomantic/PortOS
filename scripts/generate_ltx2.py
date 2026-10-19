@@ -697,9 +697,9 @@ def parse_args() -> argparse.Namespace:
                    help="Distilled-LoRA fusion strength (default 1.0, matches dgrauet's CLI).")
     p.add_argument("--user-loras", default=None,
                    help="JSON list of {path, strength} dicts — user LoRAs (e.g. a "
-                        "fal LTX-2.3 LoRA) fused into the transformer via the pipeline's "
-                        "_pending_loras hook, the same mechanism upstream's "
-                        "`ltx-2-mlx generate --lora <path> <strength>` uses. Works across "
+                        "fal LTX-2.3 LoRA) applied on every transformer load: added at "
+                        "inference beside quantized projections, fused into float ones "
+                        "(see ltx_runtime_lora.py). Works across "
                         "all modes (text/image/fflf/extend/a2v) because every pipeline "
                         "loads its DiT through _load_transformer_with_optional_streaming.")
     p.add_argument("--image", default=None, help="Source/start frame (image, fflf modes)")
@@ -978,23 +978,48 @@ def install_ltx25_encoder_override(shim_dir: Path) -> None:
     PromptEncoder._text_encoder_source = _text_encoder_source
 
 
-def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
-    """Set the pipeline's _pending_loras hook so user-LoRA deltas fuse into the
-    transformer at load time.
+# What each adapter actually received (#12262), emitted as LORASTRATEGY: after
+# the render so PortOS stamps it on the history record. Plain data only — it
+# never holds a pipeline or transformer.
+_LORA_REPORT = None
 
-    The DiT loads lazily inside generate_and_save (via
-    _load_transformer_with_optional_streaming, which reads _pending_loras and
-    fuses the deltas before quantization), so setting it on the constructed
-    pipe — before the generate call — is sufficient. This is the exact
-    mechanism the upstream `ltx-2-mlx generate --lora` CLI uses, and it works
-    across every mode because all pipelines route DiT construction through that
-    one method. No-op when no user LoRAs were requested.
+
+def _lora_report():
+    global _LORA_REPORT
+    if _LORA_REPORT is None:
+        from ltx_runtime_lora import AdapterReport
+        _LORA_REPORT = AdapterReport()
+    return _LORA_REPORT
+
+
+def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool) -> None:
+    """Apply user (and, for IC, reference) adapters at inference time (#12262).
+
+    Every pipeline builds its DiT through _load_transformer_with_optional_streaming,
+    which the runtime uses to merge `_pending_loras` into the weights and
+    re-quantize — lossy on a q4/q8 pack. ltx_runtime_lora replaces that hook so
+    each quantized projection keeps its packed weights and adds the delta at
+    inference, decided per projection from the loaded module type. A user
+    adapter still attaches on every load, so stage reloads keep it; IC adapters
+    attach once, before stage 1 (see install_pipeline_adapters).
     """
-    if not specs:
+    if not specs and not ic:
         return
-    pipe._pending_loras = list(specs)
-    names = ", ".join(f"{Path(p).name}@{s:g}" for p, s in specs)
-    emit_status(f"Fusing {len(specs)} user LoRA(s): {names}")
+    from ltx_runtime_lora import install_pipeline_adapters
+    if specs:
+        names = ", ".join(f"{Path(p).name}@{s:g}" for p, s in specs)
+        emit_status(f"Applying {len(specs)} user LoRA(s): {names}")
+    install_pipeline_adapters(pipe, list(specs or []), report=_lora_report(), status=emit_status, ic=ic)
+
+
+def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
+    """User LoRAs for every non-IC mode. No-op when none were requested."""
+    _install_adapters(pipe, specs, ic=False)
+
+
+def report_lora_strategy() -> None:
+    if _LORA_REPORT is not None:
+        _LORA_REPORT.emit()
 
 
 def bind_output_fps(pipe, fps: float) -> None:
@@ -1955,9 +1980,11 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         inside the pipeline; we surface the resolution rule in the error so the
         user knows to nudge the dimensions rather than the reference.
       - User LoRAs stack ON TOP of the IC-LoRA rather than replacing it: the
-        IC-LoRA rides `lora_paths` (fused by _fuse_loras before Stage 1) while
-        user LoRAs ride the separate `_pending_loras` hook, so an
-        Ingredients x Character stack composes.
+        IC-LoRA rides `lora_paths` (attached before Stage 1 only) while user
+        LoRAs attach on every transformer load, so an Ingredients x Character
+        stack composes and the clean Stage-2 reload keeps the user adapters
+        but not the IC one. Both apply at inference time on a quantized pack
+        rather than being merged and re-quantized (#12262).
       - Ingredients is MULTI-reference (2-8) and conditions on stills, but the
         reference channel is a video encoder end-to-end: iclora_utils probes each
         reference with ffprobe and feeds it to the video VAE, whose reshape needs
@@ -2012,9 +2039,9 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         **optional_kwargs,
         **_gemma_kwargs(args),
     )
-    # User LoRAs go through _pending_loras (fused at DiT load), NOT lora_paths —
-    # so they stack with the IC-LoRA above instead of displacing it.
-    _apply_user_loras(pipe, args.user_lora_specs)
+    # `lora_paths` stays populated: the constructor reads the reference
+    # downscale factor from it, and the installed _fuse_loras attaches it.
+    _install_adapters(pipe, args.user_lora_specs, ic=True)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     ref_names = ", ".join(Path(r).name for r in references)
@@ -2034,7 +2061,11 @@ def run_ic_lora(args: argparse.Namespace) -> str:
     )
     if args.ic_attention_strength is not None:
         kwargs["conditioning_attention_strength"] = args.ic_attention_strength
-    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(**kwargs))
+    from ltx_runtime_lora import release_pipeline_adapters
+    try:
+        return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(**kwargs))
+    finally:
+        release_pipeline_adapters(pipe)
 
 
 def maybe_strip_audio(output_path: str) -> None:
@@ -2429,7 +2460,7 @@ def main() -> NoReturn:
             parse_text_encoder_config_overrides(args.text_encoder_config_json),
         ))
     # Parse user LoRAs once up-front (strict validation surfaces bad input
-    # before any model load). Each run_* sets pipe._pending_loras from this.
+    # before any model load). Each run_* installs them on its pipeline.
     args.user_lora_specs = parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
     install_prompt_encode_markers()
@@ -2461,6 +2492,7 @@ def main() -> NoReturn:
     # pipeline construction. No-op for a process whose mode never resolved a
     # streaming policy.
     report_streaming_policy()
+    report_lora_strategy()
     if args.teacache and not _SPEED_PROFILE_REPORT.get("teacache") \
             and "teacache" not in _SPEED_PROFILE_REPORT.get("degraded", []):
         speed_profile_degrade(

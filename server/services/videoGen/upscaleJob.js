@@ -41,7 +41,10 @@ import { isHardwareCompatible, hardwareUnavailableReason } from '../../lib/syste
 import { hfChildEnv } from '../hfToken.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
-import { RUNTIME_LINE_PREFIX, parseRuntimeFingerprintLine, formatRuntimeFingerprint } from './generateVideoHelpers.js';
+import {
+  RUNTIME_LINE_PREFIX, parseRuntimeFingerprintLine, formatRuntimeFingerprint,
+  LORA_STRATEGY_LINE_PREFIX, parseLoraStrategyLine,
+} from './generateVideoHelpers.js';
 import { getHistoryItem, loadHistory, mutateVideoHistory } from './history.js';
 import { buildArgs } from './renderArgs.js';
 import { runtimeIsCacheOnly, runtimeNeedsProcessGroupKill } from './runtimes.js';
@@ -245,7 +248,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
   // so signal it immediately instead of waiting for a render nobody wants.
   if (entry.canceled) cancel(jobId);
   const stderrTail = [];
-  const provenance = { runtime: null, referenceDownscale: null };
+  const provenance = { runtime: null, referenceDownscale: null, loraStrategy: null };
   const onLine = (line, isStderr) => {
     const text = String(line).trim();
     if (!text || PYTHON_NOISE_RE.test(text)) return;
@@ -261,6 +264,11 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
       if (!fp) return;
       provenance.runtime = fp;
       console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${formatRuntimeFingerprint(fp) || '?'}`);
+      return;
+    }
+    if (text.startsWith(LORA_STRATEGY_LINE_PREFIX)) {
+      const report = parseLoraStrategyLine(text);
+      if (report) provenance.loraStrategy = report;
       return;
     }
     const downscale = REFERENCE_DOWNSCALE_RE.exec(text);
@@ -466,6 +474,7 @@ export async function runVideoUpscale({
           // sentinels when the runner did not report them, never a guessed value.
           ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
           ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
+          ...(rendered.loraStrategy ? { loraStrategyApplied: rendered.loraStrategy } : {}),
           // What the grid actually required of this source, kept beside the result
           // so a reader can tell a padded render from a conforming one.
           upscaleAlignment: {
