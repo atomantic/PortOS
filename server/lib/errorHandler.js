@@ -71,26 +71,14 @@ export class ServerError extends Error {
   }
 }
 
-/**
- * Wrap async route handlers to catch errors and emit Socket.IO events
- * Also sends error response to client
- */
-/**
- * Translate a Zod safeParse() failure into the standard `Validation failed:`
- * ServerError shape that the rest of PortOS speaks. Pass the result of
- * `schema.safeParse(...)` after confirming `.success === false`.
- */
-/**
- * A thrown value reduced to one bounded, model-safe sentence.
- *
- * Typed capability results carry the failure reason back into a prompt, so the
- * string has to be short and has to exist even when what was thrown is not an
- * Error. Shared rather than re-declared per capability: the cap and the
- * fallback are the contract, not a local detail.
- */
+/** Reduce a thrown value to a bounded string for model-facing failure results. */
 export const boundedErrorMessage = (error, fallback = 'Request failed', maxChars = 300) =>
   String(error?.message || error || fallback).slice(0, maxChars);
 
+/**
+ * Throw the standard validation error for a Zod safeParse() result whose
+ * `success` is false.
+ */
 export function failValidation(parsed) {
   throw new ServerError(
     `Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
@@ -177,6 +165,10 @@ const summarizeDetails = (details) => {
   return clampLogText(details);
 };
 
+/**
+ * Handle rejected route promises with logging, Socket.IO events and the shared
+ * HTTP error envelope; delegate failures after streaming starts to middleware.
+ */
 export function asyncHandler(fn) {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((err) => {

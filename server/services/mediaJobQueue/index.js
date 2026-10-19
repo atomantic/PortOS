@@ -1585,17 +1585,6 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     progressPersistTimer.unref?.();
   };
 
-  // Single idempotent terminal sink. All terminal paths (completed, failed,
-  // canceled, watchdog) funnel through here. The status check at the top
-  // ensures only the first caller wins; any subsequent call (e.g. watchdog
-  // fired and then the gen emits 'completed') is a no-op.
-  //
-  // `job.terminating` (not a closure-local) is the guard so cancelJob — a
-  // module-level function — can also see that a terminal transition has begun.
-  // It's set synchronously before the async drain below, during which
-  // job.status is still 'running'; a cancel arriving in that window must not
-  // fire a redundant provider cancel. It's a transient in-memory flag
-  // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
   async function releaseRemoteAudioInputs(disposable) {
     if (!disposable || !isRemoteMediaJob(job)) return;
@@ -1635,11 +1624,11 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       console.error(`❌ Remote video input cleanup needs recovery for ${job.id}: ${error.message}`);
     }
   }
+  // All terminal paths compete for one outcome. claimTerminalOutcome sets the
+  // transient job.terminating flag synchronously, so cancelJob also sees the
+  // claim while status is still running during the async progress drain.
   async function terminate(state, apply, remoteInputsDisposable = false) {
     if (!claimTerminalOutcome(job)) return;
-    // setInterval now (was setTimeout) — using clearInterval to match the new
-    // API. (Node accepts either clearTimeout or clearInterval on the same
-    // Timeout handle, so this is purely stylistic.)
     clearInterval(watchdogTimer);
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);

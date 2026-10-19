@@ -506,10 +506,9 @@ async function persistPushDeliveryEvidence(subId, {
     // whose content moved) can never be held back by a stale entry.
     sub.lastPushedLegacyHash = isNonBlankStr(legacyStrippedPayloadHash) ? legacyStrippedPayloadHash : null;
     sub.updatedAt = now;
-    // Advance the per-record confirmed-delivery water-mark monotonically — an
-    // out-of-order retry must not retract it (mirrors ackDeletesUpTo's
-    // never-move-backward guarantee). tombstoneGc reads MIN-of-this across a
-    // kind's rows, so a regression here would let a stale tombstone prune.
+    // Keep confirmed delivery monotonic across out-of-order retries, as with
+    // ackDeletesUpTo. tombstoneGc uses the minimum across a kind's rows; moving
+    // this mark backward would unnecessarily retain already-delivered tombstones.
     if (Number.isFinite(recordPushAcceptedAtMs) && recordPushAcceptedAtMs > (sub.lastConfirmedPushedAt ?? 0)) {
       sub.lastConfirmedPushedAt = recordPushAcceptedAtMs;
     }
