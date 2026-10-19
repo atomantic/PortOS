@@ -525,10 +525,12 @@ describe('source-aware playback', () => {
     const bedBlock = () => screen.getAllByText('bed.mp3').map((node) => node.parentElement).find((node) => node.style.width);
     const reportBedLength = (el, seconds) => {
       Object.defineProperty(el, 'duration', { configurable: true, value: seconds });
+      // No act here: the early-metadata fixture calls this inside render's act; test-side callers use reportBedLengthInAct.
       // Real loadedmetadata leaves HAVE_METADATA available to a late listener.
       Object.defineProperty(el, 'readyState', { configurable: true, value: 1 });
-      act(() => { el.dispatchEvent(new Event('loadedmetadata')); });
+      el.dispatchEvent(new Event('loadedmetadata'));
     };
+    const reportBedLengthInAct = (el, seconds) => { act(() => reportBedLength(el, seconds)); };
 
     it('recovers metadata reported before the bed listener is installed', async () => {
       const onDuration = vi.fn();
@@ -552,7 +554,7 @@ describe('source-aware playback', () => {
       // Until the length is known the authored placement stands.
       expect(bedBlock().style.width).toBe('600px');
 
-      reportBedLength(el, 2);
+      reportBedLengthInAct(el, 2);
       // Metadata updates React state; wait for the measured span to render.
       await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
@@ -571,10 +573,10 @@ describe('source-aware playback', () => {
       await awaitPageLoaded('Loading timeline project');
       const el = container.querySelector('audio');
 
-      reportBedLength(el, Infinity);
+      reportBedLengthInAct(el, Infinity);
       expect(bedBlock().style.width).toBe('600px');
 
-      reportBedLength(el, 2);
+      reportBedLengthInAct(el, 2);
       unmount();
       // Nothing was edited, so nothing is saved; the measured span is a view.
       expect(api.updateTimelineProject).not.toHaveBeenCalled();
@@ -584,7 +586,7 @@ describe('source-aware playback', () => {
       api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });
       const { container } = renderEditorRoute();
       await awaitPageLoaded('Loading timeline project');
-      reportBedLength(container.querySelector('audio'), 2);
+      reportBedLengthInAct(container.querySelector('audio'), 2);
       // Metadata updates React state; wait for the measured span to render.
       await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
