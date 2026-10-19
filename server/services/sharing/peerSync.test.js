@@ -3268,7 +3268,7 @@ describe('peerSync', () => {
 
     it('routes a bundled linkedCollection through mergeMediaCollectionsFromSync', async () => {
       const linkedCollection = {
-        id: 'col-1', name: 'Universe: U', items: [
+        id: 'col-1', name: 'Universe: U', universeId: 'u1', items: [
           { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
         ],
       };
@@ -3518,6 +3518,124 @@ describe('peerSync', () => {
       }
     });
 
+    describe('bundled companion records are bound to the pushed record (#12427)', () => {
+      const live = { deleted: false, deletedAt: null };
+      const SOURCE = { source: { via: 'peer-push', peerId: 'peer-a' } };
+
+      it.each([
+        ['universe', 'universeId', 'u1'],
+        ['series', 'seriesId', 'ser-1'],
+      ])('merges a %s linkedCollection only when its %s is the pushed record', async (kind, field, id) => {
+        const bound = { id: 'col-bound', name: 'Bound', [field]: id, items: [] };
+        await applyIncomingPush({ kind, record: { id, ...live }, linkedCollection: bound, assetManifest: [], sourceInstanceId: 'peer-a' });
+        expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([bound], SOURCE);
+
+        vi.mocked(mergeMediaCollectionsFromSync).mockClear();
+        const foreign = { id: 'col-foreign', name: 'Other', [field]: 'someone-else', items: [] };
+        const unlinked = { id: 'col-unlinked', name: 'Loose', items: [] };
+        for (const linkedCollection of [foreign, unlinked]) {
+          await applyIncomingPush({ kind, record: { id, ...live }, linkedCollection, assetManifest: [], sourceInstanceId: 'peer-a' });
+        }
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('refuses a linkedCollection that would re-parent a local collection linked elsewhere', async () => {
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-victim', universeId: 'u-other', items: [] });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live },
+          linkedCollection: { id: 'col-victim', universeId: 'u1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-mine', universeId: 'u1', items: [] });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live },
+          linkedCollection: { id: 'col-mine', universeId: 'u1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses a linkedCollection on a kind that has no collection parent', async () => {
+        await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-1', ...live },
+          linkedCollection: { id: 'col-1', universeId: 'mv-1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('upserts only catalog refs for the pushed record and the ingredients those refs name', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        const ref = (ingredientId, refId, refKind = 'universe') => ({ ingredientId, refKind, refId, role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' });
+        const ing = (id) => ({ id, type: 'character', name: id, updatedAt: '2026-01-02T00:00:00Z' });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [],
+          catalogBundle: {
+            ingredients: [ing('cat-mine'), ing('cat-other'), ing('cat-unreferenced')],
+            refs: [ref('cat-mine', 'u1'), ref('cat-other', 'u-other'), ref('cat-mine', 'u1', 'series')],
+          },
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        expect(applyCatalogRemoteChanges).toHaveBeenCalledTimes(1);
+        const arg = vi.mocked(applyCatalogRemoteChanges).mock.calls[0][0];
+        expect(arg.refs).toEqual([ref('cat-mine', 'u1')]);
+        expect(arg.ingredients).toEqual([ing('cat-mine')]);
+      });
+
+      it('applies nothing when no catalog ref belongs to the pushed record', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [],
+          catalogBundle: {
+            ingredients: [{ id: 'cat-other', type: 'character', name: 'Other', updatedAt: '2026-01-02T00:00:00Z' }],
+            refs: [{ ingredientId: 'cat-other', refKind: 'universe', refId: 'u-other', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+          },
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+      });
+
+      it('does not let a music-video push overwrite a local track the local project does not link', async () => {
+        const linkedTrack = { id: 'track-victim', title: 'Hijacked', ...live };
+        const push = (record) => applyIncomingPush({
+          kind: 'musicVideoProject', record: { ...record, ...live }, linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        vi.mocked(getTrack).mockResolvedValue({ id: 'track-victim', title: 'Mine' });
+
+        // No local copy of the project, or one linking a different track: refused.
+        await push({ id: 'mv-new', trackId: 'track-victim' });
+        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-old', trackId: 'track-mine' });
+        await push({ id: 'mv-old', trackId: 'track-victim' });
+        expect(mergeTracksFromSync).not.toHaveBeenCalled();
+
+        // The local copy already links this track: the update merges.
+        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-linked', trackId: 'track-victim' });
+        await push({ id: 'mv-linked', trackId: 'track-victim' });
+        expect(mergeTracksFromSync).toHaveBeenCalledWith([linkedTrack], SOURCE);
+      });
+
+      it('merges a linkedTrack that does not exist locally yet', async () => {
+        const linkedTrack = { id: 'track-new', title: 'Fresh', ...live };
+        await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-fresh', trackId: 'track-new', ...live },
+          linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeTracksFromSync).toHaveBeenCalledWith([linkedTrack], SOURCE);
+      });
+
+      it('withholds the sender hash when the local track lookup fails, without failing the push', async () => {
+        vi.mocked(getTrack).mockRejectedValue(new Error('db unavailable'));
+        const result = await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-err', trackId: 'track-new', ...live },
+          linkedTrack: { id: 'track-new', title: 'Fresh', ...live }, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeTracksFromSync).not.toHaveBeenCalled();
+        expect(result.trackSyncPending).toBe(true);
+      });
+    });
+
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
       await applyIncomingPush({
         kind: 'series',
@@ -3586,7 +3704,7 @@ describe('peerSync', () => {
           { id: 'issue-2', seriesId: 'ser-1', ephemeral: true, imageRefs: ['private.png'] },
           { id: 'issue-3', seriesId: 'ser-1', deleted: true, imageRefs: ['deleted.png'] },
         ],
-        linkedCollection: { id: 'collection-1', items: [{ kind: 'video', ref: 'collection-clip' }] },
+        linkedCollection: { id: 'collection-1', seriesId: 'ser-1', items: [{ kind: 'video', ref: 'collection-clip' }] },
         assetManifest: manifest, sourceInstanceId: 'peer-a',
       });
       expect(result.missingAssets).toEqual(manifest.slice(0, 3));
@@ -4076,7 +4194,11 @@ describe('peerSync', () => {
         kind: 'universe',
         record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
         assetManifest: [],
-        catalogBundle: { ingredients: [], refs: [], relations: [{ fromIngredientId: 'cat-chr-1', toIngredientId: 'cat-chr-2', kind: 'ally-of', updatedAt: '2026-01-02T00:00:00Z' }] },
+        catalogBundle: {
+          ingredients: [],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+          relations: [{ fromIngredientId: 'cat-chr-1', toIngredientId: 'cat-chr-2', kind: 'ally-of', updatedAt: '2026-01-02T00:00:00Z' }],
+        },
         sourceInstanceId: 'peer-a',
         portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
       });
@@ -4094,6 +4216,7 @@ describe('peerSync', () => {
         assetManifest: [],
         catalogBundle: {
           ingredients: [{ id: 'cat-chr-1', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
           relations: [{ id: 'cat-rel-1', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
         },
         sourceInstanceId: 'peer-a',
