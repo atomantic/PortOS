@@ -243,6 +243,11 @@ npm run setup:db:test
 npm run test:db
 ```
 
+Every worktree shares one `portos_test`, and some DB suites restore a whole-database
+dump, so `test:db` takes a session-level Postgres advisory lock for the run
+(`server/test/dbRunExclusivity.js`). A second run from another worktree prints
+`Another DB test run holds portos_test` and waits for the first to finish.
+
 Supported full local validation uses the CI worker budget. An unbounded
 `npm test` can oversubscribe a loaded machine: real media, prompt-catalog,
 and nested-worker cases then hit their existing budgets. A green focused

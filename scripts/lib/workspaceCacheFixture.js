@@ -48,6 +48,8 @@ function checkout(host, name, workspace, configName, dependencies) {
   put(join(parent, 'package.json'), '{"type":"module"}');
   const fixture = createVitestTempFixture(parent, workspace, 'expect(true).toBe(true);', configName);
   delete fixture.options.env.PORTOS_CI_BROWSER_OWNER;
+  // Not a `_test` database: the DB run lock stands down, so the fixture neither needs `pg` nor queues behind a real run.
+  fixture.options.env.PGTESTDATABASE = 'workspace_cache_fixture';
   const root = fixture.args[fixture.args.indexOf('--root') + 1];
   unlinkSync(join(root, 'node_modules'));
   link(dependencies, join(root, 'node_modules'));
@@ -61,7 +63,7 @@ function checkout(host, name, workspace, configName, dependencies) {
   if (workspace === 'server') {
     // Both configs load this environment relative to themselves. Copy its
     // Node-only support closure intact so setup and teardown run in this checkout.
-    for (const file of ['test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
+    for (const file of ['test/dbRunExclusivity.js', 'test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       copyFileSync(join(REPO, 'server', file), join(root, file));
     }

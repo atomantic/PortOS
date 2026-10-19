@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
@@ -65,15 +64,8 @@ const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
   health.connected && spawnSync('psql', ['--version']).status === 0,
   'test database or PostgreSQL client tools unavailable');
-// Every restore replaces the whole database, so two runs cannot share
-// portos_test. A session advisory lock queues an overlapping run behind this one.
-const RESTORE_SUITE_LOCK_KEY = 5977002;
-let suiteLock = null;
-if (ready) {
-  suiteLock = new pg.Client(POOL_CONFIG);
-  await suiteLock.connect();
-  await suiteLock.query('SELECT pg_advisory_lock($1)', [RESTORE_SUITE_LOCK_KEY]);
-}
+// Every restore replaces the whole database; vitest.config.db.js holds a run-wide
+// advisory lock (test/dbRunExclusivity.js) so no other run overlaps this one.
 let dest;
 let dumpPath;
 // Per-run identifiers: a row an earlier or overlapping run left behind can
@@ -118,7 +110,6 @@ afterAll(async () => {
       close(),
       dest && rm(dest, { recursive: true, force: true }),
       dataRoot.path && rm(dataRoot.path, { recursive: true, force: true }),
-      suiteLock?.end(),
     ]);
   }
   await drained;
