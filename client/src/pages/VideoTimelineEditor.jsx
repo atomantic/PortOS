@@ -129,7 +129,7 @@ function TimelineProjectEditor({ projectId }) {
   // Per-catalogue load failure and in-flight retry for the clip and audio
   // libraries. A failed list keeps its last good rows; the inline error and
   // Retry replace the "No clips" / "No audio" copy that would otherwise lie.
-  const [catalogStatus, setCatalogStatus] = useState({ clips: { error: null, pending: false }, music: { error: null, pending: false } });
+  const [catalogStatus, setCatalogStatus] = useState({ clips: { loadFailure: null, pending: false }, music: { loadFailure: null, pending: false } });
   // Real lengths the browser measured for the beds' audio files, keyed by asset
   // identity (`music/<file>`). The preview resolves each placement against its
   // file's length exactly as the export's probe does; an asset with no entry
@@ -243,8 +243,8 @@ function TimelineProjectEditor({ projectId }) {
     catalogGenerationRef.current.clips += 1;
     catalogGenerationRef.current.music += 1;
     setCatalogStatus({
-      clips: { error: Array.isArray(hist) ? null : CLIPS_LOAD_ERROR, pending: false },
-      music: { error: library ? null : MUSIC_LOAD_ERROR, pending: false },
+      clips: { loadFailure: Array.isArray(hist) ? null : CLIPS_LOAD_ERROR, pending: false },
+      music: { loadFailure: library ? null : MUSIC_LOAD_ERROR, pending: false },
     });
     // Whether each library actually loaded, so the "missing source" badges can
     // stay silent about a lane whose catalogue we never received.
@@ -272,7 +272,7 @@ function TimelineProjectEditor({ projectId }) {
     }
     setCatalogStatus((prev) => ({
       ...prev,
-      [kind]: { error: ok ? null : (kind === 'clips' ? CLIPS_LOAD_ERROR : MUSIC_LOAD_ERROR), pending: false },
+      [kind]: { loadFailure: ok ? null : (kind === 'clips' ? CLIPS_LOAD_ERROR : MUSIC_LOAD_ERROR), pending: false },
     }));
   }, []);
 
@@ -900,10 +900,10 @@ function TimelineProjectEditor({ projectId }) {
   const playheadSec = Math.min(t, total);
   const catalogNotice = (kind) => {
     const status = catalogStatus[kind];
-    if (!status.error) return null;
+    if (!status.loadFailure) return null;
     return (
-      <div role="alert" className="text-xs text-port-error px-1 py-2 flex flex-wrap items-center gap-2">
-        <span>{status.error}</span>
+      <div role="status" className="text-xs text-port-error px-1 py-2 flex flex-wrap items-center gap-2">
+        <span>{status.loadFailure}</span>
         <button
           type="button"
           onClick={() => retryCatalog(kind)}
@@ -934,7 +934,7 @@ function TimelineProjectEditor({ projectId }) {
 
       {libraryTab === 'clips' && catalogNotice('clips')}
       {libraryTab === 'clips' && (libraryClips.length === 0 ? (
-        !catalogStatus.clips.error && <div className="text-xs text-gray-500 px-1 py-4">No clips. Generate some on the Video page.</div>
+        !catalogStatus.clips.loadFailure && <div className="text-xs text-gray-500 px-1 py-4">No clips. Generate some on the Video page.</div>
       ) : (
         <div className="grid grid-cols-1 gap-2">
           {libraryClips.map((clip) => (
@@ -963,7 +963,7 @@ function TimelineProjectEditor({ projectId }) {
 
       {libraryTab === 'audio' && catalogNotice('music')}
       {libraryTab === 'audio' && (musicTracks.length === 0 ? (
-        !catalogStatus.music.error && <div className="text-xs text-gray-500 px-1 py-4">No audio in the shared music library.</div>
+        !catalogStatus.music.loadFailure && <div className="text-xs text-gray-500 px-1 py-4">No audio in the shared music library.</div>
       ) : (
         <div className="grid grid-cols-1 gap-1.5">
           {musicTracks.map((track) => (

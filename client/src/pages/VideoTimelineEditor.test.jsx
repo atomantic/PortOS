@@ -663,17 +663,17 @@ describe('clip and audio library load failures', () => {
     api.listHistory.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
     await renderEditor();
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent("Couldn't load your clips.");
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent("Couldn't load your clips.");
     expect(screen.queryByText(/No clips/)).not.toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled());
-    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('button', { name: 'Add to timeline' })).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('tells a successful empty audio library apart from a failed one', async () => {
@@ -681,7 +681,7 @@ describe('clip and audio library load failures', () => {
     await renderEditor();
     fireEvent.click(within(screen.getByRole('tablist', { name: 'Clip library' })).getAllByRole('tab')[2]);
     expect(screen.getByText('No audio in the shared music library.')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('shows a failed audio load with Retry, then lists the tracks once the retry succeeds', async () => {
@@ -689,12 +689,12 @@ describe('clip and audio library load failures', () => {
     await renderEditor();
     fireEvent.click(within(screen.getByRole('tablist', { name: 'Clip library' })).getAllByRole('tab')[2]);
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent("Couldn't load the shared music library.");
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent("Couldn't load the shared music library.");
     expect(screen.queryByText('No audio in the shared music library.')).not.toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Bed')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
