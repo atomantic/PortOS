@@ -1,4 +1,4 @@
-import { generateEcosystemContent as buildEcosystemContent } from './pm2Standardizer.js';
+import { __testing as standardizerInternals } from './pm2Standardizer.js';
 import { mkdtempSync as makeTempDir, writeFileSync as writeFixture, readFileSync as readFixture, rmSync as removeFixture } from 'fs';
 import { join as joinPath, relative as relativePath } from 'path';
 import { tmpdir as osTmpDir } from 'os';
@@ -399,7 +399,7 @@ describe('applyStandardization — preserve existing ecosystem.config.cjs', () =
 describe('model-authored plan fields at the apply sink', () => {
   it('emits an ecosystem file PM2 can load even when a model string carries quotes', () => {
     const hostile = "x' + require('child_process').execSync('id') + '";
-    const content = buildEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', env: { HOSTILE: hostile, 'key"name': 1 } }], 'app');
+    const content = standardizerInternals.generateEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', env: { HOSTILE: hostile, 'key"name': 1 } }], 'app');
     expect(content).toContain(PORTOS_ECOSYSTEM_MARKER);
     const module = { exports: {} };
     new Function('module', content)(module);

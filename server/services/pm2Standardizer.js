@@ -433,7 +433,7 @@ function parseAnalysisResponse(response, promptToStrip = '') {
 /**
  * Generate ecosystem.config.cjs content from processes
  */
-export function generateEcosystemContent(processes, appName) {
+function generateEcosystemContent(processes, appName) {
   const apps = processes.map(proc => {
     const config = {
       name: proc.name,
@@ -855,3 +855,5 @@ module.exports = {
 };
 `;
 }
+
+export const __testing = { generateEcosystemContent };
