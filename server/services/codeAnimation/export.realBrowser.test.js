@@ -77,7 +77,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 window.ANIMATION_META = { title: 'Three', duration: 1, fps: ${FPS}, width: ${WIDTH}, height: ${HEIGHT} };
 const film = document.getElementById('film');
 const renderer = new THREE.WebGLRenderer({ canvas: film, antialias: false, preserveDrawingBuffer: true });
