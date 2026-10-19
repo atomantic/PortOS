@@ -736,7 +736,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/capabilities` | Feature capability flags |
 | `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |
 | `/api/workspace-contexts` | Workspace context management |
-| `/api/apps/:appId/reference-repos` | Per-app reference repos |
+| `/api/apps/:appId/reference-repos` | Per-app reference repos (create, a PATCH that names `repoUrl` or `branch`, and `check` are host control: the path names a host directory the scheduled reference-watch runs git in) |
 | `/api/managed-visitor-admin` | Owner-only provisioning and revocation of scoped managed-app visitor credentials; [contract](features/managed-visitors.md) |
 | `/api/managed-visitors/v1` | Loopback managed visitor admission, observation, bounded actions and confirmed cleanup; requires a separate scoped app credential even when the instance password is off; [contract](features/managed-visitors.md) |
 | `/api/network-exposure` | Network exposure checks |
@@ -777,7 +777,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/health` | Apple Health metrics, ingest, and XML import |
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
-| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
+| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)); `POST /api/sharing/buckets` is host control (it names a host folder PortOS writes records into and imports manifests from) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
 | `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |
@@ -814,9 +814,9 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/rounds` | Rounds (music + Morse training) |
 | `/api/ask` | Ask (LLM Q&A) |
 | `/api/quota-burn` | Quota-burn plan (ordered scheduled-task references + per-invocation overrides), its live status, the app/provider catalog its pickers read, manual runs, and re-arm. The referenced work itself is read from — and only ever edited through — `/api/cos/schedule` and `/api/cos/jobs`. |
-| `/api/timeline` | Human-activity timeline (day + events) |
+| `/api/timeline` | Human-activity timeline (day + events); the path-based Gmail mbox import is host control (it names a host file or folder to read) |
 | `/api/games` | Game projects |
-| `/api/sprites` | Sprite catalog / export |
+| `/api/sprites` | Sprite catalog / export; `POST /import` is host control (it names a host source tree to copy from) |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
