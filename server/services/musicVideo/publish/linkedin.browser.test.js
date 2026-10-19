@@ -1,15 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
-import { browserSuiteCanRun } from '../../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../../lib/browserSuiteGate.js';
 import { startOwnedBrowserFixture } from '../../../test/browserFixture.js';
 import { linkedinAdapter } from './linkedin.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('LinkedIn draft browser', { Chrome: chrome });
 const POST_URL = 'https://www.linkedin.com/feed/update/urn:li:activity:123456789/';
 const text = 'Example film.\n\nA second paragraph.\n\n\nFinal paragraph.';

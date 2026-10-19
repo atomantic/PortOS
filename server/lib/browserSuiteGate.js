@@ -30,6 +30,24 @@ export function resolveTestChrome(env = process.env, { exists = existsSync, bund
   return [env.CHROME_PATH, bundled(), ...TEST_CHROME_CANDIDATES].find((path) => path && exists(path)) ?? null;
 }
 
+const CLIENT_BUNDLER_PACKAGES = Object.freeze(['vite', '@vitejs/plugin-react', '@tailwindcss/postcss']);
+
+/**
+ * The resolved paths of the client workspace's bundler packages (Vite, its
+ * React plugin, Tailwind's PostCSS plugin), or undefined when any is missing —
+ * the shape a `browserSuiteCanRun` prerequisite map treats as absent. Only
+ * MODULE_NOT_FOUND counts as missing; any other resolution error throws.
+ */
+export function resolveClientBundler(repoRoot) {
+  try {
+    const requireClient = createRequire(join(repoRoot, 'client', 'package.json'));
+    return CLIENT_BUNDLER_PACKAGES.map((name) => requireClient.resolve(name));
+  } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    return undefined;
+  }
+}
+
 /**
  * Keep cross-workspace browser suites as visible skips on machines without
  * Chrome, ffmpeg or the client workspace, while letting the one CI job that

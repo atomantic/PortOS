@@ -16,7 +16,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
-import { browserSuiteCanRun, chromeWithH264 } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, chromeWithH264, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
 const lifecycle = vi.hoisted(() => ({ diagnostics: null, chromeProcess: null, fixtureWritersSettled: false }));
@@ -75,10 +75,7 @@ afterAll(() => {
   if (!lifecycle.chromeProcess || (lifecycle.fixtureWritersSettled && _testBrowserCleanupSettled(lifecycle.chromeProcess))) cleanupTempDataRoots();
 });
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 // Imported discovery helpers can initialize mocked paths even on a skip.
 const canRun = browserSuiteCanRun('documentRender browser suite', { 'Chrome with H.264': await chromeWithH264(chrome), ffmpeg }, { onUnavailable: cleanupTempDataRoots });

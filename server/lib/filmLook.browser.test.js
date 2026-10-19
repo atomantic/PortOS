@@ -1,11 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import sharp from 'sharp';
-import { browserSuiteCanRun } from './browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from './browserSuiteGate.js';
 import { filmLookFilterMarkup, filmLookPreset, filmLookRuntimeSource } from './filmLook.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
 
@@ -15,9 +14,7 @@ vi.mock('./paths.js', async (original) => makePathsProxy(await original(), {
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: vi.fn() }));
 afterAll(() => cleanupTempDataRoots());
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('film look runtime browser', { Chrome: chrome });
 const width = 390;
 const height = 219;

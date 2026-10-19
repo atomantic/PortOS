@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import sharp from 'sharp';
-import { browserSuiteCanRun } from './browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from './browserSuiteGate.js';
 import { filmLookRuntimeSource } from './filmLook.js';
 import { TITLE_CARD_FONT_FACES, titleCardRuntimeSource } from './musicVideoTitleCard.js';
 
@@ -13,9 +13,7 @@ import { TITLE_CARD_FONT_FACES, titleCardRuntimeSource } from './musicVideoTitle
  * the card over the document's own frame inside its window and nothing outside
  * it, chaining the film look's seek wrapper rather than replacing it.
  */
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find((p) => p && existsSync(p));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('title card browser', { Chrome: chrome });
 
 const W = 640;

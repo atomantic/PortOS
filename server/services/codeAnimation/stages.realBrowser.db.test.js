@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _createTestArtifactsRoot, _selectTestChrome, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -35,15 +36,7 @@ const health = await checkHealth().catch(error => ({ connected: false, error: er
 const dbReady = requireDbOrSkip('codeAnimation/stages.realBrowser.db.test', health.connected, health.error);
 if (dbReady) await ensureSchema();
 
-const selected = _selectTestChrome([
-  { source: 'env', path: process.env.CHROME_PATH },
-  { source: 'playwright', path: chromium.executablePath() },
-  { source: 'mac-app', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-  { source: 'system-google-chrome', path: '/usr/bin/google-chrome' },
-  { source: 'system-chromium', path: '/usr/bin/chromium' },
-  { source: 'system-chromium-browser', path: '/usr/bin/chromium-browser' },
-]);
-const chrome = selected?.path;
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
 
@@ -81,7 +74,7 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child: proc });
     try {
-      const ws = await _waitForTestChrome(proc, 20000, { source: selected.source, executable: chrome, profile });
+      const ws = await _waitForTestChrome(proc, 20000, { source: 'test-chrome', executable: chrome, profile });
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
       artifacts = _createTestArtifactsRoot();
       browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
