@@ -42,10 +42,13 @@ Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
 `localLlm.mtplx`, `localLlm.slotstream`, `imageGen`, `imageGen.external`,
 `imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
 `imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
-`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, and `autoUpdate`.
-The Media settings drawer saves only the fields the user changed through these,
-one slice per request, so a value a sibling panel patched after the drawer
-opened is never overwritten by a stale snapshot. A `renderDefaults` target sent
+`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
+`music.chiptune`, `music.designer`, and `loraTraining` (its caption-model keys
+only). The Media settings drawer saves only the fields the user changed through
+these, one slice per request, so a value a sibling panel patched after the drawer
+opened is never overwritten by a stale snapshot. The Chiptune panel, the Music
+Designer and the LoRA caption-model picker save the same way, so none of them can
+drop another's prefs or the hand-set LoRA training knobs. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable

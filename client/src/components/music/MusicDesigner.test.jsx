@@ -11,7 +11,7 @@ vi.mock('../../services/api', () => ({
   generateLyrics: vi.fn(),
   getSettings: vi.fn(),
   getTrack: vi.fn(),
-  updateSettings: vi.fn(),
+  patchSettingsSlice: vi.fn(),
   updateTrack: vi.fn(),
 }));
 
@@ -87,7 +87,7 @@ describe('<MusicDesigner>', () => {
     api.getSettings.mockResolvedValue({ music: {} });
     api.createTrack.mockResolvedValue({ id: 'track-draft', title: 'Untitled music draft', concept: '', prompt: '', lyrics: '' });
     api.getTrack.mockResolvedValue({ id: 'track-draft', title: 'Untitled music draft', concept: '', prompt: '', lyrics: '' });
-    api.updateSettings.mockResolvedValue({});
+    api.patchSettingsSlice.mockResolvedValue({});
     api.updateTrack.mockResolvedValue({ id: 'track-draft', title: 'Untitled music draft' });
   });
 
@@ -262,7 +262,7 @@ describe('<MusicDesigner>', () => {
     fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
     await findEnabledByLabelText(/music description/i);
     expect(api.describeMusic).toHaveBeenCalledWith(expect.objectContaining({ concept, guidance: '  Soft pulse  ', template }), { silent: true });
-    expect(api.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ music: expect.objectContaining({ designer: expect.objectContaining({ describeTemplate: template }) }) }), { silent: true });
+    expect(api.patchSettingsSlice).toHaveBeenCalledWith('music.designer', { describeTemplate: template }, { silent: true });
     await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith('track-draft', { concept }, { silent: true }));
     const edited = description + 'Keep my ending.  ';
     fireEvent.change(screen.getByLabelText(/music description/i), { target: { value: edited } });
@@ -351,8 +351,9 @@ describe('<MusicDesigner>', () => {
       fireEvent.change(await findEnabledByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
 
-      await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith(
-        { music: { designer: { providerId: 'provider-a', model: 'model-a', effort: '' } } },
+      await waitFor(() => expect(api.patchSettingsSlice).toHaveBeenCalledWith(
+        'music.designer',
+        { providerId: 'provider-a', model: 'model-a', effort: '' },
         { silent: true },
       ));
     });

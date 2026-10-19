@@ -25,7 +25,7 @@ vi.mock('../../services/api', () => ({
   publishTrackChiptune: vi.fn(),
   getApps: vi.fn(),
   getSettings: vi.fn(),
-  updateSettings: vi.fn(),
+  patchSettingsSlice: vi.fn(),
 }));
 
 vi.mock('../../hooks/useProviderModels', () => ({
@@ -65,7 +65,7 @@ describe('ChiptunePanel', () => {
     audio.loopSec = 0;
     api.getSettings.mockResolvedValue({ music: {} });
     api.getApps.mockResolvedValue([GAME_APP]);
-    api.updateSettings.mockResolvedValue({});
+    api.patchSettingsSlice.mockResolvedValue({});
   });
 
   it('baseline: enables Generate, Render, and Publish when nothing is in flight', async () => {
@@ -145,6 +145,10 @@ describe('ChiptunePanel', () => {
         { appId: 'game-app', subdir: 'game/assets/music', slug: 'my-test-song' },
         { silent: true },
       );
+      // Only the panel's own sub-slice is sent; the server merges it.
+      await waitFor(() => expect(api.patchSettingsSlice).toHaveBeenCalledWith(
+        'music.chiptune', { publishAppId: 'game-app', publishSubdir: 'game/assets/music' }, { silent: true },
+      ));
     });
   });
 

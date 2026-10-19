@@ -1581,6 +1581,29 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     });
   });
 
+  // Each music panel and the LoRA caption picker patch only the keys they own,
+  // so a save from one never drops a sibling's prefs or the hand-set knobs.
+  it('merges the music and LoRA caption prefs into their owned sub-slices', async () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      music: { designer: { describeTemplate: 'Example describe', lyricsTemplate: 'Example lyrics' }, chiptune: { publishSubdir: 'game/assets/music' } },
+      loraTraining: { displaySleep: false, segmentation: false, defaults: { steps: 1200 } },
+    }));
+    actual.__resetSettingsCache();
+    const app = buildApp();
+    expect((await patch(app, 'music.chiptune', { providerId: 'example-provider', model: 'example-model' })).status).toBe(200);
+    expect((await patch(app, 'music.designer', { describeTemplate: 'Example revised' })).status).toBe(200);
+    expect((await patch(app, 'loraTraining', { captionProviderId: 'example-provider', captionModel: 'example-vision' })).status).toBe(200);
+    expect(persisted()).toMatchObject({
+      music: {
+        designer: { describeTemplate: 'Example revised', lyricsTemplate: 'Example lyrics' },
+        chiptune: { publishSubdir: 'game/assets/music', providerId: 'example-provider', model: 'example-model' },
+      },
+      loraTraining: {
+        displaySleep: false, segmentation: false, defaults: { steps: 1200 }, captionProviderId: 'example-provider', captionModel: 'example-vision',
+      },
+    });
+  });
+
   it('rejects invalid values, unapproved paths and credential/prototype keys without writes', async () => {
     const before = fs.readFileSync(settingsFile, 'utf8');
     for (const [path, partial] of [
@@ -1604,6 +1627,9 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
       ['pipeline', JSON.parse('{"imageGen":{"constructor":{}}}')],
       ['pipeline', JSON.parse('{"__proto__":{"polluted":true}}')],
       ['pipeline', { imageGen: { steps: 'not-a-number' } }],
+      ['music.chiptune', { describeTemplate: 'Example template' }],
+      ['music.designer', { describeTemplate: 'x'.repeat(8001) }],
+      ['loraTraining', { displaySleep: true }],
     ]) {
       expect((await patch(buildApp(), path, partial)).status, path).toBe(400);
     }
