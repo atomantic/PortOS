@@ -32,11 +32,11 @@ describe('buildRunwayVideoRequest — per-family wire bodies', () => {
     expect(estimatedCostUsd).toBe(0.48);
   });
 
-  it('Veo 3.1: enum duration, native negative prompt, audio off, ratio from the picked resolution, first+last frames', () => {
-    expect(build('veo3.1_fast', { seconds: 5, resolution: '1080P', negativePrompt: 'blur', endImageUri: END, width: 1920, height: 1080 }).body).toEqual({
-      model: 'veo3.1_fast',
+  it('Kling 3.0 Pro: first+last frames, audio off, no ratio on a keyframe render', () => {
+    expect(build('kling3.0_pro', { seconds: 5, negativePrompt: 'blur', endImageUri: END, width: 1920, height: 1080 }).body).toEqual({
+      model: 'kling3.0_pro',
       promptImage: [{ uri: FRAME, position: 'first' }, { uri: END, position: 'last' }],
-      promptText: 'a lighthouse at dusk', negativePrompt: 'blur', duration: 6, ratio: '1920:1080', audio: false,
+      promptText: 'a lighthouse at dusk\nAvoid: blur', duration: 5, audio: false,
     });
   });
 
@@ -47,7 +47,7 @@ describe('buildRunwayVideoRequest — per-family wire bodies', () => {
   });
 
   it('MiniMax H3 / WAN 3.0: size sent as a resolution or an auto ratio, priced per resolution', () => {
-    const h3 = build('h3_max', { seconds: 2, resolution: '480p' });
+    const h3 = build('h3_max', { seconds: 2, resolution: '480P' });
     expect(h3.body).toEqual({ model: 'h3_max', promptImage: FRAME, promptText: 'a lighthouse at dusk', duration: 5, resolution: '480p' });
     expect(h3.estimatedCostUsd).toBe(0.25);
     expect(build('wan3', { seconds: 12, endImageUri: END }).body).toMatchObject({ ratio: 'auto_720p', duration: 12, audio: false });
@@ -79,8 +79,9 @@ describe('buildRunwayVideoRequest — refusals before anything is paid for', () 
 
 describe('Runway pricing and lengths', () => {
   it('rounds a shot up to the shortest length that covers it, capped at the longest', () => {
-    expect(coerceRunwayVideoSeconds(getRunwayVideoModel('veo3.1'), 6.01)).toBe(8);
-    expect(coerceRunwayVideoSeconds(getRunwayVideoModel('veo3.1'), 20)).toBe(8);
+    expect(coerceRunwayVideoSeconds(getRunwayVideoModel('kling2.5_turbo_pro'), 5.01)).toBe(10);
+    expect(coerceRunwayVideoSeconds(getRunwayVideoModel('kling2.5_turbo_pro'), 20)).toBe(10);
+    expect(getRunwayVideoModel('veo3.1')).toBeNull();
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('gen4_turbo'), 1)).toBe(2);
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('gen4_turbo'), null)).toBe(5);
   });

@@ -11,6 +11,10 @@
  * refused with a 400 or a bill disagrees with an estimate, re-check that
  * model's section and edit its row.
  *
+ * Veo is deliberately not offered (a project choice), though
+ * Runway serves it; the native `negativePrompt` row field stays for a model
+ * that takes one.
+ *
  * Image-to-video only: every row animates a start frame, and the rows marked
  * `endImage` also end on a last frame. Provider audio is always requested off
  * (`audio: false`) where a model has the field, since a PortOS clip is silent
@@ -30,7 +34,6 @@ export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-10-19';
 export const RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL = 'gen4.5';
 
 const GEN4_RATIOS = Object.freeze(['1280:720', '720:1280', '1104:832', '960:960', '832:1104', '1584:672']);
-const VEO_RATIOS = Object.freeze({ '720p': ['1280:720', '720:1280'], '1080p': ['1920:1080', '1080:1920'] });
 
 /** The curated catalog, one frozen row per Runway model. */
 export const RUNWAY_VIDEO_MODELS = Object.freeze([
@@ -52,26 +55,6 @@ export const RUNWAY_VIDEO_MODELS = Object.freeze([
     size: { param: 'ratio', required: true, byResolution: { '720p': GEN4_RATIOS }, default: '720p' },
     audio: false, seed: true, negativePrompt: false,
     pricing: { perSecond: 0.05 },
-  },
-  {
-    id: 'veo3.1_fast', label: 'Veo 3.1 Fast', family: 'veo-3.1',
-    prompt: 'optional', promptMaxChars: 1000,
-    endImage: true,
-    duration: { kind: 'enum', values: [4, 6, 8], defaultSec: 8 },
-    size: { param: 'ratio', required: true, byResolution: VEO_RATIOS, default: '720p' },
-    // 15 credits/s with audio, 10 without.
-    audio: true, seed: true, negativePrompt: true, negativePromptMaxChars: 1000,
-    pricing: { perSecond: 0.10 },
-  },
-  {
-    id: 'veo3.1', label: 'Veo 3.1', family: 'veo-3.1',
-    prompt: 'optional', promptMaxChars: 1000,
-    endImage: true,
-    duration: { kind: 'enum', values: [4, 6, 8], defaultSec: 8 },
-    size: { param: 'ratio', required: true, byResolution: VEO_RATIOS, default: '720p' },
-    // 40 credits/s with audio, 20 without.
-    audio: true, seed: true, negativePrompt: true, negativePromptMaxChars: 1000,
-    pricing: { perSecond: 0.20 },
   },
   {
     id: 'kling3.0_standard', label: 'Kling 3.0 Standard', family: 'kling-3.0',
