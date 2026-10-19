@@ -13,6 +13,8 @@
  */
 // Distinct from SCHEMA_DDL_ADVISORY_LOCK_KEY (5977001, lib/db.js) — ensureSchema
 // takes that one inside a run and would otherwise deadlock against this holder.
+// No suite may take this key itself: the holder is another session, so the
+// suite's own pg_advisory_lock would block for the rest of the run.
 export const DB_RUN_ADVISORY_LOCK_KEY = 5977002;
 
 const WAIT_LOG_INTERVAL_MS = 30_000;
