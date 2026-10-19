@@ -353,6 +353,13 @@ function ConversationRow({ conversation, unified, selected, onSelect }) {
 
 /* ---------------------------------------------------------------- surface -- */
 
+const withId = (ids, id) => new Set(ids).add(id);
+const withoutId = (ids, id) => {
+  const next = new Set(ids);
+  next.delete(id);
+  return next;
+};
+
 export default function BeeperChatSurface({
   conversationId = null, realtime = null, invalidationSeq = 0, invalidationFrames = null, breaker = null,
   sweep = null, tokenConfigured = false, accounts = [], onOpenSettings,
@@ -401,9 +408,10 @@ export default function BeeperChatSurface({
   const [people, setPeople] = useState([]);
   const [linkingId, setLinkingId] = useState(null);
   // The conversation ids whose rail write / purge is in flight, so a pending
-  // write on one conversation never disables or spins another one's controls.
-  const [writePendingId, setWritePendingId] = useState(null);
-  const [purgingId, setPurgingId] = useState(null);
+  // write on one conversation never disables or spins another one's controls,
+  // and one settling never re-enables another that is still in flight.
+  const [writePendingIds, setWritePendingIds] = useState(() => new Set());
+  const [purgingIds, setPurgingIds] = useState(() => new Set());
 
   // A PortOS-side draft buffer, keyed by conversation, so a half-written
   // message survives switching threads AND leaving the page. It is deliberately
@@ -775,13 +783,13 @@ export default function BeeperChatSurface({
   const applyFlag = useCallback(async (writer, value, label) => {
     const id = conversationId;
     if (!id) return;
-    setWritePendingId(id);
+    setWritePendingIds((pending) => withId(pending, id));
     const updated = await writer(id, value, { silent: true }).catch((err) => {
       toast.error(err?.message || `Could not ${label} this conversation`);
       return null;
     });
     if (!mountedRef.current) return;
-    setWritePendingId((pending) => (pending === id ? null : pending));
+    setWritePendingIds((pending) => withoutId(pending, id));
     if (!updated) return;
     // The open thread's own row is set from the server's answer; the LIST is
     // refetched rather than merged, because archiving changes which scope a
@@ -797,13 +805,13 @@ export default function BeeperChatSurface({
   const purgeMirror = useCallback(async () => {
     const id = conversationId;
     if (!id) return;
-    setPurgingId(id);
+    setPurgingIds((pending) => withId(pending, id));
     const result = await api.purgeBeeperConversation(id, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not purge this conversation');
       return null;
     });
     if (!mountedRef.current) return;
-    setPurgingId((pending) => (pending === id ? null : pending));
+    setPurgingIds((pending) => withoutId(pending, id));
     if (!result) return;
     setConversations((prev) => prev.filter((row) => row.id !== id));
     // The purge removes every message the mirror held for this conversation,
@@ -1223,11 +1231,11 @@ export default function BeeperChatSurface({
             onOpenTribePerson={openTribePerson}
             onBack={clearSelection}
             onRetry={conversationId ? () => loadThread(conversationId) : null}
-            writePending={Boolean(conversationId) && writePendingId === conversationId}
+            writePending={writePendingIds.has(conversationId)}
             onArchive={(value) => applyFlag(api.setBeeperConversationArchived, value, 'archive')}
             onLowPriority={(value) => applyFlag(api.setBeeperConversationLowPriority, value, 'update')}
             onPurge={purgeMirror}
-            purging={Boolean(conversationId) && purgingId === conversationId}
+            purging={purgingIds.has(conversationId)}
             onAttachmentUpdated={applyAttachmentUpdate}
           />
         )}

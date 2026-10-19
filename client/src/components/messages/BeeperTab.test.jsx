@@ -1226,6 +1226,24 @@ describe('a conversation write that settles after a switch', () => {
     expectBStillOpen();
   });
 
+  it('keeps an earlier conversation\'s write pending when a later conversation\'s write settles first', async () => {
+    await openA();
+    const writes = { [CONV_A]: deferred(), [CONV_B]: deferred() };
+    api.setBeeperConversationArchived.mockImplementation((id) => writes[id].promise);
+    act(() => { screen.getAllByRole('button', { name: 'Archive' }).at(-1).click(); });
+    await switchToB();
+    act(() => { screen.getAllByRole('button', { name: 'Archive' }).at(-1).click(); });
+    await waitFor(() => expect(api.setBeeperConversationArchived).toHaveBeenCalledWith(CONV_B, true, { silent: true }));
+    await act(async () => { writes[CONV_B].resolve({ ...CONV_B_RECORD, isArchived: true }); });
+
+    fireEvent.click(screen.getByRole('button', { name: /Example A/ }));
+    await screen.findByText('Placeholder A body');
+    expect(await findThreadAction('Archive')).toBeDisabled();
+    await act(async () => { writes[CONV_A].resolve({ ...CONV_A_RECORD, isArchived: true }); });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Unarchive' }).at(-1)).toBeEnabled());
+    expect(api.setBeeperConversationArchived).toHaveBeenCalledTimes(2);
+  });
+
   it('does not reload the previous conversation into the open one when a participant link settles', async () => {
     api.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
     await openA();
