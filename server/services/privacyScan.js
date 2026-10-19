@@ -27,6 +27,7 @@
 
 import { lookup } from 'dns/promises';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
+import { fetchPublicResponse } from '../lib/safeUrlFetch.js';
 import { fetchUrlMainText } from './catalogIngestSources.js';
 import { listScanEligibleValues } from './privacyVault.js';
 import { listBrokers, listBrokerCases, recordScanVerdict } from './privacyBrokers.js';
@@ -203,6 +204,13 @@ async function isScanUrlSafe(target) {
   return !(resolved?.address && isBlockedIngestHost(resolved.address));
 }
 
+// Default HTTP lane transport: every hop (including redirects) is DNS-pinned and
+// revalidated, and private/LAN addresses are refused, so a broker page cannot
+// bounce the scan into loopback or LAN services. A refused hop yields null.
+const pinnedScanFetch = (url, { headers }) => fetchPublicResponse(url, {
+  headers, timeoutMs: HTTP_FETCH_TIMEOUT_MS, blockPrivate: true, throwOnUnsafe: false,
+});
+
 // Plain HTTP GET lane. Returns { status, html } or null on network failure.
 async function httpFetchLane(url, fetchImpl) {
   const controller = new AbortController();
@@ -210,9 +218,9 @@ async function httpFetchLane(url, fetchImpl) {
   try {
     const res = await fetchImpl(url, {
       signal: controller.signal,
-      redirect: 'follow',
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PortOS-PrivacyScan/1.0)' },
     });
+    if (!res) return null;
     const html = await res.text();
     return { status: res.status, html };
   } catch {
@@ -232,7 +240,7 @@ async function httpFetchLane(url, fetchImpl) {
  * `deps` injectable so tests/verification never hit the network.
  */
 export async function probeBroker(broker, vectors, {
-  fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe,
+  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe,
 } = {}) {
   const template = broker?.urls?.search;
   const name = (vectors.names || [])[0];
@@ -312,7 +320,7 @@ export async function probeBroker(broker, vectors, {
  * no usable search URL (blind scan not possible) or the URL is unsafe.
  */
 export async function scanBroker(broker, vectors, {
-  fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
   subjectId,
 } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
@@ -332,7 +340,7 @@ export async function scanBroker(broker, vectors, {
  *
  * Returns a summary { scanned, verdicts: {<verdict>: n}, skipped, brokers }.
  */
-export async function runScanPass({ concurrency = 3, fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
+export async function runScanPass({ concurrency = 3, fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
   // CONSENT GATE — BEFORE any vault read or broker fetch. A subject without an
   // active `broker_scan` grant is refused outright (403); the UI hiding the Scan
   // button is not sufficient, since a cron/API/agent caller reaches this same
