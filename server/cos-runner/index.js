@@ -15,6 +15,7 @@ import '../services/databaseBootFence.js';
  */
 
 import express from 'express';
+import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
 import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { spawn } from '../lib/childProcess.js';
 import * as pty from 'node-pty';
@@ -104,12 +105,16 @@ const armForceKill = (agentId, agent, opts = {}) =>
 
 // Express app setup
 const app = express();
+app.use(runnerRequestGuard);
 app.use(express.json({ limit: '10mb' }));
 
 const server = http.createServer(app);
 const io = new SocketServer(server, {
-  cors: { origin: '*' }
+  allowRequest: (req, callback) => callback(null, runnerRequestRefusal(req) === null)
 });
+
+// Check subsequent polling requests and upgrades too, even with an existing sid.
+io.engine.use(runnerRequestGuard);
 
 const httpDrain = createHttpDrain([server]);
 let transportClose;

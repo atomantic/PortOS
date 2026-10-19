@@ -1,3 +1,4 @@
+import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
@@ -31,7 +32,7 @@ async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
   const server = Object.assign(new EventEmitter(), {
     listen: vi.fn(), close: vi.fn(cb => cb?.()), closeAllConnections: vi.fn(),
   });
-  const io = Object.assign(new EventEmitter(), { use: vi.fn(), close: vi.fn(cb => cb?.()) });
+  const io = Object.assign(new EventEmitter(), { engine: { use: vi.fn() }, use: vi.fn(), close: vi.fn(cb => cb?.()) });
   const child = Object.assign(new EventEmitter(), {
     pid: 123, kill: vi.fn(), write: vi.fn(), resize: vi.fn(),
     onData: fn => child.on('data', fn),
@@ -50,6 +51,7 @@ async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
   const killProcessTree = vi.fn();
   runInNewContext(source, {
+    runnerRequestGuard, runnerRequestRefusal,
     assertDatabaseAdmission: vi.fn(), maintenance,
     withBackupAssetPublication: vi.fn(), persistRunnerCompletion: vi.fn(),
     express: Object.assign(() => app, { json: vi.fn() }),

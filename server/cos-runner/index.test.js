@@ -205,3 +205,15 @@ describe('cos-runner output — ANSI decoloring parity with spawnDirectly', () =
     expect(RUNNER_SRC).toMatch(/if \(!trimmedDecolored \|\| isKnownCliStderrNoise\(trimmedDecolored\)\) return;/);
   });
 });
+
+describe('runner browser boundary wiring', () => {
+  it('guards HTTP before parsing and every Socket.IO transport request', () => {
+    const guard = RUNNER_SRC.indexOf('app.use(runnerRequestGuard)');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(RUNNER_SRC.indexOf('app.use(express.json'));
+    expect(guard).toBeLessThan(RUNNER_SRC.indexOf('app.post('));
+    expect(RUNNER_SRC).toContain('allowRequest: (req, callback) => callback(null, runnerRequestRefusal(req) === null)');
+    expect(RUNNER_SRC).toContain('io.engine.use(runnerRequestGuard)');
+    expect(RUNNER_SRC).not.toContain("origin: '*'");
+  });
+});

@@ -93,6 +93,7 @@ beforeEach(() => {
 const renderEditorRoute = ({ strict = false } = {}) => {
   const router = createMemoryRouter([
     { path: '/media/timeline/:projectId', element: <VideoTimelineEditor /> },
+    { path: '/media/timeline', element: <div>Project index</div> },
   ], { initialEntries: ['/media/timeline/p1'] });
   const provider = <RouterProvider router={router} />;
   return { ...render(strict ? <StrictMode>{provider}</StrictMode> : provider), router };
@@ -137,7 +138,7 @@ describe('route and refresh ownership', () => {
     }), { silent: true });
   });
 
-  it('flushes A once through its existing write tail without owning B pending edits or token', async () => {
+  it('holds navigation until all A edits save through their tail, then gives B its own token', async () => {
     const firstSave = deferred();
     api.getTimelineProject.mockImplementation(async (id) => project({
       id, name: id === 'p1' ? 'Example A' : 'Example B', updatedAt: id === 'p1' ? 'a1' : 'b1',
@@ -149,12 +150,12 @@ describe('route and refresh ownership', () => {
     await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledOnce(), { timeout: 1500 });
     fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
     await act(async () => { await view.router.navigate('/media/timeline/p2'); });
-    expect(await screen.findByRole('textbox', { name: 'Project name' })).toHaveValue('Example B');
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Example A');
+    await act(async () => { firstSave.resolve({ updatedAt: 'a2' }); });
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Example B'));
     expect(screen.getByText(/Add clips, stills, overlays and audio/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
-
-    await act(async () => { firstSave.resolve({ updatedAt: 'a2' }); });
-    expect(api.updateTimelineProject).toHaveBeenCalledTimes(2);
     expect(api.updateTimelineProject.mock.calls[1]).toEqual(['p1', expect.objectContaining({
       expectedUpdatedAt: 'a2', segments: [expect.objectContaining({ clipId: CLIP_A }), expect.objectContaining({ clipId: CLIP_A })],
     }), { silent: true }]);
@@ -596,5 +597,56 @@ describe('source-aware playback', () => {
       // element reports a length — the earlier measurement must not leak in.
       expect(bedBlock().style.width).toBe('240px');
     });
+  });
+});
+
+
+describe('timeline navigation after save failure', () => {
+  it('retains failed edits, guards internal navigation, and retries the latest snapshot before proceeding', async () => {
+    const view = renderEditorRoute();
+    await awaitPageLoaded('Loading timeline project');
+    vi.useFakeTimers();
+    try {
+      api.updateTimelineProject.mockRejectedValueOnce(new Error('offline'));
+      fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(screen.getByRole('status', { name: 'Timeline save status' })).toHaveTextContent('Save failed: offline');
+      fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+      expect(screen.getByRole('button', { name: 'Keep editing' })).toBeInTheDocument();
+      expect(view.router.state.location.pathname).toBe('/media/timeline/p1');
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+      const retry = deferred();
+      api.updateTimelineProject.mockReturnValueOnce(retry.promise);
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry save' })); });
+      expect(api.updateTimelineProject.mock.calls[1][1]).toMatchObject({ expectedUpdatedAt: 'u1', segments: [expect.any(Object), expect.any(Object)] });
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+      expect(view.router.state.location.pathname).toBe('/media/timeline/p1');
+      await act(async () => { retry.resolve({ updatedAt: 'u2' }); });
+      expect(screen.getByText('Project index')).toBeInTheDocument();
+      expect(api.updateTimelineProject).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps conflicting edits and requires explicit discard to leave without another write', async () => {
+    const view = renderEditorRoute();
+    await awaitPageLoaded('Loading timeline project');
+    vi.useFakeTimers();
+    try {
+      api.updateTimelineProject.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'CONFLICT' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(screen.getByRole('status', { name: 'Timeline save status' })).toHaveTextContent('Your edits are retained');
+      expect(api.getTimelineProject).toHaveBeenCalledOnce();
+      await act(async () => { await view.router.navigate('/media/timeline'); });
+      expect(view.router.state.location.pathname).toBe('/media/timeline/p1');
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard' })); });
+      expect(screen.getByText('Project index')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(api.updateTimelineProject).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 });

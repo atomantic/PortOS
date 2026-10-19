@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -96,7 +96,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
-    await execGit(['add', 'eol.txt'], repo);
+    // No newline: Windows core.autocrlf must not make this stat-only fixture
+    // byte-different when the checkout later installs its LF attributes.
+    await writeFile(join(repo, 'stat-cache.txt'), 'unchanged');
+    await execGit(['add', 'eol.txt', 'stat-cache.txt'], repo);
     await execGit(['commit', '-m', 'chore: synthetic text file'], repo);
     const { path, release } = await heldCheckout('detached-held', { beforeLock: async (tree) => {
       // Normalization hides these CRLF bytes from every diff.
@@ -108,13 +111,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['add', 'staged-only.txt'], path);
     await rm(join(path, 'staged-only.txt'));
 
+    // Make an unchanged tracked file's stat cache stale. Git diff normally
+    // rewrites the index while refreshing it, racing the administration copy.
+    await utimes(join(path, 'stat-cache.txt'), new Date('2020-01-01'), new Date('2020-01-01'));
+    const indexPath = (await execGit(['rev-parse', '--git-path', 'index'], path)).stdout.trim();
+    const originalIndex = await readFile(indexPath);
     const result = await retire(release);
 
-    expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: false });
     expect(existsSync(path)).toBe(false);
     expect(await registered(release.path)).toBe(false);
     const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
     expect(manifest.release).toEqual(release);
+    expect(await readFile(join(result.archiveDir, 'administration', 'gitdir', 'index'))).toEqual(originalIndex);
     expect(manifest.captured.files.map(file => `${file.path}${file.tracked ? ' (tracked)' : ''}`).sort())
       .toEqual(['.gitattributes', '.gitignore', 'eol.txt (tracked)', 'ignored.txt', 'initial.txt (tracked)', 'untracked.txt']);
     expect(await readFile(join(result.archiveDir, 'files', 'eol.txt'), 'utf8')).toBe('one\r\ntwo\r\n');

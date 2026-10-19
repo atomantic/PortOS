@@ -270,6 +270,17 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
     await writeJsonAtomic(appliedFile, applied);
   };
 
+  // Retire this frozen transform before ANY pending migration executes, even
+  // with a rebuilt ledger or a later failure. Local absence cannot prove image
+  // deletion: host-mode peers intentionally retain metadata without bytes.
+  let disarmed = 0;
+  const retired = '428-prune-dangling-collection-images.js';
+  if (files.includes(retired) && !applied.includes(retired)) {
+    applied.push(retired);
+    disarmed++;
+    console.warn(`⏭️ Retired migration ${retired}: local image absence is not deletion evidence; recorded without running (#12398)`);
+  }
+
   // Disarm EVERY pending purge migration up front, not as each is reached in
   // the run loop: if this rebuilt-from-empty run aborted on an earlier
   // throwing migration (the documented repair-and-reboot flow), the partial
@@ -277,7 +288,6 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   // would then execute destructively against the rebuilt install. The probe
   // reads source text, never importing a module before its turn in the loop.
   if (ledgerStartedEmpty) {
-    let disarmed = 0;
     for (const file of files) {
       if (applied.includes(file)) continue;
       if (!sourceDeclaresPurge(await readFile(join(migrationsDir, file), 'utf-8'))) continue;
@@ -285,8 +295,10 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
       applied.push(file);
       disarmed++;
     }
-    if (disarmed > 0) await persistAppliedList();
   }
+  // Publish both policies together: persisting retirement first would leave a
+  // nonempty ledger after a crash, re-arming pending purge-class migrations.
+  if (disarmed > 0) await persistAppliedList();
 
   let ran = 0;
   for (const file of files) {

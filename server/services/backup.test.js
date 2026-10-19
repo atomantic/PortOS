@@ -2273,6 +2273,82 @@ describe('restoreSnapshot manifest verification', () => {
     return pending;
   }
 
+  it.each([
+    ['universes', 'universes/universe-example/index.json', { id: 'universe-example' }],
+    ['universes', 'universes/index.json', { config: { runs: [{ id: 'run-example' }] } }],
+    ['pipeline-issues', 'pipeline-issues/iss-example/index.json', { id: 'iss-example' }],
+    ['pipeline-series', 'pipeline-series/ser-example/index.json', { id: 'ser-example' }],
+    ['story-builder', 'story-builder/stb-example/index.json', { id: 'stb-example' }],
+    ['writers-room', 'writers-room/folders.json', [{ id: 'folder-example' }]],
+    ['writers-room', 'writers-room/exercises.json', [{ id: 'exercise-example' }]],
+    ['writers-room', 'writers-room/works/wr-work-aabb/manifest.json', { id: 'wr-work-aabb' }],
+    ['creative-director', 'creative-director-projects.json', [{ id: 'project-example' }]],
+  ])('refuses %s legacy metadata at %s before preview or execution (#12397)', async (domain, path, record) => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    const markerPath = joinPath(PATHS.data, `${domain === 'creative-director' ? 'creative-director-projects' : domain}.migrated.json`);
+    await realFs.writeFile(markerPath, '{"imported":1}');
+    try {
+      const hash = await writeSnapshotFile(path, JSON.stringify(record));
+      await writeManifest({ [path]: hash });
+      // Both empty and overlapping destination databases must refuse: this is
+      // source compatibility, not an opportunistic ON CONFLICT merge.
+      for (const rows of [[], [{ id: 'existing-record' }]]) {
+        query.mockResolvedValue({ rows });
+        for (const dryRun of [true, false]) {
+          for (const subdirFilter of [null, path.split('/')[0], path]) {
+            await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
+              .rejects.toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: [domain] } });
+          }
+        }
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(await realFs.readFile(markerPath, 'utf8')).toBe('{"imported":1}');
+      // Pre-manifest snapshots get the same compatibility preflight.
+      await realFs.rm(joinPath(snapshotDir, 'manifest.json'));
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+        .rejects.toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA' });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+      query.mockResolvedValue({ rows: [] });
+      await realFs.rm(markerPath);
+    }
+  });
+
+  it('admits current file-primary siblings and parked recovery evidence on PostgreSQL', async () => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const paths = [
+        'universes/universe-example/assets/sheet.png', 'universes.imported/universe-example/index.json',
+        'universes/index.json', 'pipeline-issues/iss-example/render.png',
+        'pipeline-series/ser-example/manuscript-review.json', 'pipeline-series/ser-example/index.json.imported',
+        'story-builder.imported/stb-example/index.json', 'writers-room/folders.imported.json',
+        'writers-room/exercises.imported.json', 'writers-room/works/wr-work-aabb/manifest.imported.json',
+        'writers-room/works/wr-work-aabb/drafts/draft-example.md', 'creative-director-projects.imported.json',
+      ];
+      const files = {};
+      for (const path of paths) files[path] = await writeSnapshotFile(path, '{}');
+      await writeManifest(files);
+      await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ verification: { status: 'verified' } });
+      // A mixed snapshot still permits selecting only the current draft body.
+      files['writers-room/folders.json'] = await writeSnapshotFile('writers-room/folders.json', '[]');
+      await writeManifest(files);
+      spawn.mockReset();
+      await expect(finishRestore({ dryRun: false, subdirFilter: 'writers-room/works/wr-work-aabb/drafts' }))
+        .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
   it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
     const relativePath = 'restore-integrity/example.json';
     const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
@@ -4901,7 +4977,7 @@ describe('runBackup lifecycle', () => {
       const dir = joinPath(destRoot, 'snapshots', source, id);
       await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
       if (generatedAt) {
-        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0 }));
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0, files: {} }));
       }
       if (marker) await fsp.writeFile(joinPath(dir, marker), '');
       return dir;
@@ -5053,7 +5129,7 @@ describe('runBackup lifecycle', () => {
 
     it('retains the readable snapshot budget in addition to corrupt manifests (#12340)', async () => {
       const fsp = await actualFs();
-      const oldest = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: { malformed: true } });
+      const oldest = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const readable = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2099-01-01T00:00:00.000Z' });
       const corrupt = await seedSnapshot(machineHost, '2020-01-03T00-00-00');
       await fsp.writeFile(joinPath(corrupt, 'manifest.json'), '{truncated');
@@ -5074,7 +5150,7 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, result.snapshotId))).resolves.toBeDefined();
       await expect(fsp.stat(corrupt)).resolves.toBeDefined();
       await expect(fsp.stat(unreadable)).resolves.toBeDefined();
-      expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2019-12-31T00-00-00 (manifest unreadable)');
+      expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2019-12-31T00-00-00 (manifest unreadable or invalid)');
     });
 
     it('keeps a completed backup after clock correction when a future snapshot manifest cannot be read (#12340)', async () => {
@@ -5097,10 +5173,48 @@ describe('runBackup lifecycle', () => {
         expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 0 });
         await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, result.snapshotId))).resolves.toBeDefined();
         await expect(fsp.stat(future)).resolves.toBeDefined();
-        expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2099-01-01T00-00-00 (manifest unreadable)');
+        expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2099-01-01T00-00-00 (manifest unreadable or invalid)');
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('excludes every invalid manifest shape from a successful dump retention budget (#12396)', async () => {
+      const fsp = await actualFs();
+      const valid = { generatedAt: '2099-01-01T00:00:00Z', fileCount: 0, files: {} };
+      const invalid = [null, [], {}, { ...valid, generatedAt: {} }, { ...valid, fileCount: 1 },
+        { ...valid, fileCount: 1, files: { '../escape': 'a'.repeat(64) } },
+        { ...valid, fileCount: 1, files: { 'record.json': 'bad-hash' } }];
+      const protectedIds = [];
+      for (const [index, manifest] of invalid.entries()) {
+        const id = `2099-01-0${index + 1}T00-00-00`;
+        const dir = await seedSnapshot(machineHost, id);
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify(manifest));
+        protectedIds.push(id);
+        await expect(restoreSnapshot(destRoot, id, { dryRun: true }))
+          .rejects.toMatchObject({ code: 'BACKUP_MANIFEST_INVALID' });
+      }
+      const legacy = await seedSnapshot(machineHost, '2019-01-01T00-00-00');
+      const healthy = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: valid.generatedAt });
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const dump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(dump);
+      const pending = runBackup(destRoot, null, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      const args = spawn.mock.calls[1][1];
+      await fsp.writeFile(args[args.indexOf('-f') + 1], 'CREATE TABLE example (id integer);');
+      dump.emit('close', 0);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
+      for (const id of [...protectedIds, result.snapshotId]) {
+        await expect(fsp.stat(joinPath(destRoot, 'snapshots', machineHost, id))).resolves.toBeDefined();
+      }
+      await expect(fsp.stat(legacy)).rejects.toThrow();
+      await expect(fsp.stat(healthy)).rejects.toThrow();
     });
 
     it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {
