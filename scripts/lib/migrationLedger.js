@@ -1,4 +1,4 @@
-import { readdir, readFile, rename } from 'fs/promises';
+import { readdir, readFile, rename, stat } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveInstallRoot } from '../../server/lib/dataRoot.js';
@@ -19,6 +19,32 @@ export const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..', '..'));
 export const DEFAULT_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
 
 export const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
+
+// Installs from before the 2026-05-16 move of migrations out of data/ keep the
+// ledger here. The booting server runs migrations on a plain pull-and-restart
+// without setup-data.js, so every runner adopts it: an unread legacy ledger
+// reads as empty, re-runs every applied migration and disarms the purge class.
+export const legacyAppliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations', '.applied.json');
+
+const pathExists = (path) => stat(path).then(() => true, (err) => {
+  if (err.code === 'ENOENT') return false;
+  throw err;
+});
+
+/**
+ * Move a legacy ledger to `appliedFilePath`. A current ledger is authoritative
+ * when both exist, so the legacy copy is then left untouched. Returns whether
+ * the file moved.
+ */
+export async function adoptLegacyAppliedList(rootDir) {
+  const legacy = legacyAppliedFilePath(rootDir);
+  if (!(await pathExists(legacy)) || await pathExists(appliedFilePath(rootDir))) return false;
+  return rename(legacy, appliedFilePath(rootDir)).then(() => true, (err) => {
+    // Another runner (setup-data has no lock) adopted it first.
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  });
+}
 
 /**
  * Scan for numbered migration files (NNN-name.js, sorted by filename). Co-located vitest
@@ -81,7 +107,12 @@ export async function listPendingMigrations({
   rootDir = DEFAULT_ROOT_DIR,
   migrationsDir = DEFAULT_MIGRATIONS_DIR,
 } = {}) {
-  const applied = await readAppliedList(appliedFilePath(rootDir), { repair: false });
+  // Read-only: report what the next run sees once it adopts a legacy ledger.
+  const useLegacy = await pathExists(appliedFilePath(rootDir))
+    .then((exists) => !exists && pathExists(legacyAppliedFilePath(rootDir)))
+    .catch(() => false);
+  const ledger = useLegacy ? legacyAppliedFilePath(rootDir) : appliedFilePath(rootDir);
+  const applied = await readAppliedList(ledger, { repair: false });
   const appliedSet = new Set(applied);
   const files = await scanMigrationFiles(migrationsDir).catch(() => []);
   return files.filter(f => !appliedSet.has(f));

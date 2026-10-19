@@ -7,6 +7,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
   DEFAULT_ROOT_DIR,
   DEFAULT_MIGRATIONS_DIR,
+  adoptLegacyAppliedList,
   appliedFilePath,
   listPendingMigrations,
   readAppliedList,
@@ -168,6 +169,10 @@ export async function runMigrations({
 }
 
 async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
+  if (await adoptLegacyAppliedList(rootDir)) {
+    console.log('🧹 Moved data/migrations/.applied.json → data/migrations.applied.json');
+  }
+
   // A runner killed between writing the ledger's temp file and renaming it
   // leaves `migrations.applied.json.tmp-<pid>` behind, and no later run (a new
   // pid) would ever reuse it. Remove only a dead writer's file: a lock reclaimed

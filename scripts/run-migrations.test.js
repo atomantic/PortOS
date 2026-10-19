@@ -113,6 +113,31 @@ export default {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  // A pre-2026-05-16 install upgraded by pull-and-restart reaches the boot
+  // runner without setup-data.js ever moving its ledger.
+  it('adopts a legacy data/migrations/.applied.json instead of re-running what it records', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, JSON.stringify(['001-fixture.js']));
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(existsSync(join(dataDir, 'fixture-marker.txt'))).toBe(false);
+    expect(existsSync(legacyFile)).toBe(false);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+  });
+
+  it('keeps the current ledger authoritative when a legacy one also exists', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, '[]');
+    writeFileSync(appliedFile, JSON.stringify(['001-fixture.js']));
+
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+    expect(readFileSync(legacyFile, 'utf-8')).toBe('[]');
+  });
+
   it('rejects unreadable ledgers without running migrations or changing their bytes', async () => {
     const original = '["001-fixture.js"]\n';
     writeFileSync(appliedFile, original);
@@ -616,6 +641,16 @@ describe('listPendingMigrations', () => {
     }
     const pending = await listPendingMigrations({ rootDir, migrationsDir });
     expect(pending).toEqual(['001-a.js', '002-b.js', '003-c.js']);
+  });
+
+  it('reads a legacy ledger the next run will adopt, without moving it', async () => {
+    const legacyFile = join(dataDir, 'migrations', '.applied.json');
+    mkdirSync(join(dataDir, 'migrations'));
+    writeFileSync(legacyFile, JSON.stringify(['001-a.js']));
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['002-b.js', '003-c.js']);
+    expect(existsSync(legacyFile)).toBe(true);
+    expect(existsSync(appliedFile)).toBe(false);
   });
 
   it('treats a corrupt applied-list as empty WITHOUT mutating it (read-only)', async () => {
