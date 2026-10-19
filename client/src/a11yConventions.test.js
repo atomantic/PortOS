@@ -2200,11 +2200,15 @@ describe('a11y conventions', () => {
   // chevrons + a layered Esc cascade Modal's stack would swallow) and supplies
   // the dialog semantics itself: role="dialog"/aria-modal, useFocusTrap, and a
   // window-level Esc handler.
+  // MoodBoardDetail's phone tool sheet is the same element as the desktop tool
+  // rail, so its tools stay mounted (running jobs keep state) across open,
+  // close and resize; it carries role="dialog", useFocusTrap and useEscLayer.
   const MODAL_BACKDROP_ALLOWLIST = new Set([
     'src/components/ui/Modal.jsx',
     'src/components/Drawer.jsx',
     'src/components/Layout.jsx',
     'src/components/media/MediaLightbox.jsx',
+    'src/pages/MoodBoardDetail.jsx',
   ]);
 
   it('routes full-screen dark overlays through the shared <Modal>', () => {
