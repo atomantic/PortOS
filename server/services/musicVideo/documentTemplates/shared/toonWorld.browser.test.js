@@ -1,17 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
-import { browserSuiteCanRun } from '../../../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSuiteGate.js';
 
 const require = createRequire(import.meta.url);
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find(p => p && existsSync(p));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('toon world browser', { Chrome: chrome });
 const root = dirname(fileURLToPath(import.meta.url));
 const threeRoot = dirname(require.resolve('three'));

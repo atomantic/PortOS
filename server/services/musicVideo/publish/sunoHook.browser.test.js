@@ -1,15 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
-import { browserSuiteCanRun } from '../../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../../lib/browserSuiteGate.js';
 import { startOwnedBrowserFixture } from '../../../test/browserFixture.js';
 import { sunoHookAdapter } from './sunoHook.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('Suno Hook draft browser', { Chrome: chrome });
 const ID = '12345678-abcd-4abc-8abc-123456789abc';
 

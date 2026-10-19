@@ -11,6 +11,7 @@ import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } fro
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
 import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -18,10 +19,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await i
   dataRoot: () => lazyTempDataRoot('portos-mv-composition-'),
 }));
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 // Vitest runs no hooks for a file whose every test is skipped, so on a runner
 // without Chrome or ffmpeg the afterAll below never fires — yet importing
