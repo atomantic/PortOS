@@ -3557,6 +3557,20 @@ describe('peerSync', () => {
         expect(mergeMediaCollectionsFromSync).toHaveBeenCalledTimes(1);
       });
 
+      it('refuses a linkedCollection whose local owner is another category or cannot be verified', async () => {
+        const incoming = { id: 'col-x', universeId: 'shared-id', items: [] };
+        const push = () => applyIncomingPush({
+          kind: 'universe', record: { id: 'shared-id', ...live }, linkedCollection: incoming, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        // Same id, different parent kind (a series parent named like this universe).
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-x', seriesId: 'shared-id', items: [] });
+        await push();
+        // A storage failure is not "no local collection".
+        vi.mocked(getCollection).mockRejectedValue(new Error('db unavailable'));
+        await push();
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
       it('refuses a linkedCollection on a kind that has no collection parent', async () => {
         await applyIncomingPush({
           kind: 'musicVideoProject', record: { id: 'mv-1', ...live },

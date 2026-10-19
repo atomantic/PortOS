@@ -231,6 +231,25 @@ export async function findPeerById(peerId) {
   const peers = await getPeers().catch(() => []);
   return peers.find((p) => p.instanceId === peerId) || null;
 }
+// A store read that fails is NOT "record does not exist": only a not-found
+// error (ServerError 404 / a `*NOT_FOUND` code, as the record loaders throw)
+// maps to null. Anything else (DB down, a sanitizer throwing) rethrows so the
+// push rejects before any network call or lastPushedHash write, and the caller
+// logs it (#11455).
+export function isNotFoundError(err) {
+  const code = err?.code;
+  return err?.status === 404 || (typeof code === 'string' && (code === 'NOT_FOUND' || code.endsWith('_NOT_FOUND')));
+}
+
+export async function loadOrNotFound(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
 export const FORCE_REVALIDATE_EVERY = 10; // ~10 min at the 60s sweep cadence
 
 /**

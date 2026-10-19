@@ -40,6 +40,7 @@ import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
   findPeerById,
+  loadOrNotFound,
   peerSyncEvents,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -91,11 +92,19 @@ async function bindLinkedCollection({ kind, record, linkedCollection, sourceInst
   // The merge overwrites the collection's own parent link by id, so a peer that
   // names another collection's id while claiming this record as parent would
   // re-parent it. Refuse when the local collection is linked elsewhere.
-  const local = isNonBlankStr(linkedCollection.id)
-    ? await RECORD_KINDS.mediaCollection.load(linkedCollection.id).catch(() => null)
-    : null;
-  const localParentId = local?.universeId || local?.seriesId || null;
-  if (localParentId && localParentId !== record.id) {
+  // A failed lookup is not "no local collection": skip the bundle (the snapshot
+  // sync reconciles collections) rather than merge past an unverified owner.
+  let local;
+  try {
+    local = await loadOrNotFound(() => RECORD_KINDS.mediaCollection.load(linkedCollection.id));
+  } catch (err) {
+    console.warn(`⚠️ peerSync: skipped linkedCollection from ${sourceInstanceId} — local collection lookup failed: ${err.message}`);
+    return null;
+  }
+  // Parent field and id must both match: a local collection parented by a
+  // series that shares this universe's id is still another category's record.
+  const linkedElsewhere = local && (local.universeId || local.seriesId) && local[parentField] !== record.id;
+  if (linkedElsewhere) {
     console.warn(`⚠️ peerSync: skipped linkedCollection from ${sourceInstanceId} — local collection belongs to another parent`);
     return null;
   }
@@ -124,8 +133,8 @@ async function bindLinkedTrack({ record, linkedTrack, sourceInstanceId, onLookup
   let localProject;
   try {
     [localTrack, localProject] = await Promise.all([
-      RECORD_KINDS.track.load(linkedTrack.id),
-      RECORD_KINDS.musicVideoProject.load(record.id).catch(() => null),
+      loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id)),
+      loadOrNotFound(() => RECORD_KINDS.musicVideoProject.load(record.id)),
     ]);
   } catch (err) {
     onLookupError(err);
