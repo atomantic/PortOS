@@ -12,6 +12,10 @@ import { makePromptReplaceMigration } from './_lib.js';
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-script-verify.md': [
     'ed6c8101644cfe56a100eb6bfe3587f3', // pre-122
+    // Shipped in v2.22.0, which predates this migration's ledger entry: without
+    // it an untouched upgrade from v2.22 was reported as customized here
+    // before migration 385 upgraded it anyway.
+    'cec35763c134fcac8bd4e9669ab5505a',
   ],
 };
 
