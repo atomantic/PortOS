@@ -52,8 +52,11 @@ describe('sharing/subscriptions', () => {
     subs.__resetForTests();
     gate.hold = null; gate.held = 0; gate.calls = 0;
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    // Debounce timers and listener-triggered exports outlive the test body and
+    // would recreate the bucket after the rmSync below (#12288).
+    await subs.__settleForTests();
     if (tempBucket) rmSync(tempBucket, { recursive: true, force: true });
   });
 
