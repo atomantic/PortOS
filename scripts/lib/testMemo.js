@@ -801,7 +801,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // `require(PACKAGE_CONSTANT)`: a module-level string is a specifier like a literal one.
       if (value.k === 'str') { facts.edges.push({ spec: value.v, kind }); continue; }
       // `require(join(<unknown dir>, 'ecosystem.config.cjs'))`: the directory is a parameter or an
-      // install root, the basename is fixed, so every tracked file of that name is an input.
+      // install root, the basename is fixed, so every tracked file of that name is an input
+      // (tests only load in-repo files, so keying by tracked basename covers the real target).
       const scoped = kind === 'require' ? joinedBasename(arg.index) : null;
       if (scoped !== null) { facts.scopedNames.push(scoped); continue; }
       facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
@@ -1047,7 +1048,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         const names = m ? (m[1] !== undefined ? [m[1]] : m[2].split(',')).map((part) => part.trim()).filter(Boolean) : [];
         // `importlib.import_module('x')` is a sibling import; a non-literal name may reach any module.
         if (!/^\s*#/.test(line)) {
-          for (const call of line.matchAll(/\bimport_module\(\s*(?:(['"])([\w.]+)\1(?=\s*[,)])|)/g)) {
+          for (const call of line.matchAll(/\bimport_module\s*\(\s*(?:(['"])([\w.]+)\1(?=\s*[,)])|)/g)) {
             if (call[2] !== undefined) names.push(call[2]);
             else resolved.unresolvedInputs.push(`python import_module with a non-literal name in ${target}`);
           }

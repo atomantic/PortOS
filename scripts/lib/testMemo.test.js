@@ -282,6 +282,10 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(key({ ...files, 'scripts/tool.py': 'import importlib\nmod = importlib.import_module(name)\n' })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
     // A literal prefix of a computed name is not the whole argument.
     expect(key({ ...files, 'scripts/tool.py': "import importlib\nmod = importlib.import_module('_pins' + suffix)\n" })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
+    // Whitespace between the name and '(' is valid Python and must not bypass either path.
+    const spaced = { ...files, 'scripts/tool.py': "import importlib\nmod = importlib.import_module ('_pins')\n" };
+    expect(key({ ...spaced, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(key(spaced).key);
+    expect(key({ ...files, 'scripts/tool.py': 'import importlib\nmod = importlib.import_module (name)\n' })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
   });
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {
