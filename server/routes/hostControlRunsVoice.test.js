@@ -35,6 +35,14 @@ vi.mock('../services/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'example-cli', type: 'cli', enabled: true })),
   getProviderById: vi.fn(), getAllProviders: vi.fn(),
 }));
+vi.mock('../services/brain.js', () => ({
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'example-inbox' } })),
+  getInboxLog: vi.fn(async () => []),
+}));
+vi.mock('../services/imageGen/index.js', async () => ({
+  ...await vi.importActual('../lib/generationModes.js'),
+  generateImage: vi.fn(async () => ({ mode: 'external', path: '/data/images/example.png', filename: 'example.png' })),
+}));
 vi.mock('../services/voice/stt.js', () => ({
   transcribe: vi.fn(async () => ({ text: 'restart the example service', latencyMs: 1 })),
 }));
@@ -69,6 +77,8 @@ import { dispatchTool } from '../services/voice/tools.js';
 import { streamChat } from '../services/voice/llm.js';
 import { restartApp } from '../services/pm2.js';
 import { addTask } from '../services/cos.js';
+import { captureThought } from '../services/brain.js';
+import { generateImage } from '../services/imageGen/index.js';
 
 const runner = {
   createRun: vi.fn(), executeCliRun: vi.fn(), executeTuiRun: vi.fn(), executeApiRun: vi.fn(),
@@ -86,10 +96,18 @@ const appFor = (address) => {
   return app;
 };
 const runBody = { providerId: 'example-provider', prompt: 'Fix the example test', workspacePath: '/example/repo' };
+// [tool, args, the host effect it must not reach without authority]
 const hostTools = [
-  ['pm2_restart', { name: 'example-api' }],
-  ['dispatch_code_agent', { task: 'Fix the example test' }],
+  ['pm2_restart', { name: 'example-api' }, restartApp],
+  ['dispatch_code_agent', { task: 'Fix the example test' }, addTask],
+  // HTTP twins are gated whole-operation: POST /api/brain/capture (#11036)
+  // and POST /api/image-gen/generate (#9667).
+  ['brain_capture', { text: 'https://github.com/example/example-repo' }, captureThought],
+  ['image_generate', { prompt: 'An example lighthouse at dusk' }, generateImage],
 ];
+const expectNoHostEffects = () => {
+  for (const [, , effect] of hostTools) expect(effect).not.toHaveBeenCalled();
+};
 const responseFor = (name, args) => ({ text: '', model: 'test-model', toolCalls: [
   { id: 'call-1', type: 'function', function: { name, arguments: JSON.stringify(args) } },
 ] });
@@ -148,7 +166,7 @@ describe('Runs and palette host authority (#8834)', () => {
       ? { model: 'fallback-model' } : { provider: { defaultModel: 'fallback-model' } });
   });
 
-  it.each(hostTools)('protects palette %s from remote anonymous and Basic callers, allowing local/session', async (name, args) => {
+  it.each(hostTools)('protects palette %s from remote anonymous and Basic callers, allowing local/session', async (name, args, effect) => {
     for (const enabled of [false, true]) {
       auth.enabled = enabled;
       const response = await request(appFor('192.0.2.10')).post(`/api/palette/action/${name}`)
@@ -157,14 +175,13 @@ describe('Runs and palette host authority (#8834)', () => {
       expect(response.status).toBe(403);
       expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     }
-    expect(restartApp).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
+    expectNoHostEffects();
     for (const address of ['127.0.0.1', '192.0.2.10']) {
       auth.enabled = address !== '127.0.0.1';
       auth.session = auth.enabled;
       expect((await request(appFor(address)).post(`/api/palette/action/${name}`).send({ args })).status).toBe(200);
     }
-    expect(name === 'pm2_restart' ? restartApp : addTask).toHaveBeenCalledTimes(2);
+    expect(effect).toHaveBeenCalledTimes(2);
   });
 
   it('does not grant host tools authority from missing or JSON-shaped contexts, while read tools stay usable', async () => {
@@ -174,8 +191,7 @@ describe('Runs and palette host authority (#8834)', () => {
       }
     }
     expect((await request(appFor('192.0.2.10')).post('/api/palette/action/pm2_status').send({})).status).toBe(200);
-    expect(restartApp).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
+    expectNoHostEffects();
   });
 });
 
@@ -186,8 +202,7 @@ describe.each(['voice:text', 'voice:turn', 'voice:call:audio'])('%s tool authori
     await fireTurn(socket, event);
     expect(streamChat).toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith('voice:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN', message: expect.stringContaining('operator session') }));
-    expect(restartApp).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
+    expectNoHostEffects();
   });
 
   it('allows local/operator tools but rechecks a revoked session after the model responds', async () => {

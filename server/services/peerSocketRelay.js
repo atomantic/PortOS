@@ -10,11 +10,19 @@ import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch, peerSocketOptionsFor } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
+import { isPlainObject } from '../lib/objects.js';
 
 // Map<peerId, { socket, agents: Map<agentId, agent>, peer }>
 const peerConnections = new Map();
 
 const CONNECT_TIMEOUT_MS = 5000;
+
+// Relay payloads are peer-controlled — on a password-free install an announced
+// peer is any LAN host — so only a plain object with a string id is an agent.
+const relayedAgent = (data) => {
+  const agent = isPlainObject(data?.agent) ? data.agent : data;
+  return isPlainObject(agent) && typeof agent.id === 'string' && agent.id ? agent : null;
+};
 
 /**
  * Connect to a peer's Socket.IO server and subscribe to agent events
@@ -61,9 +69,20 @@ export function connectToPeer(peer) {
     instanceEvents.emit('peer:agents:updated', { peerId: peer.id, agents: [] });
   });
 
+  // socket.io-client calls listeners from a nextTick, where a throw is an
+  // uncaughtException that exits the server; contain it per event.
+  const onPeerAgentEvent = (event, handler) => socket.on(event, (data) => {
+    try {
+      handler(data);
+    } catch (err) {
+      console.error(`❌ Peer relay ${event} from ${peer.name} failed: ${err.message}`);
+    }
+  });
+
   // Agent spawned
-  socket.on('cos:agent:spawned', (data) => {
-    const agent = data.agent || data;
+  onPeerAgentEvent('cos:agent:spawned', (data) => {
+    const agent = relayedAgent(data);
+    if (!agent) return;
     conn.agents.set(agent.id, agent);
     instanceEvents.emit('peer:agent:spawned', { peerId: peer.id, agent });
     instanceEvents.emit('peer:agents:updated', {
@@ -73,25 +92,25 @@ export function connectToPeer(peer) {
   });
 
   // Agent updated
-  socket.on('cos:agent:updated', (data) => {
-    const agent = data.agent || data;
-    const existing = conn.agents.get(agent.id);
-    if (existing) {
-      Object.assign(existing, agent);
-    } else {
-      conn.agents.set(agent.id, agent);
-    }
-    instanceEvents.emit('peer:agent:updated', { peerId: peer.id, agent: conn.agents.get(agent.id) });
+  onPeerAgentEvent('cos:agent:updated', (data) => {
+    const agent = relayedAgent(data);
+    if (!agent) return;
+    // Spread, not Object.assign: a peer-sent `__proto__` key stays plain data.
+    const merged = { ...conn.agents.get(agent.id), ...agent };
+    conn.agents.set(agent.id, merged);
+    instanceEvents.emit('peer:agent:updated', { peerId: peer.id, agent: merged });
   });
 
   // Agent output (streaming)
-  socket.on('cos:agent:output', (data) => {
-    instanceEvents.emit('peer:agent:output', { peerId: peer.id, ...data });
+  onPeerAgentEvent('cos:agent:output', (data) => {
+    if (!isPlainObject(data)) return;
+    instanceEvents.emit('peer:agent:output', { ...data, peerId: peer.id });
   });
 
   // Agent completed
-  socket.on('cos:agent:completed', (data) => {
-    const agent = data.agent || data;
+  onPeerAgentEvent('cos:agent:completed', (data) => {
+    const agent = relayedAgent(data);
+    if (!agent) return;
     conn.agents.delete(agent.id);
     instanceEvents.emit('peer:agent:completed', { peerId: peer.id, agent });
     instanceEvents.emit('peer:agents:updated', {
@@ -111,7 +130,8 @@ async function fetchPeerAgents(conn) {
     const res = await peerFetch(url, { signal }, peer);
     if (!res.ok) return;
     const data = await res.json();
-    const agents = data.running || data.agents || [];
+    const listed = data?.running || data?.agents;
+    const agents = Array.isArray(listed) ? listed.map(relayedAgent).filter(Boolean) : [];
     conn.agents.clear();
     for (const agent of agents) {
       conn.agents.set(agent.id, agent);

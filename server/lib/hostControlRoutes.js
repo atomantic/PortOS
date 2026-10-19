@@ -8,6 +8,9 @@
  * remote LAN/tailnet caller on a password-free install is refused (#8226).
  * The socket twin is HOST_CONTROL_SOCKET_EVENTS in services/socket.js;
  * `/api/commands/*` mounts `requireHostControl` per route in routes/commands.js.
+ * Voice and palette tools (services/voice/tools.js) reach some of these
+ * operations without the route, so a tool whose route twin is listed here
+ * carries `hostControl: true`, checked at dispatch.
  *
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
