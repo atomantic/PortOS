@@ -164,7 +164,15 @@ function ingredientPayload(value) {
 }
 
 export default function CatalogIngredient() {
+  const { id } = useParams();
+  // One owner per ingredient visit: late mutations and child-local drafts must
+  // never migrate to another record. Tabs keep the same owner and unsaved form.
+  return <IngredientEditor key={id} />;
+}
+
+function IngredientEditor() {
   const { id, tab: tabParam } = useParams();
+  const mountedRef = useMounted();
   const activeVisitRef = useRef({ id, generation: 0 });
   if (activeVisitRef.current.id !== id) {
     activeVisitRef.current = { id, generation: activeVisitRef.current.generation + 1 };
@@ -546,7 +554,7 @@ export default function CatalogIngredient() {
     const ok = await deleteCatalogIngredient(record.id, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Delete failed'); return false; });
-    if (ok) {
+    if (ok && mountedRef.current) {
       toast.success('Deleted');
       navigate(backPath);
     }

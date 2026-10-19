@@ -256,6 +256,25 @@ describe('CatalogIngredient — character sheet', () => {
     expect(uploadCatalogIngredientMediaFile).not.toHaveBeenCalled();
   });
 
+  it('keeps the new ingredient draft when an earlier restore completes', async () => {
+    let finishRestore;
+    restoreCatalogIngredientRevision.mockImplementationOnce(() => new Promise(resolve => { finishRestore = resolve; }));
+    getCatalogIngredientDetails.mockImplementation(async id => ({
+      ...detailsOf({ ...CHAR_FIXTURE, id, name: id === 'cat-chr-1' ? 'First ingredient' : 'Second ingredient' }),
+      revisions: [{ id: 'latest', name: 'Current' }, { id: 'old', name: 'Earlier' }],
+    }));
+    const { router } = await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore', exact: true }));
+    await waitFor(() => expect(restoreCatalogIngredientRevision).toHaveBeenCalledTimes(1));
+    await act(async () => router.navigate('/catalog/character/cat-chr-2'));
+    await screen.findByDisplayValue('Second ingredient');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Second draft' } });
+    await act(async () => finishRestore({ ...CHAR_FIXTURE, name: 'Restored first ingredient' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Second draft');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
   it('keeps revision restore confirmation open when restore fails', async () => {
     getCatalogIngredientDetails.mockImplementation(async () => ({
       ...detailsOf(CHAR_FIXTURE),
