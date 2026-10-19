@@ -16,7 +16,7 @@ const seed = async (doc) => {
 };
 const read = async () => JSON.parse(await readFile(eyesPath(), 'utf8'));
 
-it('collapses copies of one legacy exam to its content id, stamps id-less rows, keeps every other id, and is idempotent', async () => {
+it('collapses copies of one legacy exam under its smallest id, stamps id-less rows, keeps every other id, and is idempotent', async () => {
   const legacy = { date: '2024-05-01', leftSphere: -1, rightSphere: -1.25 };
   const idless = { date: '2023-02-01', leftSphere: -0.5 };
   // A pre-#12432 addEyeExam row: random id, no createdAt, edited since. Its id is kept.
@@ -39,7 +39,8 @@ it('collapses copies of one legacy exam to its content id, stamps id-less rows, 
   expect(doc.exams).toEqual([
     { id: legacyRowId(idless), ...idless },
     preFixEdited,
-    { id: legacyRowId(legacy), ...legacy },
+    // The peer's stamp stays reachable as an alias, so its edits and deletes still land.
+    { id: '11111111-0000-4000-8000-000000000001', aliasIds: ['33333333-0000-4000-8000-000000000003'], ...legacy },
     minted,
   ]);
 

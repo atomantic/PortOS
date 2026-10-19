@@ -8,8 +8,9 @@
  * their `id` alone is their identity. A row without `createdAt` has unknown
  * provenance — an id-less legacy row, a random stamp, or an id minted before
  * #12432 — so it answers to its own id AND to `legacy-<sha256>` of its content,
- * which every machine computes alike. Two copies that meet only through the
- * content key converge on that key as their id.
+ * which every machine computes alike. Copies of one record that carry different
+ * ids converge on the smallest of them and keep the rest as `aliasIds`, so an
+ * edit or delete still addressed by a retired id finds the row.
  *
  * Pure. Migration 429 calls `normalizeLegacyRows`, so `legacyRowId` IS an
  * on-disk id: changing it would key every peer's rows differently.
@@ -29,14 +30,19 @@ const hasStringId = (row) => typeof row?.id === 'string' && row.id !== '';
 
 /** Deterministic id for a legacy row: a hash of its content without identity or clock fields. */
 export function legacyRowId(row) {
-  const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...content } = row;
+  const { id: _id, aliasIds: _aliasIds, createdAt: _createdAt, updatedAt: _updatedAt, ...content } = row;
   const digest = createHash('sha256').update(canonicalStringify(content)).digest('hex');
   return `${LEGACY_ROW_ID_PREFIX}${digest.slice(0, 24)}`;
 }
 
-/** Every key a row answers to; the content key last. A delete tombstones all of them. */
+const rowIds = (row) => [
+  ...(hasStringId(row) ? [row.id] : []),
+  ...(Array.isArray(row.aliasIds) ? row.aliasIds.filter((id) => typeof id === 'string' && id !== '') : []),
+];
+
+/** Every key a row answers to: id, aliases, then the content key. A delete tombstones all of them. */
 export function rowIdentityKeys(row) {
-  const keys = hasStringId(row) ? [row.id] : [];
+  const keys = [...new Set(rowIds(row))];
   if (row.createdAt === undefined) {
     const contentKey = legacyRowId(row);
     if (!keys.includes(contentKey)) keys.push(contentKey);
@@ -65,46 +71,76 @@ export function preferRowCopy(a, b) {
   return canonicalStringify(a) >= canonicalStringify(b) ? a : b;
 }
 
+// One record from a group of its copies: the preferred copy's fields, the
+// smallest id as its id and every other id as an alias. Both choices are
+// order-free, so every machine reduces the same copies to the same row.
+function reduceCopies(members) {
+  if (members.length === 1) return members[0];
+  const winner = members.map((m) => m.row).reduce(preferRowCopy);
+  const ids = [...new Set(members.flatMap((m) => rowIds(m.row)))].sort();
+  let row = winner;
+  if (ids.length > 0) {
+    const { aliasIds: _aliasIds, ...fields } = winner;
+    row = ids.length > 1 ? { ...fields, id: ids[0], aliasIds: ids.slice(1) } : { ...fields, id: ids[0] };
+  }
+  const keys = new Set([...members.flatMap((m) => [...m.keys]), ...rowIdentityKeys(row)]);
+  return { row, keys };
+}
+
 /**
- * Collapse copies of one record across `localRows` then `remoteRows`. Each
- * entry of the result is `{ row, keys }` (`keys` is null for a non-object row,
- * which is kept only from the local side). Copies resolve to `preferRowCopy`;
- * copies with different ids that met through the content key take that key as
- * their id.
+ * Collapse copies of one record across `localRows` then `remoteRows`. Rows are
+ * copies when they share any identity key, transitively, so a row bridging two
+ * others joins all three whichever side is local. Each result entry is
+ * `{ row, keys }` (`keys` is null for a non-object row, kept only from the
+ * local side), in first-occurrence order.
  *
  * `stampIds` gives an id-less row its content key as its id (eyes.json, whose
- * rows are addressed by id). `keepLocalDuplicates` keeps rows of `localRows`
- * that share a key as separate rows (blood/epigenetic files, whose id-less rows
- * were never deduped locally); only a remote copy is matched against them.
+ * rows are addressed by id). `keepLocalDuplicates` keeps a group's local rows
+ * as they are and drops its remote copies (blood/epigenetic files: id-less rows
+ * keyed by content alone, which were never deduped locally).
  */
 export function mergeRowCopies(localRows, remoteRows = [], { stampIds = false, keepLocalDuplicates = false } = {}) {
-  const entries = [];
-  const indexByKey = new Map();
-  const register = (keys, index) => {
-    for (const key of keys) if (!indexByKey.has(key)) indexByKey.set(key, index);
-  };
-  const add = (row, fromLocal) => {
+  const items = [];
+  const add = (row, local) => {
     if (!isPlainObject(row)) {
-      if (fromLocal) entries.push({ row, keys: null });
+      if (local) items.push({ row, keys: null, local });
       return;
     }
     const keys = rowIdentityKeys(row);
     const keyed = stampIds && !hasStringId(row) ? { ...row, id: keys[keys.length - 1] } : row;
-    const matchKey = keys.find((key) => indexByKey.has(key));
-    if (matchKey === undefined || (keepLocalDuplicates && fromLocal)) {
-      register(keys, entries.length);
-      entries.push({ row: keyed, keys: new Set(keys) });
-      return;
-    }
-    const entry = entries[indexByKey.get(matchKey)];
-    const preferred = preferRowCopy(entry.row, keyed);
-    const id = entry.row.id === keyed.id ? preferred.id : matchKey;
-    entry.row = preferred.id === id ? preferred : { ...preferred, id };
-    for (const key of [...keys, ...rowIdentityKeys(entry.row)]) entry.keys.add(key);
-    register(entry.keys, indexByKey.get(matchKey));
+    items.push({ row: keyed, keys: new Set(keys), local });
   };
   for (const row of Array.isArray(localRows) ? localRows : []) add(row, true);
   for (const row of Array.isArray(remoteRows) ? remoteRows : []) add(row, false);
+
+  const parent = items.map((_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+    return i;
+  };
+  const ownerByKey = new Map();
+  items.forEach((item, i) => {
+    for (const key of item.keys ?? []) {
+      if (!ownerByKey.has(key)) { ownerByKey.set(key, i); continue; }
+      const a = find(ownerByKey.get(key));
+      const b = find(i);
+      if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+    }
+  });
+
+  const groups = new Map();
+  items.forEach((item, i) => {
+    const root = item.keys ? find(i) : `passthrough-${i}`;
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(item);
+  });
+  const entries = [];
+  for (const members of groups.values()) {
+    if (members[0].keys === null) { entries.push({ row: members[0].row, keys: null }); continue; }
+    const locals = members.filter((m) => m.local);
+    if (keepLocalDuplicates && locals.length > 0) entries.push(...locals.map(({ row, keys }) => ({ row, keys })));
+    else entries.push(reduceCopies(members.map(({ row, keys }) => ({ row, keys }))));
+  }
   return entries;
 }
 

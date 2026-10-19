@@ -127,7 +127,38 @@ describe('applyRemote meatspace eyes.json identity', () => {
     await apply('eyes.json', { exams: [{ id: legacyRowId(legacy), ...legacy }] });
 
     const exams = (await readDoc('eyes.json')).exams;
-    expect(exams).toEqual([{ id: legacyRowId(legacy), ...legacy }]);
+    expect(exams).toHaveLength(1);
+    expect([exams[0].id, ...exams[0].aliasIds].sort())
+      .toEqual(['0d9b4c1e-0000-4000-8000-000000000001', legacyRowId(legacy)].sort());
+  });
+
+  // A machine that has not yet seen the convergence edits the copy under the id
+  // the merge retired; the alias still routes the edit to the one row.
+  it('applies an edit addressed by an id that convergence turned into an alias', async () => {
+    const legacy = { date: '2025-02-02', leftSphere: -1 };
+    const edited = { id: 'stamp-z', ...legacy, leftSphere: -1.75, updatedAt: '2026-07-01T00:00:00.000Z' };
+    await persist('eyes.json', { exams: [edited] });
+    await apply('eyes.json', { exams: [{ id: 'stamp-b', aliasIds: ['stamp-z'], ...legacy }] });
+    expect((await readDoc('eyes.json')).exams).toEqual([{ ...edited, id: 'stamp-b', aliasIds: ['stamp-z'] }]);
+  });
+
+  // A row whose id matches one exam and whose content matches another joins all
+  // three, whichever machine runs the merge.
+  it('merges a row bridging two exams to the same result in both sync directions', async () => {
+    const a = { id: 'stamp-a', date: '2025-03-03', leftSphere: -1 };
+    const b = { id: 'stamp-b', date: '2025-03-03', leftSphere: -2 };
+    const bridge = { id: 'stamp-a', date: '2025-03-03', leftSphere: -2, updatedAt: '2026-07-01T00:00:00.000Z' };
+
+    await persist('eyes.json', { exams: [a, b] });
+    await apply('eyes.json', { exams: [bridge] });
+    const forward = (await readDoc('eyes.json')).exams;
+
+    await persist('eyes.json', { exams: [bridge] });
+    await apply('eyes.json', { exams: [a, b] });
+    const backward = (await readDoc('eyes.json')).exams;
+
+    expect(forward).toEqual([{ ...bridge, aliasIds: ['stamp-b'] }]);
+    expect(backward).toEqual(forward);
   });
 
   // An exam minted before #12432 has an id but no createdAt. Two machines that
