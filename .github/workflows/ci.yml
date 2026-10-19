@@ -765,17 +765,33 @@ jobs:
           PG_MAJOR: '17'
         run: bash scripts/ci-install-db-tools.sh
 
+      # Same contract as the server job's memo steps. The Postgres schema is
+      # not visible to a key; scripts/lib/testMemo.js lists the tracked files
+      # that build it as db base inputs.
+      - name: Restore the test memo
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
+          restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-db-
+
+      # Full mode: the runner subtracts what the memo verified and records the
+      # `⏱ db full suite` duration line itself.
       - name: Run DB-backed tests (portos_test)
-        run: |
-          set +e
-          start=$(date +%s)
-          npm run test:db:ci --prefix server
-          status=$?
-          elapsed=$(( $(date +%s) - start ))
-          echo "⏱ server db suite: ${elapsed}s" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit $status
+        id: db-tests
         env:
           PGDATABASE: portos_test
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: full
+        run: node scripts/run-ci-tests.js db
+
+      - name: Save the test memo
+        if: steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-test-memo
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
 
   browser:
     # Owns the registered browser suites; the Linux unit job excludes that

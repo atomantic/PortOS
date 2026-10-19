@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264, resolveTestChrome } from './browserSuiteGate.js';
+import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264, resolveClientBundler, resolveTestChrome } from './browserSuiteGate.js';
+
+describe('resolveClientBundler', () => {
+  it('returns undefined when the client workspace is absent', () => {
+    expect(resolveClientBundler('/nonexistent/example-root')).toBeUndefined();
+  });
+});
 
 describe('resolveTestChrome', () => {
   it('prefers CHROME_PATH, then the bundled Chromium, then the first installed package path, and reports none', () => {

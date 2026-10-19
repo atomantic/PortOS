@@ -2,24 +2,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import express from 'express';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
-import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 
-const client = resolve(import.meta.dirname, '../../../client');
 // Bundled StoryboardAnimatic.jsx exercises musicVideoFrameCapture.js and FrameStepper.jsx.
 // These source references are the fixture's CI dependency contract: generated JSX has no static import edge.
-const requireClient = createRequire(join(client, 'package.json'));
-let bundlers;
-try { bundlers = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map((name) => requireClient.resolve(name)); }
-catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
+const client = resolve(import.meta.dirname, '../../../client');
+const bundlers = resolveClientBundler(resolve(client, '..'));
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('animatic frame capture', { Chrome: chrome, ffmpeg, 'client dependencies': bundlers });

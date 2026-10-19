@@ -41,8 +41,7 @@ export function fidelityChildEnv(env, diagnostics) {
 async function fidelityToolchain(env) {
   const { findFfmpeg } = await import('../server/lib/ffmpeg.js');
   const { _testChromeCaptureArgs } = await import('../server/services/htmlComposition/testBrowserCleanup.js');
-  const { resolveTestChrome } = await import('./lib/testChrome.js');
-  const { probeChromeH264, describeH264Probe } = await import('../server/lib/browserSuiteGate.js');
+  const { probeChromeH264, describeH264Probe, resolveTestChrome } = await import('../server/lib/browserSuiteGate.js');
   const chromePath = resolveTestChrome(env);
   const ffmpegPath = await findFfmpeg();
   if (!chromePath || !ffmpegPath) throw Error('Fidelity Chrome/FFmpeg toolchain unavailable.');

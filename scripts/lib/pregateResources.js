@@ -14,8 +14,7 @@ import { join } from 'node:path';
 import databaseSettings from './databaseSettings.cjs';
 import { parseEnvFile } from './envFile.js';
 import { findFfmpeg } from '../../server/lib/ffmpeg.js';
-import { browserSuiteBlockReason, chromeWithH264 } from '../../server/lib/browserSuiteGate.js';
-import { resolveTestChrome } from './testChrome.js';
+import { browserSuiteBlockReason, chromeWithH264, resolveClientBundler, resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
 
 /** The only database the DB stage may target; `server/lib/db.js` refuses the rest. */
 export const TEST_DATABASE = 'portos_test';
@@ -26,8 +25,6 @@ const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
 
 /** The suite whose guard also needs a Chrome that decodes H.264. */
 const H264_SUITE = 'server/services/musicVideo/documentRender.browser.test.js';
-
-const CLIENT_BUNDLER_PACKAGES = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'];
 
 /**
  * Environment for the DB stages, pinned to `portos_test`.
@@ -104,14 +101,8 @@ export async function probeTestDatabase(stageEnv, { repoRoot }) {
  * decode — and return the guards' own wording when something is missing.
  */
 export async function probeBrowserPrerequisites(files, { repoRoot, env = process.env }) {
-  const chrome = resolveTestChrome(env);
-  let bundler;
-  try {
-    const requireClient = createRequire(join(repoRoot, 'client', 'package.json'));
-    bundler = CLIENT_BUNDLER_PACKAGES.map((name) => requireClient.resolve(name));
-  } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
-  }
+  const chrome = resolveTestChrome(env) ?? undefined;
+  const bundler = resolveClientBundler(repoRoot);
   const prerequisites = {
     Chrome: chrome,
     ffmpeg: await findFfmpeg(),

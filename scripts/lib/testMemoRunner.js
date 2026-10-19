@@ -34,7 +34,7 @@ import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { WORKSPACE_BASE_INPUTS, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
-import { listWorkspaceTests, toRepoPath, toWorkspacePath } from './workspaceTests.js';
+import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
@@ -43,7 +43,7 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
  * The runner's selection and memo verdicts for one workspace.
  *
  * @param {object} options
- * @param {'server'|'client'} options.scope
+ * @param {'server'|'client'|'db'} options.scope
  * @param {'full'|'files'|'related'} options.mode
  * @param {string[]} options.repoFiles planner-selected test files (repo-relative)
  * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
@@ -54,7 +54,7 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: scope, env, platform, arch, nodeVersion, toolVersion };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
   const analyzer = createTestMemoAnalyzer(options);
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope]);
   const analyze = (test, recorded) => analyzer.analyzeTest(test, { baseClosure, recorded });
@@ -126,7 +126,7 @@ export function vitestShardRange(count, index, total) {
  */
 export function vitestShardHashInput(rel, { repoRoot, scope, path = nodePath }) {
   const slash = (value) => value.replace(/\\/g, '/');
-  const root = path.resolve(repoRoot, scope);
+  const root = path.resolve(repoRoot, workspaceOf(scope));
   return slash(path.resolve(repoRoot, ...rel.split('/'))).slice(root.length);
 }
 
@@ -302,11 +302,11 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
 
 /**
  * Vitest writes the depfile under its config-hashed cache directory
- * (`<workspace>/.cache/vitest/vitest/<hash>/dependencies.json`); the newest
+ * (`<workspace>/.cache/vitest[-db]/vitest/<hash>/dependencies.json`); the newest
  * one is this run's. Null when none exists.
  */
 export function findVitestDependenciesFile(repoRoot, scope) {
-  const root = join(repoRoot, scope, '.cache', 'vitest');
+  const root = join(repoRoot, workspaceOf(scope), TEST_SCOPES[scope]?.cacheDir ?? '.cache/vitest');
   let newest = null;
   const walk = (dir, depth) => {
     let entries;

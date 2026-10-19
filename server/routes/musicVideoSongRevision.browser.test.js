@@ -5,21 +5,17 @@ import { Server } from 'socket.io';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { browserSuiteCanRun, resolveTestChrome } from '../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../lib/browserSuiteGate.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = resolveTestChrome();
 const client = resolve(import.meta.dirname, '../../client');
-const requireClient = createRequire(join(client, 'package.json'));
-let bundler;
-try { bundler = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map(name => requireClient.resolve(name)); }
-catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
+const bundler = resolveClientBundler(resolve(client, '..'));
 const canRun = browserSuiteCanRun('song revision browser suite', { Chrome: chrome, 'client workspace dependencies': bundler }, { onUnavailable: cleanupTempDataRoots });
 // Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
 let browser, artifacts, proc, server, io, songs, musicVideoEvents;
