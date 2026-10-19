@@ -19,6 +19,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
+import MediaBatchImport from '../components/media/MediaBatchImport';
 import MediaLightbox from '../components/media/MediaLightbox';
 import MoodBoardGeneratePanel from '../components/moodBoard/MoodBoardGeneratePanel';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
@@ -307,7 +308,7 @@ function MoodBoardEditor({ id }) {
     if (!mountedRef.current) return;
     setAdding(false);
     if (!item) { toast.error('Failed to add item'); return; }
-    setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
+    setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []).filter(existing => existing.id !== item.id), item] } : prev));
     resetAddForm();
   };
 
@@ -321,7 +322,7 @@ function MoodBoardEditor({ id }) {
     const item = await addMoodBoardItem(id, payload, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     if (!item) { toast.error('Failed to add item'); return; }
-    setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
+    setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []).filter(existing => existing.id !== item.id), item] } : prev));
   };
 
   const handlePickGalleryImage = (picked) => {
@@ -597,6 +598,14 @@ function MoodBoardEditor({ id }) {
       <div className="flex items-center gap-2 mb-3">
         <Plus className="w-4 h-4 text-port-accent" aria-hidden="true" />
         <h2 className="text-sm font-medium text-white">Add item</h2>
+      </div>
+      <div className="mb-3">
+        <MediaBatchImport moodBoardId={id} onImported={(_media, _collection, item) => {
+          setBoard(previous => previous ? {
+            ...previous,
+            items: [...(previous.items || []).filter(existing => existing.id !== item.id), item],
+          } : previous);
+        }} />
       </div>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {/* The shared TabPills owns the roving tabindex + arrow-key
@@ -1052,7 +1061,7 @@ function MoodBoardEditor({ id }) {
                         defaultValue={displayText}
                         title={displayText}
                         placeholder={hasPrompt ? "Add a prompt…" : "Add a caption…"}
-                        maxLength={2000}
+                        maxLength={isAnalyzed ? 8000 : item.prompt ? 16000 : 2000}
                         onBlur={(e) => {
                           const next = e.target.value.trim();
                           if (next !== displayText) handleUpdateItemText(item, next);

@@ -5,6 +5,9 @@ import { MemoryRouter } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
 
+const mockUploadRequest = vi.fn();
+vi.mock('../services/apiCore.js', async importOriginal => ({ ...await importOriginal(), request: (...args) => mockUploadRequest(...args) }));
+
 const mockGetMoodBoard = vi.fn();
 const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
@@ -53,6 +56,7 @@ vi.mock('../components/ui/Toast', () => ({
 // test is the page's own wiring (open, persist via onResult, stored-analysis
 // children), not the analyzer internals, which have their own suite.
 let analysisDelay = null;
+vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: ({ open, onSelect }) => open ? <button onClick={() => onSelect({ key: 'image:pic.png', previewUrl: '/data/images/pic.png' })}>Choose fixture</button> : null }));
 vi.mock('../components/moodBoard/MoodBoardGeneratePanel', () => ({ default: () => <div data-testid="generate-more-panel" /> }));
 vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
   default: () => <div data-testid="board-style-panel" />,
@@ -620,6 +624,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     expect(screen.getByTestId('item-indicator-prompt')).toHaveTextContent('Prompt');
     const input = screen.getByLabelText('Item prompt');
     expect(input).toHaveValue('explicit prompt text');
+    expect(input).toHaveAttribute('maxlength', '16000');
   });
 
   it('displays only default caption with no indicator when item has not been analyzed or given a prompt', async () => {
@@ -744,4 +749,84 @@ describe('MoodBoardDetail note render', () => {
     expect(await screen.findByText('Render failed: out of memory')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Render' })).toBeEnabled();
   });
+});
+
+
+describe('MoodBoardDetail direct upload', () => {
+  const image = new File(['synthetic image'], 'reference.png', { type: 'image/png' });
+  const video = new File(['synthetic video'], 'motion.mp4', { type: 'video/mp4' });
+  const savedImage = { filename: 'upload-image.png', path: '/data/images/upload-image.png', metadata: { prompt: 'Paper boat' } };
+  const savedVideo = { id: 'upload-video', filename: 'upload-video.mp4', thumbnail: 'upload-video-thumb.jpg', prompt: 'Clouds' };
+  const pick = files => fireEvent.change(screen.getByLabelText('Upload'), { target: { files } });
+
+  it('uploads mixed files once, preserves embedded prompts, and retries a lost pin response without reuploading or duplicating the pin', async () => {
+    const upload = deferred();
+    const pins = new Map();
+    let loseResponse = true;
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockUploadRequest.mockImplementation(async (path, options) => {
+      if (path === '/image-gen/upload') return upload.promise;
+      if (path === '/video-gen/upload') return savedVideo;
+      const payload = JSON.parse(options.body);
+      if (!pins.has(payload.mediaKey)) pins.set(payload.mediaKey, { ...payload, id: `pin-${pins.size}` });
+      if (loseResponse) { loseResponse = false; throw new Error('Response lost'); }
+      return pins.get(payload.mediaKey);
+    });
+    renderPage();
+    await screen.findByLabelText('Upload');
+    expect(screen.getByLabelText('Upload')).toHaveAttribute('multiple');
+    expect(screen.getByRole('button', { name: 'Pick from gallery' })).toBeInTheDocument();
+    pick([image, video]);
+    pick([image, video]);
+    expect(screen.getByLabelText('Upload')).toBeDisabled();
+    expect(mockUploadRequest).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent('queued');
+    await act(async () => upload.resolve(savedImage));
+    await screen.findByText(/mood board assignment failed: Response lost/);
+    await screen.findByText('1 of 2 imported');
+    expect(screen.queryByRole('list', { name: 'Import queue' })).toBeNull();
+    const retry = screen.getByRole('button', { name: 'Retry failed / cancelled' });
+    await act(async () => { fireEvent.click(retry); fireEvent.click(retry); });
+    await screen.findByText('2 of 2 imported');
+    expect(screen.queryByRole('region', { name: 'Imports needing attention' })).toBeNull();
+    expect(mockUploadRequest.mock.calls.filter(([path]) => path.endsWith('/upload'))).toHaveLength(2);
+    expect([...pins.values()]).toEqual([
+      expect.objectContaining({ type: 'image', mediaKey: 'image:upload-image.png', prompt: 'Paper boat' }),
+      expect.objectContaining({ type: 'video', mediaKey: 'video:upload-video.mp4', imageUrl: '/data/video-thumbnails/upload-video-thumb.jpg', prompt: 'Clouds' }),
+    ]);
+    expect(screen.getAllByLabelText('Item prompt')).toHaveLength(2);
+  });
+
+  it('finishes the active upload on its original board and stops queued files after navigation', async () => {
+    const upload = deferred();
+    mockGetMoodBoard.mockImplementation(async id => ({ id, name: `Board ${id}`, items: [] }));
+    mockUploadRequest.mockImplementation(async (path, options) => {
+      if (path === '/image-gen/upload') return upload.promise;
+      return { id: 'pin-old', ...JSON.parse(options.body) };
+    });
+    const view = renderPage();
+    await screen.findByLabelText('Upload');
+    pick([image, video]);
+    currentId = 'b';
+    view.rerender(<MemoryRouter><MoodBoardDetail /></MemoryRouter>);
+    await waitFor(() => expect(boardNameValue()).toBe('Board b'));
+    await act(async () => upload.resolve(savedImage));
+    expect(mockUploadRequest.mock.calls.map(([path]) => path)).toEqual(['/image-gen/upload', '/mood-boards/a/items']);
+    expect(screen.queryByLabelText('Item prompt')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Import queue' })).toBeNull();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+});
+
+
+it('keeps one visible item when the gallery returns an already pinned asset', async () => {
+  const item = { id: 'existing-pin', type: 'image', mediaKey: 'image:pic.png', imageUrl: '/data/images/pic.png', caption: 'Legacy gallery caption' };
+  mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [item] });
+  mockAddMoodBoardItem.mockResolvedValue(item);
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'Pick from gallery' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
+  expect(screen.getAllByRole('button', { name: 'Preview image' })).toHaveLength(1);
+  expect(screen.getByLabelText('Item prompt')).toHaveAttribute('maxlength', '2000');
 });

@@ -125,7 +125,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
     // The add endpoint returns the new item, not the board — merge it into the
     // board's items locally so the checkmark flips without a refetch.
     updateBoards((prev) => (prev || []).map((b) => (
-      b.id === board.id ? { ...b, items: [...(Array.isArray(b.items) ? b.items : []), created] } : b
+      b.id === board.id ? { ...b, items: [...(Array.isArray(b.items) ? b.items : []).filter(existing => existing.id !== created.id), created] } : b
     )));
     toast.success(`Pinned to ${board.name}`);
   }, [pinKey, pinPayload]);
@@ -156,7 +156,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
       return null;
     });
     const withItem = pinnedItem
-      ? { ...created, items: [...(Array.isArray(created.items) ? created.items : []), pinnedItem] }
+      ? { ...created, items: [...(Array.isArray(created.items) ? created.items : []).filter(existing => existing.id !== pinnedItem.id), pinnedItem] }
       : created;
     addToCollectionsState((prev) => ([...(prev || []), withItem]));
     if (pinError) {
