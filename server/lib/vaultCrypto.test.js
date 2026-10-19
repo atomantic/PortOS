@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -212,6 +212,21 @@ describe('ensureVaultKey', () => {
     delete process.env.PRIVACY_VAULT_KEY;
     expect(await ensureVaultKey({ envPath })).toEqual({ generated: false });
     expect(process.env.PRIVACY_VAULT_KEY).toBe(adopted);
+  });
+
+  // An unreadable .env is not proof that no key exists: generating here used to
+  // strip the live key line and orphan every row encrypted under it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to generate a key when .env exists but cannot be read', async () => {
+    const original = `OTHER_VAR=1\nPRIVACY_VAULT_KEY=${HEX_KEY}\n`;
+    writeFileSync(envPath, original);
+    chmodSync(envPath, 0o000);
+    try {
+      await expect(ensureVaultKey({ envPath })).rejects.toThrow(/could not be read/);
+    } finally {
+      chmodSync(envPath, 0o600);
+    }
+    expect(readFileSync(envPath, 'utf8')).toBe(original);
+    expect(process.env.PRIVACY_VAULT_KEY).toBeUndefined();
   });
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));

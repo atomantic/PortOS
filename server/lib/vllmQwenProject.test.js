@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -77,6 +77,19 @@ describe('resolveVllmProjectDir', () => {
     // The line it was appended after had no trailing newline — splicing onto it
     // would have corrupted both settings.
     expect(contents).toContain('PGPASSWORD=portos\n');
+  });
+
+  // Only a missing .env is an empty start; rewriting after a failed read used to
+  // replace the whole file with the one recorded line.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to rewrite a .env it cannot read', async () => {
+    writeFileSync(envPath(), 'PGPASSWORD=portos\n');
+    chmodSync(envPath(), 0o000);
+    try {
+      await expect(recordVllmProjectDir('/srv/first', envPath())).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      chmodSync(envPath(), 0o600);
+    }
+    expect(readFileSync(envPath(), 'utf8')).toBe('PGPASSWORD=portos\n');
   });
 
   it('reports nothing settled until something answers', async () => {

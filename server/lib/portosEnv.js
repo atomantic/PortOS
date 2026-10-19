@@ -143,8 +143,11 @@ export async function upsertPortosEnvLine(key, value, envPath) {
   let contents = '';
   try {
     contents = readFileSync(path, 'utf8');
-  } catch {
-    // no .env yet
+  } catch (err) {
+    // Only a missing file is an empty start. Any other read failure (EACCES,
+    // EMFILE, EIO) would otherwise rewrite .env as this one line, dropping
+    // PGPASSWORD, PRIVACY_VAULT_KEY and every other recorded value.
+    if (err.code !== 'ENOENT') throw err;
   }
   const next = upsertEnvLine(contents, key, value);
   await atomicWrite(path, next);

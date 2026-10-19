@@ -20,7 +20,7 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { readFileSync } from 'fs';
 import { chmod } from 'fs/promises';
-import { tryReadFile, atomicWrite } from './fileUtils.js';
+import { tryReadFileStrict, atomicWrite } from './fileUtils.js';
 import { createSingleFlight } from './singleFlight.js';
 import { PORTOS_ENV_PATH } from './portosEnv.js';
 
@@ -44,15 +44,20 @@ let envPathOverride = null;
 export function __setVaultEnvPathForTests(path) { envPathOverride = path; }
 const resolveEnvPath = () => envPathOverride ?? DEFAULT_ENV_PATH;
 
-/** First VALID key among all PRIVACY_VAULT_KEY= lines in the .env file. */
-function readKeyFromEnvFile(envPath) {
-  let content = '';
-  try { content = readFileSync(envPath, 'utf8'); } catch { return null; }
+/** First VALID key among all PRIVACY_VAULT_KEY= lines in `.env` content. */
+function findKeyInEnvContent(content) {
   for (const match of content.matchAll(/^PRIVACY_VAULT_KEY=(.*)$/gm)) {
     const raw = match[1].trim();
     if (parseKey(raw)) return raw;
   }
   return null;
+}
+
+/** Read-path lookup: an unreadable .env reads as "no key" (decrypt then refuses). */
+function readKeyFromEnvFile(envPath) {
+  let content = '';
+  try { content = readFileSync(envPath, 'utf8'); } catch { return null; }
+  return findKeyInEnvContent(content);
 }
 
 /** Parse a hex- or base64-encoded 32-byte key; null when absent/invalid. */
@@ -118,15 +123,19 @@ async function provisionVaultKey(envPath) {
   // (or a fresh call after the slot cleared) must not rotate an existing key.
   if (parseKey(process.env.PRIVACY_VAULT_KEY)) return { generated: false };
 
-  const fromFile = readKeyFromEnvFile(envPath);
+  // One strict read decides both "is there a key" and the content to rewrite.
+  // Only a missing .env proves there is no key: generating after any other read
+  // failure would strip the live key line below and orphan every encrypted row.
+  const { ok, value: existing } = await tryReadFileStrict(envPath);
+  if (!ok) throw new Error('Cannot provision PRIVACY_VAULT_KEY: .env exists but could not be read');
+  const content = existing ?? '';
+  const fromFile = findKeyInEnvContent(content);
   if (fromFile) {
     process.env.PRIVACY_VAULT_KEY = fromFile;
     return { generated: false };
   }
 
   const key = randomBytes(KEY_BYTES).toString('hex');
-  const existing = await tryReadFile(envPath);
-  const content = existing ?? '';
   // Drop any invalid PRIVACY_VAULT_KEY lines (none are valid — checked above).
   const cleaned = content.replace(/^PRIVACY_VAULT_KEY=.*(\r?\n|$)/gm, '');
   const separator = cleaned && !cleaned.endsWith('\n') ? '\n' : '';
