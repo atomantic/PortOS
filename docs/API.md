@@ -606,6 +606,7 @@ leaves finished ones alone. Agents outside PortOS call these with `node scripts/
 | GET | `/music-video/:id/publish/promotion-plan` | A music video's open promotion steps |
 | POST | `/music-video/:id/publish/promotion-plan` | Plan its promotion with one provider call `{ goal?, audience?, days?, providerId?, model? }` and schedule the steps |
 | POST | `/music-video/:id/publish/:target/preview` | What Fill draft would post for one platform (same body as prepare) → `{ ready, parts }` or `{ ready: false, problem }` |
+| POST | `/music-video/publish/cover-fonts` | Upload a cover lettering font. Host-control gated: the file is installed into a host-wide font folder (macOS `Library/Fonts/PortOS`), so a remote caller on a password-free install is refused; local connections, operator sessions and `PORTOS_API_TOKEN` agents are allowed. Listing and serving (`GET`) and delete stay open |
 
 ### Notifications
 

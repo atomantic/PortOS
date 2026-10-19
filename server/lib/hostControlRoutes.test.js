@@ -586,6 +586,22 @@ describe('Pipeline authoring remainder policy (#10907)', () => {
   });
 });
 
+describe('Music Video cover font install policy (#12493)', () => {
+  it('gates the host-wide font install and keeps cover font list, file and delete open', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    const upload = 'POST /api/music-video/publish/cover-fonts';
+    expect(mounted.has(upload)).toBe(true);
+    expect(isHostControlRoute('POST', '/api/music-video/publish/cover-fonts')).toBe(true);
+    for (const [method, path] of [
+      ['GET', '/api/music-video/publish/cover-fonts'],
+      ['GET', '/api/music-video/publish/cover-fonts/:fontId/file'],
+      ['DELETE', '/api/music-video/publish/cover-fonts/:fontId'],
+    ]) {
+      expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+    }
+  });
+});
+
 describe('Music Video agent workflow policy (#9869)', () => {
   it('gates mounted agent workflows and keeps record, cancellation and contained rendering contracts', () => {
     const protectedRoutes = [

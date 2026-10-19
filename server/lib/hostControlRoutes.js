@@ -836,6 +836,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/publish-kit/cover-art/design',
   'POST /api/music-video/:id/publish-kit/cover-art/generate',
   'POST /api/music-video/:id/publish/promotion-plan',
+  // Cover font upload copies the file into a host-wide font folder that every
+  // application loads (macOS Library/Fonts/PortOS), so it is host control, not
+  // a data upload. Listing, serving and deleting cover fonts stay open.
+  'POST /api/music-video/publish/cover-fonts',
   'POST /api/meatspace/post/score-llm',
   'POST /api/meatspace/post/rhetoric/evaluate',
   'POST /api/meatspace/post/drill-cache/fill',
