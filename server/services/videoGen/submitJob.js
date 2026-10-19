@@ -214,7 +214,9 @@ const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
         ? { id: 'fal-video', supportedModes: ['text', 'image'] }
         : backend === VIDEO_GEN_MODE.REACTOR
           ? { id: 'reactor-video', supportedModes: ['text', 'image'] }
-          : prepared.effectiveModel;
+          : backend === VIDEO_GEN_MODE.RUNWAY
+            ? { id: 'runway-video', supportedModes: ['text', 'image'] }
+            : prepared.effectiveModel;
     const compiled = await compileFableLoomVisualRequest({
       tag: body.fableLoom,
       kind: 'video',

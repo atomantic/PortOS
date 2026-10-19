@@ -107,7 +107,7 @@ import {
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
-  runwayVideoLengths, runwayVideoResolutions,
+  runwayModelTakesText, runwayVideoLengths, runwayVideoResolutions,
 } from '../lib/runwayVideoModels.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
@@ -1170,7 +1170,7 @@ export default function VideoGen() {
                   : id === 'reactor'
                     ? 'Render via the reactor.inc fast-h3 API. Counts against your reactor.inc balance.'
                     : id === 'runway'
-                      ? 'Animate a start frame via the Runway API. Counts against your Runway credits.'
+                      ? 'Render from text or animate a start frame via the Runway API. Counts against your Runway credits.'
                       : 'Render on this machine with the local runtimes.'}
             >
               {label}
@@ -1185,8 +1185,7 @@ export default function VideoGen() {
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {(isRunway ? MODES.filter((m) => m.id === 'image')
-          : rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
+        {(rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -1668,7 +1667,7 @@ export default function VideoGen() {
                   onChange={(e) => setRunwayModelId(e.target.value)}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 >
-                  {RUNWAY_VIDEO_MODELS.map((m) => (
+                  {RUNWAY_VIDEO_MODELS.filter((m) => mode !== 'text' || runwayModelTakesText(m)).map((m) => (
                     <option key={m.id} value={m.id}>
                       {`${m.label} · ${describeRunwayVideoRate(m.id)}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
                     </option>
@@ -1709,7 +1708,7 @@ export default function VideoGen() {
                 </FormField>
               )}
               <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                Animates your start frame on the Runway API. Counts against your Runway credits
+                {mode === 'image' ? 'Animates your start frame' : 'Renders from your prompt'} on the Runway API. Counts against your Runway credits
                 {(() => {
                   const estimate = estimateRunwayVideoCostUsd({
                     modelId: runwayModel?.id, seconds: runwayDuration === '' ? null : Number(runwayDuration), resolution: runwayResolution,

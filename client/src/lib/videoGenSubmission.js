@@ -115,8 +115,8 @@ function falVideoSubmission({
   };
 }
 
-// Runway renders image-to-video only: a start frame is required (the form
-// offers Image mode alone). The negative prompt is sent; the server passes it
+// Runway renders from a start frame (Image mode) or, on a model with a
+// text-to-video rule, from the prompt alone (Text mode). The negative prompt is sent; the server passes it
 // natively or as an "Avoid:" line, listed as a chip in the sent-prompt view.
 function runwayVideoSubmission({
   composed, runwayModelId, runwayDuration, runwayResolution,

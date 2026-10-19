@@ -24,6 +24,7 @@ import {
   resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
 import { useVideoGenValidation } from './useVideoGenValidation.js';
@@ -659,8 +660,13 @@ export function useVideoGenForm({
   // (`reactorEnabled`) — same short-circuit shape as fal, plus native
   // clip-to-clip chaining via continue_from_clip_id.
   const isReactor = hostedLane === 'reactor';
-  // Runway is usability-gated the same way, and renders image-to-video only.
+  // Runway is usability-gated the same way; text mode is offered for the models that render from a prompt alone.
   const isRunway = hostedLane === 'runway';
+  // A model that needs a start frame cannot stay picked in Text mode: fall back to the catalog default (which renders from text).
+  const runwayTextBlocked = isRunway && mode === 'text' && !runwayModelTakesText(getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
+  useEffect(() => {
+    if (runwayTextBlocked) setRunwayModelId('');
+  }, [runwayTextBlocked, setRunwayModelId]);
   const referenceModeApplies = mode === 'image' && !hostedLane;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
@@ -945,9 +951,7 @@ export function useVideoGenForm({
   // clip survives the switch and reappears if the user flips back.
   const handleBackendChange = (id) => {
     setBackend(id);
-    if (id === 'runway' && mode !== 'image') {
-      handleModeChange('image');
-    } else if ((id === 'grok' || id === 'fal' || id === 'reactor') && mode !== 'text' && mode !== 'image') {
+    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1248,9 +1252,9 @@ export function useVideoGenForm({
       if (p.duration) setFalDuration(p.duration);
       if (p.modelId) setFalModelId(p.modelId);
     } else if (p.mode === 'runway') {
-      // Runway job: same discriminator shape as fal above; image-to-video only.
+      // Runway job: same discriminator shape as fal above.
       setBackend('runway');
-      setMode('image');
+      setMode(p.videoMode === 'text' ? 'text' : 'image');
       if (p.modelId) {
         runwayModelPickRef.current = p.modelId;
         setRunwayModelId(p.modelId);

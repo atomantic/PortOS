@@ -13,6 +13,7 @@ export {
   estimateRunwayVideoCostUsd,
   getRunwayVideoModel,
   runwayVideoClipQuote,
+  runwayModelTakesText,
   runwayVideoLengths,
   runwayVideoResolutions,
 } from '../../../server/lib/runwayVideoModels.js';

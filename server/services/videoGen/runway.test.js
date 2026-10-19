@@ -103,6 +103,24 @@ describe('videoGen/runway — generateVideo', () => {
     expect(entry.promptAdditions).toEqual([expect.objectContaining({ id: 'avoid', text: 'text' })]);
   });
 
+  it('renders Gen-4.5 from text alone: posts /v1/text_to_video and records a text-mode take', async () => {
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {
+      calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null });
+      if (url === 'https://api.dev.runwayml.com/v1/text_to_video') return jsonResponse({ id: 'task-1' });
+      if (url === TASKS) return jsonResponse({ id: 'task-1', status: 'SUCCEEDED', output: ['https://cdn.example.com/out.mp4'] });
+      if (url === 'https://cdn.example.com/out.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const job = await runway.generateVideo({ apiKey: 'key_test', prompt: 'a fox at dawn', duration: 5, width: 720, height: 1280 });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(calls.find((c) => c.method === 'POST').body).toEqual({
+      model: 'gen4.5', promptText: 'a fox at dawn', duration: 5, ratio: '720:1280',
+    });
+    const [entry] = await loadHistory();
+    expect(entry).toMatchObject({ modelId: 'runway:gen4.5', mode: 'text', aspectRatio: '720:1280', estimatedCostUsd: 0.6 });
+  });
+
   it('fails the job with Runway\'s reason when the task FAILS', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {
       if (opts.method === 'POST') return jsonResponse({ id: 'task-1' });
@@ -114,7 +132,7 @@ describe('videoGen/runway — generateVideo', () => {
   });
 
   it.each([
-    ['no start frame', { prompt: 'a fox' }, /start frame/],
+    ['no start frame on an image-only model', { modelId: 'gen4_turbo', prompt: 'a fox' }, /start frame/],
     ['an over-cap prompt', { prompt: 'x'.repeat(1001), sourceImagePath: 'unused.png' }, /1,001 characters/],
     ['source audio', { prompt: 'a fox', sourceImagePath: 'unused.png', audioFilePath: 'song.wav' }, /cutaways only/],
   ])('refuses %s before reading media or submitting', async (_label, params, message) => {
