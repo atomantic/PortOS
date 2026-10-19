@@ -1,7 +1,8 @@
 import { noteReadinessChanged } from './readinessSignal.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict, unlinkGuarded, unreadableStoreError } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
@@ -28,15 +29,37 @@ async function ensureGenomeDir() {
   await ensureDir(GENOME_DIR);
 }
 
-async function loadMeta() {
+// Deep clone: a shallow spread would hand every caller DEFAULT_META.savedMarkers.
+const freshMeta = () => structuredClone(DEFAULT_META);
+
+const parseMeta = (raw) => {
+  const parsed = safeJSONParse(raw, null, { allowArray: false });
+  return isPlainObject(parsed) ? parsed : null;
+};
+
+// Only ENOENT is a genuinely absent file. An unreadable or malformed one is
+// served as defaults for display (`forWrite` false), but a mutation loads with
+// `forWrite` and refuses, and saveMeta refuses to persist over it, so saved
+// markers and the upload flag are never replaced by a failed read.
+async function loadMeta({ forWrite = false } = {}) {
   await ensureGenomeDir();
-  const raw = await tryReadFile(META_FILE);
-  if (!raw) return { ...DEFAULT_META };
-  return safeJSONParse(raw, { ...DEFAULT_META });
+  const { ok, value: raw } = await tryReadFileStrict(META_FILE);
+  if (ok && raw === null) return freshMeta();
+  const parsed = ok ? parseMeta(raw) : null;
+  if (parsed) return parsed;
+  console.error(`❌ Genome metadata is unreadable or malformed: ${META_FILE}`);
+  if (forWrite) throw unreadableStoreError(META_FILE);
+  return freshMeta();
+}
+
+async function assertMetaWritable() {
+  const { ok, value } = await tryReadFileStrict(META_FILE);
+  if (!ok || (value !== null && !parseMeta(value))) throw unreadableStoreError(META_FILE);
 }
 
 async function saveMeta(meta) {
   await ensureGenomeDir();
+  await assertMetaWritable();
   await atomicWrite(META_FILE, meta);
   noteReadinessChanged();
 }
@@ -118,6 +141,9 @@ export async function uploadGenome(content, filename) {
 }
 
 async function storeGenome(content, filename, index, build) {
+  // Refuse before replacing the raw file: the metadata that names it cannot be saved.
+  await assertMetaWritable();
+
   // Save raw file
   await atomicWrite(RAW_FILE, content);
 
@@ -126,7 +152,7 @@ async function storeGenome(content, filename, index, build) {
   indexBuiltAt = Date.now();
 
   // Save metadata
-  const meta = await loadMeta();
+  const meta = await loadMeta({ forWrite: true });
   meta.uploaded = true;
   meta.uploadedAt = new Date().toISOString();
   meta.filename = filename;
@@ -182,7 +208,7 @@ export async function scanCuratedMarkers() {
     return { error: 'No genome data uploaded. Upload a genome file first.' };
   }
 
-  const meta = await loadMeta();
+  const meta = await loadMeta({ forWrite: true });
   const results = [];
 
   for (const marker of CURATED_MARKERS) {
@@ -296,7 +322,7 @@ export async function searchSNP(rsid) {
  * Save a custom marker to the genome metadata.
  */
 export async function saveMarker(data) {
-  const meta = await loadMeta();
+  const meta = await loadMeta({ forWrite: true });
   const id = randomUUID();
 
   // Look up genotype from raw data if not provided
@@ -343,7 +369,7 @@ export async function saveMarker(data) {
  * Update notes on a saved marker.
  */
 export async function updateMarkerNotes(id, notes) {
-  const meta = await loadMeta();
+  const meta = await loadMeta({ forWrite: true });
   if (!meta.savedMarkers[id]) {
     return { error: 'Marker not found' };
   }
@@ -359,7 +385,7 @@ export async function updateMarkerNotes(id, notes) {
  * Delete a saved marker.
  */
 export async function deleteMarker(id) {
-  const meta = await loadMeta();
+  const meta = await loadMeta({ forWrite: true });
   if (!meta.savedMarkers[id]) {
     return { error: 'Marker not found' };
   }

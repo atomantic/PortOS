@@ -42,6 +42,8 @@ vi.mock('../lib/digitalTwinValidation.js', async importOriginal => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFileStrict: vi.fn(),
+  unreadableStoreError: (filePath) => new Error(`Unreadable JSON file: ${filePath}`),
   ensureDir: vi.fn(),
   atomicWrite: vi.fn(),
   safeJSONParse: vi.fn((str, defaultValue) => {
@@ -93,7 +95,7 @@ import { readFile, writeFile, unlink, readdir, mkdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { getProviderById, getActiveProvider } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 
 import {
@@ -214,6 +216,16 @@ describe('digital-twin.js', () => {
 
     // Default: directory exists, meta file exists
     existsSync.mockReturnValue(true);
+    // A previous test's readFile stub must not leak in as the "on-disk" meta.json:
+    // saveMeta now reads the file back before replacing it.
+    readFile.mockReset();
+    // Strict reads honour the same fs mocks the suite already drives: a missing
+    // path (existsSync false) is ENOENT, anything else is the mocked readFile.
+    tryReadFileStrict.mockImplementation(async (filePath) => {
+      if (!existsSync(filePath)) return { ok: true, value: null };
+      const value = await readFile(filePath, 'utf8');
+      return { ok: true, value: value ?? null };
+    });
     mkdir.mockResolvedValue(undefined);
     writeFile.mockResolvedValue(undefined);
     atomicWrite.mockResolvedValue(undefined);
