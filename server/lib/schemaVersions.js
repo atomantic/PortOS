@@ -478,7 +478,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // author brief. A <=v8 peer would strip it during an unrelated whole-record
   // edit, so newer transfers are gated and legacy omissions restore the local
   // value through `preserveLegacySeriesDesign`.
-  fableLoom: 9,
+  // v10 = `renderSettings.imageMode`/`videoMode` may name the fal image and
+  // fal/Runway video backends. A <=v9 peer's `sanitizeFableLoomRenderSettings`
+  // nulls an unknown mode on receive, and its next edit would LWW that lost pin
+  // back onto the newer peer. Backend values in `IMAGE_GEN_MODES` /
+  // `VIDEO_GEN_MODES` are pinned in schemaVersions.test.js to move with this.
+  fableLoom: 10,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -734,7 +739,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would reconstruct the brief without it and could push that downgrade back
   // through the brief-scoped LWW merge. Per-run recipes remain local because
   // syncWire already strips `runs[]`.
-  creativeCommissions: 4,
+  // v5 = `generation.imageMode`/`videoMode` may pin the fal image and fal/Runway
+  // video backends. A <=v4 peer's `coerceGenerationValue` turns an unknown enum
+  // value into `auto`, and its next edit would LWW that un-pinned downgrade back
+  // onto the newer peer. Any new `IMAGE_GEN_MODES`/`VIDEO_GEN_MODES` value needs
+  // another bump (guarded in schemaVersions.test.js).
+  creativeCommissions: 5,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

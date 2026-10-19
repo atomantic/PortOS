@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -55,11 +56,28 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(9);
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(10);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(4);
+    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(5);
+  });
+
+  it('moves the render-backend alphabets and their sync versions together', () => {
+    // Older receivers coerce an unknown imageMode/videoMode to auto/null, then
+    // LWW the lost pin back. Adding a backend means: update this snapshot AND
+    // bump creativeCommissions + fableLoom (and their pins above).
+    expect({
+      image: [...IMAGE_GEN_MODES],
+      video: [...VIDEO_GEN_MODES],
+      creativeCommissions: PORTOS_SCHEMA_VERSIONS.creativeCommissions,
+      fableLoom: PORTOS_SCHEMA_VERSIONS.fableLoom,
+    }).toEqual({
+      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal'],
+      video: ['local', 'grok', 'fal', 'reactor', 'runway'],
+      creativeCommissions: 5,
+      fableLoom: 10,
+    });
   });
 });
 
