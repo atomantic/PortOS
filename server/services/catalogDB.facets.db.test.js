@@ -245,4 +245,31 @@ describe.skipIf(!runDb)('catalogDB.findIngredientsByName', () => {
     expect(found.map((r) => r.id)).not.toContain(otherType.id);
     expect(await catalogDB.findIngredientsByName('character', ['  '])).toEqual([]);
   });
+
+  it('reports which ingredients exist locally and which already carry a live or tombstoned ref to a record (#12466)', async () => {
+    const make = async (name) => {
+      const row = await catalogDB.createIngredient({ type: 'character', name: `${name} ${nonce}` });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const live = await make('Ownership live');
+    const tombstoned = await make('Ownership tombstoned');
+    const foreign = await make('Ownership foreign');
+    const absentId = `absent-${nonce}`;
+    const insertRef = (ingredientId, refId, deleted = false) => query(
+      `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role, deleted, deleted_at)
+       VALUES ($1, 'universe', $2, 'cast', $3, CASE WHEN $3 THEN NOW() END)`,
+      [ingredientId, refId, deleted],
+    );
+    await insertRef(live.id, UNI_ID);
+    await insertRef(tombstoned.id, UNI_ID, true);
+    await insertRef(foreign.id, DEAD_UNI_ID);
+
+    const { existing, linked } = await catalogDB.getLocalIngredientRefOwnership(
+      [live.id, tombstoned.id, foreign.id, absentId], 'universe', UNI_ID,
+    );
+    expect([...existing].sort()).toEqual([live.id, tombstoned.id, foreign.id].sort());
+    expect([...linked].sort()).toEqual([live.id, tombstoned.id].sort());
+    expect((await catalogDB.getLocalIngredientRefOwnership([], 'universe', UNI_ID)).existing.size).toBe(0);
+  });
 });

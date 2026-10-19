@@ -50,6 +50,11 @@ import {
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
+async function isPostgresBackend() {
+  const { getBackendName } = await import('../memoryBackend.js');
+  return getBackendName() === 'postgres';
+}
+
 /**
  * Apply a received catalog bundle on the receiver. Reuses
  * `catalogSync.applyRemoteChanges` so the bundle goes through the exact same
@@ -60,8 +65,7 @@ import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
  * the backend here so a stray call on a non-Postgres install is a clean no-op.
  */
 async function applyCatalogBundle(catalogBundle, portosMeta) {
-  const { getBackendName } = await import('../memoryBackend.js');
-  if (getBackendName() !== 'postgres') return;
+  if (!(await isPostgresBackend())) return;
   const { applyRemoteChanges } = await import('../catalogSync.js');
   await applyRemoteChanges({
     ingredients: Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [],
@@ -111,37 +115,57 @@ async function bindLinkedCollection({ kind, record, linkedCollection, sourceInst
   return linkedCollection;
 }
 
-function bindCatalogBundle({ kind, record, catalogBundle, sourceInstanceId }) {
+async function bindCatalogBundle({ kind, record, catalogBundle, sourceInstanceId }) {
   if (!isPlainObject(catalogBundle)) return null;
   const rawRefs = Array.isArray(catalogBundle.refs) ? catalogBundle.refs : [];
   const rawIngredients = Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [];
-  const refs = rawRefs.filter((ref) => isPlainObject(ref) && ref.refKind === kind && ref.refId === record.id);
-  const named = new Set(refs.map((ref) => ref.ingredientId));
-  const ingredients = rawIngredients.filter((ing) => isPlainObject(ing) && named.has(ing.id));
+  let refs = rawRefs.filter((ref) => isPlainObject(ref) && ref.refKind === kind && ref.refId === record.id);
+  let ingredients = rawIngredients.filter((ing) => isPlainObject(ing) && refs.some((ref) => ref.ingredientId === ing.id));
   const dropped = (rawRefs.length - refs.length) + (rawIngredients.length - ingredients.length);
   if (dropped > 0) {
     console.warn(`⚠️ peerSync: dropped ${dropped} catalog bundle rows from ${sourceInstanceId} not bound to ${kind} ${record.id}`);
   }
+  // A ref naming the pushed record proves nothing about an ingredient another
+  // record already owns: the sender writes both. Only an ingredient with no
+  // local row, or one this record already refs locally, may merge (#12466).
+  // The ref is dropped with it, or the forged link would authorize the
+  // overwrite on the next push. Postgres-only, like the apply itself.
+  const named = [...new Set(refs.map((ref) => ref.ingredientId))];
+  if (named.length > 0 && (await isPostgresBackend())) {
+    let ownership;
+    try {
+      const { getLocalIngredientRefOwnership } = await import('../catalogDB.js');
+      ownership = await getLocalIngredientRefOwnership(named, kind, record.id);
+    } catch (err) {
+      console.warn(`⚠️ peerSync: skipped catalog bundle from ${sourceInstanceId} — local ingredient lookup failed: ${err.message}`);
+      return null;
+    }
+    const foreign = new Set(named.filter((id) => ownership.existing.has(id) && !ownership.linked.has(id)));
+    if (foreign.size > 0) {
+      console.warn(`⚠️ peerSync: skipped ${foreign.size} catalog ingredients from ${sourceInstanceId} owned by another record`);
+      refs = refs.filter((ref) => !foreign.has(ref.ingredientId));
+      ingredients = ingredients.filter((ing) => !foreign.has(ing.id));
+    }
+  }
   return refs.length === 0 && ingredients.length === 0 ? null : { ingredients, refs };
 }
 
-// A project may bundle only the track it links, and may not replace a local
-// track the local copy of this project does not already link.
+// A project bundles only the track it links, and only when no local track has
+// that id. Track records carry no sender provenance, so a track that already
+// exists locally is never overwritten here — not even one the local project
+// links, since a prior push can set that link (#12466). Later edits arrive
+// through the Tracks category.
 async function bindLinkedTrack({ record, linkedTrack, sourceInstanceId, onLookupError }) {
   if (!isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return null;
   let localTrack;
-  let localProject;
   try {
-    [localTrack, localProject] = await Promise.all([
-      loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id)),
-      loadOrNotFound(() => RECORD_KINDS.musicVideoProject.load(record.id)),
-    ]);
+    localTrack = await loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id));
   } catch (err) {
     onLookupError(err);
     return null;
   }
-  if (localTrack && localProject?.trackId !== linkedTrack.id) {
-    console.warn(`⚠️ peerSync: skipped linkedTrack from ${sourceInstanceId} — local track is not linked by local project ${record.id}`);
+  if (localTrack) {
+    console.warn(`⚠️ peerSync: skipped linkedTrack from ${sourceInstanceId} — a local track with that id already exists`);
     return null;
   }
   return linkedTrack;
@@ -335,7 +359,7 @@ export async function applyIncomingPush(payload, authorization) {
     ? await bindLinkedCollection({ kind, record, linkedCollection: pushedCollection, sourceInstanceId })
     : null;
   const catalogBundle = bundlesMergeable
-    ? bindCatalogBundle({ kind, record, catalogBundle: pushedCatalog, sourceInstanceId })
+    ? await bindCatalogBundle({ kind, record, catalogBundle: pushedCatalog, sourceInstanceId })
     : null;
   // Only a music-video push has a linked track to bundle.
   const linkedTrack = bundlesMergeable && kind === 'musicVideoProject'
