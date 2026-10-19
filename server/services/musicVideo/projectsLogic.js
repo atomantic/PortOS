@@ -140,6 +140,10 @@ export function buildProjectRecord(input, { id, now }) {
       falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
       falMusicModelId: videoSettings.falMusicModelId ?? null,
       falMusicResolution: videoSettings.falMusicResolution ?? null,
+      falLipSyncTranscription: videoSettings.falLipSyncTranscription ?? null,
+      runwayModelId: videoSettings.runwayModelId ?? null,
+      runwayDuration: videoSettings.runwayDuration ?? null,
+      runwayResolution: videoSettings.runwayResolution ?? null,
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
@@ -514,6 +518,7 @@ function buildScene(input, { order }) {
     sectionIndex: input.sectionIndex ?? null,
     lyricText: input.lyricText ?? null,
     visualIntent: input.visualIntent ?? null,
+    ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
@@ -535,6 +540,9 @@ function buildScene(input, { order }) {
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
     ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
     cardColor: input.cardColor ?? null,
+    ...(input.textZone ? { textZone: input.textZone } : {}),
+    ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
+    ...(input.lyricSize ? { lyricSize: input.lyricSize } : {}),
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
