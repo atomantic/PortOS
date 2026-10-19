@@ -3,11 +3,8 @@
  *
  * Raw `fetch`, deliberately NOT `@beeper/desktop-api` — the published SDK lags
  * the live API and exposes no `Account.status`, no `loginID`, no `/v1/bridges`;
- * `GET /v1/spec` on the running instance is the authoritative reference (see
- * the API-surface research note, `docs/research/2026-08-31-beeper-api-surface.md`
- * on the `research/beeper` branch — not merged onto `beeper/integration`, so the
- * path is not resolvable from this branch alone). Every other Beeper feature
- * (#30-#37) is built on this module.
+ * `GET /v1/spec` on the running instance is the authoritative reference.
+ * Every other Beeper feature (#30-#37) is built on this module.
  *
  * `server/lib/safeUrlFetch.js` cannot wrap this: it blocks loopback in both
  * postures by design, and Beeper Desktop's whole API IS a loopback service
@@ -223,9 +220,7 @@ export async function resolveBeeperConfig({ baseUrl, token } = {}) {
  * `POST /v1/assets/download` does NOT share this — it answers `200` with an
  * `{ error }` body instead, so this `502` branch never fires for it; that
  * shape is validated separately in `downloadAsset` below. Every other status
- * follows the spec's documented meaning (see the
- * API-surface research note, `docs/research/2026-08-31-beeper-api-surface.md`
- * §7, on the `research/beeper` branch); `code` is never a published enum, so
+ * follows the spec's documented meaning; `code` is never a published enum, so
  * it rides along under `details` for logging only.
  */
 export function mapBeeperResponseError(status, body, { isAssetEndpoint = false, retryEligible = true } = {}) {

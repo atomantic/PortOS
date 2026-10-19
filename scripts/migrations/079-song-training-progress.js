@@ -2,7 +2,7 @@
  * Registration stub for song training progress (#1028 — the capstone of the
  * #1021 song-system umbrella).
  *
- * The song shape (`server/services/songs.js`) gained one OPTIONAL,
+ * The song shape (`server/services/rounds.js`, formerly `songs.js`) gained one OPTIONAL,
  * absent-tolerant field — `progress` (`{ history: { <scope>: [attempt…] } }`),
  * a bounded per-scope rolling accuracy history for the memorize/learn/track
  * training mode. It's additive: a legacy song simply has no `progress` field,

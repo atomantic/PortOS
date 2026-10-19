@@ -45,7 +45,7 @@ function deriveRequestCapabilities({ prompt, screenshots, requestCapabilities })
 //
 // The win32 branch is gated on `instanceof ChildProcess`: stopRun/deleteRun
 // below call this with whatever was registered via registerExternalRun,
-// which can be a node-pty `IPty` TUI session (server/lib/tuiPromptRunner.js,
+// which can be a node-pty `IPty` TUI session (server/services/tuiPromptRunner.js,
 // via the host's registerActiveRun) — it also exposes `.kill()`/`.pid`, but
 // a raw `taskkill` against its pid bypasses node-pty's own Windows teardown
 // (releasing its native ConPTY handle), leaking it. Any non-ChildProcess

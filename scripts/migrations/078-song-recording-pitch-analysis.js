@@ -1,7 +1,7 @@
 /**
  * Registration stub for per-take pitch analysis on song recordings (#1027).
  *
- * The `Recording` shape (`server/services/songs.js`) gained two OPTIONAL,
+ * The `Recording` shape (`server/services/rounds.js`, formerly `songs.js`) gained two OPTIONAL,
  * absent-tolerant fields — `pitchTrack` (a bounded, downsampled tuner trace) and
  * `accuracy` (a color-match summary) — so the tuner history and grading aren't
  * recomputed on every open. Both are additive: a legacy take simply has neither

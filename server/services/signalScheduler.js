@@ -3,7 +3,7 @@
  *
  * Registers an interval job that periodically runs the incremental Signal
  * ingestion (see signalSync.js). Shape shared with the iMessage/Spotify/YouTube
- * schedulers via `createSyncScheduler` (server/lib/createSettingsGatedSyncScheduler.js).
+ * schedulers via `createSyncScheduler` (server/services/createSettingsGatedSyncScheduler.js).
  *
  * OFF by default: the scheduler is only registered when the user has opted in via
  * Settings → Signal (`settings.signal.enabled`). Reading the SQLCipher DB needs

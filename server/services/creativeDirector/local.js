@@ -17,7 +17,7 @@
  *
  * The first PG init runs a one-time, marker-gated import of any legacy
  * data/creative-director-projects.json rows into the table (see
- * scripts/migrateCreativeDirectorToDB.js), so the boot recovery scan — the first
+ * server/scripts/migrateCreativeDirectorToDB.js), so the boot recovery scan — the first
  * caller — sees migrated projects.
  *
  * `trimRuns` is re-exported from projectsLogic.js for the migration + any caller
@@ -46,7 +46,7 @@ const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
   loadDbBackend: () => import('./projectsDB.js'),
   requireDbMessage: 'Creative Director requires PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env; the launcher maps it to MEMORY_BACKEND=file for the unsupported file backend)',
   onDbReady: async () => {
-    const { migrateCreativeDirectorToDB } = await import('../../scripts/migrateCreativeDirectorToDB.js');
+    const { migrateCreativeDirectorToDB } = await import('../../server/scripts/migrateCreativeDirectorToDB.js');
     await migrateCreativeDirectorToDB();
   },
 });
