@@ -127,13 +127,10 @@ const sanitizeRemovedItems = (raw) => {
     if (!item || itemKey(item) !== key) continue;
     entries.push([key, removedAt]);
   }
-  // Bounded like `items`: keep the newest removals, which are the ones a
-  // lagging peer is most likely to still hold an older copy of.
-  if (entries.length > ITEMS_MAX) {
-    entries.sort((a, b) => parseTsMs(b[1]) - parseTsMs(a[1]));
-    entries.length = ITEMS_MAX;
-  }
-  // Sorted keys keep the wire form and snapshot checksum byte-stable.
+  // Deliberately uncapped: dropping an unacknowledged record would let a stale
+  // copy back in. There is at most one record per distinct key, and tombstone
+  // GC is what bounds them. Sorted keys keep the wire form and snapshot
+  // checksum byte-stable.
   return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
 };
 
