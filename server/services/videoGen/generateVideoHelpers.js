@@ -886,8 +886,8 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
           // a resident-by-default render and on runners that don't report one.
           ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
           // How each LoRA adapter was actually applied (#12262) — at inference
-          // beside the packed weights, fused into float ones, or merged and
-          // re-quantized under block streaming. Absent on adapter-free renders.
+          // beside the packed weights or fused into float ones, resident or
+          // block-streamed (#12327). Absent on adapter-free renders.
           ...(job.loraStrategy ? { loraStrategyApplied: job.loraStrategy } : {}),
         });
         return history;
