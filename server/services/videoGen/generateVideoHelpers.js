@@ -400,14 +400,15 @@ export function formatRuntimeFingerprint(fp) {
 
 // Signal → actionable cause for a render child that died on a signal.
 //
-// Apple Silicon reality drives this map. The dominant real-world render abort is
+// Apple Silicon reality drives this map. A common real-world render abort is
 // the macOS Metal command-buffer watchdog killing an over-long GPU command
 // buffer (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), which the
 // MLX/Metal layer surfaces as SIGABRT (exit -6) — NOT as a Python-level
 // assertion. Reporting that as a bare `Killed by signal SIGABRT` (or as a
 // "C-level assertion failed" hint, the mistake upstream made) sends users
 // hunting a model/PortOS bug when the fix is to shrink the work per command
-// buffer. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
+// buffer — but only captured stderr can prove it (see abortCause); a bare SIGABRT
+// is reported as an unexplained native abort. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
 // layer. SIGKILL stays the OOM message it has always been.
 //
 // Keys are the signal NAMES Node reports on `close` (spawnDetached decodes the
@@ -424,28 +425,52 @@ const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fa
 
 const SIGNAL_DEATH_CAUSES = Object.freeze({
   SIGKILL: 'Process killed (likely out of memory — try a smaller model or resolution)',
-  SIGABRT: 'Render aborted (SIGABRT) — on Apple Silicon this is almost always the macOS Metal command-buffer watchdog killing an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and quit other GPU-heavy apps so the render is not competing for the GPU with WindowServer compositing (driving this machine headless over SSH avoids that contention entirely).',
+  // SIGABRT is evidence-dependent — see abortCause.
   SIGBUS: nativeCrashCause('SIGBUS'),
   SIGSEGV: nativeCrashCause('SIGSEGV'),
 });
+
+const WATCHDOG_ABORT_CAUSE = 'Render aborted (SIGABRT) — the macOS Metal command-buffer watchdog killed an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and quit other GPU-heavy apps so the render is not competing for the GPU with WindowServer compositing (driving this machine headless over SSH avoids that contention entirely).';
+const OOM_ABORT_CAUSE = 'Render aborted (SIGABRT) — Metal reported the GPU ran out of memory. Try a smaller model, resolution or frame count.';
+const VICTIM_ABORT_CAUSE = 'Render aborted (SIGABRT) — Metal reported this render was an innocent victim of another process wedging the GPU. Retry once other GPU-heavy apps are closed.';
+const ASSERTION_ABORT_CAUSE = 'Render aborted (SIGABRT) — the native layer hit a failed assertion. See the runtime log for the assertion text.';
+const UNEXPLAINED_ABORT_CAUSE = 'Render aborted (SIGABRT) — a native abort with no diagnostic line captured, so the cause is unknown. Check the runtime log; retrying at a lower resolution/frame count may help.';
+const NATIVE_ASSERTION_RE = /\bassertion\b.*\bfailed\b|\bfailed\b.*\bassertion\b|__assert_rtn|Assertion`/i;
+
+// Classify from the child's ORIGINAL stderr only, before any explanatory text
+// exists, so an enum name quoted in our own advice can never act as proof. The
+// veto and signature regexes are the same ones that gate retry eligibility.
+function abortCause(stderr, { platform, arch, mlxRuntime }) {
+  const text = typeof stderr === 'string' ? stderr : '';
+  if (/kIOGPUCommandBufferCallbackErrorOutOfMemory/i.test(text)) return OOM_ABORT_CAUSE;
+  if (/kIOGPUCommandBufferCallbackErrorInnocentVictim/i.test(text)) return VICTIM_ABORT_CAUSE;
+  if (METAL_WATCHDOG_RE.test(text) && platform === 'darwin' && arch === 'arm64' && mlxRuntime) return WATCHDOG_ABORT_CAUSE;
+  if (NATIVE_ASSERTION_RE.test(text)) return ASSERTION_ABORT_CAUSE;
+  return UNEXPLAINED_ABORT_CAUSE;
+}
 
 /**
  * Failure reason for a render child that exited on a signal. Pure.
  *
  * Unmapped signals keep the historical `Killed by signal <SIG>` wording so a
- * novel signal is still reported verbatim rather than mis-attributed. The
- * resolved runtime fingerprint is appended when known, so the report names the
- * mlx / mlx-metal / chip / macOS stack that died without the user having to go
- * look it up (matching what RuntimeFingerprint.jsx surfaces on the page).
+ * novel signal is still reported verbatim rather than mis-attributed. SIGABRT is
+ * explained only from captured evidence: the Metal watchdog is named solely for a
+ * recognised timeout/interactivity signature on an Apple-silicon MLX runtime;
+ * otherwise OOM, innocent-victim, assertion or a generic unexplained abort. The
+ * resolved runtime fingerprint is appended when known.
  *
  * @param {string|null} signal - signal name from `proc.on('close', (code, signal))`
  * @param {object} [opts]
  * @param {object|null} [opts.fingerprint] - runtime fingerprint (see `pickDeathFingerprint` in runtimes.js)
+ * @param {string} [opts.stderr] - captured stderr tail of the dead child (original evidence)
+ * @param {boolean} [opts.mlxRuntime] - whether the render ran on an MLX runtime
  * @returns {string|null} reason, or null when the child did not die on a signal
  */
-export function describeSignalDeath(signal, { fingerprint = null } = {}) {
+export function describeSignalDeath(signal, { fingerprint = null, stderr = '', mlxRuntime = false, platform = process.platform, arch = process.arch } = {}) {
   if (!signal) return null;
-  const cause = SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
+  const cause = signal === 'SIGABRT'
+    ? abortCause(stderr, { platform, arch, mlxRuntime })
+    : SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
   const fp = formatRuntimeFingerprint(fingerprint);
   return fp ? `${cause} [runtime: ${fp}]` : cause;
 }

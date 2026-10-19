@@ -4065,13 +4065,10 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
     expect((await failed).failure).toMatchObject({ classification: 'attributeerror', signature: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
-  it('SIGABRT names the macOS Metal command-buffer watchdog with a resolution/frame-count next step', async () => {
+  it('a bare SIGABRT with no native line is an unexplained native abort, not a Metal watchdog', async () => {
     const evt = await failWithSignal('signal-sigabrt', 'SIGABRT');
-    expect(evt.error).toMatch(/Metal command-buffer watchdog/i);
-    expect(evt.error).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
-    expect(evt.error).toMatch(/resolution/i);
-    expect(evt.error).toMatch(/frame count/i);
-    // The old bare wording must be gone.
+    expect(evt.error).toMatch(/native abort with no diagnostic/);
+    expect(evt.error).not.toMatch(/watchdog/i);
     expect(evt.error).not.toMatch(/Killed by signal SIGABRT/);
   });
 

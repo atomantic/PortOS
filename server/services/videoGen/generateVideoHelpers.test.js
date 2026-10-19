@@ -449,16 +449,31 @@ describe('describeSignalDeath (#3101 signal → actionable cause)', () => {
     expect(describeSignalDeath('')).toBeNull();
   });
 
-  it('names the macOS Metal command-buffer watchdog for SIGABRT and points at resolution/frame count', () => {
-    const reason = describeSignalDeath('SIGABRT');
-    expect(reason).toMatch(/SIGABRT/);
-    expect(reason).toMatch(/Metal command-buffer watchdog/i);
-    expect(reason).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
-    expect(reason).toMatch(/resolution/i);
-    expect(reason).toMatch(/frame count/i);
-    // Must NOT send the user hunting a model/PortOS bug (the upstream mistake).
-    expect(reason).toMatch(/not a bug in the model or PortOS/i);
-    expect(reason).not.toMatch(/assertion/i);
+  const MLX = { mlxRuntime: true, platform: 'darwin', arch: 'arm64' };
+
+  it('names the Metal watchdog only for a captured timeout signature on an Apple-silicon MLX runtime', () => {
+    for (const stderr of ['libc++abi: kIOGPUCommandBufferCallbackErrorImpactingInteractivity', 'Caused GPU Timeout Error', 'kIOGPUCommandBufferCallbackErrorTimeout']) {
+      const reason = describeSignalDeath('SIGABRT', { stderr, ...MLX });
+      expect(reason).toMatch(/Metal command-buffer watchdog/i);
+      expect(reason).toMatch(/frame count/i);
+    }
+    // Same evidence on a CUDA/Windows host or a non-MLX runtime is not a Metal watchdog.
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Caused GPU Timeout Error', ...MLX, platform: 'win32' })).toMatch(/unknown/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Caused GPU Timeout Error', ...MLX, mlxRuntime: false })).toMatch(/unknown/);
+  });
+
+  it('reports an unexplained native abort when no diagnostic was captured, never the watchdog', () => {
+    for (const opts of [undefined, { stderr: '', ...MLX }, { stderr: 'Loading weights...', ...MLX }]) {
+      const reason = describeSignalDeath('SIGABRT', opts);
+      expect(reason).toMatch(/native abort with no diagnostic/);
+      expect(reason).not.toMatch(/watchdog/i);
+    }
+  });
+
+  it('keeps OOM, innocent-victim and assertion aborts distinct from the watchdog, even beside a timeout line', () => {
+    expect(describeSignalDeath('SIGABRT', { stderr: 'kIOGPUCommandBufferCallbackErrorOutOfMemory', ...MLX })).toMatch(/ran out of memory/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'kIOGPUCommandBufferCallbackErrorInnocentVictim\nCaused GPU Timeout Error', ...MLX })).toMatch(/innocent victim/);
+    expect(describeSignalDeath('SIGABRT', { stderr: 'Assertion failed: (x > 0), function f, file a.cpp', ...MLX })).toMatch(/failed assertion/);
   });
 
   it('names a native MLX/Metal crash for SIGBUS and SIGSEGV', () => {

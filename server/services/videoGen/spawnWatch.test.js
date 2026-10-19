@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   splice: vi.fn(),
   thumbnail: vi.fn(),
   history: [],
+  mlx: false,
 }));
 
 vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: mocks.claim }));
@@ -43,7 +44,7 @@ vi.mock('./runtimes.js', () => ({
   BYOV_RUNTIME_INFO: {},
   runtimeIsCacheOnly: () => false,
   runtimeNeedsProcessGroupKill: () => false,
-  runtimeUsesMlx: () => false,
+  runtimeUsesMlx: () => mocks.mlx,
   invalidateByovReadyCache: vi.fn(),
   pickDeathFingerprint: async () => null,
 }));
@@ -58,6 +59,7 @@ vi.mock('./history.js', () => ({
   mutateVideoHistory: async (mutate) => { mocks.history = mutate(mocks.history); },
 }));
 
+import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 import { videoGenEvents } from './events.js';
 import { videoJobState } from './jobState.js';
 import { spawnAndWatchVideo } from './spawnWatch.js';
@@ -76,6 +78,7 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     vi.useFakeTimers();
     vi.resetAllMocks();
     mocks.history = [];
+    mocks.mlx = false;
     mocks.release.mockResolvedValue();
     mocks.handoff.mockResolvedValue();
     mocks.claim.mockResolvedValue({ ok: true, release: mocks.release, handoffTo: mocks.handoff });
@@ -128,6 +131,44 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     child.emit('close', code, null);
     await vi.advanceTimersByTimeAsync(0);
   };
+
+  describe('SIGABRT cause classification', () => {
+    const abortWith = async (stderrText) => {
+      child.stderr.emit('data', Buffer.from(stderrText));
+      child.signalCode = 'SIGABRT';
+      child.emit('close', null, 'SIGABRT');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(failed).toHaveBeenCalledTimes(1);
+      return failed.mock.calls[0][0].error;
+    };
+    const asAppleSilicon = () => {
+      const restorePlatform = pinPlatform('darwin');
+      const restoreArch = pinArch('arm64');
+      return () => { restoreArch(); restorePlatform(); };
+    };
+
+    it('classifies from a final unterminated stderr line and arms no relaunch', async () => {
+      const restore = asAppleSilicon();
+      mocks.mlx = true;
+      try {
+        await spawnAndWatchVideo(params);
+        const error = await abortWith('Loading\nlibc++abi: kIOGPUCommandBufferCallbackErrorOutOfMemory');
+        expect(error).toMatch(/ran out of memory/);
+        expect(mocks.spawn).toHaveBeenCalledTimes(1);
+      } finally { restore(); }
+    });
+
+    it('reports an unexplained native abort when stderr carries no native line', async () => {
+      const restore = asAppleSilicon();
+      mocks.mlx = true;
+      try {
+        await spawnAndWatchVideo(params);
+        const error = await abortWith('Loading weights\n');
+        expect(error).toMatch(/native abort with no diagnostic/);
+        expect(error).not.toMatch(/watchdog/i);
+      } finally { restore(); }
+    });
+  });
 
   const expectCleanup = () => {
     expect(videoJobState.activeProcess).toBeNull();
