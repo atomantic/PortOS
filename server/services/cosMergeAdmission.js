@@ -47,7 +47,7 @@ let clock = systemClock;
 let lagProbe = createEventLoopLagProbe({ clock });
 
 /** Inject a deterministic clock; `null` restores the system clock. */
-export function setMergeAdmissionClockForTests(next) {
+export function __setMergeAdmissionClockForTests(next) {
   clock = next ?? systemClock;
   lagProbe = createEventLoopLagProbe({ clock });
 }

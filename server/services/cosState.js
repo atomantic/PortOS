@@ -63,7 +63,7 @@ let stateClock = systemClock;
 let stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
 
 /** Inject a deterministic clock; `null` restores the system clock. */
-export function setCosStateDiagnosticsClockForTests(clock) {
+export function __setCosStateDiagnosticsClockForTests(clock) {
   stateClock = clock ?? systemClock;
   stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
 }

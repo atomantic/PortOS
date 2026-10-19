@@ -26,7 +26,7 @@ export const systemClock = {
  * responsive loop (every timer fires on schedule); `stall(ms)` models a blocked
  * one (time passes and overdue timers wait for the next `advance`).
  */
-export function createManualClock() {
+export function __createManualClock() {
   let now = 0;
   let seq = 0;
   const timers = new Map();

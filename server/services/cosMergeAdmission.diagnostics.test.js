@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { createManualClock } from '../lib/eventLoopLagProbe.js';
+import { __createManualClock } from '../lib/eventLoopLagProbe.js';
 
 // #12329: a slow admission phase must say whether its time went to waiting on
 // the state queue, to asynchronous I/O, or to an event loop that could not run.
@@ -20,7 +20,7 @@ vi.mock('./cosState.js', () => ({
   },
 }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
-import { claimMergeAdmission, setMergeAdmissionClockForTests, withPendingMergeAdmission } from './cosMergeAdmission.js';
+import { claimMergeAdmission, __setMergeAdmissionClockForTests, withPendingMergeAdmission } from './cosMergeAdmission.js';
 
 const deferred = () => {
   let resolve;
@@ -53,8 +53,8 @@ const enqueue = async (start) => {
 
 let clock;
 beforeEach(() => {
-  clock = createManualClock();
-  setMergeAdmissionClockForTests(clock);
+  clock = __createManualClock();
+  __setMergeAdmissionClockForTests(clock);
   fixture.queue = createFileWriteQueue();
   fixture.save = null;
   fixture.state = { agents: { [agentId]: { id: agentId, taskId: 'synthetic-task', status: 'running',
@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { setMergeAdmissionClockForTests(null); vi.restoreAllMocks(); });
+afterEach(() => { __setMergeAdmissionClockForTests(null); vi.restoreAllMocks(); });
 
 describe('merge admission slow-operation diagnostics', () => {
   it('stays silent for a fast settle and reports an ordinary blocked queue as lag-free queue wait', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { createManualClock } from '../lib/eventLoopLagProbe.js';
+import { __createManualClock } from '../lib/eventLoopLagProbe.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'cos-state-test-' });
 
@@ -446,8 +446,8 @@ describe('live CoS restore boundary', () => {
 describe('state operation slow diagnostics', () => {
   it('reports each persistence stage and splits a slow write into I/O wait and loop lag', async () => {
     const store = await freshModule();
-    const clock = createManualClock();
-    store.setCosStateDiagnosticsClockForTests(clock);
+    const clock = __createManualClock();
+    store.__setCosStateDiagnosticsClockForTests(clock);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const stages = [];
@@ -467,7 +467,7 @@ describe('state operation slow diagnostics', () => {
       await store.withStateLock(async () => clock.stall(1200));
       expect(warn.mock.calls.map(([line]) => line)).toEqual(['🐢 CoS state queue slow hold heldMs=1200 waitMs=0 loopLagMs=1100 loopLagMaxMs=1100']);
     } finally {
-      store.setCosStateDiagnosticsClockForTests(null);
+      store.__setCosStateDiagnosticsClockForTests(null);
       warn.mockRestore();
     }
   });
