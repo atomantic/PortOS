@@ -2329,6 +2329,71 @@ describe('restoreSnapshot manifest verification', () => {
     expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
   });
 
+  describe('folder restore of an older snapshot (#12355)', () => {
+    const liveLedgerPath = () => joinPath(PATHS.data, 'migrations.applied.json');
+    const liveQuotaBurnPath = () => joinPath(PATHS.cos, 'quota-burn.json');
+    const liveJobsPath = () => joinPath(PATHS.cos, 'autonomous-jobs.json');
+    const legacyPlan = JSON.stringify({ families: { grok: { enabled: true, jobs: [{
+      id: 'step-1', enabled: true, label: 'Example pass', jobType: 'agent-prompt',
+      params: { appId: 'app-example', prompt: 'Rewrite the example copy.' },
+    }] } } });
+
+    afterEach(async () => {
+      for (const path of [liveLedgerPath(), liveQuotaBurnPath(), liveJobsPath()]) await realFs.rm(path, { force: true });
+    });
+
+    async function seedSnapshot({ ledger } = {}) {
+      const manifest = { 'cos/quota-burn.json': await writeSnapshotFile('cos/quota-burn.json', legacyPlan) };
+      if (ledger) manifest['migrations.applied.json'] = await writeSnapshotFile('migrations.applied.json', JSON.stringify(ledger));
+      await writeManifest(manifest);
+    }
+
+    it('reports the migrations the live ledger has applied that the snapshot lacks, in preview and execution', async () => {
+      await seedSnapshot({ ledger: ['001-example.js'] });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+      const gap = { count: 1, names: ['359-example.js'] };
+
+      await expect(finishRestore({ dryRun: true, subdirFilter: 'cos' })).resolves.toMatchObject({ ledgerGap: gap });
+      spawn.mockReset();
+      await expect(finishRestore({ dryRun: false, subdirFilter: 'cos' })).resolves.toMatchObject({ ledgerGap: gap });
+    });
+
+    it.each([
+      { name: 'matching ledger', ledger: ['001-example.js'], expected: { count: 0, names: [] } },
+      { name: 'snapshot without a ledger', ledger: undefined, expected: null },
+    ])('reports $name as $expected', async ({ ledger, expected }) => {
+      await seedSnapshot({ ledger });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js']));
+      expect((await finishRestore({ dryRun: true, subdirFilter: 'cos' })).ledgerGap).toEqual(expected);
+    });
+
+    it('omits the gap from a full restore, which installs the snapshot ledger itself', async () => {
+      await seedSnapshot({ ledger: ['001-example.js'] });
+      await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+      expect(await finishRestore({ dryRun: true })).not.toHaveProperty('ledgerGap');
+    });
+
+    it('converts a restored legacy quota-burn plan to task references, once', async () => {
+      await seedSnapshot();
+      // rsync is faked, so stand in for its transfer of the snapshot plan.
+      await realFs.mkdir(PATHS.cos, { recursive: true });
+      await realFs.writeFile(liveQuotaBurnPath(), legacyPlan);
+
+      await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      const converted = JSON.parse(await realFs.readFile(liveQuotaBurnPath(), 'utf8')).families.grok.jobs[0];
+      expect(converted).toMatchObject({ jobType: null, taskRef: { kind: 'custom', jobId: 'job-burn-grok-step-1' } });
+
+      // A second restore of the same snapshot finds the job it created last time.
+      await realFs.writeFile(liveQuotaBurnPath(), legacyPlan);
+      spawn.mockReset();
+      await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      const jobs = JSON.parse(await realFs.readFile(liveJobsPath(), 'utf8')).jobs;
+      expect(jobs.filter(job => job.id === 'job-burn-grok-step-1')).toHaveLength(1);
+      expect(JSON.parse(await realFs.readFile(liveQuotaBurnPath(), 'utf8')).families.grok.jobs[0].taskRef)
+        .toEqual({ kind: 'custom', jobId: 'job-burn-grok-step-1' });
+    });
+  });
+
   it('names the unmanifested file so the operator can act on it', async () => {
     const relativePath = 'restore-integrity/example.json';
     await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });
