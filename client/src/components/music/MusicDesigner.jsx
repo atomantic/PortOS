@@ -44,7 +44,7 @@ import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import {
-  createTrack, describeMusic, generateLyrics, getSettings, getTrack, updateSettings, updateTrack,
+  createTrack, describeMusic, generateLyrics, getSettings, getTrack, patchSettingsSlice, updateTrack,
 } from '../../services/api';
 
 const STEPS = [
@@ -123,7 +123,6 @@ export default function MusicDesigner() {
   // auto-selects a default when its list arrives, so applying immediately would
   // race that load (same pattern as ChiptunePanel).
   const [savedPin, setSavedPin] = useState(null);
-  const musicSettingsRef = useRef({});
 
   const stepFromUrl = STEP_IDS.includes(id) ? id : FIRST_STEP;
 
@@ -184,9 +183,7 @@ export default function MusicDesigner() {
   useEffect(() => {
     getSettings({ silent: true }).then((settings) => {
       if (!mountedRef.current) return;
-      const music = settings?.music || {};
-      musicSettingsRef.current = music;
-      const saved = music.designer || {};
+      const saved = settings?.music?.designer || {};
       if (saved.describeTemplate) setDescribeTemplate(saved.describeTemplate);
       if (saved.lyricsTemplate) setLyricsTemplate(saved.lyricsTemplate);
       if (saved.providerId) {
@@ -214,11 +211,10 @@ export default function MusicDesigner() {
     setSavedPin(null); // apply once
   }, [savedPin, providersLoading, providers, setSelectedProviderId, setSelectedModel]);
 
+  // The server merges into the stored `music.designer`, so saving one template
+  // cannot drop the other or the Chiptune panel's prefs, even after a failed load.
   const persistDesignerPrefs = (patch) => {
-    const music = musicSettingsRef.current;
-    const next = { ...music, designer: { ...(music.designer || {}), ...patch } };
-    musicSettingsRef.current = next;
-    updateSettings({ music: next }, { silent: true }).catch((err) => toast.error(err?.message || 'Could not save Music Designer preferences'));
+    patchSettingsSlice('music.designer', patch, { silent: true }).catch((err) => toast.error(err?.message || 'Could not save Music Designer preferences'));
   };
 
   const saveDraft = (patch) => {

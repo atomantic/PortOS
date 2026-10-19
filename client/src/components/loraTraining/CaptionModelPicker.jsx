@@ -9,10 +9,10 @@
  * provider+model. "Auto" defers to the server's vision-model auto-pick.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
-import { getVisionModels, getSettings, updateSettings } from '../../services/api';
+import { getVisionModels, getSettings, patchSettingsSlice } from '../../services/api';
 
 const AUTO = '__auto__';
 const keyFor = (m) => `${m.providerId}::${m.id}`;
@@ -21,10 +21,6 @@ export default function CaptionModelPicker({ onChange }) {
   const [models, setModels] = useState(null); // null = loading; [] = none installed
   const [value, setValue] = useState(AUTO);
   const [saving, setSaving] = useState(false);
-  // Preserve the rest of settings.loraTraining (training `defaults`) on save —
-  // updateSettings merges shallowly at the top level, so writing just the
-  // caption fields would clobber the sibling slice.
-  const loraTrainingRef = useRef({});
 
   useEffect(() => {
     let alive = true;
@@ -35,7 +31,6 @@ export default function CaptionModelPicker({ onChange }) {
       if (!alive) return;
       const list = vm?.models || [];
       setModels(list);
-      loraTrainingRef.current = settings?.loraTraining || {};
       const savedModel = settings?.loraTraining?.captionModel || null;
       const savedProvider = settings?.loraTraining?.captionProviderId || null;
       if (savedModel) {
@@ -58,14 +53,14 @@ export default function CaptionModelPicker({ onChange }) {
     const picked = next === AUTO ? null : (models || []).find((m) => keyFor(m) === next) || null;
     onChange?.(picked ? { providerId: picked.providerId, model: picked.id } : { providerId: null, model: null });
     setSaving(true);
-    const nextLoraTraining = {
-      ...loraTrainingRef.current,
-      captionProviderId: picked ? picked.providerId : null,
-      captionModel: picked ? picked.id : null,
-    };
+    // A slice patch, merged server-side into the stored `loraTraining`, so the
+    // hand-set training knobs beside these two keys survive even when the
+    // settings read above failed.
     try {
-      await updateSettings({ loraTraining: nextLoraTraining }, { silent: true });
-      loraTrainingRef.current = nextLoraTraining;
+      await patchSettingsSlice('loraTraining', {
+        captionProviderId: picked ? picked.providerId : null,
+        captionModel: picked ? picked.id : null,
+      }, { silent: true });
     } catch {
       toast.error('Could not save caption-model preference');
     } finally {
