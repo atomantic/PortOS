@@ -503,16 +503,64 @@ export async function ensureSchema(options = {}) {
   return databaseOperation(() => ensureSchemaReady(options));
 }
 
+/**
+ * Owned function signatures declared by the schema DDL: name -> argument type
+ * lists. Argument names, modes and defaults are stripped so each list can be
+ * resolved through `to_regprocedure`.
+ */
+function ownedFunctionSignatures(statements) {
+  const owned = new Map();
+  const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/gi;
+  for (const sql of statements) {
+    for (const [, name, rawArgs] of sql.matchAll(pattern)) {
+      const types = rawArgs.split(',').map((arg) => arg.trim()).filter(Boolean).map((arg) => {
+        const words = arg.replace(/\s+(?:DEFAULT|=)\s.*$/i, '').replace(/^(?:IN|INOUT|VARIADIC)\s+/i, '').split(/\s+/);
+        return words.length > 1 ? words.slice(1).join(' ') : words[0];
+      });
+      if (!owned.has(name)) owned.set(name, []);
+      owned.get(name).push(types);
+    }
+  }
+  return owned;
+}
+
+// `CREATE OR REPLACE FUNCTION` only replaces the same argument list, so an
+// overload another branch left behind survives a forced reset and can later
+// collide with a restore. Drops public overloads of schema-owned names that no
+// owned definition declares. Test database only: on a real install an unknown
+// overload may belong to the operator.
+async function dropStrayOwnedFunctionOverloads(client, statements) {
+  for (const [name, signatures] of ownedFunctionSignatures(statements)) {
+    const ownedOids = [];
+    for (const types of signatures) {
+      const { rows: [row] } = await client.query('SELECT to_regprocedure($1)::oid AS oid', [`public.${name}(${types.join(',')})`]);
+      if (!row?.oid) { ownedOids.length = 0; break; }
+      ownedOids.push(row.oid);
+    }
+    if (!ownedOids.length) continue;
+    const { rows } = await client.query(
+      `SELECT p.oid::regprocedure::text AS signature FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = $1 AND p.prokind = 'f' AND NOT (p.oid = ANY($2::oid[]))`,
+      [name, ownedOids],
+    );
+    for (const { signature } of rows) {
+      await client.query(`DROP FUNCTION ${signature}`);
+      console.warn(`🧹 Dropped stray test-database function overload ${signature}`);
+    }
+  }
+}
+
 async function ensureSchemaReady({ force = false } = {}) {
   if (ensureSchemaInFlight) return ensureSchemaInFlight;
   if (schemaEnsured && !force) return;
   schemaEnsured = false;
-  ensureSchemaInFlight = ensureSchemaImpl().then(() => { schemaEnsured = true; })
+  ensureSchemaInFlight = ensureSchemaImpl({ force }).then(() => { schemaEnsured = true; })
     .finally(() => { ensureSchemaInFlight = null; });
   return ensureSchemaInFlight;
 }
 
-async function ensureSchemaImpl() {
+async function ensureSchemaImpl({ force = false } = {}) {
   // The DDL composer is imported lazily, not at module load. `db.js` is reached
   // by ~400 server test files through pgFileFacade.js, and eagerly importing
   // ./db/schema/index.js pulled its 17 per-domain DDL modules into every one of
@@ -586,6 +634,7 @@ async function ensureSchemaImpl() {
     for (const sql of catalogDDL) {
       await client.query(sql);
     }
+    if (force && isTestDatabase()) await dropStrayOwnedFunctionOverloads(client, [...upgrades, ...catalogDDL]);
     if (!schemaUpgradeLogged) {
       console.log('🗄️ Database schema upgrades applied');
       schemaUpgradeLogged = true;

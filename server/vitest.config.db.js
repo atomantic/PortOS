@@ -44,6 +44,9 @@ export default defineConfig({
     // Environment teardown also owns collection-only/skipped suite fixtures.
     environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     testTimeout: process.platform === 'win32' ? 30000 : 15000,
+    // Vitest's 10 s default hook budget is below the schema rebuild, migrations
+    // and pg_dump a DB fixture runs in beforeAll/beforeEach on a loaded host.
+    hookTimeout: 30000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,
     globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
