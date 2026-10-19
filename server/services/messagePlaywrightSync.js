@@ -1,7 +1,7 @@
 import { readOutlookMessageRow, browserSummaryId, browserDetailIdentities, messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFileStrict, unreadableStoreError, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { messageLogError } from '../lib/messageLogError.js';
@@ -61,14 +61,16 @@ function outlookRowContext(selector, requireScroll = true) {
 }
 
 export async function getSelectors() {
-  const content = await tryReadFile(SELECTORS_FILE);
-  if (!content) return {};
-  const parsed = safeJSONParse(content, {}, { context: 'messageSelectors' });
-  return isPlainObject(parsed) ? parsed : {};
+  const { value } = await readJSONFileStrict(SELECTORS_FILE, {}, { allowArray: false });
+  return isPlainObject(value) ? value : {};
 }
 
 export async function updateSelectors(provider, selectors) {
-  const all = await getSelectors();
+  // Display readers get {} for an unreadable file; the update refuses instead of
+  // replacing every provider's selectors with one.
+  const { ok, value } = await readJSONFileStrict(SELECTORS_FILE, {}, { allowArray: false });
+  if (!ok) throw unreadableStoreError(SELECTORS_FILE);
+  const all = isPlainObject(value) ? value : {};
   all[provider] = selectors;
   await ensureDir(PATHS.messages);
   await atomicWrite(SELECTORS_FILE, all);

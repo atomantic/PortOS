@@ -7,7 +7,7 @@
 import { readdir, stat, unlink } from 'fs/promises';
 import { join, basename, dirname, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
-import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS, readJSONFileStrict, unreadableStoreError, atomicWrite, sleep } from '../lib/fileUtils.js';
 import { PORTS } from '../lib/ports.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -58,15 +58,26 @@ async function getConfigMtimeMs() {
 export async function loadConfig() {
   const mtimeMs = await getConfigMtimeMs();
   if (cachedConfig && cachedConfigMtimeMs === mtimeMs) return cachedConfig;
-  const raw = await tryReadFile(CONFIG_FILE);
-  const parsed = safeJSONParse(raw, null);
-  cachedConfig = normalizeBrowserConfig(parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG });
+  const { ok, value: parsed } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false });
+  const config = normalizeBrowserConfig(parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG });
+  // Display readers serve defaults for an unreadable file, but never cache them:
+  // a repaired file must be picked up even when its mtime is unchanged.
+  if (!ok) return config;
+  cachedConfig = config;
   cachedConfigMtimeMs = mtimeMs;
   return cachedConfig;
 }
 
+// Every write path refuses while the stored bytes are unreadable, so defaults
+// served to display readers are never persisted over the real config.
+async function assertConfigWritable() {
+  const { ok } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false });
+  if (!ok) throw unreadableStoreError(CONFIG_FILE);
+}
+
 export async function saveConfig(config) {
   await ensureDir(PATHS.data);
+  await assertConfigWritable();
   cachedConfig = normalizeBrowserConfig({ ...DEFAULT_CONFIG, ...config });
   await atomicWrite(CONFIG_FILE, cachedConfig);
   cachedConfigMtimeMs = await getConfigMtimeMs();

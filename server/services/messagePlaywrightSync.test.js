@@ -10,7 +10,13 @@ vi.mock('./browserService.js', () => ({ findOrOpenPage, isAuthPage, evaluateOnPa
 const tryReadFile = vi.fn();
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return { ...actual, tryReadFile };
+  // Selector reads are strict now; drive them from the same bytes mock.
+  const readJSONFileStrict = async (path, fallback) => {
+    const raw = await tryReadFile(path);
+    if (raw == null) return { ok: true, value: fallback };
+    try { return { ok: true, value: JSON.parse(raw) }; } catch { return { ok: false, value: fallback }; }
+  };
+  return { ...actual, tryReadFile, readJSONFileStrict };
 });
 
 const { testSelectors, syncPlaywright, sendPlaywright, refreshMessageDetail } = await import('./messagePlaywrightSync.js');
