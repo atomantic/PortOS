@@ -78,8 +78,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (SYMLINKS) await symlink('../shared-target', join(path, 'linked'));
     if (beforeLock) await beforeLock(path);
     await execGit(['worktree', 'lock', '--reason', lockReason, path], repo);
-    const gitPath = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
-    const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    const [gitPath, head] = (await Promise.all([
+      execGit(['rev-parse', '--show-toplevel'], path), execGit(['rev-parse', 'HEAD'], path),
+    ])).map(result => result.stdout.trim());
     return { path, release: { path: gitPath, head, branch, locked: true, lockReason } };
   }
 
@@ -266,8 +267,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await execGit(['commit', '-am', 'strengthen implementation'], repo);
       }
     } });
-    const main = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
-    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const [main, admin] = (await Promise.all([
+      execGit(['rev-parse', 'main'], repo), execGit(['rev-parse', '--absolute-git-dir'], path),
+    ])).map(result => result.stdout.trim());
     await writeFile(join(admin, 'portos-review-status'), 'private synthetic review marker');
     injected.policies = [{ id: 'agent-legacy', status: 'completed', result: { success: true },
       metadata: { workspacePath: repo, claimBranches: [release.branch], prCompletionPolicy: 'review-then-merge' } }];
