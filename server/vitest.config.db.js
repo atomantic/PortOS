@@ -33,6 +33,11 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * The default `vitest.config.js` excludes the same inventory, so `npm test`
  * never runs them; `npm run test:db` does, after `npm run setup:db:test`.
  *
+ * One run at a time: every worktree shares the single `portos_test`, and a
+ * suite such as backup.db.test.js restores a whole-database dump, wiping another
+ * run's fixture rows mid-case (#12371). test/dbRunExclusivity.js holds a
+ * session-level advisory lock on the test database for the run's lifetime.
+ *
  * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` in scripts/lib/dbTestFiles.js — the
  * `*.db.test.js` naming convention is documentation, not a glob match, so a new
  * suite silently never runs until it's listed. db.guards.test.js fails if a
@@ -50,7 +55,11 @@ const config = defineConfig({
     hookTimeout: 30000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,
-    globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
+    // The lock comes first so a queued run waits before touching the shared database or temp root.
+    globalSetup: [
+      fileURLToPath(new URL('./test/dbRunExclusivity.js', import.meta.url)),
+      fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url)),
+    ],
     setupFiles: ['./vitest.setup.js'],
     // One file at a time — these suites assume exclusive access to their tables.
     fileParallelism: false,
