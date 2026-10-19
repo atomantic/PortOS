@@ -7,7 +7,7 @@
 
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
 import { isTopLevelEntryName } from '../lib/pathSafety.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -25,9 +25,10 @@ async function getDraftsPath(agentId) {
 
 async function loadDrafts(agentId) {
   const filePath = await getDraftsPath(agentId);
-  const content = await tryReadFile(filePath);
-  if (!content) return [];
-  return safeJSONParse(content, [], { context: `agentDrafts:${agentId}` });
+  // Absent initializes to []; an unreadable file throws so no caller can save over it.
+  const { ok, value } = await readJSONFileStrict(filePath, []);
+  if (!ok) throw unreadableStoreError(filePath);
+  return value;
 }
 
 async function saveDrafts(agentId, drafts) {

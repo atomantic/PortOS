@@ -6,7 +6,7 @@
  * remove rows from the machine-local `human_activity_events` table only.
  * Blocklisted handles are skipped on future syncs (see imessageSync.runSync).
  */
-import { dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { dataPath, atomicWrite, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
 import { identityFromHandle, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import * as humanActivity from './humanActivity.js';
 import { getStatus } from './imessageSync.js';
@@ -61,9 +61,7 @@ export function blocklistKey(handle) {
   return raw;
 }
 
-export async function readBlocklist() {
-  const raw = await tryReadFile(blocklistPath());
-  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
+function projectBlocklist(parsed) {
   const handles = Array.isArray(parsed?.handles)
     ? [...new Set(parsed.handles.map((h) => blocklistKey(h)).filter(Boolean))].sort()
     : [];
@@ -71,6 +69,19 @@ export async function readBlocklist() {
     handles,
     updatedAt: parsed?.updatedAt || null,
   };
+}
+
+// Display readers (status, conversation list) serve an empty list for an
+// unreadable file; mutation paths use readBlocklistForWrite and refuse.
+export async function readBlocklist() {
+  const { value } = await readJSONFileStrict(blocklistPath(), null, { allowArray: false });
+  return projectBlocklist(value);
+}
+
+async function readBlocklistForWrite() {
+  const { ok, value } = await readJSONFileStrict(blocklistPath(), null, { allowArray: false });
+  if (!ok) throw unreadableStoreError(blocklistPath());
+  return projectBlocklist(value);
 }
 
 async function writeBlocklist(handles) {
@@ -93,7 +104,7 @@ export async function addToBlocklist(handles, { purgeExisting = false } = {}) {
   const incoming = (Array.isArray(handles) ? handles : [handles])
     .map((h) => blocklistKey(h))
     .filter(Boolean);
-  const current = await readBlocklist();
+  const current = await readBlocklistForWrite();
   const before = new Set(current.handles);
   const next = new Set(current.handles);
   const added = [];
@@ -134,7 +145,7 @@ export async function addToBlocklist(handles, { purgeExisting = false } = {}) {
 export async function removeFromBlocklist(handle) {
   const key = blocklistKey(handle);
   if (!key) return readBlocklist();
-  const current = await readBlocklist();
+  const current = await readBlocklistForWrite();
   if (!current.handles.includes(key)) return current;
   return writeBlocklist(current.handles.filter((h) => h !== key));
 }
