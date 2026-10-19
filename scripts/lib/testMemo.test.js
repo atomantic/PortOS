@@ -228,6 +228,8 @@ describe('non-literal native require() in a product module', () => {
     expect(floor({ ...tree(boot), 'sub/ecosystem.config.cjs': 'module.exports = { apps: [2] };\n' }).key).not.toBe(base.key);
     // A non-literal basename is still unknown.
     expect(floor(tree(boot.replace("join(root.dir, NAME)", 'join(root.dir, root.name)')))).toMatchObject({ memoizable: false, reason: expect.stringContaining('non-literal') });
+    // A bare name may be a directory Node loads via index.js or package.json main: not provably a file.
+    expect(floor(tree(boot.replace("'ecosystem.config.cjs'", "'plugin'")))).toMatchObject({ memoizable: false, reason: expect.stringContaining('non-literal') });
   });
 
   it('keys a package-name constant by the installed package version', () => {
@@ -278,6 +280,8 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(key(files).memoizable).toBe(true);
     expect(key({ ...files, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(key(files).key);
     expect(key({ ...files, 'scripts/tool.py': 'import importlib\nmod = importlib.import_module(name)\n' })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
+    // A literal prefix of a computed name is not the whole argument.
+    expect(key({ ...files, 'scripts/tool.py': "import importlib\nmod = importlib.import_module('_pins' + suffix)\n" })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
   });
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {

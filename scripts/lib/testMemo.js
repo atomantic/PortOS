@@ -741,7 +741,9 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (tokens[at]?.t === 'id' && tokens[at + 1]?.v === '.' && tokens[at + 2]?.t === 'id') at += 2; // path.join(
     if (tokens[at]?.t !== 'id' || !PATH_JOIN.has(tokens[at].v) || tokens[at + 1]?.v !== '(') return null;
     const last = (evaluateArgs(tokens, match, at + 1, ctx, 0) ?? []).at(-1);
-    return last?.k === 'str' && !last.v.endsWith('/') && last.v !== '' ? posix.basename(last.v) : null;
+    // Only an explicit file extension proves a file: a bare name may be a directory Node resolves
+    // through index.js or package.json main, which a basename match would not collect.
+    return last?.k === 'str' && /\.(?:c?js|mjs|json|node)$/.test(last.v) ? posix.basename(last.v) : null;
   };
 
   const record = (value, { walk = false, consumer = null, bare = false } = {}) => {
@@ -1045,7 +1047,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         const names = m ? (m[1] !== undefined ? [m[1]] : m[2].split(',')).map((part) => part.trim()).filter(Boolean) : [];
         // `importlib.import_module('x')` is a sibling import; a non-literal name may reach any module.
         if (!/^\s*#/.test(line)) {
-          for (const call of line.matchAll(/\bimport_module\(\s*(?:(['"])([\w.]+)\1|)/g)) {
+          for (const call of line.matchAll(/\bimport_module\(\s*(?:(['"])([\w.]+)\1(?=\s*[,)])|)/g)) {
             if (call[2] !== undefined) names.push(call[2]);
             else resolved.unresolvedInputs.push(`python import_module with a non-literal name in ${target}`);
           }
