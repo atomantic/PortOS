@@ -157,6 +157,7 @@ export const CATEGORIES = {
   // configuration are user-authored and not regenerable. Only the mail cache is
   // reproducible, and it is bounded per account, so no cache-only purge is offered.
   'messages': { label: 'Messages', description: 'Message accounts, drafts, triage rules and cached mail — drafts and rules are not regenerable', archivable: true, deletable: false },
+  'migrations': { label: 'Legacy Migration Ledger', description: 'Pre-2026-05 location of the migration applied-list — the next migration run moves it to migrations.applied.json, and setup removes the empty folder', archivable: false, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
