@@ -63,6 +63,21 @@ describe('Brain memory reader', () => {
     expect(await screen.findByText('Entry not found')).toBeTruthy();
   });
 
+  it('offers Retry after a failed deep-link read but keeps a 404 as not found', async () => {
+    api.getBrainMemories.mockResolvedValue([]);
+    api.getBrainMemory.mockRejectedValueOnce(Object.assign(new Error('Service unavailable'), { status: 503 }));
+    const view = mount('/brain/memory/memories/note-9');
+    expect(await screen.findByText("Couldn't load this entry")).toBeTruthy();
+    expect(screen.queryByText('Entry not found')).toBeNull();
+    api.getBrainMemory.mockResolvedValueOnce({ id: 'note-9', title: 'Recovered note', content: 'Recovered body' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Recovered body')).toBeTruthy();
+    view.unmount();
+    api.getBrainMemory.mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }));
+    mount('/brain/memory/memories/gone');
+    expect(await screen.findByText('Entry not found')).toBeTruthy();
+  });
+
   it('renders preview in a sidebar aside area without popping a modal dialog', async () => {
     api.getBrainMemories.mockResolvedValue([
       { id: 'mem-1', title: 'First memory', content: 'First memory full content', mood: 'reflective' },
