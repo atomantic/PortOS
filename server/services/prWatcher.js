@@ -700,7 +700,7 @@ export async function sweepPendingMergePrs() {
  * timer. It spends no tick budget — the receipt is not a cadence cycle — and
  * never throws: the timer sweep remains the owner of every queued entry.
  */
-export function sweepPendingMergeApp(appId) {
+export function _sweepPendingMergeApp(appId) {
   const inFlight = pendingMergeSweeps.get(appId);
   if (!inFlight) return receiptSweep(appId);
   // That pass read the queue before this receipt was written: reload it once the
@@ -731,7 +731,7 @@ function receiptSweep(appId) {
  * bounded follow-up poll. Never rejects.
  */
 export function followUpHandoffReceipt(appId, receiptId) {
-  return sweepPendingMergeApp(appId)
+  return _sweepPendingMergeApp(appId)
     .then(() => armHandoffFollowUp(appId, receiptId))
     .catch((err) => {
       console.error(`❌ Handoff follow-up for app ${appId} could not be armed: ${err.message}`);
@@ -810,7 +810,7 @@ async function pollHandoffFollowUp(appId, poller) {
   if (blocked) {
     console.warn(`⏸️ Handoff follow-up poll for app ${appId} skipped: ${blocked}`);
   } else {
-    const result = await sweepPendingMergeApp(appId);
+    const result = await _sweepPendingMergeApp(appId);
     // null: receiptSweep already logged the thrown failure.
     if (result && !result.ok) {
       console.error(`❌ Handoff follow-up poll for app ${appId} failed: ${result.reason || 'sweep error'}`);
