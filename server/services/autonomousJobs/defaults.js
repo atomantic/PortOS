@@ -9,6 +9,7 @@
  * customizations are preserved.
  */
 
+import { createHash } from 'crypto'
 import { DAY, WEEK, JOB_STRUCTURAL_FIELDS, JOB_ADDITIVE_FIELDS } from './constants.js'
 import { PORTOS_CATALOG_REFRESH_JOB } from './portosCatalogRefresh.js'
 import { PORTOS_CLI_CATALOG_REFRESH_JOB } from './portosCliCatalogRefresh.js'
@@ -31,7 +32,7 @@ const DEFAULT_JOBS = [
 
 You are acting as my Chief of Staff, performing automated maintenance checks across all my GitHub repositories.
 
-My GitHub username is: atomantic
+Resolve my GitHub login at run time with \`gh api user -q .login\` and use that login for every query below.
 
 Use the \`gh\` CLI to query GitHub.
 
@@ -363,6 +364,35 @@ Focus on actionable findings. The goal is to keep the wiki healthy as it grows.`
 ]
 
 /**
+ * sha256 of promptTemplate bodies that shipped earlier and are retired. A stored
+ * copy whose body matches one is an untouched default and is upgraded on merge.
+ * Hashes only: the retired text lives in git history, not in code.
+ */
+const RETIRED_JOB_PROMPT_SHA256 = {
+  'job-github-repo-maintenance': [
+    // Pre-#12499 body, which hardcoded a fixed GitHub username.
+    'de63362ff8c5da05a638448d9b0f51a4b1bd59bda02bd9258ee0635748edf095'
+  ]
+}
+
+const sha256 = (text) => createHash('sha256').update(text).digest('hex')
+
+/**
+ * Upgrade a stored promptTemplate that is still an untouched retired default.
+ * The snapshot compare in applyAdditiveFields cannot see these: a job that
+ * predates _shippedDefaults is bootstrapped to the current body and kept as-is.
+ */
+function upgradeRetiredPromptTemplate(existing, defaultJob) {
+  const retired = RETIRED_JOB_PROMPT_SHA256[defaultJob.id]
+  if (!retired || typeof existing.promptTemplate !== 'string') return false
+  if (existing.promptTemplate === defaultJob.promptTemplate) return false
+  if (!retired.includes(sha256(existing.promptTemplate))) return false
+  existing.promptTemplate = defaultJob.promptTemplate
+  existing._shippedDefaults = { ...(existing._shippedDefaults || {}), promptTemplate: defaultJob.promptTemplate }
+  return true
+}
+
+/**
  * Create initial jobs data with defaults
  */
 function createDefaultJobsData() {
@@ -478,6 +508,7 @@ function mergeWithDefaults(loaded) {
     }
     // Additive fields: snapshot-aware merge — propagates updates to untouched fields,
     // preserves user customizations
+    if (upgradeRetiredPromptTemplate(existing, defaultJob)) changed = true
     if (applyAdditiveFields(existing, defaultJob)) changed = true
     if (changed) {
       existing.updatedAt = now
