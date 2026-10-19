@@ -20,7 +20,7 @@ const DURATION_PRESETS = [
   { label: '25 min', seconds: 1500 },
 ];
 
-export default function ExercisePanel({ activeWork, onClose, editorDirty = false, onWorkChange }) {
+export default function ExercisePanel({ activeWork, onClose, editorDirty = false, onWorkChange, draftMutation = null, beginDraftMutation, endDraftMutation }) {
   const [history, setHistory] = useState([]);
   const [duration, setDuration] = useState(600);
   const [prompt, setPrompt] = useState('');
@@ -30,6 +30,11 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   const tickRef = useRef(null);
 
   const mountedRef = useMounted();
+  const promotingRef = useRef(false);
+  const [promoting, setPromoting] = useState(false);
+  const ownerKey = `${activeWork?.id || ''}:${activeWork?.activeDraftVersionId || ''}`;
+  const ownerKeyRef = useRef(ownerKey);
+  ownerKeyRef.current = ownerKey;
 
   const refresh = useCallback(async () => {
     // Capture the workId we asked for so a slow response from the previous
@@ -106,14 +111,23 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   };
 
   const promote = async (exercise) => {
+    if (promotingRef.current || editorDirty || draftMutation || exercise.workId !== activeWork?.id) return;
+    const startOwner = ownerKeyRef.current;
+    const transaction = beginDraftMutation?.(startOwner, 'exercise');
+    if (beginDraftMutation && !transaction) return;
+    promotingRef.current = true;
+    setPromoting(true);
     const result = await promoteWritersRoomExercise(exercise.id, { silent: true }).catch((err) => {
       toast.error(`Could not add to draft: ${err.message}`);
       return null;
     });
-    if (!result) return;
+    endDraftMutation?.(transaction);
+    promotingRef.current = false;
+    if (mountedRef.current) setPromoting(false);
+    if (!result || ownerKeyRef.current !== startOwner) return;
     toast.success(`Added ${countWords(exercise.appendedText)} words to draft`);
-    onWorkChange?.(result.work);
-    await refresh();
+    onWorkChange?.(result.work, { ownerKey: startOwner });
+    if (mountedRef.current) await refresh();
   };
 
   // Toast once when the timer crosses into expired. The ref guards against
@@ -233,8 +247,8 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
               {ex.status === 'finished' && ex.appendedText && ex.workId === activeWork?.id && !ex.promotedAt && (
                 <button
                   onClick={() => promote(ex)}
-                  disabled={editorDirty}
-                  title={editorDirty ? 'Save first' : 'Add to draft'}
+                  disabled={editorDirty || promoting || !!draftMutation}
+                  title={editorDirty ? 'Save first' : promoting || draftMutation ? 'Wait for the draft update' : 'Add to draft'}
                   aria-label="Add sprint text to draft"
                   className="min-h-[44px] min-w-[44px] flex items-center justify-center text-port-accent disabled:text-gray-600"
                 >

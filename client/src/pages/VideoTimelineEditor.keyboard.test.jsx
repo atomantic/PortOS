@@ -1,3 +1,4 @@
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { awaitPageLoaded } from '../test/pageLoadBarrier';
@@ -16,11 +17,6 @@ import { stubSequentialLayout, pressKey, dndAnnouncement } from '../test/dndKeyb
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: toastError, success: vi.fn() }),
-}));
-
-vi.mock('react-router', () => ({
-  useParams: () => ({ projectId: 'p1' }),
-  useNavigate: () => vi.fn(),
 }));
 
 vi.mock('../hooks/useSseProgress', () => ({
@@ -68,7 +64,8 @@ beforeEach(() => {
 afterEach(() => restoreLayout());
 
 const renderEditor = async () => {
-  render(<VideoTimelineEditor />);
+  const router = createMemoryRouter([{ path: '/media/timeline/:projectId', element: <VideoTimelineEditor /> }], { initialEntries: ['/media/timeline/p1'] });
+  render(<RouterProvider router={router} />);
   await awaitPageLoaded('Loading timeline project');
 };
 

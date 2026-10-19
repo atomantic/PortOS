@@ -88,7 +88,7 @@ describe('ExercisePanel promote-to-draft button (#5300)', () => {
     await act(async () => { fireEvent.click(promoteButton()); });
 
     expect(promoteWritersRoomExercise).toHaveBeenCalledWith('wr-ex-1', { silent: true });
-    expect(onWorkChange).toHaveBeenCalledWith({ id: 'wr-work-1', activeDraftBody: 'The hero wakes.\n\nThen he runs.\n' });
+    expect(onWorkChange).toHaveBeenCalledWith({ id: 'wr-work-1', activeDraftBody: 'The hero wakes.\n\nThen he runs.\n' }, { ownerKey: 'wr-work-1:wr-draft-1' });
     expect(toast.success).toHaveBeenCalledWith('Added 3 words to draft');
     // Mount load + the post-promote refresh, so the row can flip to the marker.
     expect(listWritersRoomExercises).toHaveBeenCalledTimes(2);

@@ -29,6 +29,8 @@ import {
 import { NumberField, FadeFields, RemoveButton } from '../components/media/VideoTimelineInspector';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
+import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
+import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import {
   assetUrl,
   segmentDuration,
@@ -332,26 +334,40 @@ function TimelineProjectEditor({ projectId }) {
     return next;
   }, []);
 
+  const [pendingLanes, setPendingLanes] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const [savePending, setSavePending] = useState(false);
   const saveTimeline = useCallback((next) => queueWrite(async () => {
     if (updatedAtRef.current == null) return false;
+    setSavePending(true);
+    setSaveError(null);
     const updated = await api.updateTimelineProject(projectId, {
       ...timelinePatch(next),
       expectedUpdatedAt: updatedAtRef.current,
     }, { silent: true }).catch((err) => {
       if (err.code === 'CONFLICT') {
-        toast.error('Project was modified elsewhere — reloading');
-        refresh();
+        if (pendingLanesRef.current) {
+          setSaveError('Project was modified elsewhere. Your edits are retained; retry after resolving the conflict, or discard to leave.');
+        } else {
+          toast.error('Project was modified elsewhere — reloading');
+          refresh();
+        }
         return null;
       }
+      setSaveError(`Save failed: ${err.message}`);
       toast.error(`Save failed: ${err.message}`);
       return null;
     });
+    setSavePending(false);
     if (!updated) return false;
     updatedAtRef.current = updated.updatedAt;
     setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
     return true;
   }).then((saved) => {
-    if (saved && pendingLanesRef.current === next) pendingLanesRef.current = null;
+    if (saved && pendingLanesRef.current === next) {
+      pendingLanesRef.current = null;
+      setPendingLanes(null);
+    }
     return saved;
   }), [projectId, refresh, queueWrite]);
 
@@ -363,22 +379,28 @@ function TimelineProjectEditor({ projectId }) {
   const queueSave = useCallback((next) => {
     clearTimeout(saveTimerRef.current);
     pendingLanesRef.current = next;
+    setPendingLanes(next);
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null;
       saveTimeline(next);
     }, 400);
   }, [saveTimeline]);
 
-  // Keep the browser's native leave prompt active only while edits await save.
-  useEffect(() => {
-    const preventLeavingWithPendingSave = (event) => {
-      if (pendingLanesRef.current == null) return;
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', preventLeavingWithPendingSave);
-    return () => window.removeEventListener('beforeunload', preventLeavingWithPendingSave);
-  }, []);
+  // Both router navigation and tab close remain guarded until the latest
+  // snapshot succeeds. A failure must not turn an in-memory edit into "saved".
+  const routeGuard = useUnsavedChangesGuard(pendingLanes !== null);
+  const retrySave = () => {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (pendingLanesRef.current) saveTimeline(pendingLanesRef.current);
+  };
+  const discardAndExit = () => {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    pendingLanesRef.current = null;
+    setPendingLanes(null);
+    routeGuard.proceed();
+  };
 
   // Navigation can unmount the editor before the debounce fires. Flush the
   // latest lanes so the final edit is persisted instead of silently dropped.
@@ -899,6 +921,21 @@ function TimelineProjectEditor({ projectId }) {
 
   return (
     <div className="space-y-3">
+      {(saveError || routeGuard.blocked) && (
+        <div role="status" aria-label="Timeline save status" className="flex items-center gap-2 text-sm text-port-warning">
+          <span>{saveError || 'Saving timeline changes before leaving…'}</span>
+          <button type="button" onClick={retrySave} disabled={savePending} className="px-3 py-2 border border-port-border rounded disabled:opacity-50">
+            {savePending ? 'Saving…' : 'Retry save'}
+          </button>
+        </div>
+      )}
+      <UnsavedChangesConfirm
+        guard={routeGuard}
+        when={!savePending}
+        question="Discard your unsaved timeline changes?"
+        label="Discard unsaved timeline changes"
+        onDiscard={discardAndExit}
+      />
       <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-port-border">
         <div className="flex items-center gap-2 flex-1 min-w-[120px]">
           <button
