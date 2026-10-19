@@ -22,7 +22,7 @@ import { canTypeSlashCommands, PR_OPENED_BY, SLASHDO_INLINE_BUDGET_CHARS } from 
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { injectReconcileAgentId } from '../lib/claimContinuation.js';
-import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, leavesPrForHuman, prStaysOpen, resolvePrCompletion } from '../lib/prDisposition.js';
 import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
@@ -574,7 +574,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     mode: completionMode, whenDone,
     tuiCompletionCommand,
     worktreeInfo, willOpenPR, prCompletion, noChangeSuccess,
-    leavePrOpen: leavesPrForHuman(task),
+    humanLandsPr: leavesPrForHuman(task),
   });
   const completionBullet = guidelineBullet ? `- ${guidelineBullet}` : '';
   // Which completion section this mode gets. A mode with no entry renders
@@ -588,8 +588,8 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
-      leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
-      prCompletion: task.metadata?.prCompletion || null,
+      prStaysOpen: prStaysOpen(task),
+      rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
     }),
@@ -1107,12 +1107,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     sentinelPath: lightSentinelPath(),
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
-    leavePrOpen: leavesPrForHuman(task),
+    humanLandsPr: leavesPrForHuman(task),
     reviewPolicy,
     forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null,
     mergeAdmission: mergesOwnPr,
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, humanLandsPr: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
   // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
   // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
   if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId));
@@ -1128,8 +1128,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
     [COMPLETION_MODES.CLAIM_FLOW]: () => contractSections.push(buildClaimFlowCompletionSection({
       isTui, sentinelPath: lightSentinelPath(), reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
-      leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
-      prCompletion: task.metadata?.prCompletion || null,
+      prStaysOpen: prStaysOpen(task),
+      rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
     })),

@@ -3032,7 +3032,7 @@ describe('buildCompletionGuidelineBullet', () => {
     // ...unless the PR is a human's to land, where the bullet must not promise a merge.
     const jiraBullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, leavePrOpen: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, humanLandsPr: true,
     });
     expect(jiraBullet).toMatch(/left OPEN for a human/);
     expect(jiraBullet).not.toMatch(/merges the PR once CI is green/);

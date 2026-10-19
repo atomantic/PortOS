@@ -127,6 +127,17 @@ export function leavesPrForHuman(task) {
   return PR_STAYS_OPEN_SET.has(metadata.analysisType) || !!metadata.jiraTicketId;
 }
 
+/**
+ * True when the PR stays open for either reason: a human lands it (`leavesPrForHuman`)
+ * or the resolved policy is leave-open (draft included). The one verdict callers
+ * that do not need to distinguish the two should use.
+ * @param {Object|null} task - the CoS task (or its metadata holder).
+ * @returns {boolean}
+ */
+export function prStaysOpen(task) {
+  return resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task);
+}
+
 /** Explicit task authority only: defaults must never release a human handoff. */
 export function explicitPrCompletion(task) {
   const metadata = task?.metadata || {};
