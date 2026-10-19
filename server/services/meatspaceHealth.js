@@ -12,7 +12,13 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import { queueHealthWrite } from './meatspaceWriteQueues.js';
-import { normalizeLegacyRows, rowIdentityKeys, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity.js';
+import {
+  normalizeLegacyRows,
+  retainContentKey,
+  rowAnswersTo,
+  rowIdentityKeys,
+  ROW_TOMBSTONES_KEY,
+} from '../lib/meatspaceRowIdentity.js';
 import { recordTombstone } from '../lib/tombstones.js';
 import {
   isMortalLoomEnabled,
@@ -218,10 +224,13 @@ export async function updateEyeExam(id, updates) {
 
   const exam = await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
-    const target = data.exams.find(e => e.id === id);
-    if (!target) return null;
+    // A sync may have retired the id the client holds into `aliasIds`.
+    const index = data.exams.findIndex(e => rowAnswersTo(e, id));
+    if (index === -1) return null;
+    const before = data.exams[index];
     // `updatedAt` is the per-row clock the federation merge resolves copies by.
-    Object.assign(target, patch, { updatedAt: new Date().toISOString() });
+    const target = retainContentKey(before, { ...before, ...patch, updatedAt: new Date().toISOString() });
+    data.exams[index] = target;
     data.exams.sort(byDate);
     await writeLocal(EYES_FILE, data);
     return target;
@@ -241,9 +250,9 @@ export async function removeEyeExam(id) {
 
   const target = await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
-    const found = data.exams.find(e => e.id === id);
+    const found = data.exams.find(e => rowAnswersTo(e, id));
     if (!found) return null;
-    data.exams = data.exams.filter(e => e.id !== id);
+    data.exams = data.exams.filter(e => e !== found);
     // The markers keep a peer that still holds the row from syncing it back —
     // under its content key too, for a copy the peer stamped with another id.
     const deletedAt = new Date().toISOString();

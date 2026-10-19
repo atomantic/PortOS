@@ -306,6 +306,14 @@ describe('eye exams by id', () => {
     );
   });
 
+  it('edits and deletes an exam addressed by an id a sync retired into aliasIds', async () => {
+    disk = { exams: [{ id: 'stamp-b', aliasIds: ['stamp-z'], createdAt: '2025-01-01T00:00:00.000Z', date: '2025-01-01', leftSphere: -1 }] };
+    expect((await updateEyeExam('stamp-z', { leftSphere: -2 })).id).toBe('stamp-b');
+    expect(disk.exams[0].leftSphere).toBe(-2);
+    expect((await removeEyeExam('stamp-z')).id).toBe('stamp-b');
+    expect(disk.exams).toEqual([]);
+  });
+
   it('stamps createdAt on a new exam and updatedAt on an edit, so peers resolve copies by clock', async () => {
     const exam = await addEyeExam({ date: '2025-01-01' });
     expect(exam.createdAt).toEqual(expect.any(String));

@@ -9,8 +9,9 @@
  * provenance — an id-less legacy row, a random stamp, or an id minted before
  * #12432 — so it answers to its own id AND to `legacy-<sha256>` of its content,
  * which every machine computes alike. Copies of one record that carry different
- * ids converge on the smallest of them and keep the rest as `aliasIds`, so an
- * edit or delete still addressed by a retired id finds the row.
+ * ids converge on the smallest non-content id and keep the rest (plus content
+ * keys an edit replaced) as `aliasIds`, so an edit, delete or stale copy still
+ * addressed by a retired key finds the row.
  *
  * Pure. Migration 429 calls `normalizeLegacyRows`, so `legacyRowId` IS an
  * on-disk id: changing it would key every peer's rows differently.
@@ -39,6 +40,21 @@ const rowIds = (row) => [
   ...(hasStringId(row) ? [row.id] : []),
   ...(Array.isArray(row.aliasIds) ? row.aliasIds.filter((id) => typeof id === 'string' && id !== '') : []),
 ];
+
+/** True when `id` is the row's id or one of its aliases (a mutation addressed by a retired id). */
+export const rowAnswersTo = (row, id) => isPlainObject(row) && rowIds(row).includes(id);
+
+/**
+ * `after` (an edit of `before`) keeping `before`'s content key as an alias when
+ * the edit changed it, so a peer's unedited copy of a row of unknown provenance
+ * still finds the edited row.
+ */
+export function retainContentKey(before, after) {
+  if (after.createdAt !== undefined) return after;
+  const previous = legacyRowId(before);
+  if (previous === legacyRowId(after) || rowIds(after).includes(previous)) return after;
+  return { ...after, aliasIds: [...(Array.isArray(after.aliasIds) ? after.aliasIds : []), previous] };
+}
 
 /** Every key a row answers to: id, aliases, then the content key. A delete tombstones all of them. */
 export function rowIdentityKeys(row) {
@@ -72,16 +88,25 @@ export function preferRowCopy(a, b) {
 }
 
 // One record from a group of its copies: the preferred copy's fields, the
-// smallest id as its id and every other id as an alias. Both choices are
-// order-free, so every machine reduces the same copies to the same row.
+// smallest minted or stamped id as its id, and every other id — plus the content key of any copy
+// of unknown provenance the winner's content replaced — as an alias. Every
+// choice is order-free, so every machine reduces the same copies to the same row.
 function reduceCopies(members) {
   if (members.length === 1) return members[0];
   const winner = members.map((m) => m.row).reduce(preferRowCopy);
-  const ids = [...new Set(members.flatMap((m) => rowIds(m.row)))].sort();
+  const winnerContentKey = legacyRowId(winner);
+  const replacedContentKeys = members
+    .filter((m) => m.row.createdAt === undefined)
+    .map((m) => legacyRowId(m.row))
+    .filter((key) => key !== winnerContentKey);
+  const ids = [...new Set([...members.flatMap((m) => rowIds(m.row)), ...replacedContentKeys])].sort();
   let row = winner;
   if (ids.length > 0) {
+    // A minted or stamped id outranks a content key, which only names a version.
+    const id = ids.find((key) => !key.startsWith(LEGACY_ROW_ID_PREFIX)) ?? ids[0];
+    const aliasIds = ids.filter((key) => key !== id);
     const { aliasIds: _aliasIds, ...fields } = winner;
-    row = ids.length > 1 ? { ...fields, id: ids[0], aliasIds: ids.slice(1) } : { ...fields, id: ids[0] };
+    row = aliasIds.length > 0 ? { ...fields, id, aliasIds } : { ...fields, id };
   }
   const keys = new Set([...members.flatMap((m) => [...m.keys]), ...rowIdentityKeys(row)]);
   return { row, keys };
@@ -95,9 +120,10 @@ function reduceCopies(members) {
  * local side), in first-occurrence order.
  *
  * `stampIds` gives an id-less row its content key as its id (eyes.json, whose
- * rows are addressed by id). `keepLocalDuplicates` keeps a group's local rows
- * as they are and drops its remote copies (blood/epigenetic files: id-less rows
- * keyed by content alone, which were never deduped locally).
+ * rows are addressed by id). `keepLocalDuplicates` keeps the local rows of a
+ * group of id-less rows as they are and drops its remote copies (blood and
+ * epigenetic rows, keyed by content alone, were never deduped locally; such a
+ * group's rows are identical, so nothing is lost). A group with an id reduces.
  */
 export function mergeRowCopies(localRows, remoteRows = [], { stampIds = false, keepLocalDuplicates = false } = {}) {
   const items = [];
@@ -138,7 +164,8 @@ export function mergeRowCopies(localRows, remoteRows = [], { stampIds = false, k
   for (const members of groups.values()) {
     if (members[0].keys === null) { entries.push({ row: members[0].row, keys: null }); continue; }
     const locals = members.filter((m) => m.local);
-    if (keepLocalDuplicates && locals.length > 0) entries.push(...locals.map(({ row, keys }) => ({ row, keys })));
+    const contentOnly = members.every((m) => rowIds(m.row).length === 0);
+    if (keepLocalDuplicates && contentOnly && locals.length > 0) entries.push(...locals.map(({ row, keys }) => ({ row, keys })));
     else entries.push(reduceCopies(members.map(({ row, keys }) => ({ row, keys }))));
   }
   return entries;

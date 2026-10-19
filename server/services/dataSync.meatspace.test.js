@@ -111,7 +111,9 @@ describe('applyRemote meatspace eyes.json identity', () => {
 
     expect(result.applied).toBe(true);
     const exams = (await readDoc('eyes.json')).exams;
-    expect(exams.map((e) => e.id)).toEqual([legacyRowId(values), 'twin-1', 'twin-2']);
+    // The peer's stamp becomes the id; the content id this machine stamped stays an alias.
+    expect(exams.map((e) => e.id)).toEqual(['stamped-copy', 'twin-1', 'twin-2']);
+    expect(exams[0].aliasIds).toEqual([legacyRowId(values)]);
   });
 
   // #12432: each machine used to stamp a legacy row with its own random id, so the
@@ -139,7 +141,24 @@ describe('applyRemote meatspace eyes.json identity', () => {
     const edited = { id: 'stamp-z', ...legacy, leftSphere: -1.75, updatedAt: '2026-07-01T00:00:00.000Z' };
     await persist('eyes.json', { exams: [edited] });
     await apply('eyes.json', { exams: [{ id: 'stamp-b', aliasIds: ['stamp-z'], ...legacy }] });
-    expect((await readDoc('eyes.json')).exams).toEqual([{ ...edited, id: 'stamp-b', aliasIds: ['stamp-z'] }]);
+    // The unedited copy's content key stays reachable too, for any other peer still holding it.
+    expect((await readDoc('eyes.json')).exams).toEqual([
+      { ...edited, id: 'stamp-b', aliasIds: [legacyRowId(legacy), 'stamp-z'] },
+    ]);
+  });
+
+  // An edit replaces a legacy exam's content, but a third peer's untouched copy,
+  // stamped with yet another id, still finds it through the retained content key.
+  it('matches a third peer copy to a legacy exam edited after its copies converged', async () => {
+    const legacy = { date: '2025-05-05', leftSphere: -1 };
+    await persist('eyes.json', { exams: [{ id: 'stamp-a', aliasIds: ['stamp-b'], ...legacy }] });
+    await health.updateEyeExam('stamp-a', { leftSphere: -1.5 });
+
+    await apply('eyes.json', { exams: [{ id: 'stamp-c', ...legacy }] });
+    const exams = (await readDoc('eyes.json')).exams;
+    expect(exams).toHaveLength(1);
+    expect(exams[0]).toMatchObject({ id: 'stamp-a', leftSphere: -1.5 });
+    expect(exams[0].aliasIds).toEqual(expect.arrayContaining(['stamp-b', 'stamp-c', legacyRowId(legacy)]));
   });
 
   // A row whose id matches one exam and whose content matches another joins all
@@ -157,7 +176,7 @@ describe('applyRemote meatspace eyes.json identity', () => {
     await apply('eyes.json', { exams: [a, b] });
     const backward = (await readDoc('eyes.json')).exams;
 
-    expect(forward).toEqual([{ ...bridge, aliasIds: ['stamp-b'] }]);
+    expect(forward).toEqual([{ ...bridge, aliasIds: [legacyRowId(a), 'stamp-b'] }]);
     expect(backward).toEqual(forward);
   });
 

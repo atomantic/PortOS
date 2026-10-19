@@ -2,7 +2,7 @@
  * (#12432). Before this, each machine stamped an id-less eyes.json row with its
  * own `randomUUID()`, so syncing peers appended each other's copy of the same
  * exam. Rows without `createdAt` whose content is identical are copies of one
- * exam: they collapse to one row under the smallest of their ids, the others
+ * exam: they collapse to one row under the smallest minted id, the others
  * kept as `aliasIds`. A single row keeps its id — it may have been minted before
  * #12432 and edited — and still meets a peer's differently-stamped copy through
  * the sync merge's content key. Input-gated on eyes.json; ships no seed.
