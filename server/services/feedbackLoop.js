@@ -6,11 +6,10 @@
  * Tracks feedback patterns and adjusts document weights for confidence scoring.
  */
 
-import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { digitalTwinEvents } from './digital-twin.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -26,34 +25,55 @@ function now() {
 
 let feedbackCache = null;
 
-async function loadFeedback() {
-  if (feedbackCache) return feedbackCache;
+// Peer sync (digital-twin-sync) and local mutators share feedback.json; every
+// read-modify-write runs in this queue against a fresh read so neither side
+// overwrites the other from a stale cache.
+const queueFeedbackWrite = createFileWriteQueue();
 
-  const defaultData = {
+function defaultFeedback() {
+  return {
     version: '1.0.0',
     entries: [],
     stats: { totalFeedback: 0, soundsLikeMe: 0, doesntSoundLikeMe: 0 },
     documentWeightAdjustments: {},
     lastCalculatedAt: null
   };
+}
 
-  if (!existsSync(FEEDBACK_FILE)) {
-    await saveFeedback(defaultData);
-    return defaultData;
-  }
+// Strict: ENOENT yields the default, but an unreadable or malformed file throws
+// so a mutator never replaces user feedback it failed to parse.
+async function readFeedbackFresh() {
+  return (await readJSONFile(FEEDBACK_FILE, null, { strict: true })) ?? defaultFeedback();
+}
 
-  const raw = await readFile(FEEDBACK_FILE, 'utf-8');
-  feedbackCache = safeJSONParse(raw, defaultData);
+async function loadFeedback() {
+  if (feedbackCache) return feedbackCache;
+  feedbackCache = await readFeedbackFresh();
   return feedbackCache;
 }
 
 async function saveFeedback(data) {
-  if (!existsSync(DIGITAL_TWIN_DIR)) {
-    await ensureDir(DIGITAL_TWIN_DIR);
-  }
+  await ensureDir(DIGITAL_TWIN_DIR);
   data.updatedAt = now();
   await atomicWrite(FEEDBACK_FILE, data);
   feedbackCache = data;
+}
+
+/**
+ * Apply a peer-sync merge to feedback.json inside the write queue. `mergeFn(local)`
+ * returns `{ merged, changed }`; the cache is replaced with what was written.
+ * Returns whether anything was written.
+ */
+export function applyFeedbackMerge(mergeFn) {
+  return queueFeedbackWrite(async () => {
+    const local = await readJSONFile(FEEDBACK_FILE, null, { strict: true });
+    const { merged, changed } = mergeFn(local);
+    if (!changed) return false;
+    await ensureDir(DIGITAL_TWIN_DIR);
+    await atomicWrite(FEEDBACK_FILE, merged);
+    feedbackCache = merged;
+    return true;
+  });
 }
 
 // =============================================================================
@@ -73,8 +93,6 @@ async function saveFeedback(data) {
  * @param {string[]} [params.documentsUsed] - Which twin documents influenced the response
  */
 export async function submitFeedback({ contentType, validation, contentSnippet, context, providerId, model, documentsUsed }) {
-  const data = await loadFeedback();
-
   const entry = {
     id: uuidv4(),
     contentType,
@@ -87,19 +105,22 @@ export async function submitFeedback({ contentType, validation, contentSnippet, 
     createdAt: now()
   };
 
-  data.entries.push(entry);
+  const data = await queueFeedbackWrite(async () => {
+    const fresh = await readFeedbackFresh();
+    fresh.entries.push(entry);
 
-  // Update running stats
-  data.stats.totalFeedback++;
-  if (validation === 'sounds_like_me') data.stats.soundsLikeMe++;
-  else if (validation === 'doesnt_sound_like_me') data.stats.doesntSoundLikeMe++;
+    fresh.stats.totalFeedback++;
+    if (validation === 'sounds_like_me') fresh.stats.soundsLikeMe++;
+    else if (validation === 'doesnt_sound_like_me') fresh.stats.doesntSoundLikeMe++;
 
-  // Keep last 500 entries to prevent unbounded growth
-  if (data.entries.length > 500) {
-    data.entries = data.entries.slice(-500);
-  }
+    // Keep last 500 entries to prevent unbounded growth
+    if (fresh.entries.length > 500) {
+      fresh.entries = fresh.entries.slice(-500);
+    }
 
-  await saveFeedback(data);
+    await saveFeedback(fresh);
+    return fresh;
+  });
 
   digitalTwinEvents.emit('feedback:submitted', entry);
   console.log(`🔄 Feedback submitted: ${validation} on ${contentType} (${data.stats.totalFeedback} total)`);
@@ -202,8 +223,12 @@ export async function getFeedbackStats() {
  * Documents that appear in "doesn't sound like me" responses get reduced.
  * Returns the new weight adjustments (deltas from base weight).
  */
-export async function recalculateWeights() {
-  const data = await loadFeedback();
+export function recalculateWeights() {
+  return queueFeedbackWrite(recalculateWeightsLocked);
+}
+
+async function recalculateWeightsLocked() {
+  const data = await readFeedbackFresh();
   const entries = data.entries.filter(e => e.documentsUsed?.length > 0);
 
   if (entries.length < 5) {
