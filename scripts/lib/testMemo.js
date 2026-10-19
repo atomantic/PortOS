@@ -71,6 +71,7 @@ export const TEST_MEMO_ENV = Object.freeze([
   'LC_ALL',
   'MEMORY_BACKEND',
   'NODE_ENV',
+  'PGDATABASE',
   'PORTOS_BROWSER_TEST_PROFILE',
   'PORTOS_CI_BROWSER_OWNER',
   'PORTOS_REQUIRE_BROWSER_SUITES',
@@ -125,6 +126,9 @@ export const TEST_MEMO_NEVER = Object.freeze({
 export const WORKSPACE_BASE_INPUTS = Object.freeze({
   server: ['server/vitest.config.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'server/package.json', 'server/package-lock.json'],
   client: ['client/vitest.config.js', 'client/src/test/setup.js', 'scripts/vitestCiPool.js', 'client/package.json', 'client/package-lock.json'],
+  // The Postgres service is not visible to a key; the schema its suites run against is applied from these tracked files.
+  db: ['server/vitest.config.db.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'scripts/lib/dbTestFiles.js', 'server/package.json', 'server/package-lock.json',
+    'server/scripts/init-db.sql', 'server/scripts/setup-db-test.mjs'],
 });
 
 const JS_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;

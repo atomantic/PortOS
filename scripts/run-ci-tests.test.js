@@ -108,6 +108,27 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
+it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'db'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: 'files', CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
+        CI_TEST_FILES: JSON.stringify(['server/services/dbAdmin.db.test.js']),
+        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const { args, selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(args.slice(0, 5)).toEqual(['run', 'test:db:ci', '--prefix', 'server', '--']);
+    expect(selection.include).toEqual(['services/dbAdmin.db.test.js']);
+    expect(result.stdout).toMatch(/⏱ db files|⏱ db selected tests/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
 describe('test memo through the real runner', () => {
   it('runs a selected file once, then skips it while its inputs are unchanged, and runs it again when they change', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-memo-e2e-'));
@@ -220,11 +241,12 @@ describe('ci.yml shard wiring', () => {
   const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
-    expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'server', 'windows-server']);
+    expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
     // `browser` runs the planner's cross-workspace browser suites in `files`
     // mode (#10312): an exact file list has nothing to shard, so it is the one
     // runner without a matrix.
-    for (const [id, body] of runners.filter(([id]) => id !== 'browser')) {
+    // `database` is one serial job (a single `portos_test`), also without a matrix.
+    for (const [id, body] of runners.filter(([id]) => id !== 'browser' && id !== 'database')) {
       // The fan-out is decided by the impact job, never hardcoded here: a
       // scoped plan must collapse to one runner, and a job-level `if` cannot
       // read `matrix` to skip the extra shards itself.
@@ -234,6 +256,18 @@ describe('ci.yml shard wiring', () => {
       // the key the winner's 1/n of the transform artifacts is all that persists.
       expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
     }
+  });
+
+  it('memoizes the serial database job through the db scope', () => {
+    const body = workflowJobs(WORKFLOW).database;
+    const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
+    const step = body.slice(start, body.indexOf('- name:', start + 1));
+    expect(step).toContain('run: node scripts/run-ci-tests.js db');
+    expect(step).toContain('CI_TEST_MODE: full');
+    expect(step).toContain('PGDATABASE: portos_test');
+    expect(step).toContain('PORTOS_TEST_MEMO_DIR:');
+    expect(body).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
   });
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {

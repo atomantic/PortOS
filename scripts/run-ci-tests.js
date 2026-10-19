@@ -18,6 +18,7 @@ import {
   memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
+import { TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -347,15 +348,16 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   });
 }
 
+// `scope` here is the workspace npm runs in; `name` is only the runner scope shown on the duration line.
 export async function spawnNpm(scope, script, extraArgs, label, {
-  run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {},
+  run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {}, name = scope,
 } = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
   const profileArgs = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
     ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
   const result = await run(scope, script, [...extraArgs, ...profileArgs]);
-  recordVitestDuration(scope, label, startedAt);
+  recordVitestDuration(name, label, startedAt);
   onResult(result);
   if (result.error) {
     console.error(result.error.message);
@@ -381,7 +383,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   const retryStartedAt = Date.now();
   // The retry keeps the run's flags (recording, pass-with-no-tests); only the selectors shrink to the crashed file.
   const retry = await run(scope, script, [selector, ...profileArgs, ...extraArgs.filter(arg => arg.startsWith('--'))]);
-  recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
+  recordVitestDuration(name, `crash retry: ${relPath}`, retryStartedAt);
   onResult(retry);
   if (!retry.error && retry.status === 0) {
     if (hasOtherTestFailures(result.output)) {
@@ -408,17 +410,19 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 
 async function main() {
   const scope = process.argv[2];
-  if (!['server', 'client'].includes(scope)) {
-    console.error('Usage: node scripts/run-ci-tests.js <server|client>');
+  if (!Object.hasOwn(TEST_SCOPES, scope)) {
+    console.error('Usage: node scripts/run-ci-tests.js <server|client|db>');
     process.exit(2);
   }
+  const workspace = workspaceOf(scope);
+  const { script } = TEST_SCOPES[scope];
 
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   const repoFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
     ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
-  const selectedFiles = repoFiles.map((path) => toRunnerPath(scope, path));
+  const selectedFiles = repoFiles.map((path) => toRunnerPath(workspace, path));
 
   if (!['full', 'files', 'related'].includes(mode)) {
     console.error(`Unsupported CI test mode: ${mode}`);
@@ -450,7 +454,7 @@ async function main() {
   // returns.
   const memoDir = resolveMemoDir();
   if (mode === 'full' && !memoDir && !shard) {
-    process.exitCode = await spawnNpm(scope, 'test:ci', [], label);
+    process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
     return;
   }
 
@@ -479,7 +483,8 @@ async function main() {
   const extraArgs = memoDir ? ['--experimental.recordDependencies'] : [];
   const passed = [];
   try {
-    process.exitCode = await spawnNpm(scope, 'test:ci', extraArgs, label, {
+    process.exitCode = await spawnNpm(workspace, script, extraArgs, label, {
+      name: scope,
       onResult: (result) => passed.push(...passedTestFiles(result.fileResults ?? [], {
         repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
       })),

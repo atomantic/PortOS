@@ -984,8 +984,11 @@ Pull requests only read. The scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
 by run id, and only when the test step itself succeeded, so the cache holds
 nothing a pull-request branch or a red run wrote and every PR restores the
-newest trusted lineage. The DB job does not go through `run-ci-tests.js`
-and is not memoized.
+newest trusted lineage. The DB job runs the `db` scope
+(`node scripts/run-ci-tests.js db`, the serial `portos_test` suite) and keeps
+its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
+`server/scripts/setup-db-test.mjs` are base inputs (a schema change
+invalidates every key) and `PGDATABASE` is a keyed env var.
 
 **Disable.** `PORTOS_TEST_MEMO=off` turns reads and writes off together and
 restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
