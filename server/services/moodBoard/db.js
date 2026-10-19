@@ -88,6 +88,17 @@ export async function listBoards({ includeDeleted = false } = {}) {
   return result.rows.map(rowToBoard);
 }
 
+/** Keep saved board ownership stable until a media retirement has settled. */
+export async function withBoardMediaReferences(work) {
+  return withTransaction(async client => {
+    // Includes every writer, including peer merges: a prior writer commits
+    // before this snapshot; later writes wait until retirement releases it.
+    await client.query('LOCK TABLE mood_boards IN SHARE MODE');
+    const { rows } = await client.query('SELECT data FROM mood_boards WHERE deleted = FALSE');
+    return work(rows.map(rowToBoard));
+  });
+}
+
 /**
  * Live boards as `{ id, name }`, newest first — for pickers that need only the
  * label, without reading and shipping every board's items (up to 500 each).
