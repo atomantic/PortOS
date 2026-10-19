@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveVideoBackendPin, grokVideoJobParams } from './backendPin.js';
+import { resolveVideoBackendPin, grokVideoJobParams, videoBackendJobParams } from './backendPin.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 
@@ -105,6 +105,24 @@ describe('resolveVideoBackendPin', () => {
     expect(resolveVideoBackendPin(null, null)).toEqual({
       pinned: false, requested: null, mode: VIDEO_GEN_MODE.LOCAL, modelId: null,
     });
+  });
+
+  // A Runway model pin renders on the pinned catalog model (its price and
+  // end-frame support differ from the Gen-4.5 default), and never leaks into
+  // the local fallback when the Runway key goes away.
+  it('carries a curated Runway model pin into the Runway job and drops it from a local fallback', () => {
+    const runwayOn = { videoGen: { runway: { apiKey: 'key_test' } } };
+    const pin = resolveVideoBackendPin(project({ mode: 'runway', modelId: 'kling2.5_turbo_pro' }), runwayOn);
+    expect(pin).toMatchObject({ mode: VIDEO_GEN_MODE.RUNWAY, modelId: 'kling2.5_turbo_pro' });
+    expect(videoBackendJobParams(runwayOn, pin, { sourceImagePath: '/tmp/frame.png', duration: 5 }))
+      .toMatchObject({ mode: VIDEO_GEN_MODE.RUNWAY, modelId: 'kling2.5_turbo_pro', videoMode: 'image', duration: 5 });
+    expect(resolveVideoBackendPin(project({ mode: 'runway', modelId: 'not-a-runway-model' }), runwayOn).modelId).toBeNull();
+
+    const prev = process.env.RUNWAYML_API_SECRET;
+    delete process.env.RUNWAYML_API_SECRET;
+    const lapsed = resolveVideoBackendPin(project({ mode: 'runway', modelId: 'kling2.5_turbo_pro' }), {});
+    if (prev !== undefined) process.env.RUNWAYML_API_SECRET = prev;
+    expect(lapsed).toMatchObject({ requested: 'runway', mode: VIDEO_GEN_MODE.LOCAL, modelId: null });
   });
 });
 
