@@ -1148,22 +1148,23 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     const snapshotDir = join(sourceRoot, id);
     const { incomplete, failed } = await snapshotState(snapshotDir, id, true);
     if (incomplete || failed) return null;
-    // A manifest that exists but cannot be read must not date or delete the
-    // snapshot: fail toward keeping data (#11859).
-    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), null, { logError: false });
-    return { id, snapshotDir, createdAt: manifestRead.value?.generatedAt ?? null, protectedFromPrune: !manifestRead.ok };
+    // Share restore's structural admission, without hashing old payloads.
+    // Only confirmed absence is legacy; JSON null is an invalid manifest.
+    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
+    const valid = manifestRead.ok && (manifestRead.value === MANIFEST_ABSENT
+      || manifestDataEntries(manifestRead.value, join(snapshotDir, 'data'), null) !== null);
+    return { id, snapshotDir, protectedFromPrune: !valid };
   }))).filter(Boolean);
 
   // Newest-first by snapshot id (an ISO-style timestamp that never depends on
-  // reading the manifest); manifest.generatedAt is only a tiebreak.
-  descriptors.sort((a, b) => b.id.localeCompare(a.id)
-    || (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+  // reading the manifest). IDs are unique within this source namespace.
+  descriptors.sort((a, b) => b.id.localeCompare(a.id));
 
   // Keep protected snapshots in addition to the readable retention budget,
   // even when a bad clock placed a protected snapshot ahead of healthy ones.
   const toDelete = descriptors.filter(d => {
     if (d.protectedFromPrune) {
-      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable)`);
+      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable or invalid)`);
       return false;
     }
     return true;
@@ -1577,6 +1578,36 @@ async function snapshotScopeInventory(srcDir, subdirFilter) {
   return { paths, largestFileBytes };
 }
 
+// These exact metadata shapes belonged to six marker-gated file→DB imports.
+// Sibling assets and parked .imported evidence remain file-primary recovery data.
+const LEGACY_DB_METADATA = [
+  ['universes', /^universes\/[^/]+\/index\.json$/],
+  ['pipeline-issues', /^pipeline-issues\/iss-[A-Za-z0-9-]+\/index\.json$/],
+  ['pipeline-series', /^pipeline-series\/ser-[A-Za-z0-9-]+\/index\.json$/],
+  ['story-builder', /^story-builder\/stb-[A-Za-z0-9-]+\/index\.json$/],
+  ['writers-room', /^writers-room\/(?:(?:folders|exercises)\.json|works\/[^/]+\/manifest\.json)$/],
+  ['creative-director', /^creative-director-projects\.json$/],
+];
+
+async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
+  // Match dumpPostgres: an uninitialized backend still requires PostgreSQL.
+  if (process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file') return;
+  if (!inventory) throw snapshotFileIntegrityError(snapshotId);
+  const domains = new Set(LEGACY_DB_METADATA
+    .filter(([, pattern]) => inventory.paths.some(path => pattern.test(path)))
+    .map(([domain]) => domain));
+  if (inventory.paths.includes('universes/index.json')) {
+    const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
+    if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
+  }
+  if (domains.size) {
+    throw new ServerError(
+      `Historical file metadata for ${[...domains].join(', ')} cannot restore database-primary records. Convert this backup in a disposable offline upgrade install, verify its records, then restore a current-format file/database backup (docs/BACKUP.md).`,
+      { status: 409, code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: [...domains] } },
+    );
+  }
+}
+
 async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
   // A unique fallback distinguishes a genuinely absent legacy manifest from an
   // existing file whose parsed value is JSON null.
@@ -1593,10 +1624,11 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   }
   if (manifestRead.value === MANIFEST_ABSENT) {
     // No manifest to verify against, but the restore's idle-deadline floor
-    // still needs the largest in-scope file. Walk it best-effort: a scope that
-    // can't be surveyed keeps the default deadline rather than failing a
-    // restore that would previously have run.
+    // still needs the largest in-scope file. PostgreSQL also needs a complete
+    // inventory to reject ignored legacy metadata; only the file escape hatch
+    // can retain the old best-effort behavior when inventory fails.
     const legacyInventory = await snapshotScopeInventory(srcDir, subdirFilter).catch(() => null);
+    await assertRestoreStorageCompatible(srcDir, legacyInventory, snapshotId);
     return {
       status: 'unverified',
       reason: 'manifest_absent',
@@ -1620,6 +1652,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   const inventory = await snapshotScopeInventory(srcDir, subdirFilter)
     .catch(() => null);
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
+  await assertRestoreStorageCompatible(srcDir, inventory, snapshotId);
   const { paths: snapshotPaths, largestFileBytes } = inventory;
   const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry));
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);

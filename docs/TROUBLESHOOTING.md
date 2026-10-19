@@ -514,6 +514,12 @@ npm run pm2:start
 
 The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
 
+### Collection images or pinned covers lost after migration 428
+
+Migration 428 inferred deletion from missing local image bytes. That is invalid for peer-hosted media, whose bytes intentionally remain on the hosting peer, and for temporarily unavailable files. The migration runner now records pending `428-prune-dangling-collection-images.js` without executing its frozen transform, including when the ledger is missing or rebuilt. This policy is persisted before any other pending migration runs, so an interrupted upgrade cannot re-arm it. Explicit gallery deletion still removes the references for the image being deleted.
+
+If 428 already ran, preserve the current collection and recover membership from an unaffected peer or retained backup. Union synchronization may re-add the image items, but the migration also stamped a newer null `coverKey`; scalar last-write-wins synchronization cannot automatically restore that pinned cover. Select the intended cover explicitly after recovery. The peer-hosted media index does not record collection ownership and cannot reconstruct memberships. Do not rerun absence-based cleanup or overwrite newer edits with reconstructed guesses.
+
 ### "Another migration run holds data/migrations.lock"
 
 **Symptom**: `npm run migrations` or server boot exits with `Another migration run (pid N) holds …/data/migrations.lock`.
