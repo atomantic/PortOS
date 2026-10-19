@@ -44,6 +44,7 @@ const annotations = await import('./sharing/annotationsSync.js');
 const alcohol = await import('./meatspaceAlcohol.js');
 const nicotine = await import('./meatspaceNicotine.js');
 const { PATHS } = await import('../lib/fileUtils.js');
+const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 const bucketPath = join(tempRoot, 'bucket');
 let bucket;
 const seed = async (path, value) => {
@@ -260,10 +261,12 @@ describe('daily-log event identity (#8143)', () => {
     await seed(path(), { entries: [day([lager('drink-a')])] });
     const before = await readFile(path(), 'utf8');
     const result = await dataSync.applyRemote('meatspace', snapshot(day([lager('drink-b')])), {
-      portosMeta: { portosVersion: '99.0.0', schemaVersions: { meatspace: 2 } },
+      portosMeta: { portosVersion: '99.0.0', schemaVersions: { meatspace: PORTOS_SCHEMA_VERSIONS.meatspace + 1 } },
     });
     expect(result.applied).toBe(false);
-    expect(result.blockedBySchema.ahead).toEqual([{ category: 'meatspace', senderV: 2, receiverV: 1 }]);
+    expect(result.blockedBySchema.ahead).toEqual([
+      { category: 'meatspace', senderV: PORTOS_SCHEMA_VERSIONS.meatspace + 1, receiverV: PORTOS_SCHEMA_VERSIONS.meatspace },
+    ]);
     expect(await readFile(path(), 'utf8')).toBe(before);
   });
 });
