@@ -799,7 +799,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `privateSecuritySandbox.js` | Loopback-only local-provider gate and macOS Seatbelt launch with isolated CLI home and scratch workspace. |
 
-| `requestOrigin.js` | `remoteRequestHandler` and `isRemoteRequest` preserve remote transport identity across a localhost hop without trusting client headers. |
+| `requestOrigin.js` | `remoteRequestHandler`, `markRemoteServer` (covers the Socket.IO handshake and upgrade a handler never sees) and `isRemoteRequest` preserve remote transport identity across a localhost hop without trusting client headers; the host-control gates refuse a marked request as non-local. |
 
 | `cosFederationPolicy.js` | `isMachineLocalCosTask` excludes private assessments and explicitly machine-local tasks and agent archives from federation. |
 

@@ -14,6 +14,7 @@ import {
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
+import { isRemoteRequest } from '../lib/requestOrigin.js';
 import {
   changedHostControlSettingsPaths, changedVoiceConfigHostControlPaths, hostControlBodyKeys,
   hostControlSettingsPathsIn, isHostControlRoute, voiceConfigHostControlPathsIn,
@@ -239,10 +240,13 @@ const hasHostControl = (auth, localConnection) =>
 
 export const HOST_CONTROL_FORBIDDEN_MESSAGE = 'Host control requires an operator session, or a local connection when no password is set. Set an instance password to use it remotely.';
 
+// A request the Tailcat ingress accepted arrives from a loopback socket, so
+// the address alone would read as local; the listener's remote mark wins.
+const requestIsLocalConnection = (req) => !isRemoteRequest(req)
+  && isLocalConnection(req.socket?.remoteAddress, req.headers);
+
 // Server-derived HTTP authority; never read caller-provided body fields.
-export const requestHasHostControl = (req) => hasHostControl(
-  req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers),
-);
+export const requestHasHostControl = (req) => hasHostControl(req.portosAuthContext, requestIsLocalConnection(req));
 
 // Re-check at tool dispatch, after any STT/LLM wait. A handshake/session that
 // was valid when a turn started is not a durable grant to execute later.
@@ -297,7 +301,7 @@ export const hostControlBodyGate = async (req, res, next) => {
   const settingsNamed = hostControlSettingsPathsIn(req.method, req.path, req.body);
   const voiceNamed = voiceConfigHostControlPathsIn(req.method, req.path, req.body);
   if ((settingsNamed.length === 0 && voiceNamed.length === 0)
-    || hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+    || hasHostControl(req.portosAuthContext, requestIsLocalConnection(req))) return next();
   if (settingsNamed.length > 0
     && changedHostControlSettingsPaths(settingsNamed, req.body, await getSettings(), req.method, req.path).length > 0) {
     return requireHostControl(req, res, next);
@@ -342,7 +346,10 @@ export const allowSocketRequest = (req, callback) => callback(null, browserReque
 
 export const socketAuthGate = async (socket, next) => {
   if (!socket.data) socket.data = {};
-  socket.data.portosLocalConnection = isLocalConnection(socket.handshake?.address, socket.handshake?.headers);
+  // `socket.request` is the engine.io handshake request; the Tailcat ingress
+  // marks it remote even though the handshake address is loopback.
+  socket.data.portosLocalConnection = !isRemoteRequest(socket.request)
+    && isLocalConnection(socket.handshake?.address, socket.handshake?.headers);
   const fakeReq = { headers: socket.handshake?.headers || {} };
   // Before the auth-off bypass: a foreign page must not drive shell:start /
   // iterm:input on a password-free install. server/index.js also refuses the
