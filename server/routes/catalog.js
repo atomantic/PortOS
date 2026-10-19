@@ -809,6 +809,9 @@ router.get('/export', asyncHandler(async (req, res) => {
 }));
 
 router.get('/sync', asyncHandler(async (req, res) => {
+  // Peers pull this (PEER_API_SURFACE): honor the per-peer `catalog` category.
+  const { authorizePeerPull } = await import('../services/sharing/peerPullAuthorization.js');
+  await authorizePeerPull(req, { syncCategory: 'catalog', route: 'catalog sync' });
   // The four `sync_sequence` columns are independent — accept either
   // `?since=N` (uniform; only meaningful on the first pull where everyone's
   // at 0) or `?since[scraps]=A&since[ingredients]=B&...` for subsequent
