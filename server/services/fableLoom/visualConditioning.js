@@ -183,6 +183,158 @@ const allocateAssets = (candidates, capability) => {
   return { accepted, omitted };
 };
 
+// Each conditioning step returns its own `omitted`/`failures`; the compiler
+// concatenates them in step order, so the manifest's omission order and the
+// locked-failure wording match one inline pass.
+const bindingConditioning = ({ bindings, locked, capability }) => {
+  const omitted = [
+    ...bindings.missing,
+    ...bindings.offscreenAppearances.map((appearance) => ({
+      role: 'character',
+      bindingId: appearance.characterId,
+      reason: 'protagonist-offscreen',
+    })),
+  ];
+  const failures = [];
+  if (locked && bindings.missing.length) failures.push('one or more stable bindings no longer resolve');
+  if (locked && bindings.boundCharacters.length > 1 && !capability.multiCharacterPreservation) {
+    failures.push(`backend does not declare multi-character preservation for ${bindings.boundCharacters.length} characters`);
+  }
+  return { omitted, failures };
+};
+
+const resolveCharacterAdapters = async ({ bindings, capability, locked, resolveLoras, hashFile }) => {
+  const omitted = [];
+  const failures = [];
+  const loraMatches = capability.supportsLora
+    ? await resolveLoras(bindings.boundCharacters.map(({ character }) => character), {
+      compatKey: capability.loraCompatKey || null, max: Number.MAX_SAFE_INTEGER, allPerCharacter: true,
+    })
+    : [];
+  const acceptedLoras = loraMatches.slice(0, capability.loraBudget || 0);
+  const omittedLoras = loraMatches.slice(acceptedLoras.length);
+  omitted.push(...omittedLoras.map((lora) => ({
+    role: 'character-adapter',
+    bindingId: lora.character?.entryId || lora.character?.ingredientId || null,
+    filename: basename(lora.filename),
+    reason: 'adapter-budget',
+  })));
+  if (locked && omittedLoras.length) failures.push('compatible character adapters exceed the backend adapter budget');
+  const adapterTriggerWords = new Map();
+  const adapters = [];
+  for (const lora of acceptedLoras) {
+    const path = join(PATHS.loras, basename(lora.filename));
+    const sha256 = await adapterDigest(path, hashFile).catch(() => null);
+    adapters.push({
+      characterId: lora.character?.entryId || null,
+      filename: basename(lora.filename), scale: lora.scale, sha256,
+    });
+    if (locked && !sha256) failures.push(`adapter ${basename(lora.filename)} could not be fingerprinted`);
+    if (lora.triggerWord) {
+      const id = lora.character?.entryId;
+      adapterTriggerWords.set(id, [...(adapterTriggerWords.get(id) || []), lora.triggerWord]);
+    }
+  }
+  if (!capability.supportsLora && bindings.boundCharacters.length) {
+    omitted.push(...bindings.boundCharacters.map(({ character }) => ({ role: 'character-adapter', bindingId: character.id, reason: 'capability-unsupported' })));
+  }
+  return { adapters, adapterTriggerWords, omitted, failures };
+};
+
+const videoReferenceCandidates = ({ node, sourceImagePath, locked, resolveAsset }) => {
+  const approvedStoryboardPath = resolveAsset(node.image);
+  const requestedCurrentStoryboard = approvedStoryboardPath && sourceImagePath
+    && basename(approvedStoryboardPath) === basename(sourceImagePath);
+  if (requestedCurrentStoryboard && node.visualCanon?.storyboardImageApproved) {
+    return {
+      candidates: [publicAsset(approvedStoryboardPath, 'storyboard-first-frame', node.id, locked)],
+      omitted: [],
+      failures: [],
+    };
+  }
+  return {
+    candidates: [],
+    omitted: [{ role: 'storyboard-first-frame', bindingId: node.id, reason: 'missing-stale-or-unapproved' }],
+    failures: locked ? ['storyboard first frame is missing, stale, or not author-approved'] : [],
+  };
+};
+
+const imageReferenceCandidates = ({ bindings, temporal, locked, resolveAsset }) => {
+  const candidates = [];
+  const omitted = [];
+  const failures = [];
+  if (temporal.node) {
+    const path = temporal.node.image ? resolveAsset(temporal.node.image) : null;
+    if (path) candidates.push(publicAsset(path, 'temporal-predecessor', temporal.node.id, locked));
+    else {
+      omitted.push({ role: 'temporal-predecessor', bindingId: temporal.node.id, reason: 'asset-unavailable' });
+      if (locked) failures.push('temporal predecessor image is unavailable');
+    }
+  } else if (temporal.reason === 'invalid-explicit-source' || temporal.reason === 'ambiguous-convergence') {
+    omitted.push({ role: 'temporal-predecessor', bindingId: null, reason: temporal.reason });
+    if (locked) failures.push(temporal.reason === 'invalid-explicit-source'
+      ? 'explicit temporal source is not an incoming graph predecessor'
+      : 'convergent scene needs an explicit incoming temporal source');
+  }
+  const characterAssets = [];
+  for (const { character, appearance } of bindings.boundCharacters) {
+    const draftReference = !locked && appearance?.referenceImage ? resolveAsset(appearance.referenceImage) : null;
+    const resolved = imageAssetsForCharacter(character, locked, resolveAsset);
+    if (locked && resolved.readiness.status !== 'ready') failures.push(`${character.name} identity package is ${resolved.readiness.status}`);
+    if (locked && resolved.primary.length === 0) failures.push(`${character.name} approved identity assets are unavailable`);
+    omitted.push(...resolved.unavailable);
+    if (draftReference) {
+      resolved.primary = [publicAsset(draftReference, 'character-draft-reference', character.id)];
+      resolved.supplemental = [];
+    }
+    characterAssets.push(resolved);
+  }
+  // Guarantee each cast member's primary approved identity anchor is
+  // considered before supplemental profile/body sheets consume the budget.
+  candidates.push(...characterAssets.flatMap((item) => item.primary));
+  candidates.push(...characterAssets.flatMap((item) => item.supplemental));
+  if (bindings.boundPlace?.primaryImageRef) {
+    const path = resolveAsset(bindings.boundPlace.primaryImageRef);
+    if (path) candidates.push(publicAsset(path, 'environment', bindings.boundPlace.id));
+    else omitted.push({ role: 'environment', bindingId: bindings.boundPlace.id, reason: 'asset-unavailable' });
+  } else if (bindings.boundPlace) {
+    omitted.push({ role: 'environment', bindingId: bindings.boundPlace.id, reason: 'reference-not-configured' });
+  }
+  for (const object of bindings.boundObjects) {
+    const path = resolveAsset(object.primaryImageRef);
+    if (path) candidates.push(publicAsset(path, 'object', object.id));
+    else omitted.push({
+      role: 'object', bindingId: object.id,
+      reason: object.primaryImageRef ? 'asset-unavailable' : 'reference-not-configured',
+    });
+  }
+  return { candidates, omitted, failures };
+};
+
+const referenceStrengths = (assets) => assets.map((asset) => asset.role === 'temporal-predecessor' ? 0.4 : 1);
+
+const manifestStatus = ({ locked, omitted, warnings }) => {
+  if (locked) return 'locked';
+  return omitted.length || warnings.length ? 'degraded' : 'draft';
+};
+
+const manifestBindings = (bindings) => ({
+  inferred: !bindings.declared,
+  ...(bindings.protagonistId ? {
+    protagonist: {
+      characterId: bindings.protagonistId,
+      wardrobeId: bindings.protagonistWardrobeId,
+      presence: bindings.protagonistPresence || null,
+    },
+  } : {}),
+  characterAppearances: bindings.boundCharacters.map(({ character, appearance }) => ({
+    characterId: character.id, wardrobeId: appearance.wardrobeId || null,
+    expression: appearance.expression || '', continuityNotes: appearance.continuityNotes || '',
+  })),
+  placeId: bindings.boundPlace?.id || null,
+  objectIds: bindings.boundObjects.map((object) => object.id),
+});
+
 const blockedError = (messages, manifest) => new ServerError(
   `Canon-locked render cannot preserve the declared scene: ${messages.join('; ')}`,
   {
@@ -219,110 +371,17 @@ export async function compileFableLoomVisualRequest({
   const bindings = bindScene({ node, episode, universe, loom });
   const locked = bindings.declared && node.visualCanon.mode !== 'draft';
   const warnings = bindings.declared ? [] : ['Bindings inferred from scene text; render is draft-only'];
-  const failures = [];
-  const omitted = [...bindings.missing];
-  omitted.push(...bindings.offscreenAppearances.map((appearance) => ({
-    role: 'character',
-    bindingId: appearance.characterId,
-    reason: 'protagonist-offscreen',
-  })));
-  if (locked && bindings.missing.length) failures.push('one or more stable bindings no longer resolve');
-  if (locked && bindings.boundCharacters.length > 1 && !capability.multiCharacterPreservation) {
-    failures.push(`backend does not declare multi-character preservation for ${bindings.boundCharacters.length} characters`);
-  }
-
-  const loraMatches = capability.supportsLora
-    ? await resolveLoras(bindings.boundCharacters.map(({ character }) => character), {
-      compatKey: capability.loraCompatKey || null, max: Number.MAX_SAFE_INTEGER, allPerCharacter: true,
-    })
-    : [];
-  const acceptedLoras = loraMatches.slice(0, capability.loraBudget || 0);
-  const omittedLoras = loraMatches.slice(acceptedLoras.length);
-  omitted.push(...omittedLoras.map((lora) => ({
-    role: 'character-adapter',
-    bindingId: lora.character?.entryId || lora.character?.ingredientId || null,
-    filename: basename(lora.filename),
-    reason: 'adapter-budget',
-  })));
-  if (locked && omittedLoras.length) failures.push('compatible character adapters exceed the backend adapter budget');
-  const adapterTriggerWords = new Map();
-  const adapters = [];
-  for (const lora of acceptedLoras) {
-    const path = join(PATHS.loras, basename(lora.filename));
-    const sha256 = await adapterDigest(path, hashFile).catch(() => null);
-    adapters.push({
-      characterId: lora.character?.entryId || null,
-      filename: basename(lora.filename), scale: lora.scale, sha256,
-    });
-    if (locked && !sha256) failures.push(`adapter ${basename(lora.filename)} could not be fingerprinted`);
-    if (lora.triggerWord) {
-      const id = lora.character?.entryId;
-      adapterTriggerWords.set(id, [...(adapterTriggerWords.get(id) || []), lora.triggerWord]);
-    }
-  }
-  if (!capability.supportsLora && bindings.boundCharacters.length) {
-    omitted.push(...bindings.boundCharacters.map(({ character }) => ({ role: 'character-adapter', bindingId: character.id, reason: 'capability-unsupported' })));
-  }
+  const bindingStep = bindingConditioning({ bindings, locked, capability });
+  const adapterStep = await resolveCharacterAdapters({ bindings, capability, locked, resolveLoras, hashFile });
+  const { adapters, adapterTriggerWords } = adapterStep;
 
   const temporal = resolveTemporalNode(episode, node, node.visualCanon?.continuitySourceNodeId);
-  const candidates = [];
-  if (kind === 'video') {
-    const approvedStoryboardPath = resolveAsset(node.image);
-    const requestedCurrentStoryboard = approvedStoryboardPath && sourceImagePath
-      && basename(approvedStoryboardPath) === basename(sourceImagePath);
-    if (requestedCurrentStoryboard && node.visualCanon?.storyboardImageApproved) {
-      candidates.push(publicAsset(approvedStoryboardPath, 'storyboard-first-frame', node.id, locked));
-    } else {
-      omitted.push({ role: 'storyboard-first-frame', bindingId: node.id, reason: 'missing-stale-or-unapproved' });
-      if (locked) failures.push('storyboard first frame is missing, stale, or not author-approved');
-    }
-  } else {
-    if (temporal.node) {
-      const path = temporal.node.image ? resolveAsset(temporal.node.image) : null;
-      if (path) candidates.push(publicAsset(path, 'temporal-predecessor', temporal.node.id, locked));
-      else {
-        omitted.push({ role: 'temporal-predecessor', bindingId: temporal.node.id, reason: 'asset-unavailable' });
-        if (locked) failures.push('temporal predecessor image is unavailable');
-      }
-    } else if (temporal.reason === 'invalid-explicit-source' || temporal.reason === 'ambiguous-convergence') {
-      omitted.push({ role: 'temporal-predecessor', bindingId: null, reason: temporal.reason });
-      if (locked) failures.push(temporal.reason === 'invalid-explicit-source'
-        ? 'explicit temporal source is not an incoming graph predecessor'
-        : 'convergent scene needs an explicit incoming temporal source');
-    }
-    const characterAssets = [];
-    for (const { character, appearance } of bindings.boundCharacters) {
-      const draftReference = !locked && appearance?.referenceImage ? resolveAsset(appearance.referenceImage) : null;
-      const resolved = imageAssetsForCharacter(character, locked, resolveAsset);
-      if (locked && resolved.readiness.status !== 'ready') failures.push(`${character.name} identity package is ${resolved.readiness.status}`);
-      if (locked && resolved.primary.length === 0) failures.push(`${character.name} approved identity assets are unavailable`);
-      omitted.push(...resolved.unavailable);
-      if (draftReference) {
-        resolved.primary = [publicAsset(draftReference, 'character-draft-reference', character.id)];
-        resolved.supplemental = [];
-      }
-      characterAssets.push(resolved);
-    }
-    // Guarantee each cast member's primary approved identity anchor is
-    // considered before supplemental profile/body sheets consume the budget.
-    candidates.push(...characterAssets.flatMap((item) => item.primary));
-    candidates.push(...characterAssets.flatMap((item) => item.supplemental));
-    if (bindings.boundPlace?.primaryImageRef) {
-      const path = resolveAsset(bindings.boundPlace.primaryImageRef);
-      if (path) candidates.push(publicAsset(path, 'environment', bindings.boundPlace.id));
-      else omitted.push({ role: 'environment', bindingId: bindings.boundPlace.id, reason: 'asset-unavailable' });
-    } else if (bindings.boundPlace) {
-      omitted.push({ role: 'environment', bindingId: bindings.boundPlace.id, reason: 'reference-not-configured' });
-    }
-    for (const object of bindings.boundObjects) {
-      const path = resolveAsset(object.primaryImageRef);
-      if (path) candidates.push(publicAsset(path, 'object', object.id));
-      else omitted.push({
-        role: 'object', bindingId: object.id,
-        reason: object.primaryImageRef ? 'asset-unavailable' : 'reference-not-configured',
-      });
-    }
-  }
+  const referenceStep = kind === 'video'
+    ? videoReferenceCandidates({ node, sourceImagePath, locked, resolveAsset })
+    : imageReferenceCandidates({ bindings, temporal, locked, resolveAsset });
+  const { candidates } = referenceStep;
+  const omitted = [...bindingStep.omitted, ...adapterStep.omitted, ...referenceStep.omitted];
+  const failures = [...bindingStep.failures, ...adapterStep.failures, ...referenceStep.failures];
 
   const allocation = allocateAssets(candidates, capability);
   omitted.push(...allocation.omitted);
@@ -337,25 +396,10 @@ export async function compileFableLoomVisualRequest({
   const manifest = {
     version: 1,
     compilerVersion: FABLELOOM_VISUAL_COMPILER_VERSION,
-    status: locked ? 'locked' : (omitted.length || warnings.length ? 'degraded' : 'draft'),
+    status: manifestStatus({ locked, omitted, warnings }),
     universeId: universe.id,
     capability,
-    bindings: {
-      inferred: !bindings.declared,
-      ...(bindings.protagonistId ? {
-        protagonist: {
-          characterId: bindings.protagonistId,
-          wardrobeId: bindings.protagonistWardrobeId,
-          presence: bindings.protagonistPresence || null,
-        },
-      } : {}),
-      characterAppearances: bindings.boundCharacters.map(({ character, appearance }) => ({
-        characterId: character.id, wardrobeId: appearance.wardrobeId || null,
-        expression: appearance.expression || '', continuityNotes: appearance.continuityNotes || '',
-      })),
-      placeId: bindings.boundPlace?.id || null,
-      objectIds: bindings.boundObjects.map((object) => object.id),
-    },
+    bindings: manifestBindings(bindings),
     assets: allocation.accepted.map(({ path: _path, ...asset }) => asset),
     adapters,
     omitted,
@@ -363,7 +407,7 @@ export async function compileFableLoomVisualRequest({
     temporalSourceNodeId: temporal.node?.id || null,
     compiledPrompt: positive,
     compiledNegativePrompt: negativePrompt,
-    referenceImageStrengths: allocation.accepted.map((asset) => asset.role === 'temporal-predecessor' ? 0.4 : 1),
+    referenceImageStrengths: referenceStrengths(allocation.accepted),
     compiledAt: now(),
   };
   if (locked && failures.length) throw blockedError(unique(failures), { ...manifest, status: 'degraded', warnings: unique([...warnings, ...failures]) });
@@ -372,7 +416,7 @@ export async function compileFableLoomVisualRequest({
     negativePrompt,
     promptAdditions,
     referenceImagePaths: allocation.accepted.map((asset) => asset.path),
-    referenceImageStrengths: allocation.accepted.map((asset) => asset.role === 'temporal-predecessor' ? 0.4 : 1),
+    referenceImageStrengths: referenceStrengths(allocation.accepted),
     loraFilenames: adapters.map((adapter) => adapter.filename),
     loraScales: adapters.map((adapter) => adapter.scale),
     sourceImagePath: kind === 'video' ? allocation.accepted[0]?.path || null : null,
