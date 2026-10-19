@@ -26,6 +26,13 @@ function inferActionFromEndpoint(endpoint, method) {
 }
 
 /**
+ * Endpoint for log lines: query strings carry agentId (auth), so drop them
+ */
+function logPath(endpoint) {
+  return endpoint.split('?')[0];
+}
+
+/**
  * Make an API request to Moltworld
  */
 async function request(endpoint, options = {}) {
@@ -38,7 +45,7 @@ async function request(endpoint, options = {}) {
     ...options
   };
 
-  console.log(`🌍 Moltworld API: ${options.method || 'GET'} ${endpoint}`);
+  console.log(`🌍 Moltworld API: ${options.method || 'GET'} ${logPath(endpoint)}`);
 
   const fetchResult = await fetchWithTimeout(url, config, MOLTWORLD_TIMEOUT_MS).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e }));
 
@@ -58,7 +65,7 @@ async function request(endpoint, options = {}) {
     if (response.status !== 404) {
       console.error(`❌ Moltworld API error: ${response.status} ${message}`);
     } else {
-      console.log(`🌍 Moltworld API: 404 ${endpoint}`);
+      console.log(`🌍 Moltworld API: 404 ${logPath(endpoint)}`);
     }
     // Sync local rate limit state when platform enforces a cooldown
     if (response.status === 429) {
@@ -111,7 +118,7 @@ export async function register(name, appearance = {}) {
   // Normalize: API may return { agent: { id } } or { agentId }
   const agentId = result?.agentId || result?.agent?.id || result?.id;
   const apiKey = result?.apiKey || result?.api_key || agentId;
-  console.log(`🆕 Moltworld: Registered agent "${name}" (agentId=${agentId})`);
+  console.log(`🆕 Moltworld: Registered agent "${name}"`);
   return { ...result, agentId, apiKey };
 }
 
