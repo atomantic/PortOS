@@ -307,6 +307,16 @@ export async function readBodyCapped(res, maxBytes) {
 }
 
 /**
+ * Fetch with every hop vetted and DNS-pinned, returning the raw Response of ANY
+ * status (3xx without a followable Location excluded) so callers that classify
+ * on status (privacy scan) keep it. Returns null on a network error or a
+ * blocked/invalid redirect. The caller owns reading the body.
+ */
+export function fetchPublicResponse(url, { timeoutMs, headers, blockPrivate = false, throwOnUnsafe = true } = {}) {
+  return fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
+}
+
+/**
  * Fetch a URL's body as text. Returns the string on a 2xx, or null on any
  * failure (network error, non-ok status, blocked redirect). `blockPrivate` opts
  * into the strict block-all-private posture and `throwOnUnsafe: false` returns
