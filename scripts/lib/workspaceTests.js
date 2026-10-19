@@ -49,11 +49,13 @@ export const CLIENT_TEST_INCLUDE = Object.freeze(['src/**/*.{test,spec}.{js,jsx}
 export const CLIENT_TEST_EXCLUDE = Object.freeze(['**/node_modules/**', '**/.git/**']);
 
 /**
- * Linux CI gives the registered browser contracts one browser-owner job; only
- * the explicitly opted-in unit profile excludes them from the server runner.
+ * Linux CI gives the registered browser contracts one browser-owner job. An
+ * explicitly exported `PORTOS_CI_BROWSER_OWNER=unit` (CI's Linux server shards,
+ * and pregate on every platform) excludes them from the server unit runner, so
+ * they run once in the browser stage. Local and Windows defaults keep them.
  */
-export function browserOwnerExcludes({ platform = process.platform, env = process.env } = {}) {
-  return platform === 'linux' && env.PORTOS_CI_BROWSER_OWNER === 'unit'
+export function browserOwnerExcludes({ env = process.env } = {}) {
+  return env.PORTOS_CI_BROWSER_OWNER === 'unit'
     ? BROWSER_SUITES.map(path => path.slice('server/'.length)) : [];
 }
 

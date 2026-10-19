@@ -49,11 +49,13 @@ describe('workspace test enumeration', () => {
     expect(listWorkspaceTests('server', { repoRoot: REPO_ROOT, env: {} })).toEqual(vitestListedFiles(REPO_ROOT, 'server'));
   }, 120_000);
 
-  it('drops the registered browser suites only for the Linux unit owner', () => {
+  it('drops the registered browser suites for an explicit unit owner on every platform', () => {
     const all = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'linux', env: {} });
-    const owned = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'linux', env: { PORTOS_CI_BROWSER_OWNER: 'unit' } });
     expect(all).toContain('lib/filmLook.browser.test.js');
-    expect(owned).not.toContain('lib/filmLook.browser.test.js');
-    expect(listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'win32', env: { PORTOS_CI_BROWSER_OWNER: 'unit' } })).toEqual(all);
+    for (const platform of ['linux', 'darwin', 'win32']) {
+      const owned = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform, env: { PORTOS_CI_BROWSER_OWNER: 'unit' } });
+      expect(owned).not.toContain('lib/filmLook.browser.test.js');
+    }
+    expect(listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'darwin', env: {} })).toEqual(all);
   });
 });

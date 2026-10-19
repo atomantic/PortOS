@@ -607,7 +607,8 @@ The selected work is split across parallel jobs:
   the serial DB suite when database-sensitive files changed.
 - **Browser suites** (their own `browser` job, beside DB tests) — the exact
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
-  Linux server shards exclude that registry with `PORTOS_CI_BROWSER_OWNER=unit`;
+  Server unit runs exclude that registry whenever `PORTOS_CI_BROWSER_OWNER=unit`
+  is exported (Linux server shards, and `npm run pregate` on every platform);
   other browser files, including `overlayTextService`, keep their existing owner.
   The planner selects affected registered files and the browser job requires
   Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
