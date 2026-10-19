@@ -2313,6 +2313,22 @@ describe('restoreSnapshot manifest verification', () => {
     expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
   });
 
+  // A pre-#6182 snapshot keeps the CoS config in state.json's `config` slice.
+  it.each([
+    { name: 'pre-split snapshot, full restore', files: ['cos/state.json'], subdirFilter: undefined, expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, state.json scope', files: ['cos/state.json'], subdirFilter: 'cos/state.json', expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, agents scope', files: ['cos/state.json'], subdirFilter: 'cos/agents', expected: null },
+    { name: 'snapshot with config.json', files: ['cos/state.json', 'cos/config.json'], subdirFilter: undefined, expected: null },
+  ])('hands CoS restore the legacy config slice the snapshot installs: $name', async ({ files, subdirFilter, expected }) => {
+    const bodies = { 'cos/state.json': '{"agents":{},"config":{"maxConcurrentAgents":7}}', 'cos/config.json': '{"maxConcurrentAgents":5}' };
+    const manifest = {};
+    for (const file of files) manifest[file] = await writeSnapshotFile(file, bodies[file]);
+    await writeManifest(manifest);
+    withLiveCosRestore.mockClear();
+    await finishRestore({ dryRun: false, subdirFilter });
+    expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+  });
+
   it('names the unmanifested file so the operator can act on it', async () => {
     const relativePath = 'restore-integrity/example.json';
     await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });

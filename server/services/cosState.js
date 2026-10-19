@@ -602,13 +602,37 @@ export async function saveState(state, { onStage } = {}) {
   stateCache = stampGeneration(state, stateRecovery);
 }
 
+const legacyConfigSlice = (state) => (isPlainObject(state?.config) ? JSON.stringify(state.config) : null);
+
+/**
+ * A snapshot taken before the #6182 split keeps the CoS config inside
+ * state.json and carries no config.json. Restored over an upgraded install, the
+ * live config.json is newer than the snapshot yet wins every read (and migration
+ * 339 no-ops on its presence), so the restored settings were silently discarded
+ * and then stripped by the next saveState. After a transfer that completed and
+ * installed the snapshot's slice, move config.json aside — kept for manual
+ * recovery, never deleted — so readConfig() completes the split from the
+ * restored slice. A failed transfer is left alone: the live state.json may
+ * already hold the same slice without this restore having installed it.
+ */
+async function supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig) {
+  if (!existsSync(STATE_FILE) || !existsSync(CONFIG_FILE)) return;
+  const restored = legacyConfigSlice(parseStateFile(await readFile(STATE_FILE, 'utf-8'), 'CoS state (restored legacy config)'));
+  if (restored === null || restored !== JSON.stringify(snapshotLegacyConfig)) return;
+  const parked = join(dirname(CONFIG_FILE), `config.pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  await rename(CONFIG_FILE, parked);
+  console.log(`📦 Restored snapshot predates config.json; moved the newer CoS config aside to ${basename(parked)} and recovering settings from the restored state.json`);
+}
+
 /**
  * Drain config, then runtime mutations and keep both queues until transfer and
  * reload settle. This order matches config changes that consult runtime state;
  * never acquire the config queue from inside the state queue.
  * Callers must read their mutation's pre-image INSIDE its respective queue.
+ * `snapshotLegacyConfig` is the config slice a pre-split snapshot installs, if
+ * any (see supersedeConfigForRestoredLegacySlice).
  */
-export function withLiveCosRestore(transfer) {
+export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {}) {
   return withConfigLock(() => withStateLock(async () => {
     const persisted = await readStateForSafetyCheck();
     const states = [stateCache, persisted.state].filter(Boolean);
@@ -628,6 +652,7 @@ export function withLiveCosRestore(transfer) {
     configCache = null;
     stateCache = null;
     const [reload] = await Promise.allSettled([(async () => {
+      if (snapshotLegacyConfig && result.status === 'fulfilled') await supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig);
       const { reloadAgentIndexAfterRestore } = await import('./cosAgentIndex.js');
       await reloadAgentIndexAfterRestore();
       const state = await loadState();
