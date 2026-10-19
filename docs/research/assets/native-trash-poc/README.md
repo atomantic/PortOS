@@ -16,3 +16,8 @@ removes everything it created, including from the Trash / Recycle Bin.
 These are investigation tools, not product code: nothing under `server/` imports
 them. They import the production scripts and adapter from `server/lib/` so a
 re-run proves what ships, not a copy.
+
+The Windows CI job also runs `server/lib/nativeTrash.smoke.test.js` against the
+runner's real Recycle Bin (opt-in via `PORTOS_NATIVE_TRASH_SMOKE=1`, set only on the
+`windows-server` job). It recycles one temp file through the shipped adapter, asserts the
+`$I` record names the original path, and removes its own `$I`/`$R` pair.
