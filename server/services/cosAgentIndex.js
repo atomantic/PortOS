@@ -15,7 +15,8 @@ import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises'
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { AGENTS_DIR, withStateLock } from './cosState.js';
-import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import {
   loadCompletionOrderIndex,
@@ -48,11 +49,21 @@ async function loadAgentIndexLeased() {
       await ensureDir(AGENTS_DIR);
     }
 
-    if (existsSync(INDEX_FILE)) {
-      const content = await tryReadFile(INDEX_FILE);
-      const parsed = safeJSONParse(content ?? '{}', {});
-      agentIndex = new Map(Object.entries(parsed));
-      console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
+    const { ok, value: content } = existsSync(INDEX_FILE)
+      ? await tryReadFileStrict(INDEX_FILE)
+      : { ok: true, value: null };
+    if (content !== null || !ok) {
+      const parsed = ok ? safeJSONParse(content, null, { allowArray: false }) : null;
+      if (isPlainObject(parsed)) {
+        agentIndex = new Map(Object.entries(parsed));
+        console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
+      } else {
+        // Present but unreadable or malformed is not an empty index: saving that
+        // would orphan every archived run. The date buckets are authoritative, so
+        // rebuild in memory; the next save persists the full map, never an empty one.
+        agentIndex = await scanDateBucketIndex();
+        console.error(`❌ Agent index is unreadable or malformed; rebuilt ${agentIndex.size} entries from date buckets: ${INDEX_FILE}`);
+      }
     } else {
       // No index yet — run migration from flat dirs to date buckets
       agentIndex = await migrateAgentsToDateBuckets();
@@ -230,31 +241,42 @@ async function migrateAgentsToDateBuckets() {
   return withBackupAssetPublication(migrateAgentsToDateBucketsLeased);
 }
 
-async function migrateAgentsToDateBucketsLeased() {
+// Index every agent already archived under a YYYY-MM-DD bucket directory.
+async function scanDateBucketIndex(entries) {
   const index = new Map();
-
-  if (!existsSync(AGENTS_DIR)) {
-    await ensureDir(AGENTS_DIR);
-    await atomicWrite(INDEX_FILE, {});
-    console.log('📂 Created empty agent index (no agents to migrate)');
-    return index;
-  }
-
-  const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-
-  // Also scan existing date-bucket dirs to include them in the index
+  const dirEntries = entries ?? await readdir(AGENTS_DIR, { withFileTypes: true });
   const dateDirPattern = /^\d{4}-\d{2}-\d{2}$/;
-  for (const entry of entries) {
+  for (const entry of dirEntries) {
     if (!entry.isDirectory() || !dateDirPattern.test(entry.name)) continue;
     const dateStr = entry.name;
     const dateDir = join(AGENTS_DIR, dateStr);
-    const agentDirs = await readdir(dateDir, { withFileTypes: true }).catch(() => []);
+    // A listing failure other than a vanished bucket must not read as an empty
+    // bucket: the caller may persist this map as the authoritative index.
+    const agentDirs = await readdir(dateDir, { withFileTypes: true }).catch(err => {
+      if (err.code === 'ENOENT') return [];
+      throw err;
+    });
     for (const agentEntry of agentDirs) {
       if (agentEntry.isDirectory() && agentEntry.name.startsWith('agent-')) {
         index.set(agentEntry.name, dateStr);
       }
     }
   }
+  return index;
+}
+
+async function migrateAgentsToDateBucketsLeased() {
+  if (!existsSync(AGENTS_DIR)) {
+    await ensureDir(AGENTS_DIR);
+    await atomicWrite(INDEX_FILE, {});
+    console.log('📂 Created empty agent index (no agents to migrate)');
+    return new Map();
+  }
+
+  const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
+
+  // Also scan existing date-bucket dirs to include them in the index
+  const index = await scanDateBucketIndex(entries);
 
   // Find flat agent-* dirs that need migration
   const flatAgentDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('agent-'));

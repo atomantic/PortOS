@@ -1,9 +1,10 @@
 import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { digitalTwinMetaSchema } from '../lib/digitalTwinValidation.js';
-import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite, tryReadFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 
@@ -28,7 +29,12 @@ export const CACHE_TTL_MS = 5000;
 // would otherwise each push onto it and the later saveMeta would persist
 // whichever tombstone/record set it happened to hold. NOT re-entrant: never
 // call withMetaLock from inside a withMetaLock callback.
-export const withMetaLock = createMutex();
+const metaMutex = createMutex();
+// Marks code running inside withMetaLock: loadMeta refuses an untrusted file
+// there instead of serving defaults, so a transient read fault cannot hand a
+// mutation defaults that a later, healthy read in saveMeta would let through.
+const metaLockContext = new AsyncLocalStorage();
+export const withMetaLock = (fn) => metaMutex(() => metaLockContext.run(true, fn));
 
 // Expose cache for modules that manage test/document caches (testing.js)
 export { cache };
@@ -59,15 +65,25 @@ export async function loadMeta() {
 
   await ensureSoulDir();
 
-  if (!existsSync(META_FILE)) {
-    // Scan existing documents and build initial meta
+  const { ok, value: content } = await tryReadFileStrict(META_FILE);
+  if (ok && content === null) {
+    // Only ENOENT proves the file was never written: scan existing documents
+    // and build initial meta
     const meta = await buildInitialMeta();
     await saveMeta(meta);
     return meta;
   }
 
-  const content = await readFile(META_FILE, 'utf-8');
-  const parsed = safeJSONParse(content, DEFAULT_META);
+  const parsed = ok ? readMetaObject(content) : null;
+  if (!parsed) {
+    // Unreadable or malformed is not "no meta". Mutations (inside withMetaLock)
+    // refuse outright; readers get uncached defaults, and saveMeta still refuses
+    // to persist over the file until it is repaired, so the registry, histories
+    // and tombstones are never replaced.
+    console.error(`❌ Digital twin meta.json is unreadable or malformed: ${META_FILE}`);
+    if (metaLockContext.getStore()) throw unreadableStoreError(META_FILE);
+    return structuredClone(DEFAULT_META);
+  }
   const validated = digitalTwinMetaSchema.safeParse(parsed);
 
   cache.meta.data = validated.success ? validated.data : { ...DEFAULT_META, ...parsed };
@@ -165,8 +181,22 @@ function getPriorityForFile(filename) {
   return priorities[filename] || 50;
 }
 
+const readMetaObject = (content) => {
+  const parsed = safeJSONParse(content, null, { allowArray: false });
+  return isPlainObject(parsed) ? parsed : null;
+};
+
+// The on-disk file, not the caller's snapshot, decides whether a write is safe:
+// loadMeta serves defaults for an untrusted file, and any mutation built on
+// them would otherwise overwrite the real document registry and tombstones.
+async function assertMetaWritable() {
+  const { ok, value } = await tryReadFileStrict(META_FILE);
+  if (!ok || (value !== null && !readMetaObject(value))) throw unreadableStoreError(META_FILE);
+}
+
 export async function saveMeta(meta) {
   await ensureSoulDir();
+  await assertMetaWritable();
   await atomicWrite(META_FILE, meta);
   cache.meta.data = meta;
   cache.meta.timestamp = Date.now();
