@@ -29,6 +29,7 @@ import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';
 import { getProviderById } from './providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
 
 const SETTINGS_FILE = join(PATHS.brain, 'activity-digest-settings.json');
 
@@ -260,6 +261,14 @@ async function buildNameMap(events) {
 async function generateNarrative(template, date, settings) {
   const provider = await getProviderById(settings.provider).catch(() => null);
   if (!provider || !provider.enabled) return null;
+  // The template quotes other people's text (calendar invite titles, message
+  // participant names, media titles) and runs unattended on the scheduler, so
+  // it never reaches host tools: only a provider that can run it tool-free
+  // drafts the narrative, pinned so no fallback swaps in an agent harness.
+  if (!isToolFreeOneShotProvider(provider)) {
+    console.warn(`⚠️ Activity digest ${date}: provider ${provider.id} cannot run tool-free — keeping the bullet digest`);
+    return null;
+  }
   const model = settings.model || provider.defaultModel;
   // Headless classification-style run — append headlessArgs so a CLI provider
   // doesn't persist a session transcript for the draft.
@@ -271,6 +280,8 @@ async function generateNarrative(template, date, settings) {
     prompt: buildNarrativePrompt(template, date),
     source: 'activity-digest',
     model,
+    toolFree: true,
+    allowFallback: false,
   }).catch((err) => {
     console.error(`🗓️  Activity digest LLM narrative failed for ${date}: ${err.message}`);
     return null;
