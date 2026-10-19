@@ -13,6 +13,9 @@ export const BRAIN_INTENT_RE = /\b(search|find|look ?up|recall|what did I (?:say
 export const BRAIN_TOOLS = [
   {
     name: 'brain_capture',
+    // Same authority as POST /api/brain/capture (#11036): a bare repo URL is
+    // cloned, and other text reaches a classifier runner that is not tool-free.
+    hostControl: true,
     description:
       'Capture a thought, note, idea, todo, reminder, or any free-form information to the user\'s brain inbox for later classification. Use whenever the user asks you to remember, add, save, note, or jot something down. The text should be in the user\'s own words with enough detail that it\'s useful later.',
     parameters: {

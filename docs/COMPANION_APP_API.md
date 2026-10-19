@@ -238,7 +238,7 @@ list and each action's parameter schema):
 
 | id | Purpose |
 |----|---------|
-| `brain_capture` | Capture a note to the Brain. |
+| `brain_capture` | Capture a note to the Brain. Host control, like `POST /api/brain/capture`: it can clone a repo URL or run the classifier, so it needs an operator session (`403 HOST_CONTROL_FORBIDDEN` otherwise). Use `daily_log_append` for a quick note without one. |
 | `brain_search` / `brain_list_recent` | Search / list recent Brain entries. |
 | `daily_log_append` | Append a line to today's daily log. |
 | `daily_log_read` | Read today's daily log. |

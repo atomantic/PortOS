@@ -166,14 +166,15 @@ describe('GET /api/palette/manifest', () => {
 });
 
 describe('POST /api/palette/action/:id', () => {
+  // Host-control actions (brain_capture, image_generate, …) need an operator;
+  // their authority matrix lives in hostControlRunsVoice.test.js.
   it('dispatches a whitelisted action and returns its result', async () => {
     const res = await request(makeApp())
-      .post('/api/palette/action/brain_capture')
-      .send({ args: { text: 'remember to drink water' } });
+      .post('/api/palette/action/meatspace_log_drink')
+      .send({ args: { name: 'beer' } });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.result.id).toBe('inbox-1');
-    expect(res.body.result.summary).toMatch(/Captured/);
+    expect(res.body.result.summary).toMatch(/Logged 1 beer/);
   });
 
   it('rejects unknown action ids', async () => {

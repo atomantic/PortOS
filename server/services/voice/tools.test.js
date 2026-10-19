@@ -490,14 +490,15 @@ describe('code intent classification', () => {
 });
 
 describe('brain_capture validation', () => {
+  const operator = { hasHostControl: () => true };
   it('rejects missing text', async () => {
-    await expect(dispatchTool('brain_capture', {})).rejects.toThrow(/text is required/);
+    await expect(dispatchTool('brain_capture', {}, operator)).rejects.toThrow(/text is required/);
   });
   it('rejects whitespace-only text', async () => {
-    await expect(dispatchTool('brain_capture', { text: '   ' })).rejects.toThrow(/text must not be empty/);
+    await expect(dispatchTool('brain_capture', { text: '   ' }, operator)).rejects.toThrow(/text must not be empty/);
   });
   it('returns inboxLog id on success', async () => {
-    const r = await dispatchTool('brain_capture', { text: 'remember milk' });
+    const r = await dispatchTool('brain_capture', { text: 'remember milk' }, operator);
     expect(r.ok).toBe(true);
     expect(r.id).toBe('inbox-1');
   });
@@ -1116,15 +1117,16 @@ describe('data-voice-guard annotation gates ui_click / ui_check / ui_fill (#5907
 // image_generate uses imageGen.generateImage under the hood; mocked
 // above. The codexEnabledRef toggle drives the disabled-gate test.
 describe("image_generate", () => {
+  const operator = { hasHostControl: () => true };
   it("rejects empty prompt", async () => {
-    const r = await dispatchTool("image_generate", { prompt: "  " });
+    const r = await dispatchTool("image_generate", { prompt: "  " }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/prompt is required/);
   });
 
   it("forwards prompt to dispatcher with no mode by default (auto)", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox" }, operator);
     expect(r.ok).toBe(true);
     expect(generateImageMock).toHaveBeenCalledTimes(1);
     const args = generateImageMock.mock.calls[0][0];
@@ -1134,20 +1136,20 @@ describe("image_generate", () => {
 
   it("treats provider=auto the same as no provider", async () => {
     generateImageMock.mockClear();
-    await dispatchTool("image_generate", { prompt: "a fox", provider: "auto" });
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "auto" }, operator);
     expect(generateImageMock.mock.calls[0][0].mode).toBeUndefined();
   });
 
   it("forwards provider=local as mode=local", async () => {
     generateImageMock.mockClear();
-    await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "local" }, operator);
     expect(generateImageMock.mock.calls[0][0].mode).toBe("local");
   });
 
   it("rejects provider=codex when codex is disabled in settings", async () => {
     codexEnabledRef.value = false;
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/Codex Imagegen is disabled/);
     expect(generateImageMock).not.toHaveBeenCalled();
@@ -1156,21 +1158,21 @@ describe("image_generate", () => {
   it("forwards provider=codex when codex is enabled", async () => {
     codexEnabledRef.value = true;
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" }, operator);
     expect(r.ok).toBe(true);
     expect(generateImageMock.mock.calls[0][0].mode).toBe("codex");
     codexEnabledRef.value = false;
   });
 
   it("includes the saved file path in summary", async () => {
-    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox" }, operator);
     expect(r.path).toBe("/data/images/mock.png");
     expect(r.filename).toBe("mock.png");
   });
 
   it("coerces stringified width/height to numbers before forwarding", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", width: "512", height: "768" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", width: "512", height: "768" }, operator);
     expect(r.ok).toBe(true);
     const args = generateImageMock.mock.calls[0][0];
     expect(args.width).toBe(512);
@@ -1179,7 +1181,7 @@ describe("image_generate", () => {
 
   it("rejects prompt longer than 2000 characters (matches route schema)", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2001) });
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2001) }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/prompt must be 2000 characters or fewer/);
     expect(generateImageMock).not.toHaveBeenCalled();
@@ -1187,13 +1189,13 @@ describe("image_generate", () => {
 
   it("accepts prompt at exactly 2000 characters", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2000) });
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2000) }, operator);
     expect(r.ok).toBe(true);
   });
 
   it("rejects out-of-bounds width", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", width: 50000 });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", width: 50000 }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/width must be an integer between 64 and 2048/);
     expect(generateImageMock).not.toHaveBeenCalled();
@@ -1201,7 +1203,7 @@ describe("image_generate", () => {
 
   it("rejects non-integer height (e.g. floats)", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", height: "768.5" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", height: "768.5" }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/height must be an integer between 64 and 2048/);
   });
@@ -1212,7 +1214,7 @@ describe("image_generate", () => {
   // actually exists.
   it("waits for imageGenEvents 'completed' on async modes (local) before resolving", async () => {
     generateImageMock.mockClear();
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" }, operator);
     expect(r.ok).toBe(true);
     expect(r.mode).toBe("local");
     expect(r.summary).toMatch(/^Generated image \(local\)/);
@@ -1230,7 +1232,7 @@ describe("image_generate", () => {
       });
       return { generationId, filename: 'mock.png', path: '/data/images/mock.png', mode: params.mode };
     });
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/mock provider failure/);
     codexEnabledRef.value = false;
@@ -1247,7 +1249,7 @@ describe("image_generate", () => {
       events.emit('completed', { generationId: params.jobId, filename: 'early.png', path: '/data/images/early.png' });
       return { generationId: params.jobId, filename: 'early.png', path: '/data/images/early.png', mode: 'local' };
     });
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" }, operator);
     expect(r.ok).toBe(true);
     expect(r.filename).toBe("early.png");
   });
@@ -1259,7 +1261,7 @@ describe("image_generate", () => {
       events.emit('failed', { generationId: params.jobId, error: 'provider exited early' });
       return { generationId: params.jobId, filename: 'x.png', path: '/data/images/x.png', mode: 'local' };
     });
-    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" }, operator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/provider exited early/);
   });
@@ -1268,9 +1270,9 @@ describe("image_generate", () => {
     const events = await getEvents();
     const before = events.listenerCount('completed') + events.listenerCount('failed');
     generateImageMock.mockImplementationOnce(async () => { throw new Error('busy'); });
-    const rejected = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    const rejected = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" }, operator);
     expect(rejected.ok).toBe(false);
-    const sync = await dispatchTool("image_generate", { prompt: "a fox", provider: "external" });
+    const sync = await dispatchTool("image_generate", { prompt: "a fox", provider: "external" }, operator);
     expect(sync.ok).toBe(true);
     expect(events.listenerCount('completed') + events.listenerCount('failed')).toBe(before);
   });
