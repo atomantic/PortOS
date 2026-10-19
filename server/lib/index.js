@@ -912,3 +912,5 @@ export * from './musicDesignerValidation.js';
 export * from './mediaJobPreparation.js';
 export * from './eventLoopLagProbe.js';
 export * from './persistentMindAttachmentOwnership.js';
+
+export * from './credentialEnvVars.js';
