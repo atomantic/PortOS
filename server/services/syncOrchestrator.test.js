@@ -334,6 +334,24 @@ describe('syncOrchestrator', () => {
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
+    it('stops draining a peer that reports more without advancing its cursor', async () => {
+      // Every page repeats the same window: unguarded, both loops never end.
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [{ seq: 1 }], maxSeq: 0, hasMore: true }) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [{ id: 'm1' }], maxSequence: '0', hasMore: true }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      applyBrainChanges.mockResolvedValue({ inserted: 0, updated: 1, deleted: 0, skipped: 0 });
+      applyMemoryChanges.mockResolvedValue({ inserted: 0, updated: 1 });
+
+      const result = await syncWithPeer(mockPeer);
+
+      expect(applyBrainChanges).toHaveBeenCalledTimes(1);
+      expect(applyMemoryChanges).toHaveBeenCalledTimes(1);
+      expect(result.brain.brainSeq).toBe(0);
+      expect(result.memory.memorySeq).toBe('0');
+    });
+
     it('handles pagination loop with hasMore=true', async () => {
       // First brain batch: hasMore=true
       mockFetch

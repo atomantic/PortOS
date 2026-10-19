@@ -252,8 +252,16 @@ async function syncBrainFromPeer(peer, cursor) {
 
     const result = await brainSync.applyRemoteChanges(data.changes);
     totalApplied += result.inserted + result.updated + result.deleted;
+    // A page of changes always advances a well-behaved peer's cursor. One that
+    // doesn't (a bug, or a hostile peer answering hasMore forever) would re-pull
+    // the same window while holding this peer's sync; the catalog loop guards
+    // the same way. Resets are handled before the drain (detectCursorReset).
+    if (!Number.isSafeInteger(data.maxSeq) || data.maxSeq <= brainSeq) {
+      console.warn(`⚠️ Brain sync from ${peer.name}: cursor did not advance past ${brainSeq} — stopping this pull`);
+      break;
+    }
     brainSeq = data.maxSeq;
-    hasMore = data.hasMore;
+    hasMore = data.hasMore === true;
   }
 
   // --- Anti-entropy reconcile (#1077) ---
@@ -324,8 +332,14 @@ async function syncMemoryFromPeer(peer, cursor) {
 
     const result = await memorySync.applyRemoteChanges(data.memories, data.schemaVersion ?? 0);
     totalApplied += result.inserted + result.updated;
+    // Same non-advancing-cursor guard as the brain drain above.
+    if (typeof data.maxSequence !== 'string' || !/^\d+$/.test(data.maxSequence)
+      || safeBigInt(data.maxSequence) <= safeBigInt(memorySeq)) {
+      console.warn(`⚠️ Memory sync from ${peer.name}: cursor did not advance past ${memorySeq} — stopping this pull`);
+      break;
+    }
     memorySeq = data.maxSequence;
-    hasMore = data.hasMore;
+    hasMore = data.hasMore === true;
   }
 
   return { memorySeq, totalApplied };
