@@ -59,7 +59,22 @@ export function browserOwnerExcludes({ env = process.env } = {}) {
     ? BROWSER_SUITES.map(path => path.slice('server/'.length)) : [];
 }
 
+/**
+ * Runner scopes. `db` is the serial `portos_test` suite: it lives in the
+ * server workspace but has its own config, npm script and Vitest cache
+ * directory (where the recorded-dependency depfile lands).
+ */
+export const TEST_SCOPES = Object.freeze({
+  server: { workspace: 'server', script: 'test:ci', cacheDir: '.cache/vitest' },
+  client: { workspace: 'client', script: 'test:ci', cacheDir: '.cache/vitest' },
+  db: { workspace: 'server', script: 'test:db:ci', cacheDir: '.cache/vitest-db' },
+});
+
+/** The workspace directory a scope runs in (`db` -> `server`); an unknown name passes through. */
+export const workspaceOf = (scope) => TEST_SCOPES[scope]?.workspace ?? scope;
+
 export function workspaceTestGlobs(workspace, options = {}) {
+  if (workspace === 'db') return { include: [...DB_TEST_INCLUDE], exclude: ['**/node_modules/**', '../lib/slashdo/**'] };
   if (workspace === 'server') return { include: [...SERVER_TEST_INCLUDE], exclude: [...SERVER_TEST_EXCLUDE, ...browserOwnerExcludes(options)] };
   if (workspace === 'client') return { include: [...CLIENT_TEST_INCLUDE], exclude: [...CLIENT_TEST_EXCLUDE] };
   throw new Error(`Unknown workspace: ${workspace}`);
@@ -105,7 +120,7 @@ export function listWorkspaceTests(workspace, { repoRoot, platform, env } = {}) 
   const { include, exclude } = workspaceTestGlobs(workspace, { platform, env });
   const includes = include.map(globToRegExp);
   const excludes = exclude.map(globToRegExp);
-  const workspaceAbs = join(repoRoot, workspace);
+  const workspaceAbs = join(repoRoot, workspaceOf(workspace));
   const found = [];
   const walk = (relDir) => {
     const absDir = relDir === '.' ? workspaceAbs : join(workspaceAbs, ...relDir.split('/'));
@@ -123,16 +138,17 @@ export function listWorkspaceTests(workspace, { repoRoot, platform, env } = {}) 
     }
   };
   for (const root of walkRoots(include)) walk(root);
-  return found.sort();
+  return [...new Set(found)].sort(); // overlapping walk roots (db globs) reach a file twice
 }
 
 /** `lib/x.test.js` in `server` -> `server/lib/x.test.js`; `../scripts/x.test.js` -> `scripts/x.test.js`. */
-export function toRepoPath(workspace, workspaceRel) {
-  return posix.normalize(posix.join(workspace, workspaceRel.split(sep).join('/')));
+export function toRepoPath(scope, workspaceRel) {
+  return posix.normalize(posix.join(workspaceOf(scope), workspaceRel.split(sep).join('/')));
 }
 
 /** The inverse of `toRepoPath`. */
-export function toWorkspacePath(workspace, repoRel) {
+export function toWorkspacePath(scope, repoRel) {
+  const workspace = workspaceOf(scope);
   const normalized = repoRel.split(sep).join('/');
   return normalized.startsWith(`${workspace}/`) ? normalized.slice(workspace.length + 1) : `../${normalized}`;
 }

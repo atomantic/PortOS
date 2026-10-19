@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
+import { applyRunnerSelection, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 
@@ -37,7 +38,7 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * suite silently never runs until it's listed. db.guards.test.js fails if a
  * checkHealth consumer is left out.
  */
-export default defineConfig({
+const config = defineConfig({
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
   test: {
@@ -60,6 +61,9 @@ export default defineConfig({
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
       // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
       npm_config_logs_max: '0',
+      // The runner's selection and memo directory are for THIS Vitest process only.
+      PORTOS_CI_TEST_SELECTION: '',
+      PORTOS_TEST_MEMO_DIR: '',
     },
     include: DB_TEST_INCLUDE,
     exclude: [
@@ -68,3 +72,7 @@ export default defineConfig({
     ],
   },
 });
+
+// The CI runner's explicit selection (files the test memo has not verified) arrives as a file.
+config.test = applyRunnerSelection(config.test, vitestRunnerSelection());
+export default config;
