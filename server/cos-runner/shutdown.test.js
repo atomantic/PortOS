@@ -1,3 +1,4 @@
+import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -66,7 +67,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     listen: vi.fn(), close: vi.fn(cb => cb?.()), closeAllConnections: vi.fn(),
   });
   const io = Object.assign(new EventEmitter(), {
-    use: vi.fn(), close: vi.fn(cb => cb?.()),
+    engine: { use: vi.fn() }, use: vi.fn(), close: vi.fn(cb => cb?.()),
   });
   const process = Object.assign(new EventEmitter(), { env: {}, exit: vi.fn() });
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
@@ -105,6 +106,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     watch: vi.fn(() => () => {}),
   }));
   runInNewContext(source, {
+    runnerRequestGuard, runnerRequestRefusal,
     assertDatabaseAdmission, maintenance, withBackupAssetPublication, persistRunnerCompletion,
     express, http: { createServer: () => server }, SocketServer: function () { return io; },
     process, console, Buffer, Date, setTimeout, clearTimeout, join, basename,
