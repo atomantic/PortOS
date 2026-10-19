@@ -809,6 +809,14 @@ describe('stitchVideos — history provenance', () => {
 
       expect(stitched).not.toHaveProperty('loraStrategyApplied');
     });
+
+    it('omits the outcome when the chunks used the adapter at different strengths', async () => {
+      const weaker = applied('runtime-delta');
+      weaker.loraStrategyApplied.adapters[0].strength = 0.4;
+      const stitched = await stitchHistory(applied('runtime-delta'), weaker);
+
+      expect(stitched).not.toHaveProperty('loraStrategyApplied');
+    });
   });
 });
 

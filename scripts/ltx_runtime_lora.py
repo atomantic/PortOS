@@ -237,15 +237,23 @@ class AdapterReport:
 
     def __init__(self):
         self.entries: list[dict] = []
+        # Identity is the full source path + strength, never the basename: two
+        # files sharing a name, or one file at two strengths, are distinct
+        # applications. The path stays out of the emitted record (history is
+        # user-facing and machine paths are private).
+        self._index: dict[tuple, dict] = {}
 
-    def record(self, role: str, stage: str, summary: dict) -> bool:
-        """Returns True the first time this adapter is recorded."""
-        for entry in self.entries:
-            if entry["role"] == role and entry["name"] == summary["name"]:
-                if stage not in entry["stages"]:
-                    entry["stages"].append(stage)
-                return False
-        self.entries.append({"role": role, "stages": [stage], **summary})
+    def record(self, role: str, stage: str, source: str, summary: dict) -> bool:
+        """Returns True the first time this application is recorded."""
+        key = (role, str(source), summary["strength"])
+        entry = self._index.get(key)
+        if entry is not None:
+            if stage not in entry["stages"]:
+                entry["stages"].append(stage)
+            return False
+        entry = {"role": role, "stages": [stage], **summary}
+        self._index[key] = entry
+        self.entries.append(entry)
         return True
 
     def emit(self, stream=None) -> None:
@@ -282,7 +290,7 @@ def install_pipeline_adapters(
         if ic:
             merged += [("ic", "stage-1", spec) for spec in getattr(pipe, "_lora_paths", [])]
         for role, stage, (path, strength) in merged:
-            report.record(role, stage, _requantized_summary(path, strength))
+            report.record(role, stage, path, _requantized_summary(path, strength))
         if merged:
             names = ", ".join(Path(path).name for _role, _stage, (path, _s) in merged)
             status(
@@ -296,8 +304,8 @@ def install_pipeline_adapters(
 
     def attach(dit, role: str, stage: str, specs) -> None:
         loaded = [(path, load_adapter(path), strength) for path, strength in specs]
-        for summary in attach_adapters(dit, loaded):
-            if report.record(role, stage, summary):
+        for (path, _tensors, _strength), summary in zip(loaded, attach_adapters(dit, loaded)):
+            if report.record(role, stage, path, summary):
                 status(
                     f"{role} LoRA {summary['name']}: {summary['strategy']} "
                     f"({summary['quantizedTargets']} quantized, {summary['fusedTargets']} float projection(s))"

@@ -56,11 +56,12 @@ const unanimousStreamingPolicyOutcome = (videos) => {
 };
 
 // Fold the per-chunk LORASTRATEGY: reports into one claim, or none (#12262).
-// Unanimity is on each adapter's name + strategy, so a chain whose chunks all
-// applied the same adapters the same way keeps the claim and a chain that
-// mixed strategies makes none.
+// Unanimity is on every field the stitched record would claim for each adapter
+// (role, name, strength, stages, strategy) — only the per-chunk target counts
+// may differ — so a chain whose chunks applied the same adapters the same way
+// keeps the claim and any other chain makes none.
 const loraStrategySignature = (applied) => JSON.stringify(
-  (applied?.adapters || []).map((a) => [a?.role, a?.name, a?.strategy]),
+  (applied?.adapters || []).map((a) => [a?.role, a?.name, a?.strength, a?.stages, a?.strategy]),
 );
 const unanimousLoraStrategyOutcome = (videos) => {
   const first = videos[0]?.loraStrategyApplied;

@@ -195,6 +195,19 @@ class ValidationTest(unittest.TestCase):
         self.assertEqual(summary["quantizedTargets"], 1)
 
 
+class AdapterReportTest(unittest.TestCase):
+    def test_same_basename_or_strength_change_is_a_separate_application(self):
+        report = runtime.AdapterReport()
+        summary = lambda strength: {"name": "style.safetensors", "strength": strength, "strategy": runtime.STRATEGY_RUNTIME,
+                                    "quantizedTargets": 1, "fusedTargets": 0}
+        self.assertTrue(report.record("user", "all", "a/style.safetensors", summary(0.5)))
+        self.assertFalse(report.record("user", "all", "a/style.safetensors", summary(0.5)))
+        self.assertTrue(report.record("user", "all", "b/style.safetensors", summary(0.5)))
+        self.assertTrue(report.record("user", "all", "a/style.safetensors", summary(0.9)))
+        self.assertEqual([e["strength"] for e in report.entries], [0.5, 0.5, 0.9])
+        self.assertNotIn("a/", repr(report.entries))
+
+
 class FakeICLoraPipeline:
     """The upstream ICLoraPipeline surface install_pipeline_adapters drives.
 
