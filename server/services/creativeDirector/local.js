@@ -46,7 +46,7 @@ const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
   loadDbBackend: () => import('./projectsDB.js'),
   requireDbMessage: 'Creative Director requires PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env; the launcher maps it to MEMORY_BACKEND=file for the unsupported file backend)',
   onDbReady: async () => {
-    const { migrateCreativeDirectorToDB } = await import('../../server/scripts/migrateCreativeDirectorToDB.js');
+    const { migrateCreativeDirectorToDB } = await import('../../scripts/migrateCreativeDirectorToDB.js');
     await migrateCreativeDirectorToDB();
   },
 });
