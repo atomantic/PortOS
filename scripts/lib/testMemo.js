@@ -713,6 +713,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' }
     paths: [], // { rel, walk } — repo-relative literal paths
     dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
+    scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
     unresolvedEdges: [], // the module graph is not fully known from source
     unresolvedInputs: [], // a filesystem input is not fully known from source
@@ -752,6 +753,18 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (first.t === 'tpl' && first.exprs.length === 0 && endsArg) return { kind: 'literal', value: first.quasis[0] };
     if (first.t === 'p' && first.v === ')') return { kind: 'none' };
     return { kind: 'expr', index: open + 1 };
+  };
+
+  /** The literal last segment of `join(<anything>, 'name')`, followed through one binding; else null. */
+  const joinedBasename = (index) => {
+    let at = index;
+    for (let hop = 0; hop < 4 && tokens[at]?.t === 'id' && ctx.bindings.has(tokens[at].v) && tokens[at + 1]?.v !== '('; hop += 1) at = ctx.bindings.get(tokens[at].v);
+    if (tokens[at]?.t === 'id' && tokens[at + 1]?.v === '.' && tokens[at + 2]?.t === 'id') at += 2; // path.join(
+    if (tokens[at]?.t !== 'id' || !PATH_JOIN.has(tokens[at].v) || tokens[at + 1]?.v !== '(') return null;
+    const last = (evaluateArgs(tokens, match, at + 1, ctx, 0) ?? []).at(-1);
+    // Only an explicit file extension proves a file: a bare name may be a directory Node resolves
+    // through index.js or package.json main, which a basename match would not collect.
+    return last?.k === 'str' && /\.(?:c?js|mjs|json|node)$/.test(last.v) ? posix.basename(last.v) : null;
   };
 
   const record = (value, { walk = false, consumer = null, bare = false } = {}) => {
@@ -806,6 +819,13 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       const { value } = evaluate(tokens, match, arg.index, ctx);
       if (value.k === 'path' && !value.partial && !value.isDir) { facts.paths.push({ rel: value.v, walk: true }); continue; }
       if (value.k === 'path') { facts.dirs.push({ rel: value.v, walk: true }); continue; }
+      // `require(PACKAGE_CONSTANT)`: a module-level string is a specifier like a literal one.
+      if (value.k === 'str') { facts.edges.push({ spec: value.v, kind }); continue; }
+      // `require(join(<unknown dir>, 'ecosystem.config.cjs'))`: the directory is a parameter or an
+      // install root, the basename is fixed, so every tracked file of that name is an input
+      // (tests only load in-repo files, so keying by tracked basename covers the real target).
+      const scoped = kind === 'require' ? joinedBasename(arg.index) : null;
+      if (scoped !== null) { facts.scopedNames.push(scoped); continue; }
       facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
       continue;
     }
@@ -937,6 +957,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const facts = new Map();
   const trees = new Map();
   const packages = new Map();
+  let byName = null;
 
   const fileHash = (rel) => {
     if (hashes.has(rel)) return hashes.get(rel);
@@ -967,6 +988,24 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     try { walk(dirRel); } catch (error) { if (!(error instanceof RangeError)) throw error; result = null; }
     trees.set(dirRel, result);
     return result;
+  };
+
+  /** Every file named `name` anywhere in the repository (one cached walk, same skips as `tree`). */
+  const filesNamed = (name) => {
+    if (!byName) {
+      byName = new Map();
+      const walk = (dir) => {
+        for (const entry of fs.list(dir)) {
+          if (SKIP_TREE_DIRS.has(entry) || (dir === '' && entry === 'data')) continue;
+          const rel = dir === '' ? entry : `${dir}/${entry}`;
+          const kind = fs.kind(rel);
+          if (kind === 'dir') walk(rel);
+          else if (kind === 'file') byName.set(entry, [...(byName.get(entry) ?? []), rel]);
+        }
+      };
+      walk('');
+    }
+    return (byName.get(name) ?? []).sort();
   };
 
   /** Installed version of the package `spec` reaches from `fromRel`, or null. */
@@ -1027,8 +1066,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       const dir = posix.dirname(target);
       for (const line of text.split('\n')) {
         const m = /^\s*(?:from\s+(\.*[\w.]*)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))/.exec(line);
-        if (!m) continue;
-        for (const name of (m[1] !== undefined ? [m[1]] : m[2].split(',')).map((part) => part.trim()).filter(Boolean)) {
+        const names = m ? (m[1] !== undefined ? [m[1]] : m[2].split(',')).map((part) => part.trim()).filter(Boolean) : [];
+        // `importlib.import_module('x')` is a sibling import; a non-literal name may reach any module.
+        if (!/^\s*#/.test(line)) {
+          for (const call of line.matchAll(/\bimport_module\s*\(\s*(?:(['"])([\w.]+)\1(?=\s*[,)])|)/g)) {
+            if (call[2] !== undefined) names.push(call[2]);
+            else resolved.unresolvedInputs.push(`python import_module with a non-literal name in ${target}`);
+          }
+        }
+        for (const name of names) {
           const relative = name.startsWith('.');
           const head = name.replace(/^\.+/, '').split('.')[0];
           const candidate = [`${dir}/${head}.py`, `${dir}/${head}/__init__.py`].find((rel) => fs.kind(rel) === 'file');
@@ -1043,6 +1089,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       else resolved.inputs.add(target);
     };
     const localState = (target) => target === 'data' || target.startsWith('data/');
+    for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
     const addDir = (dirRel, walk) => {
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
