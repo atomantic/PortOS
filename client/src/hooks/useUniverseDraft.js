@@ -89,6 +89,8 @@ const emptyPendingCanon = () => ({ characters: [], places: [], objects: [] });
 export const RUNS_STATUS = { LOADING: 'loading', READY: 'ready', ERROR: 'error' };
 
 export default function useUniverseDraft({ selectedId, goToWorld }) {
+  const visitRef = useRef({ id: selectedId });
+  if (visitRef.current.id !== selectedId) visitRef.current = { id: selectedId };
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -107,6 +109,12 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   // pin rather than the whole settings blob so the memo below has a stable dep.
   const [targetPin, setTargetPin] = useState(null);
   const [draft, setDraft] = useState(createEmptyUniverseDraft);
+  const [draftRead, setDraftRead] = useState({ id: null, status: 'idle', error: null });
+  const [draftReadAttempt, setDraftReadAttempt] = useState(0);
+  const draftReady = selectedId ? (draftRead.id === selectedId
+    && draftRead.status === 'ready' && draft.id === selectedId) : !draft.id;
+  const draftReadError = draftRead.id === selectedId ? draftRead.error : null;
+  const retryDraft = useCallback(() => setDraftReadAttempt(attempt => attempt + 1), []);
   const [runs, setRuns] = useState([]);
   // History read state, bound to the universe it was requested for. A failed
   // read must not look like an empty history, so it is tracked apart from `runs`.
@@ -230,6 +238,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
 
   useEffect(() => {
     setPendingDeleteId(null);
+    setSaving(false);
     setCanonDirty(false);
     clearPendingCanonAdditions();
     if (!selectedId) {
@@ -239,7 +248,10 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       return undefined;
     }
     let cancelled = false;
-    getUniverse(selectedId).catch(() => null).then(async (fetched) => {
+    let readError = null;
+    const failedRead = error => { readError = error.message || 'Unable to load universe'; return null; };
+    setDraftRead({ id: selectedId, status: 'loading', error: null });
+    getUniverse(selectedId, { silent: true }).catch(failedRead).then(async (fetched) => {
       if (cancelled) return;
       // This body predates a mutation we already have confirmed — re-read rather
       // than apply it. The second read is issued after that mutation's response,
@@ -249,7 +261,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       // failure, keep the draft as the mutation left it rather than applying the
       // body we just judged stale.
       const universe = (fetched && universeIsStale(selectedId, fetched.updatedAt))
-        ? await getUniverse(selectedId).catch(() => null)
+        ? await getUniverse(selectedId, { silent: true }).catch(failedRead)
         : fetched;
       if (cancelled) return;
       if (universe) {
@@ -272,10 +284,13 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
         };
         setDraft(hydrated);
         markDraftSaved(hydrated);
+        setDraftRead({ id: selectedId, status: 'ready', error: null });
+      } else {
+        setDraftRead({ id: selectedId, status: 'error', error: readError || 'Universe not found' });
       }
     });
     return () => { cancelled = true; };
-  }, [selectedId, universeIsStale, noteUniverseUpdated]);
+  }, [selectedId, universeIsStale, noteUniverseUpdated, draftReadAttempt]);
 
   // Run history loads independently of the draft so Retry never re-hydrates
   // (and so never clobbers) unsaved edits. Results are dropped unless they
@@ -305,6 +320,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   }, [selectedId, loadRuns]);
 
   const handleSave = async () => {
+    if (!draftReady || saving || selectedIdRef.current !== selectedId) return null;
+    const visit = visitRef.current;
+    const isCurrentVisit = () => mountedRef.current && visitRef.current === visit;
     if (!draft.name?.trim()) {
       toast.error('Name is required');
       return null;
@@ -338,6 +356,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     if (needsCanonInPayload) {
       if (selectedId) {
         const fresh = await getUniverse(selectedId, { silent: true }).catch(() => null);
+        if (!isCurrentVisit()) return null;
         if (!fresh) {
           setSaving(false);
           toast.error('Save failed: could not fetch latest canon — please try again');
@@ -362,6 +381,13 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     const result = selectedId
       ? await updateUniverse(selectedId, payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; })
       : await createUniverse(payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; });
+    // Persisted writes still update the list/watermark, but only their original
+    // visit may settle its draft or navigate after a create (including A→B→A).
+    if (result) {
+      noteUniverseUpdated(result.id, result.updatedAt);
+      setWorlds(previous => upsertByIdPrepend(previous, result));
+    }
+    if (!isCurrentVisit()) return result;
     setSaving(false);
     if (!result) return null;
     if (needsCanonInPayload) {
@@ -386,13 +412,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
         categories: adoptServerCategoryIds(d.categories, result.categories),
       }));
     }
-    // Watermark this save so a re-hydration GET it raced (navigate away and back
-    // mid-save) re-reads instead of showing the pre-save record — the same guard
-    // the style-reference mutators get, which is why it keys on the server's
-    // clock rather than on anything style-reference-specific.
-    noteUniverseUpdated(result.id, result.updatedAt);
     toast.success(selectedId ? 'World updated' : 'World created');
-    setWorlds((previous) => upsertByIdPrepend(previous, result));
     if (result.id !== selectedId) goToWorld(result.id);
     return result;
   };
@@ -767,6 +787,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     defaultMode,
     draft,
     draftRef,
+    draftReady,
+    draftReadError,
+    retryDraft,
     effectiveDefaultMode,
     flushDraftIfDirty,
     handleCanonChange,

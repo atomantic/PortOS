@@ -147,6 +147,40 @@ const renderSelectable = () => {
 };
 
 describe('useUniverseDraft', () => {
+  it('refuses saving an outgoing draft while the selected universe is loading or failed, then retries', async () => {
+    const { result, rerender } = renderSelectable();
+    await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+    let failRead;
+    apiMocks.getUniverse.mockImplementationOnce(() => new Promise((_resolve, reject) => { failRead = reject; }));
+    rerender({ selectedId: 'u2' });
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
+    await act(async () => failRead(new Error('World unavailable')));
+    expect(result.current.draftReadError).toBe('World unavailable');
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
+    apiMocks.getUniverse.mockResolvedValueOnce(universeTwo);
+    act(() => result.current.retryDraft());
+    await waitFor(() => expect(result.current.draftReady).toBe(true));
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).toHaveBeenCalledWith('u2', expect.objectContaining({ name: 'Second Universe' }), { silent: true });
+  });
+
+  it('does not rebaseline the new universe when an earlier save completes', async () => {
+    const { result, rerender } = renderSelectable();
+    await waitFor(() => expect(result.current.draftReady).toBe(true));
+    let finishSave;
+    apiMocks.updateUniverse.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    let pendingSave;
+    act(() => { pendingSave = result.current.handleSave(); });
+    apiMocks.getUniverse.mockResolvedValueOnce(universeTwo);
+    rerender({ selectedId: 'u2' });
+    await waitFor(() => expect(result.current.draft.id).toBe('u2'));
+    await act(async () => { finishSave({ ...universe, updatedAt: tickServerClock() }); await pendingSave; });
+    expect(result.current.draft.name).toBe('Second Universe');
+    expect(result.current.isDraftDirty()).toBe(false);
+  });
+
   it('hydrates the selected universe and its run history', async () => {
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.loading).toBe(false));
