@@ -92,6 +92,7 @@ export * from './sharedSchemas.js';
 export * from './threadRefKinds.js';
 export * from './threejsModel.js';
 export * from './threejsModelAnimation.js';
+export * from './threejsModelClipPose.js';
 export * from './threejsModelCoverage.js';
 export * from './threejsModelEnvironment.js';
 export * from './threejsModelFamilies.js';

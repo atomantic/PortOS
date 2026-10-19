@@ -685,6 +685,58 @@ describe('ThreejsModelDetail unmeasured attachments', () => {
   });
 });
 
+// Interior clip poses are only as covered as the audit says: the panel names the
+// times it measured and the ones the budget left out, and an audit stored before
+// that report existed is never presented as having measured the motion.
+describe('ThreejsModelDetail clip pose coverage', () => {
+  beforeEach(resetMocks);
+
+  const animatedSpec = {
+    ...baseRecord.spec,
+    animation: {
+      cues: [],
+      clips: [{
+        id: 'swing',
+        name: 'Swing',
+        durationSeconds: 2,
+        sequences: [{ id: 'turn', name: 'Turn', partId: 'arm', startSeconds: 0, endSeconds: 2, channels: { rotationDegrees: { from: [0, 0, 0], to: [0, 0, 360] } } }],
+      }],
+    },
+  };
+  const cleanAudit = { errorCount: 0, warningCount: 0, noteCount: 0, findings: [], unmeasuredAttachments: [] };
+
+  it('lists the measured and omitted clip times', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      spec: animatedSpec,
+      physicalAudit: {
+        ...cleanAudit,
+        poseCoverage: {
+          status: 'partial',
+          measuresAttachments: true,
+          budget: 48,
+          clips: [{ clipId: 'swing', clipName: 'Swing', sampledTimes: [0, 1, 2], omittedCount: 2, omittedTimes: [0.5, 1.5] }],
+        },
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Physical audit')).toBeInTheDocument());
+    expect(screen.getByText('Clip poses checked (the 48-pose budget ran out):')).toBeInTheDocument();
+    expect(screen.getByText(/0s, 1s, 2s/)).toBeInTheDocument();
+    expect(screen.getByText('; 2 omitted (0.5s, 1.5s)')).toBeInTheDocument();
+  });
+
+  it('reads an animated record audited before coverage reporting as unmeasured mid-motion', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, spec: animatedSpec, physicalAudit: cleanAudit });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Physical audit')).toBeInTheDocument());
+    expect(screen.getByText(/This audit predates interior clip-pose sampling/)).toBeInTheDocument();
+    expect(screen.queryByText('Assembly satisfies physical attachment, exposure, and coplanarity rules')).not.toBeInTheDocument();
+  });
+});
+
 describe('ThreejsModelDetail rig readiness fallbacks', () => {
   beforeEach(resetMocks);
 

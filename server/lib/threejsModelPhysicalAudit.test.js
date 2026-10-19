@@ -3,6 +3,7 @@ import {
   buildThreejsPhysicalAuditFeedback,
   evaluateThreejsPhysicalAudit,
 } from './threejsModelPhysicalAudit.js';
+import { threejsSculptSpecSchema } from './threejsModel.js';
 
 describe('threejsModelPhysicalAudit', () => {
   it('returns clean result for null/empty spec', () => {
@@ -1184,3 +1185,121 @@ describe('swept-path curvature', () => {
   });
 });
 
+
+// Through the real schema, as the generation path sees it: an arm turned a full
+// circle is back where it started at both ends of its window, so a walk that
+// samples only boundaries reports the prop riding its grip as clean while the
+// preview shows it 3.9 units away at the half-turn.
+describe('threejsModelPhysicalAudit interior clip poses', () => {
+  const box = (id, size, overrides = {}) => ({
+    id,
+    name: id,
+    geometry: { type: 'box', width: size[0], height: size[1], depth: size[2] },
+    material: 'shell',
+    ...overrides,
+  });
+
+  const swingClip = (id = 'swing', easing = 'easeInOut') => ({
+    id,
+    name: id,
+    durationSeconds: 2,
+    sequences: [{
+      id: `${id}-turn`,
+      name: 'Turn the arm',
+      partId: 'arm',
+      startSeconds: 0,
+      endSeconds: 2,
+      easing,
+      channels: { rotationDegrees: { from: [0, 0, 0], to: [0, 0, 360] } },
+    }],
+  });
+
+  // A filler clip whose 30 short windows are each a distinct pose time, so it
+  // alone has more candidate poses than the whole budget.
+  const busyClip = {
+    id: 'busy',
+    name: 'Busy',
+    durationSeconds: 3.2,
+    sequences: Array.from({ length: 30 }, (_, index) => ({
+      id: `nudge-${index}`,
+      name: `Nudge ${index}`,
+      partId: 'torso',
+      startSeconds: index * 0.1,
+      endSeconds: (index * 0.1) + 0.05,
+      channels: { position: { from: [0, 1, 0], to: [0, 1.001, 0] } },
+    })),
+  };
+
+  const gripSpec = (clips) => threejsSculptSpecSchema.parse({
+    schemaVersion: 1,
+    name: 'Example Figure',
+    summary: 'Placeholder figure holding a prop in a rotating grip.',
+    subjectType: 'character',
+    camera: { position: [4, 3, 5] },
+    materials: { shell: { color: '#556677' } },
+    lights: [{ type: 'directional', intensity: 2 }],
+    parts: [
+      box('torso', [1, 1, 1], { position: [0, 1, 0] }),
+      box('arm', [0.2, 2, 0.2], { position: [0, 2, 0] }),
+      // Fixed in the world where the grip is at rest — it never moves with the arm.
+      box('prop', [0.2, 0.2, 0.2], { position: [0, 3.95, 0] }),
+    ],
+    sockets: [{ name: 'grip', parentPartId: 'arm', position: [0, 1.95, 0] }],
+    articulation: {
+      joints: [
+        { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
+        { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: null },
+      ],
+      attachments: [{ partId: 'prop', anchorPartId: null, anchorSocket: 'grip', maxOffset: 0.25 }],
+    },
+    animation: { cues: [], clips },
+    detailInventory: [{
+      feature: 'Held prop',
+      evidence: 'Visible in the reference image.',
+      implementationPartIds: ['prop'],
+      priority: 'identity',
+    }],
+  });
+
+  const farFindings = (audit) => audit.findings.filter((f) => f.code === 'attachment-far-from-anchor');
+
+  it('catches an attachment that leaves its socket only between sequence boundaries', () => {
+    const audit = evaluateThreejsPhysicalAudit(gripSpec([swingClip()]));
+    const [finding] = farFindings(audit);
+    expect(finding).toMatchObject({ clipId: 'swing', timeSeconds: 1, anchorSocket: 'grip' });
+    expect(finding.distance).toBeGreaterThan(3.5);
+    expect(finding.message).toContain('In clip "swing" at 1s');
+    expect(audit.poseCoverage).toMatchObject({ status: 'complete', measuresAttachments: true });
+    expect(audit.poseCoverage.clips[0].sampledTimes).toEqual([0, 0.5, 1, 1.5, 2]);
+    expect(buildThreejsPhysicalAuditFeedback(audit)).toContain('In clip "swing" at 1s');
+  });
+
+  it('cannot let an earlier sequence-heavy clip silently starve a later one', () => {
+    const run = () => evaluateThreejsPhysicalAudit(gripSpec([busyClip, swingClip('late-swing', 'linear')]));
+    const audit = run();
+    expect(run()).toEqual(audit);
+
+    expect(farFindings(audit).map((f) => f.clipId)).toEqual(['late-swing']);
+    expect(audit.poseCoverage.status).toBe('partial');
+    const [busy, late] = audit.poseCoverage.clips;
+    expect(late).toMatchObject({ clipId: 'late-swing', omittedCount: 0 });
+    expect(busy.sampledTimes.length + late.sampledTimes.length).toBe(audit.poseCoverage.budget);
+    expect(busy.omittedCount).toBeGreaterThan(0);
+    expect(audit.evaluatedPoseCount).toBe(audit.poseCoverage.budget + 1);
+
+    // The exhausted budget is a stated gap, never a clean result.
+    const gap = audit.findings.find((f) => f.code === 'clip-poses-unsampled');
+    expect(gap).toMatchObject({ severity: 'note', clipId: 'busy', omittedCount: busy.omittedCount });
+    expect(gap.message).toContain(`${busy.omittedTimes[0]}s`);
+    expect(buildThreejsPhysicalAuditFeedback(audit)).toContain('In clip "Busy", attachments were checked at');
+  });
+
+  it('reports a static assembly as having no clip poses to sample', () => {
+    const spec = gripSpec([swingClip()]);
+    delete spec.animation;
+    const audit = evaluateThreejsPhysicalAudit(spec);
+    expect(audit.evaluatedPoseCount).toBe(1);
+    expect(farFindings(audit)).toEqual([]);
+    expect(audit.poseCoverage).toMatchObject({ status: 'static', clips: [] });
+  });
+});

@@ -50,7 +50,7 @@ const countSeverities = (findings) => findings.reduce((counts, finding) => {
  * severity-styled finding list. Shared so a second gate cannot drift into a
  * different look for the same data.
  */
-function GatePanel({ title, findings, cleanLabel, footer }) {
+function GatePanel({ title, findings, cleanLabel, footer, children = null }) {
   const counts = countSeverities(findings);
   return (
     <section className="rounded-xl border border-port-border bg-port-card p-4">
@@ -75,11 +75,45 @@ function GatePanel({ title, findings, cleanLabel, footer }) {
           ))}
         </ul>
       )}
+      {children}
       <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-gray-500">
         <Info className="mt-0.5 h-3 w-3 shrink-0" />
         <span>{footer}</span>
       </p>
     </section>
+  );
+}
+
+const formatSeconds = (times) => times.map((time) => `${time}s`).join(', ');
+
+/**
+ * Which clip times the physical audit measured, and which its pose budget left
+ * out — so a clean panel over an animated model says how much of the motion it
+ * actually covers.
+ */
+function PoseCoverageList({ coverage }) {
+  return (
+    <div className="mt-3 text-[11px] leading-relaxed text-gray-500">
+      <p className="mb-1">
+        {coverage.status === 'partial'
+          ? `Clip poses checked (the ${coverage.budget}-pose budget ran out):`
+          : 'Clip poses checked:'}
+      </p>
+      <ul className="space-y-0.5">
+        {coverage.clips.map((clip) => (
+          <li key={clip.clipId} className="break-words">
+            <span className="text-gray-400">{clip.clipName}</span>
+            {' — '}
+            {clip.sampledTimes.length > 0 ? formatSeconds(clip.sampledTimes) : 'none'}
+            {clip.omittedCount > 0 && (
+              <span className="text-port-warning">
+                {`; ${clip.omittedCount} omitted (${formatSeconds(clip.omittedTimes)}${clip.omittedCount > clip.omittedTimes.length ? ', …' : ''})`}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -389,6 +423,13 @@ export default function ThreejsModelDetail() {
   const unmeasuredAttachments = Array.isArray(record.physicalAudit?.unmeasuredAttachments)
     ? record.physicalAudit.unmeasuredAttachments
     : [];
+  // Interior clip poses were first sampled with `poseCoverage`; an audit stored
+  // before then measured an animated model only at clip and sequence
+  // boundaries, which is reported as a gap rather than read as full coverage.
+  const poseCoverage = Array.isArray(record.physicalAudit?.poseCoverage?.clips)
+    ? record.physicalAudit.poseCoverage
+    : null;
+  const poseCoverageUnrecorded = !poseCoverage && listThreejsClips(record.spec).length > 0;
   const physicalAuditFindings = Array.isArray(record.physicalAudit?.findings)
     ? [
       ...record.physicalAudit.findings,
@@ -397,6 +438,11 @@ export default function ThreejsModelDetail() {
         severity: 'note',
         message: `Attachment "${entry.partId}" could not be checked against ${entry.anchorSocket ? `socket "${entry.anchorSocket}"` : `"${entry.anchorPartId}"`} because ${entry.reason}.`,
       })),
+      ...(poseCoverageUnrecorded ? [{
+        code: 'clip-poses-unrecorded',
+        severity: 'note',
+        message: 'This audit predates interior clip-pose sampling: attachments were measured only at clip and sequence boundaries, so a part could leave its anchor mid-motion unreported. Regenerate to measure the clips mid-motion.',
+      }] : []),
     ]
     : null;
   const materialFindings = Array.isArray(record.materialPlausibility?.findings)
@@ -632,7 +678,9 @@ export default function ThreejsModelDetail() {
               ? ' Refining without your own feedback will also target physical conformance defects.'
               : ''
           }`}
-        />
+        >
+          {poseCoverage?.clips.length > 0 && <PoseCoverageList coverage={poseCoverage} />}
+        </GatePanel>
       )}
 
       {materialFindings && (
