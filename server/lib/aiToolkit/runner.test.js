@@ -2083,7 +2083,7 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
       child.emit('close', 0);
       await completed;
       expect(command).toBe('cmd.exe');
-      expect(args).toEqual(['/c', shim.replace('&', '^&'), 'plain^&value', 'quoted & value']);
+      expect(args).toEqual(['/c', shim.replace('&', '^&'), 'plain^^^&value', 'quoted & value']);
       expect(options.shell).toBeFalsy();
       expect(options.env.PATH).toBe(shimDir);
     } finally {

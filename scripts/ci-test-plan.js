@@ -279,6 +279,8 @@ export const WINDOWS_RISK_RULES = [
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
+  /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
   // and APFS are case-insensitive while ext4 is not, and git reports paths its
   // own way (drive-letter case, 8.3 short names like C:\Users\RUNNER~1). A

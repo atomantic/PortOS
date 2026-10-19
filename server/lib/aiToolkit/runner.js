@@ -447,7 +447,7 @@ export function createRunnerService(config = {}) {
       // Resolved against `childEnv` (not bare process.env) so a
       // provider-configured PATH override is honored.
       const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
-      const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+      const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args, undefined, childEnv);
       if (beforeExecute) {
         try { await beforeExecute(); }
         catch {

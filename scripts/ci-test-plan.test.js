@@ -1558,6 +1558,7 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/fix-windows-console.js',
       'scripts/ps1-bom.test.js',
       'server/lib/bufferedSpawn.js',
+      'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
       'server/lib/mockPathsDataRoot.js',
       'server/services/cosAgentIndex.completionOrder.test.js',
