@@ -1904,9 +1904,13 @@ describe('dependency manifest Windows escalation', () => {
 
 describe('path-gated single-purpose jobs', () => {
   const repo = fileURLToPath(new URL('../', import.meta.url));
+  // The gates read only the two static input lists, which do not depend on the
+  // diff; walking the repository once per case exceeded the 5 s test timeout (#12461).
+  let staticInputs;
   const realPlan = (changedFiles) => {
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: repo });
-    return buildCiTestPlan(inputs.changedFiles, inputs);
+    staticInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
+    const { promptHistoryInputs, linuxContainmentInputs } = staticInputs;
+    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs });
   };
   const gates = (plan) => ({ promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment });
 
