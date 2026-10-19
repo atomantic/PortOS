@@ -44,6 +44,17 @@ describe('relativeSpecifiers ignores non-executable text', () => {
     ].join('\n');
     expect(relativeSpecifiers(source)).toEqual(['./InExpression.js', './Real.js', './AfterString.js']);
   });
+
+  it("treats division after postfix ++/-- and closing tokens as division, so later imports stay checked", () => {
+    const source = [
+      "const r1 = count++ / divisor; await import('./AfterInc.js');",
+      "const r2 = count-- / divisor; await import('./AfterDec.js');",
+      "const r3 = (a + b) / 2; await import('./AfterParen.js');",
+      "const r4 = list[0] / 2; await import('./AfterBracket.js');",
+      "const r5 = a + /x/.source.length; await import('./AfterRegex.js');",
+    ].join("\n");
+    expect(relativeSpecifiers(source)).toEqual(['./AfterInc.js', './AfterDec.js', './AfterParen.js', './AfterBracket.js', './AfterRegex.js']);
+  });
 });
 
 describe('importCaseMismatches', () => {

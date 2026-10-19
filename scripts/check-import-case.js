@@ -51,7 +51,11 @@ function scanCode(source) {
   const templates = []; // brace depth at which each open `${` resumes template text
   let depth = 0;
   let prev = ''; // last significant code character
+  let prevAt = -1; // its index in source
   let i = 0;
+  // `x++ / y`: a prefix ++/-- needs an operand, never a regex, so an adjacent
+  // doubled +/- before `/` always ends an expression.
+  const isPostfixStep = () => (prev === '+' || prev === '-') && prevAt > 0 && source[prevAt - 1] === prev;
   const readTemplate = (from) => {
     let j = from + 1;
     while (j < source.length) {
@@ -89,7 +93,7 @@ function scanCode(source) {
     } else if (ch === '`') {
       i = readTemplate(i);
       prev = '`';
-    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{};+-*%<>~^'.includes(prev))) {
+    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{};+-*%<>~^'.includes(prev)) && !isPostfixStep()) {
       let j = i + 1;
       let inClass = false;
       while (j < source.length && source[j] !== '\n' && (inClass || source[j] !== '/')) {
@@ -112,7 +116,7 @@ function scanCode(source) {
           continue;
         }
       }
-      if (!/\s/.test(ch)) prev = ch;
+      if (!/\s/.test(ch)) { prev = ch; prevAt = i; }
       i += 1;
     }
   }
