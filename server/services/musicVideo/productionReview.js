@@ -684,96 +684,153 @@ export function anchorShotsToSungLyrics(project, sceneIds = null) {
   return moved ? { ...project, productionReview: { ...project.productionReview, draft: { ...draft, storyboard } } } : project;
 }
 
-export function productionReadiness(project) {
-  const review = project.productionReview || {};
-  const draft = review.draft || {};
-  const basis = productionReviewBasis(project);
-  const alignmentBasis = productionAlignmentBasis(project);
-  const inputs = productionApprovalInputs(project);
-  const unresolved = stage => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
-  const artProblems = unresolved('art').map(f => `Resolve art feedback for ${f.target}: ${f.text}`);
-  for (const [key, label] of [['cast', 'Cast guide'], ['environments', 'Environment guide'],
-    ['visualLanguage', 'Visual guide and mood board'], ['motionLanguage', 'Motion guide']]) {
-    if (!text(draft[key])) artProblems.push(`${label} needs editable direction.`);
+const unresolvedFeedback = (review, stage) => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
+const feedbackProblems = (review, stage) => unresolvedFeedback(review, stage).map(f => `Resolve ${stage} feedback for ${f.target}: ${f.text}`);
+
+const ART_GUIDE_FIELDS = [['cast', 'Cast guide'], ['environments', 'Environment guide'],
+  ['visualLanguage', 'Visual guide and mood board'], ['motionLanguage', 'Motion guide']];
+const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
+
+// Art direction: open change requests, every guide written, and a visual sheet the render mode accepts.
+function artDirectionProblems(project, review, draft) {
+  const problems = feedbackProblems(review, 'art');
+  for (const [key, label] of ART_GUIDE_FIELDS) if (!text(draft[key])) problems.push(`${label} needs editable direction.`);
+  const guide = artifact(project, draft.guideArtifactId);
+  if (!GUIDE_MIME_TYPES.includes(guide?.mimeType)) problems.push('Attach a visual cast/environment sheet from Development artifacts.');
+  if (guide?.mimeType?.startsWith('image/') && !musicVideoAllowsMedia(project, 'image')) problems.push('Code only requires a code-authored visual guide; select a compatible Development artifact.');
+  return problems;
+}
+
+// Lyric timing: an instrumental has no sung lines; a song with lyrics needs them imported, aligned
+// to the current master, and every line's words bounded inside the song.
+function lyricTimingProblems(review, draft, cues, duration, alignmentBasis) {
+  if (draft.lyricsMode === 'instrumental') return cues.length ? ['This song has lyrics. Remove the instrumental exception or correct the song data.'] : [];
+  const problems = [];
+  if (!cues.length) problems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
+  if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) problems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
+  // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
+  // forced-aligned words may run a little past a line window taken from the song's line timestamps.
+  if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
+    || !(lyricCueSpan(c)?.startSec >= 0 && lyricCueSpan(c).endSec <= duration))) {
+    problems.push('Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.');
   }
-  if (!['text/html', 'image/png', 'image/jpeg'].includes(artifact(project, draft.guideArtifactId)?.mimeType)) artProblems.push('Attach a visual cast/environment sheet from Development artifacts.');
-  if (artifact(project, draft.guideArtifactId)?.mimeType?.startsWith('image/') && !musicVideoAllowsMedia(project, 'image')) artProblems.push('Code only requires a code-authored visual guide; select a compatible Development artifact.');
-  const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
-  // Shots whose lyric anchors differ from the lines sung over them, with both, so the checklist can show and fix them.
-  const lyricAnchors = [];
-  const boardProblems = unresolved('storyboard').map(f => `Resolve storyboard feedback for ${f.target}: ${f.text}`);
-  if (!artApproved) boardProblems.push('Review and approve the current art direction first.');
-  const duration = project.audioAnalysis?.durationSec;
-  if (!(duration > 0)) boardProblems.push('Analyze the current master song.');
-  const cues = (project.lyricCues || []).filter(c => text(c.text));
-  if (draft.lyricsMode === 'instrumental') {
-    if (cues.length) boardProblems.push('This song has lyrics. Remove the instrumental exception or correct the song data.');
-  } else {
-    if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
-    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
-    // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
-    // forced-aligned words may run a little past a line window taken from the song's line timestamps.
-    if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
-      || !(lyricCueSpan(c)?.startSec >= 0 && lyricCueSpan(c).endSec <= duration))) {
-      boardProblems.push('Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.');
-    }
-  }
-  const documentShots = draft.storyboardSource === 'document';
-  // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
-  const staleRows = documentShots ? [] : staleStoryboardRows(project)
-    .map(shot => ({ id: shot.id || null, sceneId: shot.sceneId, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null, action: shot.action || '' }));
-  const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
+  return problems;
+}
+
+// Where the shots come from: a document manifest imported from the current authored source and
+// master, or Board rows each bound to its own live scene.
+function shotSourceProblems(project, review, draft, scenes, documentShots, staleRows) {
+  const problems = [];
   if (documentShots) {
     if (project.composition?.mode !== 'document' || !project.composition.document?.directory
       || review.documentStoryboard?.basis !== documentStoryboardBasis(project)) {
-      boardProblems.push('Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.');
+      problems.push('Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.');
     }
-    if (new Set(scenes.map(s => s.id)).size !== scenes.length || scenes.some(s => !text(s.id))) boardProblems.push('Document shots need unique source IDs.');
-  } else {
-    if (draft.storyboard?.some(shot => !shot.sceneId)) boardProblems.push('Bind every draft shot to a real Board scene.');
-    if (staleRows.length) boardProblems.push(`Remove ${staleRows.length} storyboard row${staleRows.length === 1 ? '' : 's'} left from deleted shots.`);
-    if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) boardProblems.push('Each storyboard shot must bind to its own Board scene.');
+    if (new Set(scenes.map(s => s.id)).size !== scenes.length || scenes.some(s => !text(s.id))) problems.push('Document shots need unique source IDs.');
+    return problems;
   }
-  if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
-  const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
-  // Each place the shots leave the song uncovered or covered twice, on the shot where it happens, so the checklist can name it.
+  if (draft.storyboard?.some(shot => !shot.sceneId)) problems.push('Bind every draft shot to a real Board scene.');
+  if (staleRows.length) problems.push(`Remove ${staleRows.length} storyboard row${staleRows.length === 1 ? '' : 's'} left from deleted shots.`);
+  if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) problems.push('Each storyboard shot must bind to its own Board scene.');
+  return problems;
+}
+
+const FRAME = 1 / 24;
+// Each place the shots leave the song uncovered or covered twice, on the shot where it happens, so the checklist can name it.
+function storyboardCoverage(timedScenes, duration) {
+  if (!timedScenes.length) return [];
   const coverage = [];
-  if (timedScenes.length) {
-    const [first, last] = [timedScenes[0], timedScenes.at(-1)];
-    if (first.startSec > 1 / 24) coverage.push({ sceneId: first.sceneId, issue: 'late-start', startSec: 0, endSec: first.startSec });
-    timedScenes.forEach((s, i) => {
-      const prev = timedScenes[i - 1];
-      if (!prev || Math.abs(s.startSec - prev.endSec) <= 1 / 24) return;
-      coverage.push({ sceneId: s.sceneId, issue: s.startSec > prev.endSec ? 'gap' : 'overlap',
-        startSec: Math.min(s.startSec, prev.endSec), endSec: Math.max(s.startSec, prev.endSec) });
-    });
-    if (Math.abs(last.endSec - duration) > 1 / 24) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
-      startSec: Math.min(last.endSec, duration), endSec: Math.max(last.endSec, duration) });
-  }
-  if (coverage.length) boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
-  // Each shot missing timing or storyboard fields, with what is missing.
+  const [first, last] = [timedScenes[0], timedScenes.at(-1)];
+  if (first.startSec > FRAME) coverage.push({ sceneId: first.sceneId, issue: 'late-start', startSec: 0, endSec: first.startSec });
+  timedScenes.forEach((s, i) => {
+    const prev = timedScenes[i - 1];
+    if (!prev || Math.abs(s.startSec - prev.endSec) <= FRAME) return;
+    coverage.push({ sceneId: s.sceneId, issue: s.startSec > prev.endSec ? 'gap' : 'overlap',
+      startSec: Math.min(s.startSec, prev.endSec), endSec: Math.max(s.startSec, prev.endSec) });
+  });
+  if (Math.abs(last.endSec - duration) > FRAME) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
+    startSec: Math.min(last.endSec, duration), endSec: Math.max(last.endSec, duration) });
+  return coverage;
+}
+
+// A Board shot with no camera note is a valid choice (a cutaway rendered from its start frame plays
+// whatever motion its clip has); camera variety stays advice. Document shots spell out every field.
+const BOARD_SHOT_FIELDS = ['action', 'staging', 'transition'];
+const DOCUMENT_SHOT_FIELDS = ['action', 'staging', 'camera', 'transition'];
+
+/**
+ * Every shot's open work: the timing or storyboard fields it is missing
+ * (`incompleteShots`), and lyric anchors that disagree with the lines sung over it
+ * (`lyricAnchors`, with both sides so the checklist can show and fix them), each
+ * also named in `problems`.
+ */
+function shotProblems(project, draft, scenes, { documentShots, cues, duration }) {
+  const problems = [];
   const incompleteShots = [];
+  const lyricAnchors = [];
   for (const scene of scenes) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
     const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
       : scene.endSec > duration ? ['an end inside the song'] : [];
-    // A Board shot with no camera note is a valid choice (a cutaway rendered from its start frame plays
-    // whatever motion its clip has); camera variety stays advice. Document shots spell out every field.
-    missing.push(...(documentShots ? ['action', 'staging', 'camera', 'transition'] : ['action', 'staging', 'transition'])
-      .filter(key => !text(shot?.[key])));
+    missing.push(...(documentShots ? DOCUMENT_SHOT_FIELDS : BOARD_SHOT_FIELDS).filter(key => !text(shot?.[key])));
     if (missing.length) {
-      boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
+      problems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
       incompleteShots.push({ sceneId: scene.sceneId, missing });
     }
     // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
     const sung = cuesSungWithin(cues, scene.startSec, scene.endSec);
     if (sung.some(c => !shot?.lyricCueIds?.includes(c.id))
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) {
-      boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
+      problems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
       if (!documentShots) lyricAnchors.push({ sceneId: scene.sceneId, sung: sung.map(c => c.text),
         anchored: (shot?.lyricCueIds || []).map(id => cues.find(c => c.id === id)?.text).filter(Boolean) });
     }
   }
+  return { problems, incompleteShots, lyricAnchors };
+}
+
+// The animated proof: a current chorus excerpt rendered with the master and watched once the storyboard is approved.
+function proofReadiness(project, review, basis, storyboardApproved) {
+  const proof = review.proof;
+  const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
+  const problems = feedbackProblems(review, 'proof');
+  if (!storyboardApproved) problems.push('Approve the current lyric-timed storyboard before the animated proof.');
+  if (!proof || proof.basis !== basis.proof || excerpt?.status !== 'complete' || !excerpt?.filename) {
+    problems.push('Render and watch a current animated chorus proof with the master song.');
+  }
+  const approved = !problems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
+  return { approved, problems, excerptId: excerpt?.id || null };
+}
+
+const alignmentStatus = (review, draft, alignmentBasis) => draft.lyricsMode === 'instrumental' ? 'instrumental'
+  : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale';
+
+export function productionReadiness(project) {
+  const review = project.productionReview || {};
+  const draft = review.draft || {};
+  const basis = productionReviewBasis(project);
+  const alignmentBasis = productionAlignmentBasis(project);
+  const inputs = productionApprovalInputs(project);
+  const artProblems = artDirectionProblems(project, review, draft);
+  const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
+  const boardProblems = feedbackProblems(review, 'storyboard');
+  if (!artApproved) boardProblems.push('Review and approve the current art direction first.');
+  const duration = project.audioAnalysis?.durationSec;
+  if (!(duration > 0)) boardProblems.push('Analyze the current master song.');
+  const cues = (project.lyricCues || []).filter(c => text(c.text));
+  boardProblems.push(...lyricTimingProblems(review, draft, cues, duration, alignmentBasis));
+  const documentShots = draft.storyboardSource === 'document';
+  // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
+  const staleRows = documentShots ? [] : staleStoryboardRows(project)
+    .map(shot => ({ id: shot.id || null, sceneId: shot.sceneId, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null, action: shot.action || '' }));
+  const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
+  boardProblems.push(...shotSourceProblems(project, review, draft, scenes, documentShots, staleRows));
+  if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
+  const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
+  const coverage = storyboardCoverage(timedScenes, duration);
+  if (coverage.length) boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
+  const shots = shotProblems(project, draft, scenes, { documentShots, cues, duration });
+  boardProblems.push(...shots.problems);
   // Once any shot has been locked, the board is approved exactly when every shot is.
   const locks = shotLocks(project);
   const byShot = !!locks && Object.keys(review.shotApprovals || {}).length > 0;
@@ -782,24 +839,16 @@ export function productionReadiness(project) {
   const storyboardApproved = !boardProblems.length && (byShot ? scenes.length > 0 && !unlocked.length
     : storyboardApprovalCurrent(review.approvals?.storyboard, basis));
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
-  const proof = review.proof;
-  const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
-  const proofProblems = unresolved('proof').map(f => `Resolve proof feedback for ${f.target}: ${f.text}`);
-  if (!storyboardApproved) proofProblems.push('Approve the current lyric-timed storyboard before the animated proof.');
-  if (!proof || proof.basis !== basis.proof || excerpt?.status !== 'complete' || !excerpt?.filename) {
-    proofProblems.push('Render and watch a current animated chorus proof with the master song.');
-  }
-  const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
-    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
+  const proof = proofReadiness(project, review, basis, storyboardApproved);
+  return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(review, draft, alignmentBasis) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, staleRows, coverage, incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shots: documentShots ? null : boardStoryboard(project), lyricAnchors: shots.lyricAnchors, staleRows, coverage, incompleteShots: shots.incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
       // Video shots whose clip is not locked yet: the board is finished when every shot is fully locked.
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },
-    proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
+    proof: { ...proof, stale: proof.approved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
     readyForProduction: storyboardApproved };
