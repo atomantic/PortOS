@@ -868,6 +868,21 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(r.next.name).toBe('new');
   });
 
+  it('never imports a peer song revision and preserves explicit local clears (#12429)', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const foreign = { id: 'mv-peer', updatedAt: '2026-01-05T00:00:00Z', name: 'Peer edit',
+      songRevision: { id: 'mvsr-peer', submitted: true, songIds: ['peer-song'] },
+      songRevisionHistory: [{ id: 'mvsr-peer-history' }] };
+    for (const projected of [sanitizeRecordForWire('musicVideoProject', foreign),
+      mergeProjectRecord(null, foreign).next,
+      mergeProjectRecord({ id: foreign.id, updatedAt: '2026-01-01T00:00:00Z' }, foreign).next]) {
+      expect(projected).not.toHaveProperty('songRevision');
+      expect(projected).not.toHaveProperty('songRevisionHistory');
+    }
+    const cleared = { id: foreign.id, updatedAt: '2026-01-01T00:00:00Z', songRevision: null, songRevisionHistory: [] };
+    expect(mergeProjectRecord(cleared, foreign).next).toMatchObject({ name: 'Peer edit', songRevision: null, songRevisionHistory: [] });
+  });
+
   it('preserves local render pins when a newer remote edit wins (#3245)', () => {
     const local = {
       id: 'mv-1',

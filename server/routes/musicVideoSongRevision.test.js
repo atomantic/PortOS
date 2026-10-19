@@ -101,7 +101,7 @@ describe('fork song revision through HTTP', () => {
     expect((await store.getProject(fork.id)).audioAnalysis).toBeNull();
   });
 
-  it('retries downloads without repeating Create and cancels without changing master', async () => {
+  it('retries downloads after a newer peer edit without repeating Create and cancels without changing master', async () => {
     const { fork, revisionId } = await fixture();
     let fail = true;
     let submissions = 0;
@@ -112,9 +112,13 @@ describe('fork song revision through HTTP', () => {
     } });
     await post(fork.id, 'generate', { revisionId }); await service.__testing.settle();
     expect((await store.getProject(fork.id)).songRevision.status).toBe('failed');
+    await store.mergeProjectsFromSync([{ ...stripMusicVideoLocalRenderPins(await store.getProject(fork.id)),
+      name: 'Example peer rename', updatedAt: '2099-01-01T00:00:00Z' }]);
     fail = false;
-    await post(fork.id, 'generate', { revisionId }); await service.__testing.settle();
+    expect((await post(fork.id, 'generate', { revisionId })).status).toBe(202);
+    await service.__testing.settle();
     expect(submissions).toBe(1);
+    expect((await store.getProject(fork.id)).songRevision.candidates).toHaveLength(2);
     expect((await post(fork.id, 'cancel', { revisionId })).status).toBe(200);
     expect((await store.getProject(fork.id)).uploadedAudioFilename).toBe('original.m4a');
     const next = await post(fork.id, '', { ...fields, lyrics: 'Another morning' });
