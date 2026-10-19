@@ -149,7 +149,9 @@ vi.mock('ws', () => {
       }
       if (message.type === 'verb') {
         const state = mocks.worlds.get(this.world);
-        if (message.verb === 'grant') {
+        if (message.verb === 'grant' && message.args.role === null) {
+          delete state.roles[message.args.id];
+        } else if (message.verb === 'grant') {
           state.roles[message.args.id] = {
             ...(state.roles[message.args.id] || {}),
             ...(message.args.role ? { role: message.args.role } : {}),
@@ -1302,6 +1304,28 @@ it('admits a visitor before joining and exposes only new live chat to both guest
   await guest.connection.close();
 });
 
+
+it('revokes a departed guest role, retries a failed revoke once, and revokes on failed admission', async () => {
+  await world.ensureEidoverseWorldPresence();
+  const roles = mocks.worlds.get('portos').roles;
+  const guest = await world.admitEidoverseGuest({ agent: true, name: 'Example Explorer' });
+  expect(roles['Example Explorer']).toMatchObject({ role: 'visitor' });
+  await guest.connection.close();
+  await world.revokeEidoverseGuest(guest.identity);
+  expect(roles['Example Explorer']).toBeUndefined();
+
+  const browser = await world.admitEidoverseGuest({ name: 'Example Browser' });
+  mocks.rejectVerb = 'grant';
+  mocks.rejectedVerb = false;
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await world.revokeEidoverseGuest(browser.identity);
+  expect(error).toHaveBeenCalled();
+  error.mockRestore();
+  await world.admitEidoverseGuest({ name: 'Example Next' });
+  const revokes = mocks.sent.filter((entry) => entry.verb === 'grant' && entry.args.id === 'Example Browser' && entry.args.role === null);
+  expect(revokes.length).toBeGreaterThanOrEqual(2);
+  expect(roles['Example Browser']).toBeUndefined();
+});
 
 it('keeps occupied identities intact and disambiguates repeated browser admissions', async () => {
   await world.ensureEidoverseWorldPresence();

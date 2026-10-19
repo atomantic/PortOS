@@ -8,7 +8,7 @@ import { eidoverseChatResultSchema } from '../lib/eidoverseValidation.js';
 import { getPeers } from './instances.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { ensureEidoverseHost } from './eidoverseHost.js';
-import { admitEidoverseGuest, ensureEidoverseWorldConfig, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
+import { admitEidoverseGuest, revokeEidoverseGuest, ensureEidoverseWorldConfig, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
 import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
 import { EIDOVERSE_MANAGED_PREFIX } from '../lib/eidoverseWorldDesign.js';
 
@@ -24,6 +24,7 @@ const closeSession = async (sessions, key) => {
   sessions.delete(key);
   clearTimeout(session?.timer);
   await session?.connection?.close();
+  if (session?.identity) await revokeEidoverseGuest(session.identity);
 };
 const remember = (sessions, key, session) => {
   session.expiresAt = Date.now() + TTL;

@@ -33,7 +33,7 @@ The resident grants an unused identity `visitor` with generation disabled
 before entry. Named admission preserves the source human or CoS in-world handle
 when available, adding a bounded numeric suffix for occupied names. Existing
 roles and entities are never reused or downgraded. Missing or reserved handles
-retain the opaque guest fallback. Handles travel only in explicit admission
+retain the opaque guest fallback. When a visit ends (leave, session expiry, or a failed admission) the resident clears the guest's role with `grant` `role: null`, since the world has no revoke verb; a failed revoke is logged and retried once at the next admission. Handles travel only in explicit admission
 bodies, never status/capability payloads. The renderer's explicit guest protocol ignores an existing browser
 login, refuses missing visitor grants and ownerless worlds, and restricts
 snapshot/scrollback chat to the visit's admission sequence. Guest debug history
