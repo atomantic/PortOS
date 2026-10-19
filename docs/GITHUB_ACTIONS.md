@@ -784,6 +784,9 @@ platform. A changed `package.json`/`package-lock.json` (root, `server`,
 carries `windowsEscalates: 'dependencies'`: `collectPlanInputs()` reads each
 file at `CI_BASE_SHA` (`git show`; the base is inside the depth-2 checkout)
 and in the tree under test, and `classifyDependencyChange()` diffs them.
+Only manifests (and `.npmrc`) of workspaces in `WINDOWS_INSTALLED_WORKSPACES`
+(`server`, pinned to the `windows-server` install steps by a test) are diffed;
+root, client and autofixer changes keep the Windows baseline.
 Windows escalates when any added, removed or changed lockfile entry (either
 side) has `hasInstallScript`, `os`, `cpu`, `libc`, `optional` or
 `devOptional`, or matches `PLATFORM_PACKAGE_RES` — every `TRUSTED_REBUILDS`

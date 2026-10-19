@@ -95,6 +95,13 @@ const fansOut = (runner, { mode, files }, excludedFiles) => {
 
 const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
 
+// Workspaces the windows-server job installs (`npm ci --prefix <dir>`). Only
+// their manifests and .npmrc can change what that job runs, so a dependency or
+// npm-config change elsewhere keeps the Windows baseline. ci-test-plan.test.js
+// pins this list to the job's install steps in ci.yml.
+export const WINDOWS_INSTALLED_WORKSPACES = ['server'];
+const windowsInstalls = (path) => WINDOWS_INSTALLED_WORKSPACES.some((dir) => path.startsWith(`${dir}/`));
+
 // Packages whose installed files differ per platform although their lockfile
 // entry may carry no os/cpu/install-script metadata: runtime dispatchers that
 // pick a prebuilt binary (their per-platform children ARE os/cpu-tagged, and
@@ -1006,7 +1013,13 @@ function buildSuitePlan(changedFiles, {
     .flatMap((path) => FULL_TRIGGER_RULES
       .filter(({ re }) => re.test(path))
       .map(({ reason, windowsEscalates }) => {
-        if (windowsEscalates !== 'dependencies') return { path, reason, windowsEscalates };
+        const scopedToWindows = windowsEscalates === 'dependencies' || (windowsEscalates === true && /(?:^|\/)\.npmrc$/.test(path));
+        if (!scopedToWindows) return { path, reason, windowsEscalates };
+        if (!windowsInstalls(path)) {
+          dependencyVerdicts.push(`${path} keeps the Windows baseline: the Windows job does not install that workspace`);
+          return { path, reason, windowsEscalates: false };
+        }
+        if (windowsEscalates === true) return { path, reason, windowsEscalates };
         const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
         dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
         return { path, reason, windowsEscalates: verdict.escalate };

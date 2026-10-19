@@ -19,6 +19,7 @@ import {
   BROWSER_SUITES,
   buildCiTestPlan,
   classifyDependencyChange,
+  WINDOWS_INSTALLED_WORKSPACES,
   collectPlanInputs,
   emitGitHubPlan,
   forceFullReasonFor,
@@ -1000,7 +1001,7 @@ describe('CI test impact planner', () => {
     });
 
     it('keeps an independent lockfile full-CI trigger authoritative', () => {
-      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'package-lock.json'], {
+      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'server/package-lock.json'], {
         trackedFiles: [...REVIEW_LOOP_TRACKED, ...WINDOWS_CONTRACT_TESTS],
       });
 
@@ -1494,7 +1495,7 @@ describe('Windows escalation on a full plan (#7440)', () => {
     expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
 
     // package-lock.json carries no manifest comparison here, so it fails closed.
-    for (const escalating of ['server/index.js', 'package-lock.json', '.npmrc']) {
+    for (const escalating of ['server/index.js', 'server/package-lock.json', 'server/.npmrc']) {
       const combined = plan(['client/src/App.jsx', escalating]);
       expect(combined.reason, escalating).toContain('client composition root changed');
       expect(combined.windowsMode, escalating).toBe('full');
@@ -1834,12 +1835,33 @@ describe('dependency manifest Windows escalation', () => {
     // The lockfile mirrors engines into its root entry.
     expect(classifyDependencyChange(LOCK, BASE, lockfile(BASE_PACKAGES, { engines: { node: '>=26' } })).escalate).toBe(true);
 
-    for (const npmrc of ['.npmrc', 'server/.npmrc']) {
+    for (const npmrc of ['server/.npmrc']) {
       const plan = planFor([npmrc], {});
       expect(plan.full, npmrc).toBe(true);
       expect(plan.reason, npmrc).toContain('npm configuration changed');
       expect(plan.windowsMode, npmrc).toBe('full');
     }
+  });
+
+  it('keeps the Windows baseline for platform-sensitive changes in workspaces the job does not install', () => {
+    const unsafe = lockfile({ ...BASE_PACKAGES, 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } });
+    for (const path of ['package-lock.json', 'client/package-lock.json', 'autofixer/package-lock.json']) {
+      const plan = planFor([path], { [path]: classifyDependencyChange(path, BASE, unsafe) });
+      expect(plan.full, path).toBe(true);
+      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.suiteReasons.windows, path).toContain('the Windows job does not install that workspace');
+    }
+    for (const path of ['.npmrc', 'client/.npmrc']) {
+      expect(planFor([path], {}).windowsMode, path).toBe('files');
+    }
+    // The same diff in the server lockfile still escalates.
+    expect(lockPlan(unsafe).windowsMode).toBe('full');
+  });
+
+  it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
+    const job = workflowJobs(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8'))['windows-server'];
+    const installed = [...job.matchAll(/npm (?:ci|install)\b[^\n]*/g)].map(([cmd]) => cmd.match(/--prefix\s+(\S+)/)?.[1] ?? '.');
+    expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
   });
 
   it('runs the shared server contracts as a full plan on the Windows baseline', () => {
