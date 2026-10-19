@@ -8,7 +8,9 @@
 // snake_case) literal instead of being consumed as emphasis delimiters.
 const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|(?<!\w)_(?!\s)[^_]+(?<!\s)_(?!\w)|\[[^\]]+\]\([^)]+\))/g;
 
-const safeSrc = (url) => (/^(https?:\/\/|\/[^/])/.test(url) ? url : null);
+// Absolute http(s), or an in-app path: `//host` and `/\\host` are protocol-relative
+// and would leave the origin (mirrors sanitizeNext in pages/Login.jsx).
+const safeSrc = (url) => (/^(https?:\/\/|\/(?![/\\]))/.test(url) ? url : null);
 
 const LINK_CLASS = 'text-port-accent hover:underline';
 

@@ -84,7 +84,9 @@ export const UI_TOOLS = [
           }
         }
       }
-      if (!target && path && typeof path === 'string' && path.startsWith('/')) target = path;
+      // A model-chosen raw path must stay in-app: `//host` and `/\\host` are
+      // protocol-relative and the client would leave the origin.
+      if (!target && typeof path === 'string' && /^\/(?![/\\])/.test(path)) target = path;
       if (!target) {
         const suggestions = ['tasks', 'agents', 'gsd', 'briefing', 'calendar', 'goals', 'brain', 'meatspace', 'messages', 'settings', 'shell', 'instances'];
         return {
