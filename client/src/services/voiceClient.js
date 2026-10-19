@@ -780,28 +780,38 @@ const VAD = {
   debug: false,          // window.__portosVadDebug = true to enable logging
 };
 
-// Live thresholds (set by calibration, then static for the session).
-let onRms = VAD.minOnRms;
-let offRms = VAD.minOffRms;
-let calibrating = false;
-let calibrationSamples = [];
-let calibrationUntil = 0;
-
+// Module-level on purpose: a display reading for the widget's level meter and
+// a log throttle — neither is detection state, so neither belongs to an attempt.
 let lastRmsValue = 0;
 let lastDebugLogAt = 0;
 
 let continuousAttempt = null;
-let vadState = 'idle';
-let speechChunks = [];
-// Fixed-size ring buffer of the last `preRollLimit` frames; avoids the
-// O(n) Array.shift() that would otherwise run ~375 times/second.
-let preRoll = null;
-let preRollLimit = 0;
-let preRollIdx = 0;
-let preRollFilled = 0;
-let silenceStartedAt = 0;
-let speechStartedAt = 0;
-let onsetFrames = 0;
+
+// Detector state for ONE capture attempt (`attempt.vad`). This is the single
+// list of starting values; a new attempt gets a fresh record and a detached one
+// drops it, so nothing carries over between hands-free sessions.
+const createVadState = (sampleRate) => {
+  const preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
+  return {
+    // Live thresholds (set by calibration, then static for the session).
+    onRms: VAD.minOnRms,
+    offRms: VAD.minOffRms,
+    calibrating: true,
+    calibrationSamples: [],
+    calibrationUntil: performance.now() + VAD.calibrationMs,
+    vadState: 'idle',
+    speechChunks: [],
+    // Fixed-size ring buffer of the last `preRollLimit` frames; avoids the
+    // O(n) Array.shift() that would otherwise run ~375 times/second.
+    preRoll: new Array(preRollLimit),
+    preRollLimit,
+    preRollIdx: 0,
+    preRollFilled: 0,
+    silenceStartedAt: 0,
+    speechStartedAt: 0,
+    onsetFrames: 0,
+  };
+};
 
 const WORKLET_SOURCE = `
 class VADProcessor extends AudioWorkletProcessor {
@@ -824,17 +834,6 @@ const settleContinuousStart = (attempt) => {
   attempt.pending = false;
 };
 
-const resetContinuousVad = () => {
-  speechChunks = [];
-  preRoll = null;
-  preRollIdx = 0;
-  preRollFilled = 0;
-  vadState = 'idle';
-  onsetFrames = 0;
-  calibrating = false;
-  calibrationSamples = [];
-};
-
 // Detach before any asynchronous close. A stale startup may still receive a
 // stream later, but it can release only resources on its own attempt.
 const detachContinuousAttempt = (attempt) => {
@@ -843,7 +842,7 @@ const detachContinuousAttempt = (attempt) => {
   settleContinuousStart(attempt);
   if (continuousAttempt === attempt) {
     continuousAttempt = null;
-    resetContinuousVad();
+    attempt.vad = null;
   }
   return attempt;
 };
@@ -866,9 +865,10 @@ const releaseContinuousResources = (attempt) => {
 
 const submitUtterance = async (capture) => {
   if (!isCurrentContinuousAttempt(capture)) return;
-  if (!speechChunks.length) return;
-  const chunksToSubmit = speechChunks;
-  speechChunks = [];
+  const { vad } = capture;
+  if (!vad.speechChunks.length) return;
+  const chunksToSubmit = vad.speechChunks;
+  vad.speechChunks = [];
 
   const total = chunksToSubmit.reduce((n, c) => n + c.length, 0);
   const samples = new Float32Array(total);
@@ -891,26 +891,33 @@ const submitUtterance = async (capture) => {
   capture.callbacks?.onSubmit?.({ submitted: true, peak, size: wav.byteLength });
 };
 
-const finishCalibration = () => {
-  calibrating = false;
-  const samples = calibrationSamples;
-  calibrationSamples = [];
+const finishCalibration = (vad) => {
+  vad.calibrating = false;
+  const samples = vad.calibrationSamples;
+  vad.calibrationSamples = [];
   if (!samples.length) return;
   samples.sort((a, b) => a - b);
   // Median is robust if the user accidentally speaks during calibration —
   // up to ~50% of frames can be speech without poisoning the floor estimate.
   const floor = samples[Math.floor(samples.length * 0.5)] ?? samples[samples.length - 1];
-  offRms = Math.max(VAD.minOffRms, floor * 2.0);
-  onRms = Math.min(VAD.maxOnRms, Math.max(VAD.minOnRms, floor * 4.0, offRms * 2));
-  console.log(`🎙️  [vad] calibrated floor=${floor.toFixed(4)} → on=${onRms.toFixed(4)} off=${offRms.toFixed(4)}`);
+  vad.offRms = Math.max(VAD.minOffRms, floor * 2.0);
+  vad.onRms = Math.min(VAD.maxOnRms, Math.max(VAD.minOnRms, floor * 4.0, vad.offRms * 2));
+  console.log(`🎙️  [vad] calibrated floor=${floor.toFixed(4)} → on=${vad.onRms.toFixed(4)} off=${vad.offRms.toFixed(4)}`);
 };
 
-const snapshotPreRoll = () => {
+const snapshotPreRoll = ({ preRoll, preRollLimit, preRollIdx, preRollFilled }) => {
   if (!preRollFilled) return [];
   const out = new Array(preRollFilled);
   const start = preRollFilled < preRollLimit ? 0 : preRollIdx;
   for (let i = 0; i < preRollFilled; i++) out[i] = preRoll[(start + i) % preRollLimit];
   return out;
+};
+
+// Speech -> idle transition shared by the watchdog and end-of-speech paths.
+const returnToIdle = (vad) => {
+  vad.vadState = 'idle';
+  vad.silenceStartedAt = 0;
+  vad.onsetFrames = 0;
 };
 
 const handleFrame = (frame, capture) => {
@@ -920,64 +927,63 @@ const handleFrame = (frame, capture) => {
   const rms = Math.sqrt(sum / frame.length);
   lastRmsValue = rms;
 
-  preRoll[preRollIdx] = frame;
-  preRollIdx = (preRollIdx + 1) % preRollLimit;
-  if (preRollFilled < preRollLimit) preRollFilled += 1;
+  const { vad } = capture;
+  vad.preRoll[vad.preRollIdx] = frame;
+  vad.preRollIdx = (vad.preRollIdx + 1) % vad.preRollLimit;
+  if (vad.preRollFilled < vad.preRollLimit) vad.preRollFilled += 1;
 
   const now = performance.now();
 
-  if (calibrating) {
-    calibrationSamples.push(rms);
-    if (now >= calibrationUntil) finishCalibration();
+  if (vad.calibrating) {
+    vad.calibrationSamples.push(rms);
+    if (now >= vad.calibrationUntil) finishCalibration(vad);
     else return;
   }
 
   if (VAD.debug && now - lastDebugLogAt > 250) {
     lastDebugLogAt = now;
-    console.log(`[vad] state=${vadState} rms=${rms.toFixed(4)} on=${onRms.toFixed(4)} off=${offRms.toFixed(4)} tts=${isTtsActive()}`);
+    console.log(`[vad] state=${vad.vadState} rms=${rms.toFixed(4)} on=${vad.onRms.toFixed(4)} off=${vad.offRms.toFixed(4)} tts=${isTtsActive()}`);
   }
 
-  if (vadState === 'idle') {
+  if (vad.vadState === 'idle') {
     // Raise the bar while TTS plays AND during the echo tail so neither the
     // bot's live audio nor reverb through the mic trigger a false barge-in.
     // Skip the bump entirely on a confirmed headset — there's no acoustic
     // path from speaker to mic, so the user can interrupt at normal volume.
     const inEcho = isInTtsEchoWindow() && !audioRoute.likelyHeadset;
-    const effectiveOnRms = inEcho ? onRms * VAD.bargeInMul : onRms;
+    const effectiveOnRms = inEcho ? vad.onRms * VAD.bargeInMul : vad.onRms;
     const effectiveConfirmMs = inEcho ? VAD.bargeInOnsetConfirmMs : VAD.onsetConfirmMs;
     if (rms > effectiveOnRms) {
-      onsetFrames += 1;
+      vad.onsetFrames += 1;
       const frameMs = (frame.length / (capture.context?.sampleRate || 48000)) * 1000;
-      if (onsetFrames * frameMs >= effectiveConfirmMs) {
+      if (vad.onsetFrames * frameMs >= effectiveConfirmMs) {
         // Confirmed speech onset — barge-in + start capturing
-        vadState = 'speaking';
-        speechStartedAt = now;
-        silenceStartedAt = 0;
-        onsetFrames = 0;
+        vad.vadState = 'speaking';
+        vad.speechStartedAt = now;
+        vad.silenceStartedAt = 0;
+        vad.onsetFrames = 0;
         if (isTtsActive()) {
           socket.emit('voice:interrupt');
           cancelVoicePlayback();
         }
-        speechChunks = snapshotPreRoll();
+        vad.speechChunks = snapshotPreRoll(vad);
         capture.callbacks?.onSpeechStart?.();
       }
     } else {
-      onsetFrames = 0;
+      vad.onsetFrames = 0;
     }
     return;
   }
 
   // state === 'speaking'
-  speechChunks.push(frame);
+  vad.speechChunks.push(frame);
 
   // Watchdog: if silence never crosses offRms (e.g. noisy env, echo tail,
   // stuck mic), force the turn to end so VAD doesn't jam here forever.
-  if (now - speechStartedAt >= VAD.maxSpeechMs) {
-    vadState = 'idle';
-    silenceStartedAt = 0;
-    onsetFrames = 0;
+  if (now - vad.speechStartedAt >= VAD.maxSpeechMs) {
+    returnToIdle(vad);
     capture.callbacks?.onSpeechEnd?.();
-    if (speechChunks.length) {
+    if (vad.speechChunks.length) {
       submitUtterance(capture).catch((err) => console.warn('[voice] watchdog submit failed:', err));
     } else {
       capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
@@ -985,25 +991,23 @@ const handleFrame = (frame, capture) => {
     return;
   }
 
-  if (rms < offRms) {
-    if (!silenceStartedAt) silenceStartedAt = now;
-    if (now - silenceStartedAt >= VAD.silenceMs) {
-      const speechMs = silenceStartedAt - speechStartedAt;
-      vadState = 'idle';
-      silenceStartedAt = 0;
-      onsetFrames = 0;
+  if (rms < vad.offRms) {
+    if (!vad.silenceStartedAt) vad.silenceStartedAt = now;
+    if (now - vad.silenceStartedAt >= VAD.silenceMs) {
+      const speechMs = vad.silenceStartedAt - vad.speechStartedAt;
+      returnToIdle(vad);
       capture.callbacks?.onSpeechEnd?.();
       if (speechMs >= VAD.minSpeechMs) {
         submitUtterance(capture).catch((err) => console.warn('[voice] submit failed:', err));
       } else {
         // Too short to submit — notify the widget so it leaves 'thinking'
         // instead of waiting for a server response that won't arrive.
-        speechChunks = [];
+        vad.speechChunks = [];
         capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
       }
     }
   } else {
-    silenceStartedAt = 0;
+    vad.silenceStartedAt = 0;
   }
 };
 
@@ -1019,6 +1023,7 @@ export const startContinuous = async (callbacks = {}) => {
     context: null,
     source: null,
     workletNode: null,
+    vad: null,
   };
   continuousAttempt = attempt;
 
@@ -1064,21 +1069,7 @@ export const startContinuous = async (callbacks = {}) => {
     attempt.source = attempt.context.createMediaStreamSource(attempt.stream);
     attempt.workletNode = new AudioWorkletNode(attempt.context, 'vad-processor');
 
-    const sampleRate = attempt.context.sampleRate;
-    preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
-    preRoll = new Array(preRollLimit);
-    preRollIdx = 0;
-    preRollFilled = 0;
-    speechChunks = [];
-    vadState = 'idle';
-    silenceStartedAt = 0;
-    speechStartedAt = 0;
-    onsetFrames = 0;
-    calibrating = true;
-    calibrationSamples = [];
-    calibrationUntil = performance.now() + VAD.calibrationMs;
-    onRms = VAD.minOnRms;
-    offRms = VAD.minOffRms;
+    attempt.vad = createVadState(attempt.context.sampleRate);
 
     attempt.workletNode.port.onmessage = (e) => handleFrame(e.data, attempt);
     attempt.source.connect(attempt.workletNode);

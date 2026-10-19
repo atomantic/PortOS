@@ -717,6 +717,33 @@ describe('voice playback cancellation', () => {
       },
     );
 
+    it('starts a restarted capture calibrating and idle after the previous one stopped mid-speech', async () => {
+      let now = 1000;
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      const loud = () => new Float32Array(128).fill(0.5);
+      const onFirstSpeech = vi.fn();
+      await voiceClient.startContinuous({ onSpeechStart: onFirstSpeech });
+      const firstFrame = FakeAudioWorkletNode.last.port.onmessage;
+      now = 1700;
+      firstFrame({ data: new Float32Array(128) });
+      for (let i = 0; i < 40; i++) firstFrame({ data: loud() });
+      expect(onFirstSpeech).toHaveBeenCalledOnce();
+      await voiceClient.stopContinuous();
+
+      const onSpeechStart = vi.fn();
+      await voiceClient.startContinuous({ onSpeechStart });
+      const frame = FakeAudioWorkletNode.last.port.onmessage;
+      // Still inside the new capture's calibration window: loud frames only
+      // feed the noise-floor estimate, never a speech onset.
+      for (let i = 0; i < 40; i++) frame({ data: loud() });
+      expect(onSpeechStart).not.toHaveBeenCalled();
+      // Past the window the detector is live again, starting from idle.
+      now = 1700 + 700;
+      frame({ data: new Float32Array(128) });
+      for (let i = 0; i < 40; i++) frame({ data: loud() });
+      expect(onSpeechStart).toHaveBeenCalledOnce();
+    });
+
     it.each(['resolve', 'reject'])('does not stop a retry when a disposed startup later %ss', async (outcome) => {
       let resolveModule;
       let rejectModule;
