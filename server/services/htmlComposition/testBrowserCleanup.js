@@ -329,7 +329,7 @@ export async function _startTestChromeWithRetry({ launch, discard, onProc = () =
     const proc = launch(attempt);
     onProc(proc);
     try {
-      return await wait(proc, attempt);
+      return await wait(proc);
     } catch (error) {
       if (attempt + 1 >= attempts || !/^Test Chrome did not start within/.test(error?.message)) throw error;
       await discard(proc);

@@ -903,7 +903,7 @@ describe('test Chrome startup retry', () => {
   it('retries a startup timeout once on a fresh child and discards the abandoned one', async () => {
     const procs = [];
     const discard = vi.fn(async () => {});
-    const wait = vi.fn(async (proc, attempt) => { if (attempt === 0) throw timeout(); return 'ws://127.0.0.1:1/devtools/browser/example'; });
+    const wait = vi.fn(async proc => { if (proc.attempt === 0) throw timeout(); return 'ws://127.0.0.1:1/devtools/browser/example'; });
     const ws = await _startTestChromeWithRetry({ launch: attempt => ({ attempt }), onProc: proc => procs.push(proc), wait, discard });
     expect(ws).toBe('ws://127.0.0.1:1/devtools/browser/example');
     expect(procs).toEqual([{ attempt: 0 }, { attempt: 1 }]);
