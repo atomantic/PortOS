@@ -27,6 +27,7 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
+vi.mock('dns/promises', () => ({ default: { lookup: vi.fn() } }));
 vi.mock('./instanceEvents.js', () => ({
   instanceEvents: {
     emit: vi.fn()
@@ -55,6 +56,7 @@ vi.mock('../lib/tailscale.js', () => ({
 
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
+import dns from 'dns/promises';
 import { stopForwardForPeer } from './tailcatPeer.js';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -1193,6 +1195,22 @@ describe('instances.js', () => {
       ...overrides
     });
 
+    it('refuses to probe a DNS host that resolves to loopback or link-local, but probes a tailnet answer', async () => {
+      const peer = makePeer({ host: 'rebind.example.com' });
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      for (const address of ['127.0.0.1', '169.254.169.254']) {
+        dns.lookup.mockResolvedValueOnce([{ address, family: 4 }]);
+        const result = await probePeer(peer);
+        expect(result.status).toBe('offline');
+        expect(JSON.stringify(result.lastProbe)).toContain('loopback or link-local');
+      }
+
+      dns.lookup.mockResolvedValueOnce([{ address: '100.64.0.7', family: 4 }]);
+      fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ instanceId: 'remote-id' }) });
+      const allowed = await probePeer(peer);
+      expect(JSON.stringify(allowed.lastProbe)).not.toContain('loopback or link-local');
+    });
+
     it('should mark peer online on successful probe', async () => {
       const peer = makePeer();
       const peers = [peer];
@@ -1645,6 +1663,16 @@ describe('instances.js', () => {
       expect(result.peer.directions).toEqual(['outbound', 'inbound']);
       expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ peers: [result.peer] }));
     });
+
+    it.each(['localhost', 'api.localhost', '127.0.0.1', '169.254.169.254'])(
+      'stores no host for a new peer announcing %s, and adopts a *.ts.net host', async (badHost) => {
+        readJSONFile.mockResolvedValue({ self: null, peers: [] });
+        const refused = await handleAnnounce({ address: '192.0.2.10', port: 5555, instanceId: 'bad', host: badHost });
+        expect(refused.peer.host).toBeNull();
+        readJSONFile.mockResolvedValue({ self: null, peers: [] });
+        const ok = await handleAnnounce({ address: '192.0.2.11', port: 5555, instanceId: 'good', host: 'box.tail1234.ts.net' });
+        expect(ok.peer.host).toBe('box.tail1234.ts.net');
+      });
 
     it('should create a new peer from announcement', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
