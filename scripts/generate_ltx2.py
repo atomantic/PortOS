@@ -569,24 +569,34 @@ PROMPT_ENCODE_BEGIN_MARKER = "STAGE:encode-prompt"
 PROMPT_ENCODE_END_MARKER = "STAGE:encode-prompt-done"
 
 
-def configure_gemma_max_length(max_length: int | None) -> None:
-    """Pin the Gemma prompt-encode sequence length for this run.
+def gemma_max_length() -> int:
+    """The sequence budget ltx-2-mlx will apply (``LTX2_GEMMA_MAX_LENGTH``, default 1024)."""
+    return int(os.environ.get("LTX2_GEMMA_MAX_LENGTH", "1024"))
 
-    ltx-2-mlx reads ``LTX2_GEMMA_MAX_LENGTH`` at encode time
-    (``ltx_pipelines_mlx.utils.blocks.PromptEncoder.encode``, and again in
-    ``_base`` for Prompt Relay token ranges), defaulting to 1024. PortOS passes a
-    lowered value on its one-shot relaunch after the macOS Metal command-buffer
-    watchdog aborts the encoder, so this ASSIGNS rather than ``setdefault``s: an
-    explicit flag has to beat whatever the parent environment already carried.
 
-    No-op when the flag is absent, which leaves upstream's own default in force.
+def enforce_prompt_token_limit(encoder, prompt: str) -> None:
+    """Refuse a prompt the Gemma encoder would silently truncate.
+
+    ltx-2-mlx's ``GemmaEncoder.tokenize`` keeps only the LAST ``max_length``
+    tokens of an over-long input, so the start of an accepted prompt (usually the
+    subject) would vanish while history still shows the full text. This counts
+    with the encoder's own tokenizer on the exact string it will tokenize
+    (``text.strip()``) and exits before any sampling work. PortOS never lowers
+    the budget to recover from a Metal watchdog abort for the same reason.
+
+    Silently skipped when the loaded encoder exposes no tokenizer, so a pin with a
+    different layout keeps its upstream behavior.
     """
-    if max_length is None:
+    tokenizer = getattr(getattr(encoder, "_text_encoder", None), "_tokenizer", None)
+    if not callable(getattr(tokenizer, "encode", None)):
         return
-    if max_length < 1:
-        raise SystemExit(f"--gemma-max-length must be a positive integer; got {max_length}.")
-    os.environ["LTX2_GEMMA_MAX_LENGTH"] = str(max_length)
-    emit_status(f"Gemma prompt-encode capped at {max_length} tokens")
+    count = len(tokenizer.encode(prompt.strip()))
+    limit = gemma_max_length()
+    if count > limit:
+        raise SystemExit(
+            f"Prompt is {count} Gemma tokens but the text encoder accepts at most {limit}; "
+            "shorten the prompt (it would otherwise lose its beginning)."
+        )
 
 
 def install_prompt_encode_markers() -> None:
@@ -618,10 +628,15 @@ def install_prompt_encode_markers() -> None:
         return
 
     @functools.wraps(original)
-    def encode(self, *args, **kwargs):
+    def encode(self, prompt, *args, **kwargs):
         print(PROMPT_ENCODE_BEGIN_MARKER, file=sys.stderr, flush=True)
         try:
-            return original(self, *args, **kwargs)
+            # The tokenizer only exists after load(); upstream's encode() calls it
+            # first and it is idempotent, so loading here costs nothing extra.
+            if callable(getattr(self, "load", None)):
+                self.load()
+            enforce_prompt_token_limit(self, prompt)
+            return original(self, prompt, *args, **kwargs)
         finally:
             print(PROMPT_ENCODE_END_MARKER, file=sys.stderr, flush=True)
 
@@ -762,12 +777,6 @@ def parse_args() -> argparse.Namespace:
                         "measured with. Reported as degraded (never fatal) when the model "
                         "pack does not carry it, so a slower render is never presented as "
                         "the profile's validated speed.")
-    p.add_argument("--gemma-max-length", type=int, default=None,
-                   help="Gemma prompt-encode sequence length (LTX2_GEMMA_MAX_LENGTH; "
-                        "upstream default 1024). PortOS lowers this on its one-shot "
-                        "relaunch after the macOS Metal command-buffer watchdog aborts "
-                        "the prompt encoder. An explicit value always wins over the "
-                        "ambient environment.")
     p.add_argument("--mlx-cache-limit-mb", default=None,
                    help="Cap the MLX allocator cache at this many MB for the whole run, "
                         "reasserted before every render. Omit to derive a conservative "
@@ -2136,7 +2145,7 @@ def physical_memory_bytes() -> int | None:
 def resolve_mlx_cache_policy(physical_bytes, override_raw=None, env_raw=None) -> dict:
     """Effective cache policy as ``{"limitMb": int | None, "source": str}``.
 
-    Precedence mirrors --gemma-max-length: an explicit flag beats the ambient
+    Precedence: an explicit flag beats the ambient
     environment, which beats the ceiling derived from physical memory. A machine
     whose memory could not be read gets ``limitMb: None`` and MLX's own default
     stands — a blind floor would throttle a large box exactly as readily as it
@@ -2423,7 +2432,6 @@ def main() -> NoReturn:
     # before any model load). Each run_* sets pipe._pending_loras from this.
     args.user_lora_specs = parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
-    configure_gemma_max_length(args.gemma_max_length)
     install_prompt_encode_markers()
     configure_mlx_cache(args)
     # Frame-one anchor contract (#5422). Runs before any pipeline is built so a

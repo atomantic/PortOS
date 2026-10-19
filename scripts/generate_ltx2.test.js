@@ -345,7 +345,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
 
   // ── Gemma prompt-encode budget + boundary markers (#4589) ──────────────────
   // The markers are what lets PortOS tell "the Metal watchdog killed the prompt
-  // encoder" (worth one relaunch at a smaller budget) from "it killed the
+  // encoder" (worth one relaunch with smaller command buffers) from "it killed the
   // denoise loop" (not worth anything), so their exact text and their emission
   // on BOTH the success and the failure path are load-bearing.
   const stubPromptEncoderModule = (body) => [
@@ -424,50 +424,61 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
     expect(output.trim()).toBe('ok');
   });
 
-  // ltx-2-mlx reads LTX2_GEMMA_MAX_LENGTH at encode time and defaults it to
-  // 1024, so the flag has to ASSIGN — a setdefault would be swallowed by the
-  // ambient value the parent already exported and the relaunch would re-run at
-  // the budget that just aborted.
-  it.each([
-    ['None', 'None', null, '1024'],
-    ['a lowered budget', '512', null, '512'],
-    ['a lowered budget over an ambient value', '512', '1024', '512'],
-  ])('configure_gemma_max_length(%s) resolves LTX2_GEMMA_MAX_LENGTH to the expected value', (_label, flag, ambient, expected) => {
+  // The upstream tokenizer keeps only the LAST max_length tokens, so an over-long
+  // prompt silently loses its beginning. The stub reproduces that truncation so
+  // the assertion is on the token sequence the encoder actually receives, not on
+  // the unchanged Python string.
+  const truncatingEncoder = [
+    '    _text_encoder = type("E", (), {"_tokenizer": type("T", (), {"encode": lambda self, t: t.split()})()})()',
+    '    def load(self): pass',
+    '    def encode(self, prompt):',
+    '        import os',
+    '        limit = int(os.environ.get("LTX2_GEMMA_MAX_LENGTH", "1024"))',
+    '        tokens = prompt.strip().split()',
+    '        if len(tokens) > limit: tokens = tokens[-limit:]',
+    '        return (tokens[0], tokens[-1])',
+  ];
+
+  it.each([['at the 1024 limit', 1024], ['inside 513-1024', 800]])('hands the encoder the whole prompt %s (first and last token intact)', (_label, count) => {
     const output = runPython(`${importRunner}\n${[
-      'import os',
-      ambient === null
-        ? 'os.environ.pop("LTX2_GEMMA_MAX_LENGTH", None)'
-        : `os.environ["LTX2_GEMMA_MAX_LENGTH"] = ${JSON.stringify(ambient)}`,
-      `runner.configure_gemma_max_length(${flag})`,
-      // Read back through the same default upstream applies, so "unset" and
-      // "explicitly 1024" are both expressed as the value the encoder would use.
-      'print(os.environ.get("LTX2_GEMMA_MAX_LENGTH", "1024"))',
+      ...stubPromptEncoderModule(truncatingEncoder),
+      'import contextlib, os',
+      'os.environ.pop("LTX2_GEMMA_MAX_LENGTH", None)',
+      'runner.install_prompt_encode_markers()',
+      `prompt = " ".join("t%d" % i for i in range(${count}))`,
+      'with contextlib.redirect_stderr(sys.stdout):',
+      '    print(PromptEncoder().encode(prompt))',
     ].join('\n')}`);
-    expect(output.trim()).toBe(expected);
+    expect(output.trim().split(/\r?\n/).pop()).toBe(`('t0', 't${count - 1}')`);
   });
 
-  it.each([['0'], ['-1']])('rejects a non-positive --gemma-max-length (%s)', (value) => {
+  it('refuses an over-limit prompt with the measured count and limit before encoding', () => {
     const output = runPython(`${importRunner}\n${[
-      'try:',
-      `    runner.configure_gemma_max_length(${value})`,
-      'except SystemExit as exc:',
-      '    print(str(exc))',
-      'else:',
-      '    raise SystemExit("a non-positive gemma budget was accepted")',
+      ...stubPromptEncoderModule(truncatingEncoder.map((l) => (l.includes('return (tokens[0]') ? '        raise RuntimeError("encoder reached")' : l))),
+      'import contextlib, os',
+      'os.environ.pop("LTX2_GEMMA_MAX_LENGTH", None)',
+      'runner.install_prompt_encode_markers()',
+      'prompt = " ".join("t%d" % i for i in range(1025))',
+      'with contextlib.redirect_stderr(sys.stdout):',
+      '    try:',
+      '        PromptEncoder().encode(prompt)',
+      '    except SystemExit as exc:',
+      '        print("REFUSED:" + str(exc))',
     ].join('\n')}`);
-    expect(output).toMatch(/must be a positive integer/);
+    expect(output).toMatch(/REFUSED:Prompt is 1025 Gemma tokens but the text encoder accepts at most 1024/);
+    expect(output).not.toMatch(/encoder reached/);
   });
 
-  it.each([
-    ['omitted', [], 'None'],
-    ['given', ['--gemma-max-length', '512'], '512'],
-  ])('parses --gemma-max-length when %s', (_label, extra, expected) => {
+  it('no longer exposes a flag that lowers the encoder sequence budget', () => {
     const output = runPython(`${importRunner}\n${[
       'import sys',
-      `sys.argv = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m"] + ${JSON.stringify(extra)}`,
-      'print(runner.parse_args().gemma_max_length)',
+      'sys.argv = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m", "--gemma-max-length", "512"]',
+      'try:',
+      '    runner.parse_args()',
+      'except SystemExit:',
+      '    print("REJECTED")',
     ].join('\n')}`);
-    expect(output.trim()).toBe(expected);
+    expect(output).toMatch(/REJECTED/);
   });
 
   // The reference-mode promise (#4874). "inspire" is only expressible where the

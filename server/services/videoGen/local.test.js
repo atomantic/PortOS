@@ -5297,7 +5297,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   it.each([
     ['the classic timeout signature', TIMEOUT_ABORT],
     ['the impacting-interactivity signature newer macOS reports', INTERACTIVITY_ABORT],
-  ])('relaunches once at a reduced Gemma budget on %s', async (_label, abort) => {
+  ])('relaunches once with smaller command buffers, prompt untouched, on %s', async (_label, abort) => {
     const first = makeDrivenProc(101);
     const second = makeDrivenProc(102);
     const spawnMock = await startRender(`pe-${abort.length}`, [first, second]);
@@ -5309,11 +5309,13 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     const calls = ltx2Calls(spawnMock);
     expect(calls).toHaveLength(2);
     const [firstArgs, retryArgs] = calls.map(([, args]) => args);
-    // The original render never carries the flag — the reduced budget exists
-    // only as the mitigation, not as a new default.
-    expect(firstArgs).not.toContain('--gemma-max-length');
-    expect(flagValue(retryArgs, '--gemma-max-length')).toBe('512');
-    // Same render, smaller prompt budget: seed and output must survive verbatim
+    // Recovery never shortens the encoder sequence (the encoder would drop the
+    // START of the prompt): the args are byte-identical and only the env differs.
+    expect(retryArgs).toEqual(firstArgs);
+    expect(retryArgs).not.toContain('--gemma-max-length');
+    expect(calls[0][2].env.MLX_MAX_OPS_PER_BUFFER).toBeUndefined();
+    expect(calls[1][2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+    // Same render, smaller command buffers: seed and output must survive verbatim
     // or the relaunch silently produces a different clip than the user asked for.
     expect(flagValue(retryArgs, '--seed')).toBe(flagValue(firstArgs, '--seed'));
     expect(flagValue(retryArgs, '--seed')).toBe('987654');
@@ -5413,7 +5415,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     expect(failures).toHaveLength(1);
   });
 
-  it('relaunches at most once — a second abort at the reduced budget fails the job', async () => {
+  it('relaunches at most once — a second abort at the smaller setting fails the job', async () => {
     const first = makeDrivenProc(105);
     const second = makeDrivenProc(106);
     const spawnMock = await startRender('pe-twice', [first, second]);
