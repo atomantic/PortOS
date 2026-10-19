@@ -240,7 +240,7 @@ export default function VideoGen() {
   // Every field the form submits, plus the payload builder both submit paths
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
-    backend, isGrok, isFal, isReactor, isRunway, handleBackendChange, grokDuration, setGrokDuration,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange, grokDuration, setGrokDuration,
     runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution,
     falDuration, setFalDuration, falModelId, setFalModelId,
     falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
@@ -362,7 +362,7 @@ export default function VideoGen() {
   // short submit / render / fetch ladder instead. A federated PEER is
   // deliberately excluded: it really does load the weights and run the sampler,
   // it just does so out of view.
-  const rendersOffMachine = isGrok || isFal || isReactor || isRunway;
+  const rendersOffMachine = Boolean(hostedLane);
   const rendersOnThisMachine = !rendersOffMachine && !remoteTarget.isRemote;
 
   // Can THIS render put the display to sleep at all? The model says whether
@@ -1308,7 +1308,8 @@ export default function VideoGen() {
             <div className="mt-2">
               <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
             </div>
-            {!negativePromptSupported && !isFal && !isReactor && !isRunway && (
+            {/* negativePromptSupported is already true for Grok and Runway, so this only fires on local lanes. */}
+            {!negativePromptSupported && !hostedLane && (
               <p className="mt-1 text-[11px] text-gray-500 leading-snug">
                 This model does not use a negative prompt.
               </p>

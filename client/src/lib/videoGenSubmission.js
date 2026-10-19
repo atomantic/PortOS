@@ -322,9 +322,17 @@ const liveBeats = (chainingActive, chunkPrompts, chunks, withEnvelope) => (
     : []
 );
 
+// Keyed by the form's resolved `hostedLane` (null = local or federated).
+const HOSTED_VIDEO_SUBMISSIONS = {
+  grok: grokVideoSubmission,
+  fal: falVideoSubmission,
+  reactor: reactorVideoSubmission,
+  runway: runwayVideoSubmission,
+};
+
 export function buildVideoGenSubmission(args) {
   const {
-    isGrok, isFal, isReactor, isRunway, remoteSubmissionFields,
+    hostedLane, remoteSubmissionFields,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     currentModel, disableAudio, noMusic, chainingActive, chunks, chunkPrompts,
   } = args;
@@ -334,12 +342,9 @@ export function buildVideoGenSubmission(args) {
   });
   const shared = { ...args, composed };
 
-  const isLocal = !isGrok && !isFal && !isReactor && !isRunway && !remoteSubmissionFields;
+  const isLocal = !hostedLane && !remoteSubmissionFields;
   const additions = videoPromptAdditions({ ...args, isLocal });
-  const payload = isGrok ? grokVideoSubmission(shared)
-    : isFal ? falVideoSubmission(shared)
-    : isReactor ? reactorVideoSubmission(shared)
-    : isRunway ? runwayVideoSubmission(shared)
+  const payload = hostedLane ? HOSTED_VIDEO_SUBMISSIONS[hostedLane](shared)
     : remoteSubmissionFields ? remoteVideoSubmission(shared)
     : localVideoSubmission(args, {
       composed,

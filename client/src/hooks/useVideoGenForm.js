@@ -645,19 +645,23 @@ export function useVideoGenForm({
   // Hoisted above the reference-mode derivation below, which needs it: the grok
   // lane reads only prompt/dims/source-image/duration, so its image_to_video
   // always anchors and the promise has to collapse to the default there.
-  const isGrok = grokEnabled && backend === 'grok';
+  // Each hosted lane stays gated on its own *Enabled flag, so a persisted
+  // backend that is no longer configured resolves to null (the local lane).
+  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled })[backend]
+    ? backend : null;
+  const isGrok = hostedLane === 'grok';
   // fal.ai's queue REST API is usability-gated on a configured API key
   // (`falEnabled`, mirrored from the server's isVideoModeUsable check), not a
   // toggle — same short-circuit shape as grok: only prompt/dims/source-image
   // and a duration reach the provider.
-  const isFal = falEnabled && backend === 'fal';
+  const isFal = hostedLane === 'fal';
   // reactor.inc fast-h3 is likewise usability-gated on a configured API key
   // (`reactorEnabled`) — same short-circuit shape as fal, plus native
   // clip-to-clip chaining via continue_from_clip_id.
-  const isReactor = reactorEnabled && backend === 'reactor';
+  const isReactor = hostedLane === 'reactor';
   // Runway is usability-gated the same way, and renders image-to-video only.
-  const isRunway = runwayEnabled && backend === 'runway';
-  const referenceModeApplies = mode === 'image' && !isGrok && !isFal && !isReactor && !isRunway;
+  const isRunway = hostedLane === 'runway';
+  const referenceModeApplies = mode === 'image' && !hostedLane;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
   // rather than the pipeline's 1.0, and the panel must say so.
@@ -1333,7 +1337,7 @@ export function useVideoGenForm({
   // Snapshot the current validated state into a wire payload. The submit flow
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
-    isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
+    hostedLane, isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
     isRunway, runwayModelId, runwayDuration, runwayResolution,
     displaySleepEnabled,
@@ -1352,7 +1356,7 @@ export function useVideoGenForm({
 
   return {
     // Backend + mode
-    backend, isGrok, isFal, isReactor, isRunway, handleBackendChange,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange,
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,
