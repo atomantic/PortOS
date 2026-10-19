@@ -26,10 +26,10 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
+import { ITEM_KIND, REF_MAX_LENGTH, itemKey, parseKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { compareNewerWins, compareEarlierWins } from '../lib/lwwTimestamp.js';
+import { compareNewerWins, compareEarlierWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from './sharing/recordEvents.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -109,6 +109,40 @@ const sanitizeItem = (raw) => {
   return out;
 };
 
+// Per-item removal records (#12433): `removedItems: { "<kind>:<ref>": removedAt }`.
+// Item lists union on merge, so without a marker any peer still holding a removed
+// item re-adds it. A copy of an item survives only when its `addedAt` is strictly
+// newer than the removal for its key; a re-add supersedes the removal by carrying
+// a newer `addedAt`, and the record itself is KEPT (a stale peer copy with the
+// original `addedAt` must still lose). Records are pruned only by tombstone GC
+// once every subscribed peer has had the chance to apply them
+// (`pruneCollectionItemRemovals`). Omitted from the record when empty.
+const sanitizeRemovedItems = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const entries = [];
+  for (const [key, removedAt] of Object.entries(raw)) {
+    if (parseTsMs(removedAt) === null) continue;
+    const parsed = parseKey(key);
+    const item = parsed && sanitizeItem({ ...parsed, addedAt: removedAt });
+    if (!item || itemKey(item) !== key) continue;
+    entries.push([key, removedAt]);
+  }
+  // Deliberately uncapped: dropping an unacknowledged record would let a stale
+  // copy back in. There is at most one record per distinct key, and tombstone
+  // GC is what bounds them. Sorted keys keep the wire form and snapshot
+  // checksum byte-stable.
+  return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
+};
+
+const isSupersededByRemoval = (item, removedItems) => {
+  const removedMs = parseTsMs(removedItems[itemKey(item)]);
+  return removedMs !== null && !(parseTsMs(item.addedAt) > removedMs);
+};
+
+// A local add/remove must order strictly after the opposite event it replaces,
+// even when that event came from a peer whose clock runs ahead of ours.
+const stampAfter = (ts) => new Date(Math.max(Date.now(), (parseTsMs(ts) ?? -Infinity) + 1)).toISOString();
+
 const UNIVERSE_ID_MAX = 80;
 const SERIES_ID_MAX = 80;
 
@@ -146,12 +180,13 @@ const sanitizeCollection = (raw) => {
   const description = typeof raw.description === 'string'
     ? raw.description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
+  const removedItems = sanitizeRemovedItems(raw.removedItems);
   const seen = new Set();
   const items = [];
   if (Array.isArray(raw.items)) {
     for (const it of raw.items) {
       const s = sanitizeItem(it);
-      if (!s) continue;
+      if (!s || isSupersededByRemoval(s, removedItems)) continue;
       const key = itemKey(s);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -195,6 +230,7 @@ const sanitizeCollection = (raw) => {
     seriesId,
     ...(source ? { source } : {}),
     items,
+    ...(Object.keys(removedItems).length ? { removedItems } : {}),
     createdAt,
     updatedAt,
     deleted,
@@ -819,7 +855,9 @@ export async function deleteCollection(id) {
     // Soft-delete: keep the record on disk as a tombstone (NOT deleteOne) so it
     // still syncs to peers as a deletion. Clear coverKey/items too — with items
     // emptied the cover would otherwise dangle and leak into the wire payload.
-    const tombstone = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], coverKey: null, universeId: null, seriesId: null };
+    // Item removal records go too: a tombstone holds no items to protect.
+    const { removedItems: _removedItems, ...live } = target;
+    const tombstone = { ...live, deleted: true, deletedAt: now, updatedAt: now, items: [], coverKey: null, universeId: null, seriesId: null };
     await store().saveOneNow(id, tombstone);
     return { universeId: target.universeId || null, seriesId: target.seriesId || null, alreadyDeleted: false };
   });
@@ -880,7 +918,7 @@ export async function addItem(id, item) {
     }
     const updated = {
       ...cur,
-      items: [...cur.items, { kind, ref, addedAt: new Date().toISOString() }],
+      items: [...cur.items, { kind, ref, addedAt: stampAfter(cur.removedItems?.[key]) }],
       updatedAt: new Date().toISOString(),
     };
     await store().saveOneNow(id, updated);
@@ -936,7 +974,12 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
 
     const removeSet = new Set(remove);
-    const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
+    const removedItems = { ...cur.removedItems };
+    const remainingItems = cur.items.filter((it) => {
+      if (!removeSet.has(itemKey(it))) return true;
+      removedItems[itemKey(it)] = stampAfter(it.addedAt);
+      return false;
+    });
     const removed = cur.items.length - remainingItems.length;
 
     // Dedupe `add` against itself AND against items that survived the removal.
@@ -950,7 +993,9 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
       const key = `${kind}:${ref}`;
       if (presentKeys.has(key)) continue;
       presentKeys.add(key);
-      additions.push({ kind, ref, addedAt: now });
+      // A key removed earlier in this same batch keeps its removal record, so
+      // the re-add must postdate it to survive.
+      additions.push({ kind, ref, addedAt: removedItems[key] ? stampAfter(removedItems[key]) : now });
     }
 
     const nextItems = [...remainingItems, ...additions];
@@ -965,6 +1010,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     const merged = {
       ...cur,
       items: nextItems,
+      ...(Object.keys(removedItems).length ? { removedItems: sanitizeRemovedItems(removedItems) } : {}),
       coverKey,
       updatedAt: now,
     };
@@ -1009,12 +1055,12 @@ export async function removeItem(id, key) {
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
     if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const before = cur.items.length;
-    const items = cur.items.filter((it) => itemKey(it) !== key);
-    if (items.length === before) throw codedError(`Item not in collection: ${key}`, ERR_NOT_FOUND);
+    const target = cur.items.find((it) => itemKey(it) === key);
+    if (!target) throw codedError(`Item not in collection: ${key}`, ERR_NOT_FOUND);
     const updated = {
       ...cur,
-      items,
+      items: cur.items.filter((it) => it !== target),
+      removedItems: sanitizeRemovedItems({ ...cur.removedItems, [key]: stampAfter(target.addedAt) }),
       // Drop the cover if it pointed at the removed item — sanitizeCollection
       // would do this on the next read, but doing it here keeps the in-memory
       // return consistent with what's persisted.
@@ -1068,6 +1114,32 @@ export async function pruneTombstonedCollections(olderThanMs) {
   return { pruned: outcomes.filter(Boolean).length };
 }
 
+// Drop item removal records older than the cutoff from live collections.
+// Called by tombstoneGc with a cutoff every subscribed peer has acknowledged,
+// so no peer still holds a pre-removal copy the record would have to defeat.
+// Housekeeping, not an edit: `updatedAt` is left alone so the prune can't win
+// LWW over a peer's real scalar change. Returns the number of records dropped.
+export async function pruneCollectionItemRemovals(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  const isExpired = (removedAt) => parseTsMs(removedAt) < olderThanMs;
+  const candidates = (await store().loadAll()).filter((c) =>
+    c.deleted !== true && Object.values(c.removedItems || {}).some(isExpired));
+  let firstError = null;
+  const outcomes = await mapWithConcurrency(candidates, COLLECTION_WRITE_CONCURRENCY, (c) =>
+    store().queueRecordWrite(c.id, async () => {
+      const cur = await store().loadOne(c.id);
+      if (!cur || cur.deleted === true || !cur.removedItems) return 0;
+      const kept = Object.entries(cur.removedItems).filter(([, removedAt]) => !isExpired(removedAt));
+      const dropped = Object.keys(cur.removedItems).length - kept.length;
+      if (dropped === 0) return 0;
+      const { removedItems: _removedItems, ...rest } = cur;
+      await store().saveOneNow(c.id, kept.length ? { ...rest, removedItems: Object.fromEntries(kept) } : rest);
+      return dropped;
+    }).catch((err) => { if (!firstError) firstError = err; return 0; }));
+  if (firstError) throw firstError;
+  return { pruned: outcomes.reduce((sum, n) => sum + n, 0) };
+}
+
 /**
  * Merge an incoming list of collections from a peer (snapshot sync OR the
  * per-record push payload's `linkedCollection` field). Per-collection
@@ -1076,11 +1148,12 @@ export async function pruneTombstonedCollections(olderThanMs) {
  *   - New (unseen id): inserted verbatim after sanitization.
  *   - Existing id: top-level scalars (name, description, coverKey, universeId,
  *     seriesId) follow LWW on `updatedAt`. Items[] is **union by `kind:ref`**
- *     so neither side ever loses a render it knows about — collections are
- *     append-mostly in normal use, and a divergence (peer-A added image-X
- *     while peer-B added image-Y to the same collection on the same day)
- *     should retain both rather than discard whichever has the older
- *     collection-level updatedAt.
+ *     minus copies a newer per-item removal record supersedes (see
+ *     `mergeCollectionItems`) — a divergence (peer-A added image-X while
+ *     peer-B added image-Y to the same collection on the same day) retains
+ *     both rather than discarding whichever has the older collection-level
+ *     updatedAt, while a deliberate removal sticks against a peer that still
+ *     holds the item.
  *
  * Each remote collection's merge runs inside the store's per-record queue
  * (`queueRecordWrite(id)`), so a concurrent local `addItem` and a remote apply
@@ -1115,7 +1188,7 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
         await setSyncBaseHash('mediaCollection', sanitized.id, contentHashForRecord('mediaCollection', sanitized));
         return true;
       }
-      const mergedItems = mergeCollectionItems(local.items, sanitized.items);
+      const { items: mergedItems, removedItems: mergedRemovals } = mergeCollectionItems(local, sanitized);
       // LWW on collection-level scalars. Parse to epoch ms (not lexicographic
       // compare on the raw strings): `sanitizeCollection` accepts any
       // Date.parse-able string for `updatedAt`, so a hand-edit or older peer
@@ -1133,12 +1206,13 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
         // journal: archive the about-to-be-lost local version when BOTH sides
         // diverged from the last synced base — but only over the SCALAR SUBSET
         // (contentHashForRecord narrows mediaCollection to its overwritable
-        // scalars, so an item-only divergence — items are union-merged, never
-        // lost — does NOT false-positive here). Always advances the base hash
-        // (clean or conflict) so the next snapshot cycle doesn't re-journal the
-        // same divergence. Never throws into the merge. Skipped when local wins:
-        // local scalars are KEPT, so there's nothing to lose (and the base stays
-        // put — it advances only on an accepted overwrite, mirroring universe).
+        // scalars, so an item-only divergence — items and removal records merge
+        // per key, never overwritten — does NOT false-positive here). Always
+        // advances the base hash (clean or conflict) so the next snapshot cycle
+        // doesn't re-journal the same divergence. Never throws into the merge.
+        // Skipped when local wins: local scalars are KEPT, so there's nothing to
+        // lose (and the base stays put — it advances only on an accepted
+        // overwrite, mirroring universe).
         await maybeJournalBeforeOverwrite({ kind: 'mediaCollection', id: sanitized.id, local, remote: sanitized, source });
       }
       const scalarSource = remoteWins ? sanitized : local;
@@ -1158,7 +1232,9 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
       // the sanitizer accepted (an offline export/import bundle can legitimately
       // carry it). Do NOT add it to the LWW scalars without also un-stripping it
       // on the wire — and that needs a schemaVersions bump.
-      const next = {
+      // Re-sanitized so a record that newly gains `removedItems` lands in the
+      // canonical key order the equality check and the wire checksum rely on.
+      const next = sanitizeCollection({
         ...local,
         name: scalarSource.name,
         description: scalarSource.description,
@@ -1166,10 +1242,11 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
         universeId: scalarDeleted ? null : scalarSource.universeId,
         seriesId: scalarDeleted ? null : scalarSource.seriesId,
         items: scalarDeleted ? [] : mergedItems,
+        removedItems: scalarDeleted ? undefined : mergedRemovals,
         updatedAt: remoteWins ? remoteTs : localTs,
         deleted: scalarDeleted,
         deletedAt: scalarDeleted ? (scalarSource.deletedAt || (remoteWins ? remoteTs : localTs)) : null,
-      };
+      });
       if (collectionsEqual(local, next)) return false;
       await store().saveOneNow(sanitized.id, next);
       return true;
@@ -1185,10 +1262,18 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
   return { applied: true, count: changed };
 }
 
-function mergeCollectionItems(localItems, remoteItems) {
+// Union of both sides' items, minus any copy a removal record supersedes. The
+// removal maps merge latest-wins per key, and an item is kept when EITHER side
+// holds a copy added after the merged removal — so concurrent adds are never
+// lost, and a removal wins only over copies that predate it.
+function mergeCollectionItems(local, remote) {
+  const removedItems = { ...local.removedItems };
+  for (const [k, removedAt] of Object.entries(remote.removedItems || {})) {
+    if (compareNewerWins(removedAt, removedItems[k])) removedItems[k] = removedAt;
+  }
   const byKey = new Map();
-  for (const it of localItems || []) byKey.set(itemKey(it), it);
-  for (const it of remoteItems || []) {
+  for (const it of [...(local.items || []), ...(remote.items || [])]) {
+    if (isSupersededByRemoval(it, removedItems)) continue;
     const k = itemKey(it);
     const existing = byKey.get(k);
     if (!existing) {
@@ -1214,7 +1299,8 @@ function mergeCollectionItems(localItems, remoteItems) {
   // snapshot path already sorts collections by id and items by key for
   // wire stability; aligning the in-memory merge keeps reads and writes
   // self-consistent.
-  return Array.from(byKey.values()).sort((a, b) => itemKey(a).localeCompare(itemKey(b)));
+  const items = Array.from(byKey.values()).sort((a, b) => itemKey(a).localeCompare(itemKey(b)));
+  return { items, removedItems };
 }
 
 function collectionsEqual(a, b) {

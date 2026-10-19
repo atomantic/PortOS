@@ -41,8 +41,15 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(14);
   });
 
-  it('declares mediaCollections layout version', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
+  it('gates mediaCollections at v2 so a v1 peer refuses collections carrying removal records (#12433)', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(2);
+    // A v1 receiver would strip `removedItems` and union the removed item back.
+    const v1Receiver = { ...PORTOS_SCHEMA_VERSIONS, mediaCollections: 1 };
+    const diff = scopeVersionDiff(
+      compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, v1Receiver),
+      RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection,
+    );
+    expect(diff.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
   });
 
   it('version-gates catalog object attachments and media generation provenance', () => {
@@ -268,11 +275,11 @@ describe('scopeVersionDiff', () => {
         universes: PORTOS_SCHEMA_VERSIONS.universes,
         pipelineSeries: 2,
         pipelineIssues: 3,
-        mediaCollections: 2,
+        mediaCollections: PORTOS_SCHEMA_VERSIONS.mediaCollections + 1,
       },
       PORTOS_SCHEMA_VERSIONS,
     );
-    expect(union.compatible).toBe(false); // mediaCollections 2 > 1
+    expect(union.compatible).toBe(false);
     expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.universe).compatible).toBe(true);
     expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection).compatible).toBe(false);
   });

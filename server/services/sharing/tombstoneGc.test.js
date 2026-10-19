@@ -22,6 +22,7 @@ vi.mock('../pipeline/issues.js', () => ({
 }));
 vi.mock('../mediaCollections.js', () => ({
   pruneTombstonedCollections: vi.fn().mockResolvedValue({ pruned: 0 }),
+  pruneCollectionItemRemovals: vi.fn().mockResolvedValue({ pruned: 0 }),
   listCollections: vi.fn().mockResolvedValue([]),
   listCollectionIds: vi.fn().mockResolvedValue([]),
 }));
@@ -107,7 +108,9 @@ import {
   listLiveIds as listLiveSeriesIds, listIds as listSeriesIds,
 } from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
-import { pruneTombstonedCollections, listCollections, listCollectionIds } from '../mediaCollections.js';
+import {
+  pruneTombstonedCollections, pruneCollectionItemRemovals, listCollections, listCollectionIds,
+} from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
@@ -579,6 +582,7 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedSeries.mockResolvedValueOnce({ pruned: 0 });
     pruneTombstonedIssues.mockResolvedValueOnce({ pruned: 5 });
     pruneTombstonedCollections.mockResolvedValueOnce({ pruned: 3 });
+    pruneCollectionItemRemovals.mockResolvedValueOnce({ pruned: 14 });
     pruneTombstonedAuthors.mockResolvedValueOnce({ pruned: 1 });
     pruneTombstonedArtists.mockResolvedValueOnce({ pruned: 4 });
     pruneTombstonedAlbums.mockResolvedValueOnce({ pruned: 6 });
@@ -595,6 +599,7 @@ describe('sweepTombstones — return shape', () => {
       series: 0,
       issues: 5,
       collections: 3,
+      collectionItemRemovals: 14,
       authors: 1,
       artists: 4,
       albums: 6,
@@ -925,6 +930,20 @@ describe('sweepTombstones — mediaCollection GC (Task 1.10b)', () => {
     // their own grace-only cutoffs.
     await sweepTombstones({ now: NOW });
     expect(pruneTombstonedCollections).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS + 1);
+    expect(pruneCollectionItemRemovals).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS + 1);
+  });
+
+  it('holds item removal records to a lagging universe subscriber, which receives collections as linkedCollection', async () => {
+    // #12433: a universe-only peer gets a linked collection's removal records on
+    // the universe push, so their prune waits for that cohort even though the
+    // collection-tombstone cutoff does not.
+    const minAck = NOW - 48 * 60 * 60 * 1000;
+    mockSubs({ universe: [{ peerId: 'peer-a' }] });
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    getMinAckAcrossPeers.mockImplementation(async (peerIds) => (peerIds.includes('peer-a') ? minAck : Infinity));
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedCollections).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS + 1);
+    expect(pruneCollectionItemRemovals).toHaveBeenCalledWith(minAck - TOMBSTONE_GRACE_MS + 1);
   });
 
   it('does NOT prune collection tombstones when a subscribed peer has not acked', async () => {
@@ -956,6 +975,7 @@ describe('sweepTombstones — mediaCollection GC (Task 1.10b)', () => {
     ]);
     const result = await sweepTombstones({ now: NOW });
     expect(pruneTombstonedCollections).not.toHaveBeenCalled();
+    expect(pruneCollectionItemRemovals).not.toHaveBeenCalled();
     expect(result.refused).toContain('mediaCollection');
     expect(result.collections).toBe(0);
   });
