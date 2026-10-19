@@ -108,7 +108,7 @@
  *     file PortOS then reads, writes or runs against is the same choice as a
  *     stored host-file setting, made once. A remote password-free caller
  *     could otherwise point PortOS at any path the host user owns. Gated:
- *     reference-repo create (and a PATCH that changes `repoUrl`/`branch`,
+ *     reference-repo create (and a PATCH that names `repoUrl` or `branch`,
  *     which the scheduled reference-watch runs git in and hands to an
  *     analysis agent), share-bucket create (PortOS writes records into and
  *     imports manifests from the folder), the sprite source-tree import and
