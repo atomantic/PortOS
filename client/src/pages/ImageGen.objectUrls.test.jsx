@@ -28,12 +28,13 @@ const InitPicker = ({ initImage, onPick, onClear, onBrowse }) => (
     <span data-testid="init-url">{initImage.previewUrl || ''}</span>
   </div>
 );
-const RefPicker = ({ referenceImages, onPick, onClear }) => (
+const RefPicker = ({ referenceImages, onPick, onClear, onBrowse }) => (
   <div>
     {referenceImages.map((slot, i) => (
       <div key={i}>
         <button type="button" onClick={() => onPick(i, { target: { files: [nextFile()] } })}>{`pick-ref-${i}`}</button>
         <button type="button" onClick={() => onClear(i)}>{`clear-ref-${i}`}</button>
+        <button type="button" onClick={() => onBrowse(i)}>{`browse-ref-${i}`}</button>
         <span data-testid={`ref-url-${i}`}>{slot.previewUrl || ''}</span>
       </div>
     ))}
@@ -223,6 +224,40 @@ describe('ImageGen object-URL lifecycle', () => {
     await act(async () => { unmount(); });
 
     expect(objectUrl.revoked).toEqual([blobUrl]);
+  });
+
+  it('does not restore a pending upload after clear or gallery replacement', async () => {
+    const pending = [];
+    window.createImageBitmap = vi.fn((...args) => (args.length === 2
+      ? new Promise((_, reject) => { pending.push(() => reject(new Error('no decoder'))); })
+      : Promise.reject(new Error('no decoder'))));
+    await mount();
+    await click('pick-init');
+    await click('pick-ref-0');
+    await click('clear-init');
+    await click('clear-ref-0');
+    await act(async () => { pending.splice(0).forEach(finish => finish()); });
+    expect(screen.getByTestId('init-url')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('ref-url-0')).toBeEmptyDOMElement();
+    expect(objectUrl.created).toEqual([]);
+
+    await click('pick-init');
+    await click('browse-init');
+    await click('gallery-select');
+    await act(async () => { pending.splice(0).forEach(finish => finish()); });
+    expect(screen.getByTestId('init-url')).toHaveTextContent('/data/images/gallery-pick.png');
+    expect(objectUrl.created).toEqual([]);
+  });
+
+  it('does not restore a gallery reference after it is cleared', async () => {
+    let finishFetch;
+    restore.push(stub(globalThis, 'fetch', vi.fn(() => new Promise(resolve => { finishFetch = resolve; }))));
+    await mount();
+    await click('browse-ref-0');
+    await click('gallery-select');
+    await click('clear-ref-0');
+    await act(async () => finishFetch({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }));
+    expect(screen.getByTestId('ref-url-0')).toBeEmptyDOMElement();
   });
 
   // Two picks that overlap in the EXIF-normalization await must not each mint
