@@ -14,6 +14,7 @@ const effects = vi.hoisted(() => ({
   startLyricAlign: vi.fn(async () => ({ jobId: 'align-1' })),
   probeLoraEffect: vi.fn(async () => ({ status: 'active' })),
   renderTimelineProject: vi.fn(async () => ({ jobId: 'render-1' })),
+  addCoverFont: vi.fn(async () => ({ id: 'font-1' })),
 }));
 
 vi.mock('../services/auth.js', () => ({
@@ -90,6 +91,14 @@ vi.mock('../services/musicVideo/vocalSeparation.js', () => ({
   startVocalSeparation: effects.startVocalSeparation,
   cancelVocalSeparation: vi.fn(() => true),
   attachVocalSeparationSseClient: vi.fn(() => true),
+}));
+
+vi.mock('../services/musicVideo/coverFonts.js', () => ({
+  addCoverFont: effects.addCoverFont,
+  coverFontPath: vi.fn(async () => null),
+  listCoverFonts: vi.fn(async () => []),
+  removeCoverFont: vi.fn(async () => ({ ok: true })),
+  MAX_COVER_FONT_BYTES: 8 * 1024 * 1024,
 }));
 
 vi.mock('../services/musicVideo/lyricAlignJob.js', () => ({
@@ -216,6 +225,19 @@ describe('media process execution operator authority', () => {
     const resOp = await post(operator, path, body, { Authorization: 'Bearer example-session' });
     expect(resOp.status).toBe(202);
     expect(effect).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates the cover font install (host-wide font folder) while local and operator callers reach the handler (#12493)', async () => {
+    const path = '/api/music-video/publish/cover-fonts';
+    const remote = await post(appFor(), path, {});
+    expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    // Past the gate, the upload middleware rejects a JSON body (not multipart).
+    const local = await post(appFor('127.0.0.1'), path, {});
+    expect([local.status, local.body.code]).toEqual([400, 'INVALID_CONTENT_TYPE']);
+    state.enabled = true;
+    const operator = await post(appFor(), path, {}, { Authorization: 'Bearer example-session' });
+    expect([operator.status, operator.body.code]).toEqual([400, 'INVALID_CONTENT_TYPE']);
+    expect(effects.addCoverFont).not.toHaveBeenCalled();
   });
 
   it('keeps timeline render available to local and operator callers', async () => {
