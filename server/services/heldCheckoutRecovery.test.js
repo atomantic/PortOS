@@ -96,7 +96,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
-    await writeFile(join(repo, 'stat-cache.txt'), 'unchanged\n');
+    // No newline: Windows core.autocrlf must not make this stat-only fixture
+    // byte-different when the checkout later installs its LF attributes.
+    await writeFile(join(repo, 'stat-cache.txt'), 'unchanged');
     await execGit(['add', 'eol.txt', 'stat-cache.txt'], repo);
     await execGit(['commit', '-m', 'chore: synthetic text file'], repo);
     const { path, release } = await heldCheckout('detached-held', { beforeLock: async (tree) => {
