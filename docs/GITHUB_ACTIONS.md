@@ -938,6 +938,18 @@ version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
 `PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
 `LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
 
+The recorded key takes the setup phase from the record too. Vitest's depfile
+lists, in every test file's record, the modules its custom environment and
+`setupFiles` loaded, so for the setup entries the config reaches
+(`WORKSPACE_SETUP_ENTRIES`: `server/vitest.setup.js` and
+`server/test/mediaRegistryEnvironment.js`, `client/src/test/setup.js`) the
+recorded key's workspace base stops the static walk at them: a module the
+setup files only mock or never load (`services/instances.js` and its
+closure) no longer invalidates every recorded key. A record that does not
+name every setup entry (a per-file environment pragma) keeps the full static
+base, and a setup-phase problem the static walk finds still fails both keys
+closed. The floor key always walks the setup closure.
+
 **Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
 or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
 file whose closure contains the `// test-memo: never` marker; a test file or

@@ -26,8 +26,10 @@
  * `DIRECTORY_INPUT_LIMIT`); the installed version of every package the
  * members reach; the sibling imports of a Python sidecar; the version of an
  * external program a member reaches (`TEST_MEMO_TOOLS`); the workspace's
- * Vitest configuration closure and manifest; the full Node version, platform
- * and arch; and `TEST_MEMO_ENV`.
+ * Vitest configuration closure and manifest (for a recorded key, the setup
+ * files and custom environment come from the record instead of the static
+ * walk: `WORKSPACE_SETUP_ENTRIES`); the full Node version, platform and
+ * arch; and `TEST_MEMO_ENV`.
  *
  * Fail closed. A test is not memoizable when a member reads a path the
  * analyzer cannot resolve, when a test or `scripts/` member spawns `git`
@@ -129,6 +131,21 @@ export const WORKSPACE_BASE_INPUTS = Object.freeze({
   // The Postgres service is not visible to a key; the schema its suites run against is applied from these tracked files.
   db: ['server/vitest.config.db.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'scripts/lib/dbTestFiles.js', 'server/package.json', 'server/package-lock.json',
     'server/scripts/init-db.sql', 'server/scripts/setup-db-test.mjs'],
+});
+
+/**
+ * Setup-phase entries: each config's `setupFiles` and its repository-local
+ * custom `environment`. Vitest 5's depfile already lists what they load in
+ * every test file's record (`runBaseTests` seeds a file's record with the
+ * environment loader's modules; setup files run inside the file's own
+ * recording), so the recorded key takes them from the record and its
+ * workspace base stops the static walk at them. The floor key walks them.
+ * An entry the config no longer reaches is ignored rather than trusted.
+ */
+export const WORKSPACE_SETUP_ENTRIES = Object.freeze({
+  server: ['server/vitest.setup.js', 'server/test/mediaRegistryEnvironment.js'],
+  client: ['client/src/test/setup.js'],
+  db: ['server/vitest.setup.js', 'server/test/mediaRegistryEnvironment.js'],
 });
 
 const JS_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
@@ -1080,7 +1097,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   };
 
   /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
-  const gather = (roots, { walk, testRel = null }) => {
+  const gather = (roots, { walk, testRel = null, stop = null }) => {
     const members = new Set();
     // A side module (read as text, spawned, loaded natively or as a worker)
     // is never narrowed by the recording: it and its own closure are walked
@@ -1096,7 +1113,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     let git = false;
     while (stack.length) {
       const { rel, walkEdges } = stack.pop();
-      if (members.has(rel)) continue;
+      if (members.has(rel) || stop?.has(rel)) continue;
       members.add(rel);
       const f = factsFor(rel);
       if (walkEdges) for (const dep of f.modules) if (!members.has(dep)) stack.push({ rel: dep, walkEdges: true });
@@ -1124,7 +1141,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return { members, inputs, absent, packages: packageVersions, tools, unresolvedEdges, unresolvedInputs, never, git };
   };
 
-  const closureOf = (entry, testRel = entry) => gather([entry], { walk: true, testRel });
+  const closureOf = (entry, testRel = entry, stop = null) => gather([entry], { walk: true, testRel, stop });
 
   const snapshotInputs = (testRel) => {
     const base = posix.basename(testRel);
@@ -1150,21 +1167,35 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     ...TEST_MEMO_ENV.map((name) => `env ${name} ${env[name] === undefined ? '<unset>' : env[name]}`),
   ];
 
-  /** The workspace-level inputs every key shares: the Vitest config closure and manifest. */
-  const workspaceBase = (roots) => {
-    const files = new Set();
-    const packageVersions = new Map();
-    const unresolved = [];
-    for (const root of roots) {
-      if (fs.kind(root) !== 'file') { unresolved.push(`missing workspace input ${root}`); continue; }
-      if (!JS_EXT.test(root)) { files.add(root); continue; }
-      const closure = closureOf(root, null);
-      for (const rel of closure.members) files.add(rel);
-      for (const rel of closure.inputs) files.add(rel);
-      for (const [name, version] of closure.packages) packageVersions.set(name, version);
-      unresolved.push(...closure.unresolvedEdges, ...closure.unresolvedInputs);
-    }
-    return { files, packages: packageVersions, unresolved };
+  /**
+   * The workspace-level inputs every key shares: the Vitest config closure and
+   * manifest. `recorded` is the same walk stopped at the setup entries the
+   * config reaches (`WORKSPACE_SETUP_ENTRIES`), for a recorded key whose
+   * module list names every one of `recorded.entries`. It keeps the full
+   * walk's `unresolved`, so a setup-phase problem fails both keys closed.
+   */
+  const workspaceBase = (roots, setupEntries = []) => {
+    const walkBase = (stop) => {
+      const files = new Set();
+      const packageVersions = new Map();
+      const unresolved = [];
+      for (const root of roots) {
+        if (stop?.has(root)) continue;
+        if (fs.kind(root) !== 'file') { unresolved.push(`missing workspace input ${root}`); continue; }
+        if (!JS_EXT.test(root)) { files.add(root); continue; }
+        const closure = closureOf(root, null, stop);
+        for (const rel of closure.members) files.add(rel);
+        for (const rel of closure.inputs) files.add(rel);
+        for (const [name, version] of closure.packages) packageVersions.set(name, version);
+        unresolved.push(...closure.unresolvedEdges, ...closure.unresolvedInputs);
+      }
+      return { files, packages: packageVersions, unresolved };
+    };
+    const full = walkBase(null);
+    const entries = setupEntries.filter((rel) => full.files.has(rel));
+    if (!entries.length) return { ...full, recorded: null };
+    const narrowed = walkBase(new Set(entries));
+    return { ...full, recorded: { ...narrowed, unresolved: full.unresolved, entries } };
   };
 
   const verdict = (testRel, gathered, extra, baseClosure, { requireEdges }) => {
@@ -1208,7 +1239,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         recordedVerdict = { key: null, memoizable: false, reason: `loaded a module outside the repository: ${outside}`, reasons: [] };
       } else {
         const gathered = gather(new Set([testRel, ...recorded]), { walk: false, testRel });
-        recordedVerdict = verdict(testRel, gathered, fixtures, baseClosure, { requireEdges: false });
+        // A record missing a setup entry (a per-file environment pragma, a
+        // Vitest that stopped recording them) keeps the full static base.
+        const base = baseClosure.recorded?.entries.every((rel) => gathered.members.has(rel)) ? baseClosure.recorded : baseClosure;
+        recordedVerdict = verdict(testRel, gathered, fixtures, base, { requireEdges: false });
       }
     }
     return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0 };
@@ -1225,7 +1259,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
  */
 export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, records = new Map() }) {
   const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion });
-  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? []);
+  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
   for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null }));
   return out;
