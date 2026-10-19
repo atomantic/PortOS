@@ -37,6 +37,7 @@ import {
   peerAllowsOutbound,
   peerHasCategory,
   findPeerById,
+  loadOrNotFound,
   readState,
   writeState,
   withStateLock,
@@ -104,25 +105,6 @@ function reportPushRecovered(sub, peer) {
 
 export function __resetPushFailureLogForTests() {
   loggedPushFailures.clear();
-}
-
-// A store read that fails is NOT "record does not exist": only a not-found
-// error (ServerError 404 / a `*NOT_FOUND` code, as the record loaders throw)
-// maps to null. Anything else (DB down, a sanitizer throwing) rethrows so the
-// push rejects before any network call or lastPushedHash write, and the caller
-// logs it (#11455).
-function isNotFoundError(err) {
-  const code = err?.code;
-  return err?.status === 404 || (typeof code === 'string' && (code === 'NOT_FOUND' || code.endsWith('_NOT_FOUND')));
-}
-
-async function loadOrNotFound(fn) {
-  try {
-    return await fn();
-  } catch (err) {
-    if (isNotFoundError(err)) return null;
-    throw err;
-  }
 }
 
 async function isSubscriptionRecordTombstone(sub) {
