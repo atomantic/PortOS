@@ -73,3 +73,10 @@ export function fenceBlock(label, text, maxChars) {
   if (!body) return '';
   return `${label}:\n\`\`\`text\n${body}\n\`\`\``;
 }
+
+// A `<portos-…>` tag pair delimits a block of untrusted text (an issue body,
+// a title) inside a prompt. Text that contains the closing tag would end the
+// block early and present the rest as prompt-level instructions — including
+// a forged copy of a user-authored block that follows. Breaking the `<` keeps
+// the text readable and the delimiter intact.
+export const neutralizePromptTags = (text) => String(text ?? '').replace(/<(?=\/?portos-)/gi, '&lt;');

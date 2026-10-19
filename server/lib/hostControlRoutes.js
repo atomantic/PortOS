@@ -321,6 +321,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Instances: runs the Tailscale CLI and writes a TLS certificate and private
   // key into the install's cert directory.
   'POST /api/instances/provision-cert',
+  // Tailcat: installs the binary (brew / go install) and starts the relay
+  // processes; serve opens the remote ingress and reveals its bearer address.
+  // GET status and the DELETEs (they stop a relay) stay open.
+  'POST /api/instances/peers/tailcat',
+  'POST /api/instances/peers/tailcat/forwards/:id/retry',
+  'POST /api/instances/peers/tailcat/serve',
+  'POST /api/instances/peers/tailcat/serve/retry',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.

@@ -9,4 +9,16 @@ export function remoteRequestHandler(handler) {
   };
 }
 
+// Socket.IO's `attach` intercepts its own handshake and upgrade requests before
+// the server's request handler runs, so a handler-level mark never sees them.
+// Prepending here (after `io.attach`) marks every request and upgrade the
+// listener accepts; the engine.io socket keeps that handshake request as
+// `socket.request`, which is what the socket auth gate checks.
+export function markRemoteServer(server) {
+  const mark = (req) => { remoteRequests.add(req); };
+  server.prependListener('request', mark);
+  server.prependListener('upgrade', mark);
+  return server;
+}
+
 export const isRemoteRequest = (req) => remoteRequests.has(req);

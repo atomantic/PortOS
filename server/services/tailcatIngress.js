@@ -2,7 +2,7 @@
 import { createTailscaleServers, watchCertReload } from '../../lib/tailscale-https.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { remoteRequestHandler } from '../lib/requestOrigin.js';
+import { markRemoteServer, remoteRequestHandler } from '../lib/requestOrigin.js';
 
 let configuration = null;
 let listener = null;
@@ -43,6 +43,7 @@ export function ensureTailcatIngress() {
         server.removeListener('error', reject);
         server.on('error', (err) => console.error(`❌ Tailcat ingress failed: ${err.message}`));
         io.attach(server);
+        markRemoteServer(server);
         if (httpsEnabled) stopWatching = watchCertReload(server, certDir);
         resolve();
       } catch (err) {

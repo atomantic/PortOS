@@ -1757,3 +1757,24 @@ describe('catalog_lookup', () => {
     expect(res.summary).toMatch(/No catalog ingredients matched "nope"/);
   });
 });
+
+describe('ui_navigate raw path fallback', () => {
+  const run = (path) => {
+    const ctx = { sideEffects: [], state: { ui: { path: '/tasks' } } };
+    return dispatchTool('ui_navigate', { path }, ctx).then((result) => ({ result, ctx }));
+  };
+
+  it('accepts an in-app route path', async () => {
+    const { result, ctx } = await run('/cos/tasks');
+    expect(result).toMatchObject({ ok: true, path: '/cos/tasks' });
+    expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/cos/tasks' }]);
+  });
+
+  it('refuses protocol-relative paths the browser would resolve off-origin', async () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const { result, ctx } = await run(path);
+      expect(result.ok).toBe(false);
+      expect(ctx.sideEffects).toEqual([]);
+    }
+  });
+});

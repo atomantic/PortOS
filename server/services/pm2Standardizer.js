@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, writeFile, readdir, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, relative } from 'path';
 import { exec, spawn } from '../lib/childProcess.js';
@@ -14,6 +14,11 @@ import { isStandardizable } from './streamingDetect.js';
 import { getListeningPorts } from '../lib/platform.js';
 import { isBrowserUnsafePort } from '../lib/browserUnsafePorts.js';
 import { DEFAULT_PORT_RANGE_START } from './ports.js';
+import { isPathInsideDir } from '../lib/pathSafety.js';
+
+// Mirrors standardizePlanStrayPortSchema (lib/validation.js): the sink re-checks
+// because the socket flow applies the model's plan without the HTTP route's schema.
+const STRAY_VARIABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const execAsync = promisify(exec);
 const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
@@ -428,6 +433,23 @@ function parseAnalysisResponse(response, promptToStrip = '') {
 /**
  * Generate ecosystem.config.cjs content from processes
  */
+const IDENTIFIER_KEY_RE = /^[A-Za-z_$][\w$]*$/;
+
+/** A JS object literal with unquoted identifier keys; every other token is JSON-encoded. */
+function jsObjectLiteral(value, depth = 1) {
+  const pad = '  '.repeat(depth);
+  const close = '  '.repeat(depth - 1);
+  if (Array.isArray(value)) {
+    return value.length === 0 ? '[]' : `[\n${value.map((item) => `${pad}${jsObjectLiteral(item, depth + 1)}`).join(',\n')}\n${close}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined);
+    if (entries.length === 0) return '{}';
+    return `{\n${entries.map(([key, item]) => `${pad}${IDENTIFIER_KEY_RE.test(key) ? key : JSON.stringify(key)}: ${jsObjectLiteral(item, depth + 1)}`).join(',\n')}\n${close}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 function generateEcosystemContent(processes, appName) {
   const apps = processes.map(proc => {
     const config = {
@@ -458,15 +480,16 @@ function generateEcosystemContent(processes, appName) {
     return config;
   });
 
-  // Generate formatted JavaScript
-  const configStr = JSON.stringify({ apps }, null, 2)
-    .replace(/"([^"]+)":/g, '$1:')  // Remove quotes from keys
-    .replace(/"/g, "'");             // Use single quotes for strings
-
+  // PM2 `require()`s this file and parseEcosystemConfig (streamingDetect.js)
+  // reads it back with regexes keyed on bare `name:` / `ports:` / `env:` keys,
+  // so the literal keeps identifier keys unquoted. Every value is model output
+  // steered by the scanned repository: strings are JSON-encoded (the old quote
+  // rewrite left `'` free to close the string and run code on load) and a key
+  // that is not an identifier is quoted the same way.
   return `// PM2 Ecosystem Configuration
 // ${PORTOS_ECOSYSTEM_MARKER}
 
-module.exports = ${configStr};
+module.exports = ${jsObjectLiteral({ apps })};
 `;
 }
 
@@ -648,8 +671,17 @@ export async function applyStandardization(
   for (const stray of preserveEcosystem ? [] : plan.proposedChanges.strayPorts || []) {
     if (stray.action !== 'remove') continue;
 
-    const filePath = join(repoPath, stray.file);
+    // Contain both model-chosen fields at the sink: the file must resolve
+    // inside the repository (after following symlinks, so a planted `.env`
+    // link cannot aim the write at a host file) and the variable must be a
+    // bare identifier before it becomes a RegExp.
+    const filePath = join(repoPath, String(stray.file ?? ''));
     if (!existsSync(filePath)) continue;
+    const [realFile, realRepo] = await Promise.all([realpath(filePath).catch(() => null), realpath(repoPath).catch(() => null)]);
+    if (!realFile || !realRepo || !isPathInsideDir(realRepo, realFile) || !STRAY_VARIABLE_RE.test(String(stray.variable ?? ''))) {
+      console.warn(`⚠️ PM2 standardizer skipped a stray-port edit outside the plan contract: ${stray.file} / ${stray.variable}`);
+      continue;
+    }
 
     const content = await tryReadFile(filePath);
     if (!content) continue;
@@ -845,3 +877,5 @@ module.exports = {
 };
 `;
 }
+
+export const __testing = { generateEcosystemContent };

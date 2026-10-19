@@ -7,6 +7,7 @@
 
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { shellQuote } from '../lib/shellQuote.js';
+import { neutralizePromptTags } from '../lib/promptFencing.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
 import { ZERO_REVIEWER_COVERAGE_NOTE, isProviderReviewer, LOCAL_LLM_REVIEWERS } from '../lib/reviewerConfig.js';
 import { buildCliReviewerOutcomeInstructions } from './promptSections/reviewerOutcome.js';
@@ -57,10 +58,10 @@ export function buildPrefetchedIssueContextBlock(promptTaskType, target, issueCo
   if (!Number.isSafeInteger(issueNumber) || issueNumber !== Number(target)) return '';
 
   const title = typeof issueContext?.title === 'string'
-    ? issueContext.title.slice(0, PREFETCHED_ISSUE_TITLE_MAX_CHARS)
+    ? neutralizePromptTags(issueContext.title.slice(0, PREFETCHED_ISSUE_TITLE_MAX_CHARS))
     : '';
   const body = typeof issueContext?.body === 'string'
-    ? issueContext.body.slice(0, PREFETCHED_ISSUE_BODY_MAX_CHARS)
+    ? neutralizePromptTags(issueContext.body.slice(0, PREFETCHED_ISSUE_BODY_MAX_CHARS))
     : '';
   const url = typeof issueContext?.url === 'string'
     ? issueContext.url.slice(0, PREFETCHED_ISSUE_URL_MAX_CHARS)

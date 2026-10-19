@@ -162,3 +162,11 @@ describe('resolver segments without a URL', () => {
     expect(screen.getByText('#tag').className).toContain('text-port-accent/70');
   });
 });
+
+it('keeps protocol-relative paths from becoming links or image fetches', () => {
+  render(<MarkdownOutput content={'[one](//evil.example/x) [two](/\\evil.example/x) ![pic](/\\evil.example/p.png) [ok](/tasks)'} />);
+  expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['/tasks']);
+  expect(screen.queryByRole('img')).toBeNull();
+  expect(screen.getByText('one')).toBeInTheDocument();
+  expect(screen.getByText('two')).toBeInTheDocument();
+});

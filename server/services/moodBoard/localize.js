@@ -35,7 +35,9 @@ const IMAGE_HEADERS = { 'User-Agent': UA, Accept: 'image/*' };
  * the format is sniffed from bytes, never trusted from Content-Type.
  */
 async function downloadExternalImage(url) {
-  const res = await fetchPublicBinary(url.trim(), { timeoutMs: IMAGE_TIMEOUT_MS, headers: IMAGE_HEADERS, maxBytes: MAX_IMAGE_BYTES, throwOnUnsafe: false }).catch(() => null);
+  // Item URLs arrive from the UI and from synced peer records; never let one
+  // point the server at a LAN or loopback host.
+  const res = await fetchPublicBinary(url.trim(), { timeoutMs: IMAGE_TIMEOUT_MS, headers: IMAGE_HEADERS, maxBytes: MAX_IMAGE_BYTES, blockPrivate: true, throwOnUnsafe: false }).catch(() => null);
   if (!res?.buffer?.length) return null;
   const fmt = detectImageFormat(res.buffer);
   if (!fmt) return null;

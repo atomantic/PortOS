@@ -792,6 +792,42 @@ describe('host-control authority', () => {
     vi.useRealTimers();
   });
 
+  // The Tailcat ingress accepts remote peers on a loopback listener, so the
+  // socket address reads as local. Only the listener's mark separates them;
+  // it must refuse password-free host control for HTTP and for the Socket.IO
+  // handshake (which engine.io intercepts before the app handler).
+  it('refuses password-free host control to requests the Tailcat ingress marked remote', async () => {
+    const { remoteRequestHandler, markRemoteServer } = await import('../lib/requestOrigin.js');
+    const { hostControlBodyGate, requestHasHostControl, socketAuthGate, socketHasHostControl } = await import('./authGate.js');
+    const local = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
+    const viaIngress = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
+    remoteRequestHandler(() => {})(viaIngress, {});
+    expect(requestHasHostControl(local)).toBe(true);
+    expect(requestHasHostControl(viaIngress)).toBe(false);
+
+    const policyWrite = { ...viaIngress, method: 'PUT', path: '/api/cos/config', body: { autonomyMode: 'execute' } };
+    remoteRequestHandler(() => {})(policyWrite, {});
+    const bodyGate = await runGate(hostControlBodyGate, policyWrite);
+    expect(bodyGate.called).toBe(false);
+    expect(bodyGate.res.statusCode).toBe(403);
+    expect(bodyGate.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+
+    const { EventEmitter } = await import('node:events');
+    const server = markRemoteServer(new EventEmitter());
+    const handshake = async (request) => {
+      const socket = { request, handshake: { address: '127.0.0.1', headers: {} } };
+      await new Promise((resolve) => socketAuthGate(socket, resolve));
+      return socketHasHostControl(socket);
+    };
+    const upgradeRequest = {};
+    server.emit('upgrade', upgradeRequest);
+    const pollingRequest = {};
+    server.emit('request', pollingRequest);
+    expect(await handshake({})).toBe(true);
+    expect(await handshake(upgradeRequest)).toBe(false);
+    expect(await handshake(pollingRequest)).toBe(false);
+  });
+
   it('keeps password-free socket host control limited to connected local sockets', async () => {
     const { socketHasCurrentHostControl } = await import('./authGate.js');
     expect(await socketHasCurrentHostControl({ data: { portosLocalConnection: true } })).toBe(true);

@@ -27,6 +27,7 @@ import { getAgentKeyStatus, rotateAgentKey, setAgentKeyEnabled } from '../servic
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
+import { isRemoteRequest } from '../lib/requestOrigin.js';
 
 const router = Router();
 
@@ -49,7 +50,9 @@ const isSecure = (req) => !!req.secure;
 
 // Source address for the audit trail. `req.ip` is the socket peer (no reverse
 // proxy in front of PortOS), so a forged header cannot name another machine.
-const sourceOf = (req) => req.ip || req.socket?.remoteAddress || 'unknown';
+// A Tailcat ingress request reports the loopback hop as its address; keep its
+// throttle bucket and audit lines apart from genuine local logins.
+const sourceOf = (req) => (isRemoteRequest(req) ? 'tailcat-ingress' : (req.ip || req.socket?.remoteAddress || 'unknown'));
 
 // The session cookie name is port-scoped from the browser-facing `Host` (see
 // sessionCookieNameFor in lib/portosAuthCore.js) — e.g. `portos_auth_15555`
