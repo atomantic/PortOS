@@ -38,6 +38,7 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { findFfmpeg, findFfprobe, probeVideoStreamInfo, safeUnder } from '../../lib/ffmpeg.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'auto-review' });
 import { musicVideoEvents } from './events.js';
 import { startExcerptRender } from './excerptRender.js';
@@ -98,12 +99,6 @@ function findRun(project, runId) {
   const run = projectAutoReviews(project).find((r) => r.id === runId);
   if (!run) throw new ServerError('Auto-review run not found', { status: 404, code: 'NOT_FOUND' });
   return run;
-}
-
-async function requireProject(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
 }
 
 function publish(projectId, project, run, action) {

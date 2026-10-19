@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord, cloneProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { applyProjectPatch, addScenes } from './projectsLogic.js';
 import { parseLyricCues } from './timedText.js';
 import { musicVideoEvents } from './events.js';
@@ -172,8 +173,7 @@ export async function selectSongRevision(projectId, revisionId, songId) {
  * sheet, then starts re-timing it. Resolves `{ project, retimeJobId }`.
  */
 export async function reviseSongFromTrack(projectId, { trackId }) {
-  const source = await getProject(projectId);
-  if (!source) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const source = await requireProject(projectId);
   if (productionActive(source)) fail('Stop active production before revising the song');
   const track = await deps.getTrack(trackId);
   if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
@@ -277,8 +277,7 @@ function replanNote(scene, entry) {
  * `dismiss` keeps the named shots as they are.
  */
 export async function resolveSongRevisionScenes(projectId, { revisionId, action, sceneIds = null, ...route }) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const revision = requireRevision(project, revisionId);
   if (!revision.sceneReview) fail('Re-time the shots to the new song first', 'SONG_REVISION_NOT_REMAPPED');
   const statuses = action === 'remove' ? ['removed'] : action === 'replan' ? ['changed', 'new'] : ['changed', 'new', 'removed'];

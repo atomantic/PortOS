@@ -12,7 +12,8 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, updateProject } from './projects.js';
+import { updateProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { parseLyricCues } from './timedText.js';
 
 export const MAX_LYRIC_CUES = 2000;
@@ -23,8 +24,7 @@ export const MAX_LYRIC_CUES = 2000;
  * @returns {Promise<{ project: object, imported: number, markers: number, skipped: string|null }>}
  */
 export async function importTrackLyrics(projectId, { mode = 'replace' } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const ifEmpty = mode === 'if-empty';
   const skip = (skipped) => ({ project, imported: 0, markers: 0, skipped });
   if (ifEmpty && (project.lyricCues || []).length > 0) return skip('has-lyrics');

@@ -93,6 +93,7 @@ import {
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 // `runId` lets the run's repairs land on shots its own approval locked (preserveAutomatedShotLocks).
 const mutateProjectRecord = (id, transform, { runId = null } = {}) => mutateRecord(id, transform, { source: 'orchestrator', runId });
 import { musicVideoEvents } from './events.js';
@@ -180,8 +181,7 @@ const projectAutonomousRun = (project) => project?.autonomousRun || null;
 const ownsRunningRun = (current, run) => current?.id === run.id && current.status === 'running' && current.processId === PROCESS_ID;
 
 async function requireRun(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw runError(404, 'NOT_FOUND', 'Project not found');
+  const project = await requireProject(projectId);
   const run = projectAutonomousRun(project);
   if (!run) throw runError(404, 'NO_AUTONOMOUS_RUN', 'This project has no autonomous run');
   return { project, run };

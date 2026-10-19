@@ -20,7 +20,8 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideoHandoffFrame.js';
 import { getHistoryItem } from '../videoGen/history.js';
-import { appendSceneTakes, getProject, selectSceneTake } from './projects.js';
+import { appendSceneTakes, selectSceneTake } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { assertClipUnlocked } from './productionReview.js';
 
 const refuse = (message, code, status = 409) => new ServerError(message, { status, code });
@@ -30,8 +31,7 @@ const refuse = (message, code, status = 409) => new ServerError(message, { statu
  * start frame. Returns `{ scene, frame: { imageId, atSec, fromSceneId } }`.
  */
 export async function continueFromPreviousShot(projectId, sceneId, { keepStillAsEnd = false } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw refuse('Project not found', 'NOT_FOUND', 404);
+  const project = await requireProject(projectId);
   const scene = project.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) throw refuse('Scene not found', 'NOT_FOUND', 404);
   assertClipUnlocked(project, sceneId);

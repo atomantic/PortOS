@@ -8,7 +8,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, setProjectAnalysis } from './projects.js';
+import { setProjectAnalysis } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { analyzeAudioFile } from './audioAnalysis.js';
 import { relabelAnalysisSections } from './lyricMarkers.js';
 
@@ -40,8 +41,7 @@ export async function resolveProjectAudioPath(project) {
  * aligned). Resolves to the updated project.
  */
 export async function analyzeProjectSong(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const analysis = await analyzeAudioFile(await resolveProjectAudioPath(project));
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });

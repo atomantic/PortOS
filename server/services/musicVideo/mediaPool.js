@@ -371,14 +371,14 @@ export async function forgetDeletedMusicVideoAssets(keys, { mutateProjectRecord:
  * the batch on every music video (forgetDeletedMusicVideoAssets).
  */
 export async function deleteMusicVideoPoolAssets(project, items) {
-  const { withProjectMediaMutation, getProject, listProjects } = await import('./projects.js');
+  const { withProjectMediaMutation, listProjects } = await import('./projects.js');
+  const { requireProject } = await import('./requireProject.js');
   const { ServerError } = await import('../../lib/errorHandler.js');
   const { withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
   // Backup admission precedes the project boundary, matching gallery/history
   // deletion; one lease covers physical deletion and project cleanup.
   return withBackupAssetPublication(() => withProjectMediaMutation(async (admitted) => {
-    const current = await getProject(project.id);
-    if (!current) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    const current = await requireProject(project.id);
     const pool = new Set((await getMusicVideoMediaPool(current)).items.map((item) => `${item.kind}:${item.assetId}`));
     // A shot on any music video using it keeps it, not only this video's shots.
     const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));

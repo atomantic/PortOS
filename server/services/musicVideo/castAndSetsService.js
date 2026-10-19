@@ -37,6 +37,7 @@ import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
@@ -112,12 +113,6 @@ export const __castAndSetsProcessId = () => PROCESS_ID;
 export const presentProjectCastAndSets = (project) => (project?.castAndSets
   ? { ...project, castAndSets: presentCastAndSets(project.castAndSets, PROCESS_ID) }
   : project);
-
-async function requireProject(id) {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
-}
 
 function publish(projectId, project) {
   musicVideoEvents.emit('cast-and-sets', {
