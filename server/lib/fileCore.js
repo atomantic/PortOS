@@ -258,13 +258,15 @@ export async function ensureDirs(dirs) {
  *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
+ * @param {{ onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
+ *   `onStage` is called as each durable stage begins, for slow-write diagnostics.
  * @returns {Promise<void>}
  *
  * @example
  * await atomicWrite(FILE, { version: 1, items: [] });
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
-export async function atomicWrite(filePath, data) {
+export async function atomicWrite(filePath, data, { onStage } = {}) {
   // #6176 — the filesystem analogue of db.js's row-write backstop. Refuses
   // before any bytes are produced, so a leaking suite cannot even leave a temp
   // file behind in the real tree.
@@ -272,6 +274,7 @@ export async function atomicWrite(filePath, data) {
   // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
+  onStage?.('write');
   await ensureDir(dirname(filePath));
   // Preserve the destination's existing permission bits. A plain
   // writeFile(existing) truncated the inode in place and kept its mode, but
@@ -329,11 +332,13 @@ export async function atomicWrite(filePath, data) {
     // rename below never publishes an inode the disk has not yet received.
     await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
     if (existingMode !== null) await chmod(tmp, existingMode);
+    onStage?.('replace');
     await replace();
   } catch (err) {
     await unlink(tmp).catch(() => {});
     throw err;
   }
+  onStage?.('dirSync');
   await syncDirectory(dirname(filePath));
 }
 

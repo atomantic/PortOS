@@ -10,6 +10,7 @@ import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
+import { createEventLoopLagProbe, phaseGroup, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 
 const retryAfterMs = 5000;
 export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
@@ -39,36 +40,58 @@ const validLease = (lease, repository) => isPlainObject(lease) && lease.reposito
     : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
 const expired = (lease) => lease.kind === 'agent' && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
 
+// A settled transaction is logged only at or above this duration; a deadline,
+// pending or failed one always is. See docs/TROUBLESHOOTING.md for the fields.
+export const SLOW_ADMISSION_MS = 1000;
+let clock = systemClock;
+let lagProbe = createEventLoopLagProbe({ clock });
+
+/** Inject a deterministic clock; `null` restores the system clock. */
+export function setMergeAdmissionClockForTests(next) {
+  clock = next ?? systemClock;
+  lagProbe = createEventLoopLagProbe({ clock });
+}
+
+const REPORTED_PHASES = ['queue', 'trustedState', 'stateLoad', 'origin', 'ownerRecovery', 'persistence'];
+const REPORTED_STAGES = [['trustedState', 'read'], ['trustedState', 'parse'], ['persistence', 'prepare'],
+  ['persistence', 'serialize'], ['persistence', 'write'], ['persistence', 'replace'], ['persistence', 'dirSync']];
+const REPORTED_LAG_PHASES = ['queue', 'trustedState', 'persistence'];
+
 async function transaction(work, operation) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
   // pending merge exists. Admission needs runtime state only on the merge path.
   const { withStateLock, readMergeAdmissionStateForSafetyCheck, loadState, saveState } = await import('./cosState.js');
-  const queuedAt = performance.now();
+  const queuedAt = clock.now();
+  // Each phase runs until the next begins; `phase.stage` names are its stages.
+  const span = lagProbe.begin('queue');
   let started = false;
   let cancelled = false;
-  let phase = 'queue';
-  let phaseStartedAt = queuedAt;
-  const timings = { queue: 0, trustedState: 0, stateLoad: 0, origin: 0, ownerRecovery: 0, persistence: 0 };
-  const elapsed = (since) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(performance.now() - since)));
+  let timerLateMs = 0;
   // Only fixed operation/phase names and bounded numeric timings reach logs.
   const report = (status) => {
+    const summary = status === 'pending' ? span.snapshot() : span.end();
+    if (status === 'settled' && summary.totalMs < SLOW_ADMISSION_MS) return;
     const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
-    log(`🚦 Merge admission operation=${operation} status=${status} phase=${phase} phaseMs=${elapsed(phaseStartedAt)} totalMs=${elapsed(queuedAt)} queueMs=${timings.queue} trustedStateMs=${timings.trustedState} stateLoadMs=${timings.stateLoad} originMs=${timings.origin} ownerRecoveryMs=${timings.ownerRecovery} persistenceMs=${timings.persistence}`);
+    const phases = REPORTED_PHASES.map((name) => `${name}Ms=${phaseGroup(summary, name).ms}`);
+    const stages = REPORTED_STAGES.map(([name, stage]) => `${stage}Ms=${summary.phases[`${name}.${stage}`]?.ms ?? 0}`);
+    const lag = REPORTED_LAG_PHASES.map((name) => `${name}LagMs=${phaseGroup(summary, name).lagMs}`);
+    log(`🚦 Merge admission operation=${operation} status=${status} phase=${summary.phase.split('.')[0]} phaseMs=${summary.phaseMs} totalMs=${summary.totalMs} ${phases.join(' ')} ${stages.join(' ')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} ${lag.join(' ')} timerLateMs=${timerLateMs}`);
   };
   const measure = async (name, fn) => {
-    phase = name;
-    phaseStartedAt = performance.now();
-    try { return await fn(); }
-    finally { timings[name] = elapsed(phaseStartedAt); }
+    span.mark(name);
+    return fn();
   };
+  const stage = (name) => (sub) => span.mark(`${name}.${sub}`);
+  const overdue = () => roundMs(clock.now() - queuedAt - ADMISSION_QUEUE_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
     const expire = () => {
       cancelled = true;
-      timings.queue = elapsed(queuedAt);
       report('queue-timeout');
       resolve(refuse('state-queue-timeout'));
     };
-    const timer = setTimeout(() => {
+    // A late timer is itself evidence of event-loop delay: record by how much.
+    const timer = clock.setTimer(() => {
+      timerLateMs = overdue();
       if (!started) expire();
       else report('pending');
     }, ADMISSION_QUEUE_TIMEOUT_MS);
@@ -76,10 +99,10 @@ async function transaction(work, operation) {
       // Check the clock as well: a delayed timer must not let an expired
       // callback mutate a lease when the state queue resumes first.
       if (cancelled) return;
-      if (performance.now() - queuedAt >= ADMISSION_QUEUE_TIMEOUT_MS) { expire(); return; }
+      if (clock.now() - queuedAt >= ADMISSION_QUEUE_TIMEOUT_MS) { timerLateMs = overdue(); expire(); return; }
       started = true;
-      timings.queue = elapsed(queuedAt);
-      const snapshot = await measure('trustedState', () => readMergeAdmissionStateForSafetyCheck().catch(() => null));
+      const snapshot = await measure('trustedState', () =>
+        readMergeAdmissionStateForSafetyCheck({ onStage: stage('trustedState') }).catch(() => null));
       if (!snapshot?.trusted || !isPlainObject(snapshot.agents) || !isPlainObject(snapshot.mergeAdmissions)) {
         return refuse('ownership-unreadable');
       }
@@ -93,7 +116,7 @@ async function transaction(work, operation) {
       // Copy before mutation: a failed atomic write must not admit from a cache
       // that falsely remembers a successful grant/release.
       const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions } };
-      return work(next, (value) => measure('persistence', () => saveState(value)), measure);
+      return work(next, (value) => measure('persistence', () => saveState(value, { onStage: stage('persistence') })), measure);
     });
     // Once started, the queue owns the entire transaction through durable
     // settlement. The deadline diagnoses a slow phase but cannot return a
@@ -102,7 +125,7 @@ async function transaction(work, operation) {
       if (!cancelled) { report('settled'); resolve(result); }
     }, (error) => {
       if (!cancelled) { report('failed'); reject(error); }
-    }).finally(() => clearTimeout(timer));
+    }).finally(() => clock.clearTimer(timer));
   });
 }
 

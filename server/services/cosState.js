@@ -9,6 +9,7 @@ import { readFile, readdir, rm, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createEventLoopLagProbe, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 import { ensureDirs, safeJSONParse, readJSONFileStrict, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
@@ -51,7 +52,37 @@ export const ROOT_DIR = PATHS.root;
 // `withStateLock(...)` call sites are unchanged; the name is kept for that
 // reason. The queue additionally silences its tail so one rejected write can't
 // poison subsequent waiters (a strict improvement over the prior mutex).
-export const withStateLock = createFileWriteQueue();
+const stateQueue = createFileWriteQueue();
+
+// Slow-operation diagnostics (#12329): only bounded numbers reach the log, and
+// only for an operation at or above this duration. Each held operation's time
+// is split into event-loop lag and the rest, so a stalled queue can be told
+// apart from a busy host (see docs/TROUBLESHOOTING.md).
+export const SLOW_STATE_OPERATION_MS = 1000;
+let stateClock = systemClock;
+let stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
+
+/** Inject a deterministic clock; `null` restores the system clock. */
+export function setCosStateDiagnosticsClockForTests(clock) {
+  stateClock = clock ?? systemClock;
+  stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
+}
+
+export function withStateLock(fn) {
+  const queuedAt = stateClock.now();
+  return stateQueue(async () => {
+    const waitMs = roundMs(stateClock.now() - queuedAt);
+    const span = stateLagProbe.begin('hold');
+    try {
+      return await fn();
+    } finally {
+      const { totalMs, lagMs, lagMaxMs } = span.end();
+      if (totalMs >= SLOW_STATE_OPERATION_MS) {
+        console.warn(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}`);
+      }
+    }
+  });
+}
 
 // Config gets its OWN tail, so a settings read or write never queues behind the
 // runtime-record writes that dominate state.json (#6182). Same
@@ -486,10 +517,12 @@ export async function loadState() {
 // action must distinguish "known empty" from "could not establish what is
 // there". `trusted: false` means the file exists but could not be read as an
 // object — every caller must treat that as "assume the worst", never as empty.
-async function readStateForSafetyCheck() {
+async function readStateForSafetyCheck({ onStage } = {}) {
+  onStage?.('read');
   await ensureDirectories();
   if (!existsSync(STATE_FILE)) return { trusted: true, state: null };
   const content = await readFile(STATE_FILE, 'utf-8');
+  onStage?.('parse');
   const state = parseStateFile(content);
   if (!state) return { trusted: false, state: null };
   return { trusted: true, state };
@@ -497,8 +530,9 @@ async function readStateForSafetyCheck() {
 
 // Merge admission shares the runtime ownership store and its write queue.
 // Missing leases are legacy empty state; malformed leases are never defaulted.
-export async function readMergeAdmissionStateForSafetyCheck() {
-  const { trusted, state } = await readStateForSafetyCheck();
+// `onStage('read'|'parse')` marks each stage for slow-admission diagnostics.
+export async function readMergeAdmissionStateForSafetyCheck({ onStage } = {}) {
+  const { trusted, state } = await readStateForSafetyCheck({ onStage });
   return { trusted, agents: state?.agents ?? null, mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {} };
 }
 
@@ -531,21 +565,39 @@ export async function readAgentsStateForSafetyCheck() {
  * can neither publish that copy nor leave `stateCache.config` undefined for the
  * next `state.config.…` reader. A caller wanting to CHANGE a setting must call
  * `updateConfig()`; `state.config` is a read-only view.
+ *
+ * `onStage` is called as each persistence stage begins (`prepare`, `serialize`,
+ * `write`, `replace`, `dirSync`) for a caller's own slow-operation diagnostics.
  */
-export async function saveState(state) {
+export async function saveState(state, { onStage } = {}) {
   assertCurrentGeneration(state, stateRecovery);
   stampGeneration(state, stateRecovery);
+  const span = stateLagProbe.begin('prepare');
+  const stage = (name) => { span.mark(name); onStage?.(name); };
+  onStage?.('prepare');
+  let bytes = 0;
+  let outcome = 'failed';
   try {
     await ensureDirectories();
     state.config = await loadConfig();
     // Config lives in its own file; never re-serialize it onto the hot path.
     const persisted = { ...state };
     delete persisted.config;
-    await atomicWrite(STATE_FILE, persisted);
+    stage('serialize');
+    const payload = JSON.stringify(persisted, null, 2);
+    bytes = Buffer.byteLength(payload);
+    await atomicWrite(STATE_FILE, payload, { onStage: stage });
+    outcome = 'saved';
   } catch (error) {
     stateCache = null;
     invalidateFailedWrite(stateRecovery);
     throw error;
+  } finally {
+    const summary = span.end();
+    if (summary.totalMs >= SLOW_STATE_OPERATION_MS) {
+      const ms = (name) => summary.phases[name]?.ms ?? 0;
+      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
+    }
   }
   stateCache = stampGeneration(state, stateRecovery);
 }

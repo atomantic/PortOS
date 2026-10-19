@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { createManualClock } from '../lib/eventLoopLagProbe.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'cos-state-test-' });
 
@@ -437,5 +438,37 @@ describe('live CoS restore boundary', () => {
     await expect(store.withLiveCosRestore(transfer)).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
     expect(transfer).not.toHaveBeenCalled();
     expect(readFileSync(STATE_PATH, 'utf8')).toBe('{broken');
+  });
+});
+
+// #12329: a slow state operation must separate durable-write stages and
+// event-loop lag, logging only bounded numbers.
+describe('state operation slow diagnostics', () => {
+  it('reports each persistence stage and splits a slow write into I/O wait and loop lag', async () => {
+    const store = await freshModule();
+    const clock = createManualClock();
+    store.setCosStateDiagnosticsClockForTests(clock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const stages = [];
+      await store.saveState(await store.loadState(), { onStage: (stage) => {
+        stages.push(stage);
+        if (stage === 'write') clock.advance(1500);
+        if (stage === 'dirSync') clock.stall(600);
+      } });
+      expect(stages).toEqual(['prepare', 'serialize', 'write', 'replace', 'dirSync']);
+      expect(readJson(STATE_PATH).agents).toEqual({});
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^🐢 CoS state write slow outcome=saved totalMs=2100 prepareMs=0 serializeMs=0 writeMs=1500 replaceMs=0 dirSyncMs=600 loopLagMs=500 loopLagMaxMs=500 sizeKiB=\d+$/);
+
+      warn.mockClear();
+      await store.withStateLock(async () => clock.advance(200));
+      expect(warn).not.toHaveBeenCalled();
+      await store.withStateLock(async () => clock.stall(1200));
+      expect(warn.mock.calls.map(([line]) => line)).toEqual(['🐢 CoS state queue slow hold heldMs=1200 waitMs=0 loopLagMs=1100 loopLagMaxMs=1100']);
+    } finally {
+      store.setCosStateDiagnosticsClockForTests(null);
+      warn.mockRestore();
+    }
   });
 });
