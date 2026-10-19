@@ -1127,6 +1127,8 @@ jobs:
           # Windows runners lose Vitest workers at startup with 0xC0000142
           # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
           PORTOS_CI_MAX_WORKERS: 2
+          # Opts nativeTrash.smoke.test.js into the runner's real Recycle Bin (#12325).
+          PORTOS_NATIVE_TRASH_SMOKE: 1
         run: node scripts/run-ci-tests.js server
 
       - name: Save the test memo
