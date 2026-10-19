@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
@@ -15,6 +15,7 @@ const mockImportMoodBoardXPost = vi.fn();
 const mockLocalizeMoodBoardMedia = vi.fn();
 const mockRenderMoodBoardItem = vi.fn();
 const socketHandlers = new Map();
+const mockNavigate = vi.fn();
 
 vi.mock('../services/socket', () => ({
   default: {
@@ -97,7 +98,7 @@ vi.mock('react-router', async (importOriginal) => {
   return {
     ...actual,
     useParams: () => ({ id: currentId }),
-    useNavigate: () => vi.fn(),
+    useNavigate: () => mockNavigate,
   };
 });
 
@@ -124,9 +125,11 @@ const renderPage = (initialEntries = ['/mood-boards/a']) => render(
 );
 
 const boardNameValue = () => screen.getByLabelText('Name').value;
+const openTool = (name) => fireEvent.click(screen.getByRole('tab', { name }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
@@ -275,6 +278,7 @@ describe('MoodBoardDetail stale-response guards', () => {
     mockSyncMoodBoardPinterest.mockReturnValueOnce(oldSync.promise);
     const { rerender } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    openTool('Import');
     fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
 
     currentId = 'missing';
@@ -310,6 +314,7 @@ describe('MoodBoardDetail private Pinterest import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Board URL'), { target: { value: boardUrl } });
     fireEvent.click(screen.getByRole('button', { name: 'Import pins' }));
 
@@ -357,6 +362,7 @@ describe('MoodBoardDetail X post import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
 
@@ -371,6 +377,7 @@ describe('MoodBoardDetail X post import', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
+    openTool('Import');
     fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
 
@@ -634,8 +641,8 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
   });
 });
 
-describe('MoodBoardDetail desktop layout', () => {
-  it('puts the add panel before the items list in the single-column source order', async () => {
+describe('MoodBoardDetail layout', () => {
+  it('shows pins first with every board tool one tap away in the side rail', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({
       id: 'a',
       name: 'Board A',
@@ -645,47 +652,64 @@ describe('MoodBoardDetail desktop layout', () => {
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
     const itemsSection = screen.getByRole('region', { name: 'Mood board items' });
-    const addAside = screen.getByRole('complementary', { name: 'Add to mood board' });
+    const tools = screen.getByRole('complementary', { name: 'Board tools' });
+    expect(itemsSection.parentElement).toBe(tools.parentElement);
+    expect(itemsSection.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(itemsSection.parentElement.className).toContain('@4xl/board:grid-cols-[minmax(0,1fr)_24rem]');
 
-    const parentGrid = itemsSection.parentElement;
-    expect(parentGrid).toBe(addAside.parentElement);
-    // Wide boards keep the 22rem side column. Source order is the stacked
-    // order; order-last plus reading-flow put the aside on the right and
-    // keep tab order with that visual column.
-    expect(parentGrid.className).toContain('@4xl/board:grid-cols-[minmax(0,1fr)_22rem]');
-    expect(parentGrid.className).toContain('[reading-flow:grid-order]');
-    expect(parentGrid.firstElementChild).toBe(addAside);
-    expect(parentGrid.lastElementChild).toBe(itemsSection);
-    expect(addAside.className).toContain('@4xl/board:order-last');
-    expect(addAside.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    expect(addAside).toContainElement(screen.getByRole('heading', { name: 'Add item' }));
-    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
-
-    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
-    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-    expect(disclosure.className).toContain('@4xl/board:hidden');
-    const imports = document.getElementById('mood-board-import-panels');
-    expect(addAside).toContainElement(imports);
-    expect(imports.className).toContain('hidden');
-    expect(imports.className).toContain('@4xl/board:block');
-    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
-    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import' }));
-    expect(disclosure.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Add is the default tool; the others stay mounted but hidden.
+    expect(tools).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+    expect(screen.queryByRole('button', { name: 'Import pins' })).toBeNull();
+    openTool('Import');
+    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pin to board' })).toBeNull();
+    expect(screen.getByTestId('generate-more-panel')).toBeInTheDocument();
   });
 
-  it('reveals Pinterest and X import in one click on the stacked layout', async () => {
+  it('remembers the last tool used for the next board', async () => {
+    mockGetMoodBoard.mockResolvedValue({ id: 'a', name: 'Board A', items: [] });
+    const { unmount } = renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    openTool('Import');
+    unmount();
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.getByRole('tab', { name: 'Import' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Import pins' })).toBeInTheDocument();
+  });
+});
+
+describe('MoodBoardDetail phone tool sheet', () => {
+  const desktopWidth = window.innerWidth;
+  beforeEach(() => { window.innerWidth = 390; });
+  afterEach(() => { window.innerWidth = desktopWidth; });
+
+  it('opens a tool as a sheet on its own history entry and closes it with one step back', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Import from Pinterest or X' }));
-    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
-    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    const imports = document.getElementById('mood-board-import-panels');
-    expect(imports.className).not.toContain('hidden');
-    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
+    const row = screen.getByRole('navigation', { name: 'Board tools' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Import' }));
+    const sheet = screen.getByRole('dialog', { name: 'Board tools' });
+    expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Pinterest board' }));
+
+    // Switching tools inside the sheet keeps it open on the same entry.
+    fireEvent.click(screen.getByRole('tab', { name: 'Add' }));
+    expect(screen.getByRole('dialog', { name: 'Board tools' })).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close board tools' }));
+    expect(mockNavigate).toHaveBeenCalledWith(-1);
+  });
+
+  it('does not pop the sheet open for a ?tool= link from the desktop rail', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage(['/mood-boards/a?tool=style']);
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Board tools' })).toBeInTheDocument();
   });
 });
 

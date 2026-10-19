@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../../services/socket';
-import { ScanEye, Sparkles, ImageIcon, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { ScanEye, Sparkles, ImageIcon, ChevronDown, Cpu, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
@@ -51,8 +51,10 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     setNegative(savedNegative);
   }
 
-  // Collapsed once a style exists so the pinned items sit above the fold.
-  const [open, setOpen] = useState(!savedPrompt);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [negativeOpen, setNegativeOpen] = useState(false);
+  // Stays shown while a saved negative prompt is being cleared.
+  const negativeShown = negativeOpen || Boolean(negative) || Boolean(savedNegative);
   const [composing, setComposing] = useState(false);
   const [job, setJob] = useState(null);
   const jobRunning = job?.status === 'running';
@@ -258,160 +260,190 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
 
   const showAnalyze = plan.pending.length > 0;
   const showCompose = plan.analyzed > 0;
+  const analyzable = plan.analyzed + plan.pending.length;
+  const progressPct = jobRunning && job.total > 0
+    ? Math.round((Math.min(job.done, job.total) / job.total) * 100)
+    : analyzable > 0 ? Math.round((plan.analyzed / analyzable) * 100) : 0;
+  const providerName = providers.find((p) => p.id === selectedProviderId)?.name || selectedProviderId;
+  const aiSummary = [providerName || 'Choose a provider', selectedModel, effort ? `${effort} effort` : null].filter(Boolean).join(' · ');
 
   return (
-    <section className="@container/board-style min-w-0 bg-port-card border border-port-border rounded-md p-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className={`flex w-full min-w-0 items-center gap-2 text-left ${open ? 'mb-2' : ''}`}
-      >
-        {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" aria-hidden="true" />}
-        <ScanEye className="w-4 h-4 text-port-accent shrink-0" aria-hidden="true" />
-        <h2 className="text-sm font-medium text-white">Board style</h2>
-        <span className="text-[11px] text-gray-500 truncate" title="Prompt from media for each gallery item, then one composite style from those prompts. The poster is this board’s canonical reference image.">
-          Analyze pins → composite style → poster
-        </span>
-      </button>
-      <div className={`flex-col @xl/board-style:flex-row gap-3 ${open ? 'flex' : 'hidden'}`}>
-        <div className="w-full @xl/board-style:w-36 shrink-0">
-          <div className="aspect-[3/2] w-full rounded-md overflow-hidden border border-port-border bg-port-bg">
-            {jobId ? (
-              <MediaJobThumb jobId={jobId} onFilename={handleComplete} size="fill" label="Board poster" />
-            ) : posterSrc ? (
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(true)}
-                aria-label="Preview board poster"
-                className="block w-full h-full cursor-zoom-in"
-              >
-                <img src={posterSrc} alt="Board poster" className="w-full h-full object-cover" />
-              </button>
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 gap-1">
-                <ImageIcon className="w-6 h-6" aria-hidden="true" />
-                <span className="text-[11px]">No poster yet</span>
-              </div>
-            )}
+    <section aria-label="Board style" className="min-w-0 bg-port-card border border-port-border rounded-md p-3 space-y-3">
+      <div className="aspect-[3/2] w-full rounded-md overflow-hidden border border-port-border bg-port-bg">
+        {jobId ? (
+          <MediaJobThumb jobId={jobId} onFilename={handleComplete} size="fill" label="Board poster" />
+        ) : posterSrc ? (
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            aria-label="Preview board poster"
+            className="block w-full h-full cursor-zoom-in"
+          >
+            <img src={posterSrc} alt="Board poster" className="w-full h-full object-cover" />
+          </button>
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 gap-1">
+            <ImageIcon className="w-6 h-6" aria-hidden="true" />
+            <span className="text-[11px]">No poster yet</span>
+          </div>
+        )}
+      </div>
+
+      {analyzable > 0 ? (
+        <div className="space-y-1.5">
+          <p className="text-xs text-gray-400">
+            {jobRunning ? jobProgress : `${formatCount(plan.analyzed)} of ${formatCount(analyzable)} pins analyzed`}
+          </p>
+          <div
+            role="progressbar"
+            aria-label="Pins analyzed"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPct}
+            className="h-1.5 rounded-full bg-port-bg overflow-hidden"
+          >
+            <div className="h-full bg-port-accent transition-[width]" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
-        <div className="flex-1 min-w-0 space-y-2">
-          <ProviderModelSelector
-            providers={providers}
-            selectedProviderId={selectedProviderId}
-            selectedModel={selectedModel}
-            availableModels={availableModels}
-            onProviderChange={setSelectedProviderId}
-            onModelChange={setSelectedModel}
-            effort={effort}
-            onEffortChange={setEffort}
-            disabled={busy || providersLoading}
-            layout="row"
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {showAnalyze ? (
+          <button
+            type="button"
+            onClick={analyzeBoard}
+            disabled={busy || !selectedProviderId}
+            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+          >
+            <ScanEye className="w-4 h-4" aria-hidden="true" />
+            {jobRunning ? jobProgress : `Analyze ${formatCount(plan.pending.length)} new`}
+          </button>
+        ) : null}
+        {showCompose ? (
+          <button
+            type="button"
+            onClick={composeOnly}
+            disabled={busy}
+            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-gray-200 hover:text-white disabled:opacity-50 transition-colors"
+          >
+            Compose board style
+          </button>
+        ) : null}
+        {!showAnalyze && !showCompose ? (
+          <p className="text-xs text-gray-500">Pin an image or video to analyze this board.</p>
+        ) : null}
+      </div>
+
+      {/* Provider, model and effort fold into one summary line until changed. */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setAiOpen((v) => !v)}
+          aria-expanded={aiOpen}
+          aria-label={`Analysis AI: ${aiSummary}`}
+          className="flex w-full min-h-[40px] items-center gap-2 px-2.5 rounded border border-port-border bg-port-bg text-left text-xs text-gray-300 hover:text-white"
+        >
+          <Cpu className="w-3.5 h-3.5 shrink-0 text-gray-400" aria-hidden="true" />
+          <span className="flex-1 min-w-0 truncate">{aiSummary}</span>
+          <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${aiOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+        </button>
+        {aiOpen ? (
+          <div className="mt-2">
+            <ProviderModelSelector
+              providers={providers}
+              selectedProviderId={selectedProviderId}
+              selectedModel={selectedModel}
+              availableModels={availableModels}
+              onProviderChange={setSelectedProviderId}
+              onModelChange={setSelectedModel}
+              effort={effort}
+              onEffortChange={setEffort}
+              disabled={busy || providersLoading}
+            />
+          </div>
+        ) : null}
+      </div>
+      {providers.length === 0 && !providersLoading ? (
+        <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under Settings → Providers to analyze items. Composing from analyses you already have still works.</p>
+      ) : null}
+      {plan.skipped > 0 ? (
+        <p className="text-[11px] text-gray-500">
+          {formatCount(plan.skipped)} pin{plan.skipped === 1 ? '' : 's'} couldn’t be imported from {plan.skipped === 1 ? 'its' : 'their'} source URL and can’t be analyzed yet.
+        </p>
+      ) : null}
+
+      <div>
+        <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
+        <textarea
+          id="board-style-prompt"
+          value={prompt}
+          rows={5}
+          maxLength={8000}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Compose a style from the item analyses, or write one."
+          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
+        />
+      </div>
+      {negativeShown ? (
+        <div>
+          <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt (optional)</label>
+          <textarea
+            id="board-style-negative"
+            value={negative}
+            rows={2}
+            maxLength={8000}
+            onChange={(e) => setNegative(e.target.value)}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
           />
-          {providers.length === 0 && !providersLoading ? (
-            <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under Settings → Providers to analyze items. Composing from analyses you already have still works.</p>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-2">
-            {showAnalyze ? (
-              <button
-                type="button"
-                onClick={analyzeBoard}
-                disabled={busy || !selectedProviderId}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-              >
-                <ScanEye className="w-4 h-4" aria-hidden="true" />
-                {jobRunning ? jobProgress : 'Analyze board'}
-              </button>
-            ) : null}
-            {showCompose ? (
-              <button
-                type="button"
-                onClick={composeOnly}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-gray-200 hover:text-white disabled:opacity-50 transition-colors"
-              >
-                Compose board style
-              </button>
-            ) : null}
-            {!showAnalyze && !showCompose ? (
-              <p className="text-xs text-gray-500">Pin an image or video to analyze this board.</p>
-            ) : null}
-          </div>
-          {plan.skipped > 0 ? (
-            <p className="text-[11px] text-gray-500">
-              {formatCount(plan.skipped)} pin{plan.skipped === 1 ? '' : 's'} couldn’t be imported from {plan.skipped === 1 ? 'its' : 'their'} source URL and can’t be analyzed yet.
-            </p>
-          ) : null}
-          <details className="group" open={!savedPrompt}>
-            <summary className="cursor-pointer text-xs text-gray-400 hover:text-white select-none">
-              Style prompt{savedPrompt ? `: ${savedPrompt.slice(0, 90)}${savedPrompt.length > 90 ? '…' : ''}` : ''}
-            </summary>
-            <div className="space-y-2 mt-2">
-              <div>
-                <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
-                <textarea
-                  id="board-style-prompt"
-                  value={prompt}
-                  rows={4}
-                  maxLength={8000}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Compose a style from the item analyses, or write one."
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
-                />
-              </div>
-              <div>
-                <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt</label>
-                <textarea
-                  id="board-style-negative"
-                  value={negative}
-                  rows={2}
-                  maxLength={8000}
-                  onChange={(e) => setNegative(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
-                />
-              </div>
-            </div>
-          </details>
-          {board?.style?.rationale ? (
-            <p className="text-xs text-gray-400">{board.style.rationale}</p>
-          ) : null}
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0">
-              <label htmlFor="board-poster-renderer" className="block text-xs text-gray-400 mb-1">Image renderer</label>
-              <select
-                id="board-poster-renderer"
-                value={resolvedMode}
-                onChange={(e) => setRendererMode(e.target.value)}
-                disabled={Boolean(jobId) || rendererOptions.length === 0}
-                className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none max-w-full"
-              >
-                {rendererOptions.length === 0 ? <option value="">Loading renderers…</option> : null}
-                {rendererOptions.map((backend) => (
-                  <option key={backend.id} value={backend.id}>{backend.label}</option>
-                ))}
-              </select>
-            </div>
-            <button
-              type="button"
-              onClick={saveStyle}
-              disabled={!styleDirty || savingStyle || busy}
-              className="px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-gray-200 hover:text-white disabled:opacity-50 transition-colors"
-            >
-              {savingStyle ? 'Saving…' : 'Save style'}
-            </button>
-            <button
-              type="button"
-              onClick={renderPoster}
-              disabled={!canRender || Boolean(jobId)}
-              title={styleDirty ? 'Save the board style first' : (savedPrompt.trim() ? 'Render the poster on the selected image service' : 'Compose a board style first')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
-            >
-              <Sparkles className="w-4 h-4" aria-hidden="true" />
-              {posterSrc ? 'Regenerate poster' : 'Generate poster'}
-            </button>
-          </div>
         </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setNegativeOpen(true)}
+          className="min-h-[36px] text-xs text-port-accent hover:underline"
+        >
+          + Negative prompt (optional)
+        </button>
+      )}
+      {board?.style?.rationale ? (
+        <p className="text-xs text-gray-400">{board.style.rationale}</p>
+      ) : null}
+      <div className="flex flex-wrap items-end gap-2">
+        {styleDirty ? (
+          <button
+            type="button"
+            onClick={saveStyle}
+            disabled={savingStyle || busy}
+            className="min-h-[40px] px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+          >
+            {savingStyle ? 'Saving…' : 'Save style'}
+          </button>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <label htmlFor="board-poster-renderer" className="block text-xs text-gray-400 mb-1">Poster renderer</label>
+          <select
+            id="board-poster-renderer"
+            value={resolvedMode}
+            onChange={(e) => setRendererMode(e.target.value)}
+            disabled={Boolean(jobId) || rendererOptions.length === 0}
+            className="w-full min-h-[40px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+          >
+            {rendererOptions.length === 0 ? <option value="">Loading renderers…</option> : null}
+            {rendererOptions.map((backend) => (
+              <option key={backend.id} value={backend.id}>{backend.label}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={renderPoster}
+          disabled={!canRender || Boolean(jobId)}
+          title={styleDirty ? 'Save the board style first' : (savedPrompt.trim() ? 'Render the poster on the selected image service' : 'Compose a board style first')}
+          className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+        >
+          <Sparkles className="w-4 h-4" aria-hidden="true" />
+          {posterSrc ? 'Regenerate poster' : 'Generate poster'}
+        </button>
       </div>
       {posterSrc ? (
         <Modal
