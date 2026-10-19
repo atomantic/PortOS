@@ -583,3 +583,10 @@ describe('text note render lifecycle (#10531)', () => {
     expect(() => claimItemRender(board(), 'missing')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
   });
 });
+
+
+it('returns the original media pin on retry even at capacity, preserving user edits', () => {
+  const original = { id: 'pin-original', type: 'image', mediaKey: 'image:upload.png', caption: 'Edited caption' };
+  const board = { items: [original, ...Array.from({ length: MAX_ITEMS_PER_BOARD - 1 }, (_, i) => ({ id: `note-${i}`, type: 'text', text: 'Note' }))] };
+  expect(addItem(board, { type: 'image', mediaKey: original.mediaKey, caption: 'Upload caption' })).toEqual({ board, item: original });
+});

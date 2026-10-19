@@ -370,7 +370,7 @@ export const saveCleanResult = (jobId, options = {}) =>
 // Reuse the same upload endpoints as the Prompt page's gallery pickers.
 export async function importGalleryFile(file, options = {}) {
   const extension = file.name.split('.').pop().toLowerCase();
-  if (!file.size) throw new Error('The file is empty.');
+  if (!file.size) throw Object.assign(new Error('The file is empty.'), { code: 'INVALID_MEDIA_FILE' });
   if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)) {
     const saved = await uploadGalleryImage(file, options);
     return { kind: 'image', data: { ...saved, ...saved.metadata }, ref: saved.filename };
@@ -379,7 +379,7 @@ export async function importGalleryFile(file, options = {}) {
     const saved = await uploadGalleryVideo(file, file.name, options);
     return { kind: 'video', data: saved, ref: saved.id };
   }
-  throw new Error('Unsupported type. Use PNG, JPEG, GIF, WebP, MP4, MOV, M4V, WebM, or MKV.');
+  throw Object.assign(new Error('Unsupported type. Use PNG, JPEG, GIF, WebP, MP4, MOV, M4V, WebM, or MKV.'), { code: 'INVALID_MEDIA_FILE' });
 }
 
 export const assignImportedMedia = (collectionId, item, options = {}) => request(

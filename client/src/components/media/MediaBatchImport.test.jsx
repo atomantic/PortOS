@@ -21,7 +21,7 @@ beforeEach(() => {
 describe('shared gallery batch import', () => {
   it('posts a mixed batch through the Prompt gallery endpoints and reports unsupported and failed files independently', async () => {
     const imported = vi.fn();
-    request.mockRejectedValueOnce(new Error('Image decoder rejected the bytes'));
+    request.mockRejectedValueOnce(Object.assign(new Error('Image decoder rejected the bytes'), { code: 'UNSUPPORTED_IMAGE' }));
     render(<MediaBatchImport onImported={imported} />);
     pick([image, video, new File(['x'], 'unsafe.svg'), image]);
     await waitFor(() => expect(imported).toHaveBeenCalledTimes(2));
@@ -134,7 +134,7 @@ it.each([undefined, 'collection-a'])('clears completed rows while later files re
 });
 
 it('keeps failed imports retryable when another batch is selected without retrying them implicitly', async () => {
-  request.mockRejectedValueOnce(new Error('Image decoder rejected the bytes'));
+  request.mockRejectedValueOnce(Object.assign(new Error('Image decoder rejected the bytes'), { code: 'UNSUPPORTED_IMAGE' }));
   render(<MediaBatchImport />);
   pick([image]);
   await screen.findByText(/Image decoder rejected the bytes/);
@@ -157,4 +157,19 @@ it('keeps inspection warnings separate from the completed upload queue', async (
   expect(screen.queryByRole('list', { name: 'Import queue' })).not.toBeInTheDocument();
   expect(screen.getByRole('region', { name: 'Import warnings' })).toHaveTextContent('clip.mp4: Embedded metadata could not be inspected.');
   expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
+});
+
+
+it('keeps uncertain upload outcomes out of retry while allowing definitive failures to recover', async () => {
+  request.mockRejectedValueOnce(new Error('Response lost'));
+  request.mockRejectedValueOnce(Object.assign(new Error('Unsupported video bytes'), { code: 'UNSUPPORTED_VIDEO' }));
+  render(<MediaBatchImport />);
+  pick([image, video]);
+  await screen.findByText(/Unsupported video bytes/);
+  expect(screen.getByRole('region', { name: 'Uploads to check in History' })).toHaveTextContent('Retry will not upload this file again');
+  expect(screen.getByRole('link', { name: 'Check Media History' })).toHaveAttribute('href', '/media/history');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry failed / cancelled' }));
+  await screen.findByText('1 of 2 imported');
+  expect(request.mock.calls.map(([path]) => path)).toEqual(['/image-gen/upload', '/video-gen/upload', '/video-gen/upload']);
+  expect(screen.getByRole('region', { name: 'Uploads to check in History' })).toHaveTextContent('portrait.png');
 });

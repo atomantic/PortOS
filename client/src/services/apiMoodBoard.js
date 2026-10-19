@@ -166,3 +166,12 @@ export const generateMoodBoardImages = (id, data, options) =>
   });
 export const getMoodBoardGeneration = (id, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}/generate`, options);
+
+// Video pins use the filename (not the history id) for playback and sync.
+export const pinImportedMedia = (boardId, { kind, data }, options) => addMoodBoardItem(boardId, {
+  type: kind,
+  mediaKey: `${kind}:${data.filename}`,
+  imageUrl: kind === 'image' ? data.path : data.thumbnail ? `/data/video-thumbnails/${data.thumbnail}` : null,
+  prompt: data.prompt || null,
+  caption: data.prompt?.slice(0, 2000) || null,
+}, options);
