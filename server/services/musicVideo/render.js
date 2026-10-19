@@ -223,6 +223,112 @@ export async function resolveSoundBedPath(project) {
 // its length. Null when the scene is not timed.
 const authoredSpan = (scene) => (sceneHasAuthoredSpan(scene) ? round3(scene.endSec - scene.startSec) : null);
 
+// A composed render's non-footage section — a still, a card or a code shot —
+// or the problem that keeps it out of the render: `untimed` (no authored span
+// to take a length from) or `missing-still` (the selected reference frame is gone).
+function sectionClip(scene, layer, planned, { layered }) {
+  const spanSec = authoredSpan(scene);
+  if (spanSec == null) return { problem: 'untimed' };
+  const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene), ...cutEffectOf(scene, planned) };
+  // A composed render has no code to run: a code shot (#10297) is a black
+  // ground the typography layer draws over, cut exactly like a blank card.
+  if (layer === 'code') return { clip: { ...section, layer: 'card', cardText: '', cardColor: '#000000' } };
+  if (layer === 'card') {
+    // A blank card falls back to the shot's own line, so a silence card is not left black.
+    const cardText = [scene.cardText, scene.lyricText].find((t) => typeof t === 'string' && t.trim())?.trim() || '';
+    return { clip: { ...section, cardText, cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' } };
+  }
+  return stillClip(scene, section, { layered });
+}
+
+function stillClip(scene, section, { layered }) {
+  const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+  if (!imagePath || !existsSync(imagePath)) return { problem: 'missing-still' };
+  // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
+  // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
+  // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
+  const effect = sceneImageEffect(scene, { layered });
+  const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
+  const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
+  return { clip: { ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
+    ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) } };
+}
+
+// A footage shot's verified clip: the history entry's own frame count and
+// dimensions, or the file's when a hosted render (Grok/fal/reactor) recorded
+// none (#8977). Null when the clip file is missing or unreadable, or has no
+// usable length or dimensions — a dimensionless entry would make
+// buildMusicVideoFfmpegArgs emit `scale=undefined:undefined` (opaque ffmpeg
+// failure), so it is reported as a missing clip like the duration guard.
+async function footageGeometry(entry) {
+  const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
+  if (!entry || !videoPath || !existsSync(videoPath)) return null;
+  const measured = entry.numFrames && entry.fps && entry.width && entry.height
+    ? entry
+    : { ...entry, ...(await probeVideoGeometry(videoPath)) };
+  const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
+  if (!duration || duration <= 0) return null;
+  if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) return null;
+  return { videoPath, width: measured.width, height: measured.height, fps: measured.fps || 24, duration };
+}
+
+// Where a footage clip plays on the output timebase. A performance edit trims
+// the source; a hand-set speed and offset (clipSpeedRate / clipOffsetSec)
+// retime it: sectionChain plays it at `rate` and holds its first frame for
+// `leadSec` before the trim, so the in/out points here are output seconds.
+// Source coordinates stay immutable: only retimed clips round to milliseconds,
+// an untouched performance edit keeps its original precision. `sourceSec` is
+// the playable source length from the in-point on.
+function playbackWindow(scene, edit, duration) {
+  const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
+  const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
+  const rate = clipSpeedRate(scene);
+  const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
+  const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
+  const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
+  const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
+  return {
+    rate,
+    leadSec,
+    inSec: retimed ? round3(clampedSourceInSec / rate) : sourceInSec,
+    outSec: retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec,
+    sourceSec: retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec,
+  };
+}
+
+// A footage shot's render clip, or `missing-clip` when its selected take cannot be read.
+async function footageClip(scene, entry, planned) {
+  const geometry = await footageGeometry(entry);
+  if (!geometry) return { problem: 'missing-clip' };
+  const edit = performanceEdit(scene);
+  const { rate, leadSec, inSec, outSec, sourceSec } = playbackWindow(scene, edit, geometry.duration);
+  return { clip: {
+    sceneId: scene.sceneId,
+    videoPath: geometry.videoPath,
+    width: geometry.width,
+    height: geometry.height,
+    fps: geometry.fps,
+    duration: outSec - inSec,
+    // The playable source length survives the beat snap (which rewrites
+    // `duration` to the rendered span) so coverage can be judged against it.
+    sourceSec,
+    // A reversed clip is read once, backwards, and holds its last frame rather than looping.
+    loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
+    ...(clipReversed(scene) ? { reverse: true } : {}),
+    // The director chose to hold the last frame over a shot longer than its clip.
+    ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
+    ...(rate !== 1 ? { rate } : {}),
+    ...(leadSec > 0 ? { leadSec } : {}),
+    inSec,
+    outSec,
+    ...footageFrameFit(scene),
+    // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
+    ...sceneTransitions(scene),
+    // So does a beat toggle on its cut out (musicVideoCutEffects.js).
+    ...cutEffectOf(scene, planned),
+  } };
+}
+
 // Resolve every scene that has a generated i2v clip (`videoHistoryId`) to a
 // verified on-disk path + dims, in scene order. Scenes without a clip yet are
 // skipped (not an error — they're just not rendered). A scene whose clip id
@@ -247,112 +353,33 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
   const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
   const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
-  const missing = [];
-  const missingShots = [];
-  const missingStills = [];
-  const untimed = [];
+  const problems = { 'missing-clip': [], 'missing-still': [], untimed: [] };
   const clips = [];
   for (const scene of scenes) {
     const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
-    if (layer !== 'footage') {
-      const spanSec = authoredSpan(scene);
-      if (spanSec == null) { untimed.push(scene.sceneId); continue; }
-      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene), ...cutEffectOf(scene, planned) };
-      // A composed render has no code to run: a code shot (#10297) is a black
-      // ground the typography layer draws over, cut exactly like a blank card.
-      if (layer === 'code') {
-        clips.push({ ...section, layer: 'card', cardText: '', cardColor: '#000000' });
-        continue;
-      }
-      if (layer === 'card') {
-        // A blank card falls back to the shot's own line, so a silence card is not left black.
-        const cardText = [scene.cardText, scene.lyricText].find((t) => typeof t === 'string' && t.trim())?.trim() || '';
-        clips.push({ ...section, cardText, cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
-        continue;
-      }
-      const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
-      if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
-      // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
-      // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
-      // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
-      const effect = sceneImageEffect(scene, { layered });
-      const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
-      const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
-      clips.push({ ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
-        ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) });
-      continue;
-    }
-    const entry = historyMap.get(scene.videoHistoryId);
-    const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-    if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
-    // Hosted renders (Grok/fal/reactor) record no frame count or dimensions;
-    // measure the file itself rather than reject a clip that exists (#8977).
-    const measured = entry.numFrames && entry.fps && entry.width && entry.height
-      ? entry
-      : { ...entry, ...(await probeVideoGeometry(videoPath)) };
-    const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
-    if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
-    // A dimensionless history entry would make buildMusicVideoFfmpegArgs emit
-    // `scale=undefined:undefined` (opaque ffmpeg failure); treat it as a missing
-    // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
-    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
-    const edit = performanceEdit(scene);
-    const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
-    const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
-    // A hand-set speed and offset (clipSpeedRate / clipOffsetSec) put the clip on the
-    // output timebase: sectionChain plays it at `rate` and holds its first frame for
-    // `leadSec` before the trim, so the in/out points here are output seconds.
-    const rate = clipSpeedRate(scene);
-    const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
-    const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
-    const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
-    const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
-    // Keep source coordinates immutable. Only retimed clips round to milliseconds;
-    // an untouched performance edit keeps its original precision.
-    const playbackInSec = retimed ? round3(clampedSourceInSec / rate) : sourceInSec;
-    const playbackOutSec = retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec;
-    const playableDurationSec = retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec;
-    clips.push({
-      sceneId: scene.sceneId,
-      videoPath,
-      width: measured.width,
-      height: measured.height,
-      fps: measured.fps || 24,
-      duration: playbackOutSec - playbackInSec,
-      // The playable source length (from the in-point on) survives the snap
-      // below (which rewrites `duration` to the rendered span) so coverage can
-      // be judged against it.
-      sourceSec: playableDurationSec,
-      // A reversed clip is read once, backwards, and holds its last frame rather than looping.
-      loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
-      ...(clipReversed(scene) ? { reverse: true } : {}),
-      // The director chose to hold the last frame over a shot longer than its clip.
-      ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
-      ...(rate !== 1 ? { rate } : {}),
-      ...(leadSec > 0 ? { leadSec } : {}),
-      inSec: playbackInSec,
-      outSec: playbackOutSec,
-      ...footageFrameFit(scene),
-      // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
-      ...sceneTransitions(scene),
-      // So does a beat toggle on its cut out (musicVideoCutEffects.js).
-      ...cutEffectOf(scene, planned),
+    const { clip, problem } = layer === 'footage'
+      ? await footageClip(scene, historyMap.get(scene.videoHistoryId), planned)
+      : sectionClip(scene, layer, planned, { layered });
+    if (clip) clips.push(clip);
+    else problems[problem].push(scene);
+  }
+  const missingShots = problems['missing-clip'];
+  if (missingShots.length > 0) {
+    const one = missingShots.length === 1;
+    throw new ServerError(`${nameShots(project, missingShots.map((s) => s.sceneId))}: the selected clip file ${one ? 'is' : 'are'} missing or unreadable. Pick another take or render a new one`, {
+      status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missingShots.map((s) => s.videoHistoryId) },
     });
   }
-  if (missing.length > 0) {
-    const one = missing.length === 1;
-    throw new ServerError(`${nameShots(project, missingShots)}: the selected clip file ${one ? 'is' : 'are'} missing or unreadable. Pick another take or render a new one`, {
-      status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
+  if (problems['missing-still'].length > 0) {
+    const sceneIds = problems['missing-still'].map((s) => s.sceneId);
+    throw new ServerError(`${nameShots(project, sceneIds)}: no still frame to show. Generate or pick one first`, {
+      status: 404, code: 'MISSING_STILLS', context: { sceneIds },
     });
   }
-  if (missingStills.length > 0) {
-    throw new ServerError(`${nameShots(project, missingStills)}: no still frame to show. Generate or pick one first`, {
-      status: 404, code: 'MISSING_STILLS', context: { sceneIds: missingStills },
-    });
-  }
-  if (untimed.length > 0) {
-    throw new ServerError(`${nameShots(project, untimed)}: give ${untimed.length === 1 ? 'this still or card' : 'these stills or cards'} a start and end time`, {
-      status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds: untimed },
+  if (problems.untimed.length > 0) {
+    const sceneIds = problems.untimed.map((s) => s.sceneId);
+    throw new ServerError(`${nameShots(project, sceneIds)}: give ${sceneIds.length === 1 ? 'this still or card' : 'these stills or cards'} a start and end time`, {
+      status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds },
     });
   }
   return clips;
