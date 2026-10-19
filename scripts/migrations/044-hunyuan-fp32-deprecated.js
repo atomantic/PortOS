@@ -1,7 +1,7 @@
 /**
  * Pin HunyuanVideo to fp32 + mark it deprecated on the macOS video catalog.
  *
- * `scripts/generate_hunyuan.py` previously defaulted to fp16, which silently
+ * The Hunyuan generate script (since removed) previously defaulted to fp16, which silently
  * trips an MPS matmul assertion ("Destination NDArray and Accumulator NDArray
  * cannot have different datatype") within ~2s of the first forward pass.
  * Verified empirically that bf16 hits the same assertion — only fp32 across

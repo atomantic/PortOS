@@ -4,7 +4,7 @@
  * Registers an interval job that periodically runs the CDP scrape of the
  * signed-in YouTube history page (see youtubeSync.js). Shape shared with the
  * iMessage/Signal/Spotify schedulers via `createSyncScheduler`
- * (server/lib/createSettingsGatedSyncScheduler.js).
+ * (server/services/createSettingsGatedSyncScheduler.js).
  *
  * OFF by default: only registered when the user has opted in via Settings →
  * YouTube (`settings.youtube.enabled`) AND is logged into YouTube in the managed

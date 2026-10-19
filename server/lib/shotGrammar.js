@@ -6,7 +6,7 @@
  *
  * Pure and dependency-free (no imports) so it's shared without a cycle by the
  * three layers that touch the shot shape:
- *   - server/lib/sceneExtractor.js  — sanitizes LLM-emitted shots
+ *   - server/services/sceneExtractor.js  — sanitizes LLM-emitted shots
  *   - server/lib/validation.js      — the Zod enum for the storyboards stage shot schema
  *   - server/lib/editorial/checkRegistry.js — the visual.shot-continuity check
  *     reasons over `shotType` (monotony) + `screenDirection` (180°-rule axis reversal)

@@ -159,7 +159,7 @@ export async function listStyles() {
  * Reads the `deleted` MIRROR COLUMN, not the JSONB flag listUniverses filters
  * on. Those cannot disagree: every write path derives both from the same
  * `record` in the same statement with the same predicate — `writeRaw` above and
- * the one-time file import (`scripts/migrateUniversesToDB.js`) each bind
+ * the one-time file import (`server/scripts/migrateUniversesToDB.js`) each bind
  * `record.deleted === true` into the column, and the sanitizer the service
  * filters on (`sanitizeSoftDeleteFields`, lib/syncWire.js) computes
  * `raw?.deleted === true` off the same field. There is no third writer, and no

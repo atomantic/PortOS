@@ -4,7 +4,7 @@
  * Registers an interval job that periodically runs the incremental Spotify
  * recently-played ingestion (see spotifySync.js). Shape shared with the
  * iMessage/Signal/YouTube schedulers via `createSyncScheduler`
- * (server/lib/createSettingsGatedSyncScheduler.js).
+ * (server/services/createSettingsGatedSyncScheduler.js).
  *
  * OFF by default: the scheduler is only registered when the user has connected
  * Spotify AND opted in via Settings → Spotify (`settings.spotify.enabled`). The

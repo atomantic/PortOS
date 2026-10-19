@@ -1,5 +1,5 @@
 /**
- * Root paths the Eidoverse Worlds sequencer owns (from its server/routes.ts
+ * Root paths the Eidoverse Worlds sequencer owns (from its routes.ts
  * matchers: exact + prefix). Import-free leaf so Vite, drift guards, and the
  * reverse-proxy can share one list without dragging Express into the graph.
  *

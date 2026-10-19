@@ -13,7 +13,7 @@
  * coalesces onto the in-flight run. Late-connecting clients receive the last
  * broadcast frame via attachSseClient's replay grace window in lib/sseUtils.js.
  *
- * Frame shapes (consumed by client/src/hooks/useStoryStepProgress.js):
+ * Frame shapes (consumed by client/src/hooks/useStoryStepRuns.jsx):
  *   { type: 'start',    runId, stepId, op }
  *   { type: 'progress', label, phase }        // phase labels during the run
  *   { type: 'complete', runId, stepId, op, changes, rationale, providerId, model }

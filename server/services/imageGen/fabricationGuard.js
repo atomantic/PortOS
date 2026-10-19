@@ -71,7 +71,7 @@ export const noFabricationClause = (toolName) =>
  */
 export async function checkFabrication(scratchDir, toolName) {
   // Recursive listing rather than a hand-rolled walk so the rule is the same at
-  // every depth — a `scripts/draw.py` or a nested `__pycache__` counts exactly
+  // every depth — a `draw.py` or a nested `__pycache__` counts exactly
   // as much as one dropped beside the output.
   //
   // A scan that FAILS is not a scan that found nothing. ENOENT is a real clean
