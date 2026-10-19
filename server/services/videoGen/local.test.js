@@ -787,6 +787,29 @@ describe('stitchVideos — history provenance', () => {
       expect(stitched).not.toHaveProperty('streamingPolicyApplied');
     });
   });
+
+  // LoRA application strategy (#12262). Each chunk's child decides whether an
+  // adapter applied at inference or was merged and re-quantized, so a stitched
+  // clip may claim a strategy only when every chunk agrees on it.
+  describe('LoRA strategy outcome', () => {
+    const applied = (strategy, quantizedTargets = 480) => ({
+      loraStrategyApplied: {
+        adapters: [{ role: 'user', name: 'character.safetensors', strategy, stages: ['all'], strength: 0.8, quantizedTargets, fusedTargets: 0 }],
+      },
+    });
+
+    it('inherits a unanimous outcome even when target counts differ', async () => {
+      const stitched = await stitchHistory(applied('runtime-delta'), applied('runtime-delta', 479));
+
+      expect(stitched.loraStrategyApplied).toEqual(applied('runtime-delta').loraStrategyApplied);
+    });
+
+    it('omits the outcome when the chunks applied the adapter differently', async () => {
+      const stitched = await stitchHistory(applied('runtime-delta'), applied('merged-requantized'));
+
+      expect(stitched).not.toHaveProperty('loraStrategyApplied');
+    });
+  });
 });
 
 describe('extractLastFrame — anchor selection', () => {

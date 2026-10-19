@@ -375,16 +375,21 @@ describe('runVideoUpscale — success', () => {
   // factor they read off the adapter before the pipeline loads. Those are
   // provenance: a clip must be traceable to the exact runtime and the rule it
   // enforced, the way a plain render's row carries `runtime` (#6512).
-  it('records the runtime fingerprint and measured reference factor the runner reports', async () => {
+  it('records the runtime fingerprint, measured reference factor and adapter strategy the runner reports', async () => {
     const fingerprint = { runtime: 'ltx25', versions: { mlx: '0.32.0' }, chip: 'Apple Mx' };
+    // #12262: whether the adapter applied at inference or was merged and
+    // re-quantized decides whether a low-bit upscale kept its effect.
+    const loraStrategy = { adapters: [{ role: 'ic', name: 'upscaler.safetensors', strategy: 'runtime-delta', stages: ['stage-1'], strength: 1, quantizedTargets: 480, fusedTargets: 0 }] };
     const entry = await runWith(() => {
       state.child.stderr.emit('data', 'UPSCALE_REFERENCE_DOWNSCALE:2\n');
       state.child.stderr.emit('data', `RUNTIME:${JSON.stringify(fingerprint)}\n`);
       state.child.stderr.emit('data', 'STAGE:inference\n');
+      state.child.stderr.emit('data', `LORASTRATEGY:${JSON.stringify(loraStrategy)}\n`);
       finishChild(0);
     });
     expect(entry.upscaleReferenceDownscale).toBe(2);
     expect(entry.runtime).toEqual(fingerprint);
+    expect(entry.loraStrategyApplied).toEqual(loraStrategy);
   });
 
   it('keeps a malformed fingerprint line off the row instead of half-parsing it', async () => {
@@ -422,6 +427,7 @@ describe('runVideoUpscale — success', () => {
     // guessed factor or a half-parsed fingerprint.
     expect(entry.upscaleReferenceDownscale).toBeUndefined();
     expect(entry.runtime).toBeUndefined();
+    expect(entry).not.toHaveProperty('loraStrategyApplied');
     // The source render's timing must not ride along on a row that only paid
     // for the upscale.
     expect(entry.renderStartedAt).not.toBe('2026-01-01T00:00:00.000Z');

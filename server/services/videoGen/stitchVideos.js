@@ -55,6 +55,22 @@ const unanimousStreamingPolicyOutcome = (videos) => {
     : {};
 };
 
+// Fold the per-chunk LORASTRATEGY: reports into one claim, or none (#12262).
+// Unanimity is on each adapter's name + strategy, so a chain whose chunks all
+// applied the same adapters the same way keeps the claim and a chain that
+// mixed strategies makes none.
+const loraStrategySignature = (applied) => JSON.stringify(
+  (applied?.adapters || []).map((a) => [a?.role, a?.name, a?.strategy]),
+);
+const unanimousLoraStrategyOutcome = (videos) => {
+  const first = videos[0]?.loraStrategyApplied;
+  if (first === undefined) return {};
+  const signature = loraStrategySignature(first);
+  return videos.every((v) => v?.loraStrategyApplied && loraStrategySignature(v.loraStrategyApplied) === signature)
+    ? { loraStrategyApplied: first }
+    : {};
+};
+
 export async function stitchVideos(videoIds, opts = {}) {
   const {
     id = randomUUID(),
@@ -282,6 +298,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         // false fidelity claim this field exists to prevent.
         ...unanimousDraftDecodeOutcome(videos),
         ...unanimousStreamingPolicyOutcome(videos),
+        ...unanimousLoraStrategyOutcome(videos),
         // Inherit applied LoRAs from the first constituent clip (a chunk chain
         // shares one LoRA set across all chunks), so the visible stitched entry
         // round-trips LoRAs on Remix the same way a single render does — mirrors

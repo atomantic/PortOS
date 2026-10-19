@@ -217,6 +217,14 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         return false;
       }
     }
+    if (line.startsWith(LORA_STRATEGY_LINE_PREFIX)) {
+      const report = parseLoraStrategyLine(line);
+      // Malformed payload — fall through to raw-logging (same as RUNTIME: above).
+      if (!report) return false;
+      job.loraStrategy = report;
+      console.log(`🧩 LoRA strategy [${jobId.slice(0, 8)}] ${report.adapters.map((a) => `${a?.name || '?'}=${a?.strategy || '?'}`).join(', ')}`);
+      return true;
+    }
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
@@ -375,6 +383,28 @@ export function parseRuntimeFingerprintLine(line) {
   try {
     const fp = JSON.parse(line.slice(RUNTIME_LINE_PREFIX.length));
     return fp && typeof fp === 'object' ? fp : null;
+  } catch {
+    return null;
+  }
+}
+
+// How each LoRA adapter was applied (#12262): `scripts/ltx_runtime_lora.py
+// AdapterReport.emit`. A quantized pack can apply a delta at inference or merge
+// and re-quantize it (which can erase most of it), so the record keeps the
+// outcome beside the request. Shared by the render path and the upscale job.
+export const LORA_STRATEGY_LINE_PREFIX = 'LORASTRATEGY:';
+
+/**
+ * The `{ adapters: [...] }` payload of a `LORASTRATEGY:<json>` line, or null
+ * when the line is not one or its payload is malformed.
+ * @param {string} line - one trimmed child-output line
+ * @returns {{ adapters: object[] }|null}
+ */
+export function parseLoraStrategyLine(line) {
+  if (typeof line !== 'string' || !line.startsWith(LORA_STRATEGY_LINE_PREFIX)) return null;
+  try {
+    const report = JSON.parse(line.slice(LORA_STRATEGY_LINE_PREFIX.length));
+    return Array.isArray(report?.adapters) ? report : null;
   } catch {
     return null;
   }
@@ -855,6 +885,10 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
           // decision, and (when active) the render's peak MLX memory. Absent on
           // a resident-by-default render and on runners that don't report one.
           ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
+          // How each LoRA adapter was actually applied (#12262) — at inference
+          // beside the packed weights, fused into float ones, or merged and
+          // re-quantized under block streaming. Absent on adapter-free renders.
+          ...(job.loraStrategy ? { loraStrategyApplied: job.loraStrategy } : {}),
         });
         return history;
       });
