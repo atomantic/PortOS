@@ -42,6 +42,7 @@ const CMD_UNCARRYABLE_RE = /["%\r\n]/;
 // (`"%dp0%\…" %*`) and legacy (`"%~dp0\…" %*`) cmd-shim layouts.
 const CMD_SHIM_TARGET_RE = /"%~?dp0%?\\([^"]+)"\s+%\*/g;
 const CMD_SHIM_NODE_RE = /%~?dp0%?\\node\.exe"/i;
+const WINDOWS_BATCH_ARG_UNSAFE = 'WINDOWS_BATCH_ARG_UNSAFE';
 
 function escapeCmdMetachars(value, carets) {
   const str = String(value);
@@ -87,20 +88,23 @@ function resolveCmdShimLaunch(shimPath, searchEnv) {
  * command path is not re-parsed and gets one level. An argument cmd.exe
  * cannot carry at all (CMD_UNCARRYABLE_RE — agent prompts on argv) bypasses
  * cmd.exe by launching the shim's target directly; when the shim is not one
- * that can be resolved, the launch is refused rather than handing untrusted
- * text to cmd.exe's parser. `searchEnv` is the child's env, so the bypass
+ * that can be resolved, the launch is refused (a child that prints
+ * WINDOWS_BATCH_ARG_UNSAFE and exits 1) rather than handing untrusted text to
+ * cmd.exe's parser. `searchEnv` is the child's env, so the bypass
  * picks the same `node` the shim would have.
  */
 export function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32', searchEnv = process.env) {
   if (!isWin32 || !WIN_BATCH_EXT_RE.test(command)) return { command, args };
   if (args.some((arg) => CMD_UNCARRYABLE_RE.test(String(arg)))) {
     const direct = resolveCmdShimLaunch(command, searchEnv);
-    if (!direct) {
-      const error = new Error(`Cannot pass this argument safely through cmd.exe to ${command}: it contains a double quote, percent sign, or line break, and the batch file is not an npm shim that can be launched directly. Install the CLI with npm or as a native .exe.`);
-      error.code = 'WINDOWS_BATCH_ARG_UNSAFE';
-      throw error;
-    }
-    return { command: direct.command, args: [...direct.args, ...args] };
+    if (direct) return { command: direct.command, args: [...direct.args, ...args] };
+    // Refuse as a launch that fails, not a throw: callers prepare outside their
+    // spawn-failure boundaries, and a child that exits 1 with this on stderr
+    // reaches every caller's existing failure, result and cleanup path.
+    return {
+      command: process.execPath,
+      args: ['-e', 'process.stderr.write(process.argv[1] + "\\n"); process.exit(1)', `${WINDOWS_BATCH_ARG_UNSAFE}: cannot pass an argument containing a double quote, percent sign or line break through cmd.exe to ${command}, which is not an npm shim PortOS can launch directly. Install the CLI with npm or as a native .exe.`],
+    };
   }
   return {
     command: 'cmd.exe',

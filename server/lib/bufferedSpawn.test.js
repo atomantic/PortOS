@@ -502,8 +502,10 @@ describe('prepareWindowsSafeSpawn — argv cmd.exe cannot carry (#12346)', () =>
   it('refuses a batch file it cannot bypass rather than passing the prompt to cmd.exe', async () => {
     const shim = join(shimDir, 'custom.bat');
     await writeFile(shim, '@echo off\r\necho %*\r\n');
-    expect(() => prepareWindowsSafeSpawn(shim, ['--prompt', HOSTILE_PROMPT], true))
-      .toThrow(expect.objectContaining({ code: 'WINDOWS_BATCH_ARG_UNSAFE' }));
+    const result = prepareWindowsSafeSpawn(shim, ['--prompt', HOSTILE_PROMPT], true);
+    expect(result.command).toBe(process.execPath);
+    expect(result.args.join(' ')).not.toContain(HOSTILE_PROMPT);
+    expect(result.args.at(-1)).toMatch(/^WINDOWS_BATCH_ARG_UNSAFE: /);
   });
 
   it.runIf(process.platform === 'win32')('delivers hostile arguments verbatim through a real npm shim', async () => {
