@@ -226,6 +226,7 @@ vi.mock('../memoryBackend.js', async () => ({
 }));
 vi.mock('../catalogDB.js', async () => ({
   getCatalogBundleForRef: vi.fn(),
+  getLocalIngredientRefOwnership: vi.fn(),
 }));
 vi.mock('../catalogSync.js', async () => ({
   applyRemoteChanges: vi.fn(),
@@ -316,7 +317,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
-import { getCatalogBundleForRef } from '../catalogDB.js';
+import { getCatalogBundleForRef, getLocalIngredientRefOwnership } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 import { contentHashForRecord, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
@@ -441,6 +442,7 @@ beforeEach(async () => {
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
+  vi.mocked(getLocalIngredientRefOwnership).mockReset().mockResolvedValue({ existing: new Set(), linked: new Set() });
   vi.mocked(getCatalogBundleForRef).mockReset().mockResolvedValue({ ingredients: [], refs: [] });
   vi.mocked(applyCatalogRemoteChanges).mockReset().mockResolvedValue({ errors: [] });
 
@@ -3611,23 +3613,57 @@ describe('peerSync', () => {
         expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
       });
 
-      it('does not let a music-video push overwrite a local track the local project does not link', async () => {
+      describe('bundled catalog ingredients owned by another record (#12466)', () => {
+        const ing = (id) => ({ id, type: 'character', name: id, updatedAt: '2026-01-02T00:00:00Z' });
+        const ref = (ingredientId) => ({ ingredientId, refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' });
+        const pushBundle = (catalogBundle) => applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [], catalogBundle,
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        const ownership = (existing, linked = []) => ({ existing: new Set(existing), linked: new Set(linked) });
+
+        beforeEach(() => {
+          vi.mocked(getBackendName).mockReturnValue('postgres');
+        });
+
+        it('drops an existing ingredient another record owns, with its forged ref, and merges the rest', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockResolvedValue(ownership(['cat-victim', 'cat-mine'], ['cat-mine']));
+          await pushBundle({
+            ingredients: [ing('cat-victim'), ing('cat-mine'), ing('cat-new')],
+            refs: [ref('cat-victim'), ref('cat-mine'), ref('cat-new')],
+          });
+          expect(getLocalIngredientRefOwnership).toHaveBeenCalledWith(['cat-victim', 'cat-mine', 'cat-new'], 'universe', 'u1');
+          const arg = vi.mocked(applyCatalogRemoteChanges).mock.calls[0][0];
+          expect(arg.ingredients).toEqual([ing('cat-mine'), ing('cat-new')]);
+          expect(arg.refs).toEqual([ref('cat-mine'), ref('cat-new')]);
+        });
+
+        it('applies nothing when the only ingredient belongs to another record, even with no bundled row', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockResolvedValue(ownership(['cat-victim']));
+          await pushBundle({ ingredients: [], refs: [ref('cat-victim')] });
+          expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+        });
+
+        it('fails closed when the local ownership lookup throws', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockRejectedValue(new Error('db unavailable'));
+          await pushBundle({ ingredients: [ing('cat-new')], refs: [ref('cat-new')] });
+          expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+        });
+      });
+
+      it('never lets a music-video push overwrite an existing local track, linked by the project or not (#12466)', async () => {
         const linkedTrack = { id: 'track-victim', title: 'Hijacked', ...live };
         const push = (record) => applyIncomingPush({
           kind: 'musicVideoProject', record: { ...record, ...live }, linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
         });
         vi.mocked(getTrack).mockResolvedValue({ id: 'track-victim', title: 'Mine' });
 
-        // No local copy of the project, or one linking a different track: refused.
+        // First push points the project at the victim track; the second finds
+        // that link already stored locally — neither may overwrite the track.
         await push({ id: 'mv-new', trackId: 'track-victim' });
-        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-old', trackId: 'track-mine' });
-        await push({ id: 'mv-old', trackId: 'track-victim' });
+        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-new', trackId: 'track-victim' });
+        await push({ id: 'mv-new', trackId: 'track-victim' });
         expect(mergeTracksFromSync).not.toHaveBeenCalled();
-
-        // The local copy already links this track: the update merges.
-        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-linked', trackId: 'track-victim' });
-        await push({ id: 'mv-linked', trackId: 'track-victim' });
-        expect(mergeTracksFromSync).toHaveBeenCalledWith([linkedTrack], SOURCE);
       });
 
       it('merges a linkedTrack that does not exist locally yet', async () => {
