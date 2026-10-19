@@ -1,6 +1,7 @@
 import { __testing as standardizerInternals } from './pm2Standardizer.js';
 import { mkdtempSync as makeTempDir, writeFileSync as writeFixture, readFileSync as readFixture, rmSync as removeFixture } from 'fs';
 import { join as joinPath, relative as relativePath } from 'path';
+import { symlinkSync } from 'fs';
 import { tmpdir as osTmpDir } from 'os';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
@@ -414,6 +415,8 @@ describe('model-authored plan fields at the apply sink', () => {
     try {
       writeFixture(joinPath(repo, '.env'), 'PORT=3000\nKEEP=1\n');
       writeFixture(joinPath(outside, '.env'), 'PORT=3000\nSECRET=1\n');
+      writeFixture(joinPath(outside, 'linked.env'), 'PORT=3000\nLINKED=1\n');
+      symlinkSync(joinPath(outside, 'linked.env'), joinPath(repo, 'planted.env'));
       const escape = relativePath(repo, joinPath(outside, '.env'));
       const plan = {
         currentState: { hasGit: false },
@@ -422,6 +425,7 @@ describe('model-authored plan fields at the apply sink', () => {
           createEcosystem: true,
           strayPorts: [
             { file: escape, variable: 'PORT', action: 'remove' },
+            { file: 'planted.env', variable: 'PORT', action: 'remove' },
             { file: '.env', variable: '|', action: 'remove' },
             { file: '.env', variable: 'PORT', action: 'remove' },
           ],
@@ -429,6 +433,7 @@ describe('model-authored plan fields at the apply sink', () => {
       };
       const result = await applyStandardization(repo, plan, { skipBackup: true });
       expect(readFixture(joinPath(outside, '.env'), 'utf-8')).toBe('PORT=3000\nSECRET=1\n');
+      expect(readFixture(joinPath(outside, 'linked.env'), 'utf-8')).toBe('PORT=3000\nLINKED=1\n');
       expect(readFixture(joinPath(repo, '.env'), 'utf-8')).toBe('KEEP=1\n');
       expect(result.filesModified).toEqual(['ecosystem.config.cjs', '.env (removed PORT)']);
     } finally {

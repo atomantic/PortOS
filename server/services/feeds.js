@@ -74,10 +74,14 @@ async function ensureItemsSorted() {
  * never closed it (a 2 KB `<title>` plus spaces took 13 s), and feeds refresh
  * on a schedule from servers PortOS does not control.
  */
+// ASCII-only fold keeps `lower` the same length as `xml`; a full toLowerCase()
+// expands characters such as U+0130 and would skew the offsets below.
+const asciiLower = (text) => text.replace(/[A-Z]+/g, (run) => run.toLowerCase());
+
 const extractTag = (xml, tag) => {
-  const lower = xml.toLowerCase();
-  const open = `<${tag.toLowerCase()}`;
-  const close = `</${tag.toLowerCase()}>`;
+  const lower = asciiLower(xml);
+  const open = `<${asciiLower(tag)}`;
+  const close = `</${asciiLower(tag)}>`;
   for (let from = 0; ; ) {
     const start = lower.indexOf(open, from);
     if (start === -1) return '';

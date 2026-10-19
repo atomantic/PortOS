@@ -43,8 +43,12 @@ const CONTAINER_OPEN_RE = /<(script|style|head|noscript)\b/gi;
 // any sender reaches this): 200 KB of bare `<head>` stalled the loop for
 // seconds. Index scanning keeps the old semantics — an unclosed container is
 // left in place — in linear time.
+// ASCII-only fold: tag names are ASCII, and a full `toLowerCase()` can change
+// the string length (U+0130 expands), which would skew every index below.
+const asciiLower = (text) => text.replace(/[A-Z]+/g, (run) => run.toLowerCase());
+
 function stripContainerElements(html) {
-  const lower = html.toLowerCase();
+  const lower = asciiLower(html);
   // Next close position per tag, so a run of unclosed opens does not rescan
   // to the end for each one (-1 = no close anywhere after the cached search).
   const nextClose = new Map();

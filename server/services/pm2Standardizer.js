@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, writeFile, readdir, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, relative } from 'path';
 import { exec, spawn } from '../lib/childProcess.js';
@@ -652,14 +652,16 @@ export async function applyStandardization(
     if (stray.action !== 'remove') continue;
 
     // Contain both model-chosen fields at the sink: the file must resolve
-    // inside the repository and the variable must be a bare identifier before
-    // it becomes a RegExp.
+    // inside the repository (after following symlinks, so a planted `.env`
+    // link cannot aim the write at a host file) and the variable must be a
+    // bare identifier before it becomes a RegExp.
     const filePath = join(repoPath, String(stray.file ?? ''));
-    if (!isPathInsideDir(repoPath, filePath) || !STRAY_VARIABLE_RE.test(String(stray.variable ?? ''))) {
+    if (!existsSync(filePath)) continue;
+    const [realFile, realRepo] = await Promise.all([realpath(filePath).catch(() => null), realpath(repoPath).catch(() => null)]);
+    if (!realFile || !realRepo || !isPathInsideDir(realRepo, realFile) || !STRAY_VARIABLE_RE.test(String(stray.variable ?? ''))) {
       console.warn(`⚠️ PM2 standardizer skipped a stray-port edit outside the plan contract: ${stray.file} / ${stray.variable}`);
       continue;
     }
-    if (!existsSync(filePath)) continue;
 
     const content = await tryReadFile(filePath);
     if (!content) continue;

@@ -56,6 +56,8 @@ describe('htmlToText on hostile container tags', () => {
     expect(htmlToText('<head>a<head>b</head>c')).toBe('c');
     expect(htmlToText('<p>before</p><style>unclosed body text')).toBe('before\nunclosed body text');
     expect(htmlToText('<SCRIPT>x</script>kept<Style>y</STYLE>')).toBe('kept');
+    // A character whose lowercase form is longer must not shift the offsets.
+    expect(htmlToText('<script>\u0130</script>x')).toBe('x');
   });
 
   it('stays linear on a document made of unclosed container tags', () => {
