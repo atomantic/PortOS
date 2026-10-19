@@ -11,17 +11,14 @@
  *
  * This periodic sweep deletes `init-`/`ref-`-prefixed files in `data/image-refs`
  * that are BOTH:
- *   (a) not referenced by any gallery sidecar's `initImageFilename` /
- *       `referenceImageFilenames` basenames, AND
+ *   (a) not referenced by any gallery sidecar's applied, requested or omitted
+ *       input filenames, AND
  *   (b) older than a grace window.
  *
  * Why BOTH gates (not either):
- * - The reference check alone is unsafe — the codex backend does NOT record an
- *   `initImageFilename` in its sidecar, so a still-wanted init upload behind a
- *   codex render would look unreferenced. The age gate is the backstop: a file
- *   younger than the window is spared regardless, covering codex lineage and
- *   renders still in flight (the staged file exists before its sidecar is
- *   written).
+ * - The reference check alone is unsafe — newly staged inputs exist before a
+ *   render publishes its sidecar. The age gate spares those in-flight uploads
+ *   and gives legacy uploads without recorded lineage a grace window.
  * - The age check alone is unsafe — a long-lived gallery image that still
  *   points at an old init upload would lose its lineage source. The reference
  *   check protects those: any basename a kept sidecar names is never swept,
@@ -38,7 +35,9 @@
 
 import { readdir, stat } from 'fs/promises';
 import { join, basename } from 'path';
-import { PATHS, tryReadFile, safeJSONParse, unlinkGuarded } from '../lib/fileUtils.js';
+import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
+import { readJSONFileStrict, unreadableStoreError } from '../lib/jsonIo.js';
+import { isPlainObject } from '../lib/objects.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 // `init-<uuid>` / `ref-<uuid>` with a decodable image extension — the exact
@@ -49,7 +48,7 @@ const STAGED_UPLOAD_RE = /^(?:init|ref)-[0-9a-f-]+\.(?:png|jpe?g|webp)$/i;
 // Grace window before an unreferenced staged upload is eligible for deletion.
 // Measured against the file's mtime. Generous on purpose: the cost of a stale
 // upload lingering an extra week is trivial next to deleting an init/reference
-// source a render (e.g. a sidecar-less codex edit) still depends on.
+// source before its render publishes the sidecar.
 export const ORPHAN_REF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // How often the sweep runs once started. These files are cheap to leave around,
@@ -58,8 +57,9 @@ const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Scan every gallery sidecar and collect the set of `data/image-refs` basenames
- * any kept image still references (`initImageFilename` + `referenceImageFilenames`).
- * A basename in this set is never swept regardless of age.
+ * any kept image still references, including requested or omitted provider inputs.
+ * A basename in this set is never swept regardless of age. An incomplete scan
+ * rejects before the sweep deletes anything; only a missing gallery is empty.
  *
  * Reads the `*.metadata.json` sidecars directly rather than going through
  * `listGallery()` so the dir is injectable for tests and we don't pay for the
@@ -67,20 +67,34 @@ const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
  */
 export async function collectReferencedRefBasenames(imagesDir = PATHS.images) {
   const referenced = new Set();
-  // A missing/unreadable images dir yields [] (no sidecars → nothing referenced).
-  const entries = await readdir(imagesDir).catch(() => []);
+  const entries = await readdir(imagesDir).catch(err => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
   for (const name of entries) {
     if (!name.endsWith('.metadata.json')) continue;
-    const raw = await tryReadFile(join(imagesDir, name));
-    if (raw == null) continue;
-    const meta = safeJSONParse(raw, {});
-    if (typeof meta.initImageFilename === 'string' && meta.initImageFilename) {
-      referenced.add(basename(meta.initImageFilename));
+    const path = join(imagesDir, name);
+    const { ok, value: meta } = await readJSONFileStrict(path, null, { logError: false });
+    // Even ENOENT here is an incomplete scan: a listed sidecar disappearing
+    // can be an in-flight replacement, not proof that its inputs are orphaned.
+    if (!ok || !isPlainObject(meta)) throw unreadableStoreError(path);
+    const filenames = [];
+    if (meta.initImageFilename != null) filenames.push(meta.initImageFilename);
+    if (meta.referenceImageFilenames != null) {
+      if (!Array.isArray(meta.referenceImageFilenames)) throw unreadableStoreError(path);
+      filenames.push(...meta.referenceImageFilenames);
     }
-    if (Array.isArray(meta.referenceImageFilenames)) {
-      for (const f of meta.referenceImageFilenames) {
-        if (typeof f === 'string' && f) referenced.add(basename(f));
+    for (const field of ['requestedInputImages', 'omittedInputImages']) {
+      if (meta[field] == null) continue;
+      if (!Array.isArray(meta[field])) throw unreadableStoreError(path);
+      for (const input of meta[field]) {
+        if (!isPlainObject(input)) throw unreadableStoreError(path);
+        filenames.push(input.filename);
       }
+    }
+    for (const filename of filenames) {
+      if (typeof filename !== 'string') throw unreadableStoreError(path);
+      if (filename) referenced.add(basename(filename));
     }
   }
   return referenced;
@@ -119,7 +133,7 @@ export async function sweepOrphanRefImages({
       continue;
     }
     // mtime backstop — spare anything younger than the grace window so a
-    // sidecar-less codex render or an in-flight render isn't swept early. A
+    // legacy sidecar-less render or an in-flight render isn't swept early. A
     // stat failure means the file vanished under us; skip it silently.
     const info = await stat(join(refsDir, name)).catch(() => null);
     if (!info) continue;
