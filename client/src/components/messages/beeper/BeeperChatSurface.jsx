@@ -400,8 +400,10 @@ export default function BeeperChatSurface({
 
   const [people, setPeople] = useState([]);
   const [linkingId, setLinkingId] = useState(null);
-  const [writePending, setWritePending] = useState(false);
-  const [purging, setPurging] = useState(false);
+  // The conversation ids whose rail write / purge is in flight, so a pending
+  // write on one conversation never disables or spins another one's controls.
+  const [writePendingId, setWritePendingId] = useState(null);
+  const [purgingId, setPurgingId] = useState(null);
 
   // A PortOS-side draft buffer, keyed by conversation, so a half-written
   // message survives switching threads AND leaving the page. It is deliberately
@@ -416,6 +418,11 @@ export default function BeeperChatSurface({
   // burst can put several list fetches in flight at once.
   const listGenRef = useRef(0);
   const threadGenRef = useRef(0);
+  // The conversation `conversation`/`messages` belong to. The composer sends to
+  // the URL's conversation, so a write that settles for any other id must stay
+  // off the thread, and a switch must not leave the previous conversation's
+  // header, roster and messages on screen while the new one loads or fails.
+  const threadIdRef = useRef(null);
 
   const scope = savedScope || LIVE_SYSTEM_SCOPES.has(scopeParam) || scopeParam.startsWith(NETWORK_SCOPE_PREFIX)
     ? scopeParam
@@ -504,6 +511,7 @@ export default function BeeperChatSurface({
 
   const loadThread = useCallback(async (id) => {
     if (!id) {
+      threadIdRef.current = null;
       setConversation(null);
       setMessages([]);
       setMessageCursor(null);
@@ -512,6 +520,12 @@ export default function BeeperChatSurface({
       return;
     }
     const generation = ++threadGenRef.current;
+    if (threadIdRef.current !== id) {
+      threadIdRef.current = id;
+      setConversation(null);
+      setMessages([]);
+      setMessageCursor(null);
+    }
     setThreadLoading(true);
     setThreadError(null);
     const [result, error] = await Promise.all([
@@ -758,20 +772,21 @@ export default function BeeperChatSurface({
   // the response — not an optimistic guess — updates local state. A write never
   // retries, so a failure is reported once and left failed.
   const applyFlag = useCallback(async (writer, value, label) => {
-    if (!conversationId) return;
-    setWritePending(true);
-    const updated = await writer(conversationId, value, { silent: true }).catch((err) => {
+    const id = conversationId;
+    if (!id) return;
+    setWritePendingId(id);
+    const updated = await writer(id, value, { silent: true }).catch((err) => {
       toast.error(err?.message || `Could not ${label} this conversation`);
       return null;
     });
     if (!mountedRef.current) return;
-    setWritePending(false);
+    setWritePendingId((pending) => (pending === id ? null : pending));
     if (!updated) return;
     // The open thread's own row is set from the server's answer; the LIST is
     // refetched rather than merged, because archiving changes which scope a
     // conversation belongs to — a local merge would leave it sitting in a
     // scope it no longer matches until the next load anyway.
-    setConversation(updated);
+    if (threadIdRef.current === id) setConversation(updated);
     loadList();
   }, [conversationId, loadList, mountedRef]);
 
@@ -779,23 +794,26 @@ export default function BeeperChatSurface({
   // rather than refetched: the row is gone, the thread has nothing left to
   // show, and the surface navigates back to the list it came from.
   const purgeMirror = useCallback(async () => {
-    if (!conversationId) return;
-    setPurging(true);
-    const result = await api.purgeBeeperConversation(conversationId, { silent: true }).catch((err) => {
+    const id = conversationId;
+    if (!id) return;
+    setPurgingId(id);
+    const result = await api.purgeBeeperConversation(id, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not purge this conversation');
       return null;
     });
     if (!mountedRef.current) return;
-    setPurging(false);
+    setPurgingId((pending) => (pending === id ? null : pending));
     if (!result) return;
-    setConversations((prev) => prev.filter((row) => row.id !== conversationId));
+    setConversations((prev) => prev.filter((row) => row.id !== id));
     // The purge removes every message the mirror held for this conversation,
     // so a drafted-but-unsent reply left in `drafts` would otherwise survive
     // it forever in localStorage — nothing else ever clears an entry once its
     // conversation is gone from the list. Same shape `setDraft` uses.
     setDraft('');
     toast.success(`Mirror purged — ${result.messagesRemoved} message(s), ${result.filesRemoved} attachment file(s) removed`);
-    clearSelection();
+    // Only leave the thread the purge emptied; a reader who has since opened
+    // another conversation stays on it.
+    if (threadIdRef.current === id) clearSelection();
   }, [clearSelection, conversationId, mountedRef, setDraft]);
 
   // One attachment changed under the thread (a "fetch anyway", a keep toggle).
@@ -826,7 +844,7 @@ export default function BeeperChatSurface({
     setLinkingId(null);
     if (!result) return;
     if (result.displacedPersonId) toast.success('Handle moved from another Tribe person');
-    loadThread(conversationId);
+    if (threadIdRef.current === conversationId) loadThread(conversationId);
   }, [conversationId, loadThread, mountedRef]);
 
   // The confirm-and-rename form (#97 part A) hands back the edited fields
@@ -849,7 +867,7 @@ export default function BeeperChatSurface({
     setLinkingId(null);
     if (!result) return;
     toast.success('Linked to a new Tribe person');
-    loadThread(conversationId);
+    if (threadIdRef.current === conversationId) loadThread(conversationId);
     api.getTribePeople({ silent: true })
       .then((data) => { if (mountedRef.current) setPeople(Array.isArray(data) ? data : (data?.people || [])); })
       .catch(() => {});
@@ -878,7 +896,7 @@ export default function BeeperChatSurface({
     });
     if (!mountedRef.current) return;
     setLinkingId(null);
-    loadThread(conversationId);
+    if (threadIdRef.current === conversationId) loadThread(conversationId);
   }, [conversationId, loadThread, mountedRef]);
 
   const pinned = useMemo(
@@ -1204,11 +1222,11 @@ export default function BeeperChatSurface({
             onOpenTribePerson={openTribePerson}
             onBack={clearSelection}
             onRetry={conversationId ? () => loadThread(conversationId) : null}
-            writePending={writePending}
+            writePending={Boolean(conversationId) && writePendingId === conversationId}
             onArchive={(value) => applyFlag(api.setBeeperConversationArchived, value, 'archive')}
             onLowPriority={(value) => applyFlag(api.setBeeperConversationLowPriority, value, 'update')}
             onPurge={purgeMirror}
-            purging={purging}
+            purging={Boolean(conversationId) && purgingId === conversationId}
             onAttachmentUpdated={applyAttachmentUpdate}
           />
         )}
