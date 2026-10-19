@@ -946,7 +946,12 @@ cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
 `readServerSource`/`readClientSource`, a literal directory with more than
 400 files); a bare specifier that resolves to no installed package; and, for
 the floor key only, a non-literal `import()`/`require()` or an unparseable
-member. A recorded set that reaches outside the repository is not memoizable
+member. Two non-literal `require()` shapes are keyed instead: `require(CONST)`
+with a module-level string is that bare specifier (package version), and
+`require(join(<unknown dir>, 'name.cjs'))` keys every tracked file of that
+basename. A Python `importlib.import_module('x')` follows like `import x`; a
+computed name is not memoizable. `import(variable)` stays outside the
+recorded key by design: only what the green run loaded is keyed. A recorded set that reaches outside the repository is not memoizable
 either. Every unknown construct lands in one of those buckets rather than
 silently narrowing the key.
 
