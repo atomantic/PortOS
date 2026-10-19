@@ -91,6 +91,8 @@ function scanCode(source) {
     blank(from, source.length);
     return source.length;
   };
+  // After readTemplate: a closed template is an operand ('`'); entering `${` starts a fresh expression, so a leading `/` is a regex ('{' is a regex-start context).
+  const templateEnd = (end) => (source[end - 1] === '`' ? '`' : '{');
   while (i < source.length) {
     const ch = source[i];
     const two = source.slice(i, i + 2);
@@ -112,7 +114,7 @@ function scanCode(source) {
       prev = ch;
     } else if (ch === '`') {
       i = readTemplate(i);
-      prev = '`';
+      prev = templateEnd(i);
     } else if (ch === '/' && (prev === '' || '(,=:[!&|?{;+-*%<>~^'.includes(prev) || !endsExpression() && (prev === ')' || /[\w$]/.test(prev))) && !isPostfixStep()) {
       // `}` is deliberately not a regex start: it usually ends an object/function expression (`{} / d`), and mis-scanning a rare regex statement after a block is safer than dropping later imports from the check.
       let j = i + 1;
@@ -135,7 +137,7 @@ function scanCode(source) {
         if (templates.length > 0 && templates[templates.length - 1] === depth) {
           templates.pop();
           i = readTemplate(i);
-          prev = '`';
+          prev = templateEnd(i);
           continue;
         }
       }

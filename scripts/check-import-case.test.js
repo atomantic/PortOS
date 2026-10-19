@@ -45,6 +45,14 @@ describe('relativeSpecifiers ignores non-executable text', () => {
     expect(relativeSpecifiers(source)).toEqual(['./InExpression.js', './Real.js', './AfterString.js']);
   });
 
+  it('reads a leading regex in a template interpolation as a regex, and a closed template as an operand', () => {
+    const source = [
+      "const t = `${/x'/.test(s) ? import('./LeadingRegex.js') : null}`;",
+      "const u = `a` / 2; await import('./AfterTemplate.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./LeadingRegex.js', './AfterTemplate.js']);
+  });
+
   it("treats division after postfix ++/-- and closing tokens as division, so later imports stay checked", () => {
     const source = [
       "const r1 = count++ / divisor; await import('./AfterInc.js');",
