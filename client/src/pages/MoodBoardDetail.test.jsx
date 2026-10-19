@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
@@ -15,6 +15,7 @@ const mockImportMoodBoardXPost = vi.fn();
 const mockLocalizeMoodBoardMedia = vi.fn();
 const mockRenderMoodBoardItem = vi.fn();
 const socketHandlers = new Map();
+const mockNavigate = vi.fn();
 
 vi.mock('../services/socket', () => ({
   default: {
@@ -97,7 +98,7 @@ vi.mock('react-router', async (importOriginal) => {
   return {
     ...actual,
     useParams: () => ({ id: currentId }),
-    useNavigate: () => vi.fn(),
+    useNavigate: () => mockNavigate,
   };
 });
 
@@ -676,6 +677,39 @@ describe('MoodBoardDetail layout', () => {
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
     expect(screen.getByRole('tab', { name: 'Import' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('button', { name: 'Import pins' })).toBeInTheDocument();
+  });
+});
+
+describe('MoodBoardDetail phone tool sheet', () => {
+  const desktopWidth = window.innerWidth;
+  beforeEach(() => { window.innerWidth = 390; });
+  afterEach(() => { window.innerWidth = desktopWidth; });
+
+  it('opens a tool as a sheet on its own history entry and closes it with one step back', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
+
+    const row = screen.getByRole('navigation', { name: 'Board tools' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Import' }));
+    const sheet = screen.getByRole('dialog', { name: 'Board tools' });
+    expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Pinterest board' }));
+
+    // Switching tools inside the sheet keeps it open on the same entry.
+    fireEvent.click(screen.getByRole('tab', { name: 'Add' }));
+    expect(screen.getByRole('dialog', { name: 'Board tools' })).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close board tools' }));
+    expect(mockNavigate).toHaveBeenCalledWith(-1);
+  });
+
+  it('does not pop the sheet open for a ?tool= link from the desktop rail', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage(['/mood-boards/a?tool=style']);
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.queryByRole('dialog', { name: 'Board tools' })).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Board tools' })).toBeInTheDocument();
   });
 });
 

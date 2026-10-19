@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenModes';
 import { BOARD_POSTER_SIZE } from '../../lib/moodBoardAnalysis';
@@ -140,6 +140,16 @@ describe('MoodBoardStylePanel', () => {
     await lastRenderOpts.onComplete('poster.png');
     expect(mockUpdateBoard).toHaveBeenCalledWith('mb-1', { posterImageRef: 'poster.png' }, { silent: true });
     expect(onBoardChange).toHaveBeenCalled();
+  });
+
+  it('keeps a saved negative prompt on screen while it is cleared', async () => {
+    render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
+    const field = screen.getByLabelText('Negative prompt (optional)');
+    field.focus();
+    fireEvent.change(field, { target: { value: '' } });
+    expect(screen.getByLabelText('Negative prompt (optional)')).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(screen.getByRole('button', { name: 'Save style' })).toBeEnabled();
   });
 
   it('shows a saved poster', () => {

@@ -53,7 +53,8 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
 
   const [aiOpen, setAiOpen] = useState(false);
   const [negativeOpen, setNegativeOpen] = useState(false);
-  const negativeShown = negativeOpen || Boolean(negative);
+  // Stays shown while a saved negative prompt is being cleared.
+  const negativeShown = negativeOpen || Boolean(negative) || Boolean(savedNegative);
   const [composing, setComposing] = useState(false);
   const [job, setJob] = useState(null);
   const jobRunning = job?.status === 'running';

@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
+import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -147,22 +147,25 @@ function MoodBoardEditor({ id }) {
     return BOARD_TOOL_IDS.includes(saved) ? saved : 'add';
   });
   const activeTool = urlTool || lastTool;
-  const sheetOpen = !wide && Boolean(urlTool);
+  // The sheet is open only on the history entry the phone tool row pushed, so
+  // a `?tool=` written by the desktop rail (or a shared link) never pops it
+  // open, and closing it is always one step back.
+  const location = useLocation();
+  const sheetEntry = Boolean(location.state?.boardToolSheet);
+  const sheetOpen = !wide && Boolean(urlTool) && sheetEntry;
   const selectTool = useCallback((tool) => {
     setLastTool(tool);
     safeWriteStorage(BOARD_TOOL_STORAGE_KEY, tool);
-    // Opening the phone sheet pushes history so Back closes it.
+    const opening = !wide && !sheetOpen;
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('tool', tool);
       return next;
-    }, { replace: wide || Boolean(urlTool) });
-  }, [setSearchParams, wide, urlTool]);
-  const closeSheet = useCallback(() => setSearchParams((prev) => {
-    const next = new URLSearchParams(prev);
-    next.delete('tool');
-    return next;
-  }, { replace: true }), [setSearchParams]);
+    }, opening
+      ? { state: { boardToolSheet: true } }
+      : { replace: true, state: sheetOpen ? { boardToolSheet: true } : undefined });
+  }, [setSearchParams, wide, sheetOpen]);
+  const closeSheet = useCallback(() => navigate(-1), [navigate]);
   const toolsRef = useRef(null);
   useScrollLock(sheetOpen);
   useFocusTrap(sheetOpen, toolsRef);
