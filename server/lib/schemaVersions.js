@@ -922,9 +922,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   //    send a stale subset back, which a union ignores.
   // Rows without an `id` (logged before #8143) are still add-only: deleting
   // or moving one does not reach peers.
-  // The key exists so the NEXT incompatible daily-log change can bump to 2 and
-  // have v1 receivers reject it.
-  meatspace: 1,
+  //
+  // v2 (#12432): blood/epigenetic/eye rows merge by identity. A legacy row (no
+  // id, or the random id a pre-v2 reader stamped on it) is keyed by a
+  // content-derived `legacy-` id every machine computes alike, copies of one
+  // row resolve by per-row `updatedAt`, and a delete rides a top-level
+  // `rowTombstones: [{ id, deletedAt }]` list in the row's file. A v1 receiver
+  // must refuse that: its union keys a legacy row by its own random stamp, so
+  // every `legacy-` id would append a second copy of a row it already holds,
+  // and it cannot read tombstones or edits. v1 → v2 stays accepted: a v2
+  // receiver re-keys the v1 sender's random-stamped legacy rows (they carry no
+  // `createdAt`) to the same content id, so they match instead of duplicating.
+  // An edit made on a v1 peer still arrives as a second row, as it always did.
+  // Until a v1 peer upgrades it refuses the whole meatspace snapshot from a v2
+  // peer, daily log included; the gap shows on the Instances page.
+  meatspace: 2,
   // v1 = the paired-peer credential (#8356): `X-PortOS-Peer-Auth`, an HMAC of the
   // pair `syncSecret` bound to the sender's instance id, replacing the instance
   // password over HTTP Basic between paired peers. Not a record or snapshot

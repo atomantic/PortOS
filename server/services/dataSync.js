@@ -18,6 +18,13 @@ import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
 import { GOAL_TOMBSTONES_KEY, reconcileGoalTombstones } from './identity/goalTombstones.js';
 import {
+  ROW_TOMBSTONES_KEY,
+  contentRowIdentity,
+  legacyRowIdentity,
+  preferRowCopy,
+  rowLiveStamp,
+} from '../lib/meatspaceRowIdentity.js';
+import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
   queueDailyLogWrite,
@@ -126,20 +133,19 @@ const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
 // checksum cache.
 const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
-// Blood/epigenetic/eye records merge by identity-preserving union
-// (`unionPreservingRows`): `date` is NOT unique for them (two labs on one day,
-// a retest, left/right exams entered separately), so keying by date would
-// collapse same-day rows (#10910). Known limitation, intentionally not fixed
-// here: the union is add-only, so a row edited on one machine never reaches a
-// peer that already holds the old copy, and a deleted row (e.g. an eye exam
-// removed with `removeEyeExam`) is re-added by the next snapshot from any peer
-// that still has it. Propagating edits/deletes needs tombstones plus a
-// `PORTOS_SCHEMA_VERSIONS.meatspace` bump.
+// Blood/epigenetic/eye records merge by row identity (`mergeRowUnionFile`), not
+// by `date`: two labs on one day, a retest, or left/right exams entered
+// separately share a date (#10910). Identity is the row's minted id, or for a
+// legacy row a content-derived `legacy-` id every machine computes alike
+// (`lib/meatspaceRowIdentity.js`, #12432). Copies of one row resolve by per-row
+// `updatedAt` LWW, and a delete travels as a `rowTombstones` entry, so edits and
+// deletes reach peers at `PORTOS_SCHEMA_VERSIONS.meatspace` 2. `legacyIds` marks
+// the file whose pre-#12432 readers stamped random ids on legacy rows.
 const MEATSPACE_FILES = {
   'daily-log.json': { type: 'daily-log' }, // mergeDailyLogFile
   'blood-tests.json': { type: 'row-union', arrayKey: 'tests' },
   'epigenetic-tests.json': { type: 'row-union', arrayKey: 'tests' },
-  'eyes.json': { type: 'row-union', arrayKey: 'exams' },
+  'eyes.json': { type: 'row-union', arrayKey: 'exams', legacyIds: true },
   'config.json': { type: 'object-lww' }
 };
 
@@ -407,52 +413,66 @@ function mergeArraysByKey(localArr, remoteArr, idField, timestampField, mergeRec
 }
 
 /**
- * Union two arrays of records WITHOUT collapsing any local row: every local row
- * is kept verbatim and in order, and a remote row is appended only when its
- * identity is not already present locally. For records whose date (or any other
- * field) is not unique, so `mergeArraysByKey` would silently drop one of two
- * same-key local rows.
+ * Merge a peer's row-union file (blood / epigenetic / eye records) into the
+ * local one. Pure: returns the file to persist.
  *
- * Identity is the string `id` when the row has one, else the row's content
- * (`canonicalStringify`, the same content-signature approach as
- * `digital-twin-sync.js#unionKeyFor`). A row stamped with an id after the fact
- * (legacy eye exams get one on first read) still matches its id-less copy on a
- * peer, so a content match ignores `id` — but an id-bearing remote row is only
- * content-matched against local rows that have no id, so two distinct records
- * that happen to hold identical values are both kept.
- *
- * Same-identity rows are not reconciled: the local copy stands (see the
- * `MEATSPACE_FILES` note on edits/deletes).
+ * Rows match by identity (`legacyRowIdentity` for an id-stamping file, else
+ * `contentRowIdentity`); copies of one row resolve to `preferRowCopy`, so an
+ * edit stamped with `updatedAt` wins on every machine. Local rows that share an
+ * identity in a non-stamping file are kept as they are — only a peer's copy is
+ * deduped against them — so the merge never drops a local row it cannot tell
+ * apart. Tombstones union both ways and drop a row unless it was edited after
+ * the delete; a row that outlives its tombstone prunes it.
  */
-function unionPreservingRows(localArr, remoteArr) {
-  const contentKey = (row) => {
-    const { id: _id, ...rest } = row;
-    return canonicalStringify(rest);
+function mergeRowUnionFile(localFile, remoteFile, { arrayKey, legacyIds = false }) {
+  const local = isPlainObject(localFile) ? localFile : {};
+  const remote = isPlainObject(remoteFile) ? remoteFile : {};
+  const identity = legacyIds ? legacyRowIdentity : contentRowIdentity;
+  const rows = [];
+  const keys = [];
+  const indexByKey = new Map();
+  const add = (row, fromLocal) => {
+    if (!isPlainObject(row)) {
+      if (fromLocal) { rows.push(row); keys.push(null); }
+      return;
+    }
+    const key = identity(row);
+    const keyed = legacyIds && row.id !== key ? { ...row, id: key } : row;
+    const index = indexByKey.get(key);
+    if (index !== undefined && (legacyIds || !fromLocal)) {
+      rows[index] = preferRowCopy(rows[index], keyed);
+      return;
+    }
+    if (index === undefined) indexByKey.set(key, rows.length);
+    rows.push(keyed);
+    keys.push(key);
   };
-  const localIds = new Set();
-  const idlessLocalContent = new Set();
-  const allLocalContent = new Set();
-  const track = (row) => {
-    const hasId = typeof row.id === 'string' && row.id !== '';
-    if (hasId) localIds.add(row.id);
-    const content = contentKey(row);
-    allLocalContent.add(content);
-    if (!hasId) idlessLocalContent.add(content);
-  };
-  for (const row of localArr) if (isPlainObject(row)) track(row);
+  for (const row of Array.isArray(local[arrayKey]) ? local[arrayKey] : []) add(row, true);
+  for (const row of Array.isArray(remote[arrayKey]) ? remote[arrayKey] : []) add(row, false);
 
-  const merged = [...localArr];
-  for (const remoteRow of remoteArr) {
-    if (!isPlainObject(remoteRow)) continue;
-    const hasId = typeof remoteRow.id === 'string' && remoteRow.id !== '';
-    const present = hasId
-      ? localIds.has(remoteRow.id) || idlessLocalContent.has(contentKey(remoteRow))
-      : allLocalContent.has(contentKey(remoteRow));
-    if (present) continue;
-    merged.push(remoteRow);
-    track(remoteRow);
-  }
-  return { merged, changed: merged.length !== localArr.length };
+  const { merged: unionTombstones } = mergeTombstones(
+    local[ROW_TOMBSTONES_KEY],
+    remote[ROW_TOMBSTONES_KEY],
+    { keyField: 'id' },
+  );
+  const kept = [];
+  const liveStamps = [];
+  rows.forEach((row, i) => {
+    if (keys[i] !== null) {
+      const stamp = rowLiveStamp(row);
+      if (isTombstoned(unionTombstones, keys[i], stamp, 'id')) return;
+      liveStamps.push({ id: keys[i], stamp });
+    }
+    kept.push(row);
+  });
+  const tombstones = pruneTombstones(unionTombstones, liveStamps, { keyField: 'id', timestampField: 'stamp' });
+  // Stable by date; same-date rows keep local-then-remote order.
+  kept.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));
+
+  const mergedFile = { ...remote, ...local, [arrayKey]: kept };
+  if (tombstones.length > 0) mergedFile[ROW_TOMBSTONES_KEY] = tombstones;
+  else delete mergedFile[ROW_TOMBSTONES_KEY];
+  return mergedFile;
 }
 
 /**
@@ -626,13 +646,11 @@ async function applyMeatspaceRemote(remoteData) {
     } else {
       const written = await queueHealthWrite(async () => {
         const local = await readJSONFile(filePath, null, { strict: true });
-        const localArr = Array.isArray(local?.[config.arrayKey]) ? local[config.arrayKey] : [];
-        const remoteArr = Array.isArray(remoteFile[config.arrayKey]) ? remoteFile[config.arrayKey] : [];
-        const { merged, changed } = unionPreservingRows(localArr, remoteArr);
-        if (!changed) return false;
-        // Stable by date; same-date rows keep local-then-remote order.
-        merged.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));
-        await atomicWrite(filePath, { ...remoteFile, ...local, [config.arrayKey]: merged });
+        const merged = mergeRowUnionFile(local, remoteFile, config);
+        // A peer with nothing to add must not create the file here.
+        if (local === null && merged[config.arrayKey].length === 0 && !merged[ROW_TOMBSTONES_KEY]) return false;
+        if (canonicalStringify(merged) === canonicalStringify(local)) return false;
+        await atomicWrite(filePath, merged);
         return true;
       });
       if (written) totalApplied++;

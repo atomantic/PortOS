@@ -12,6 +12,8 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import { queueHealthWrite } from './meatspaceWriteQueues.js';
+import { normalizeLegacyRows, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity.js';
+import { recordTombstone } from '../lib/tombstones.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -147,28 +149,31 @@ const readLocalEyes = async () => {
 };
 
 /**
- * Local eyes.json with every row id-stamped. MUST run inside `queueHealthWrite`:
- * legacy rows have no id, so stamping rewrites the file.
+ * Local eyes.json with every row carrying its identity. MUST run inside
+ * `queueHealthWrite`: a legacy row (no id, or a pre-#12432 random stamp) is
+ * re-keyed to its content-derived id and persisted once, so the ids the client
+ * reads back match the ones every peer computes for the same row.
  */
 async function loadLocalEyeExamsQueued() {
   const { data, exams } = await readLocalEyes();
-  // Legacy eyes.json rows have no id. Stamp and persist them once so the ids
-  // the client reads back are the ones later edits/deletes resolve.
-  if (exams.some(e => !e.id)) {
-    for (const e of exams) e.id ||= randomUUID();
-    exams.sort(byDate);
-    await writeLocal(EYES_FILE, { ...data, exams });
-  }
-  return { ...data, exams };
+  const normalized = normalizeLegacyRows(exams);
+  if (!normalized.changed) return { ...data, exams };
+  normalized.rows.sort(byDate);
+  const next = { ...data, exams: normalized.rows };
+  await writeLocal(EYES_FILE, next);
+  return next;
 }
+
+// Deletion markers are sync metadata, not part of the exam list callers read.
+const withoutTombstones = ({ [ROW_TOMBSTONES_KEY]: _tombstones, ...rest }) => rest;
 
 export async function getEyeExams() {
   const ml = await mlArrayIfEnabled('eyeExams');
   if (ml) return { exams: [...ml].sort(byDate) };
   const { data, exams } = await readLocalEyes();
-  // Only a legacy file needs the (queued) stamping write; the common read stays lock-free.
-  if (exams.some(e => !e.id)) return queueHealthWrite(loadLocalEyeExamsQueued);
-  return { ...data, exams };
+  // Only a legacy file needs the (queued) re-keying write; the common read stays lock-free.
+  if (normalizeLegacyRows(exams).changed) return withoutTombstones(await queueHealthWrite(loadLocalEyeExamsQueued));
+  return withoutTombstones({ ...data, exams });
 }
 
 /** Resolve an eye exam id, or a legacy numeric index into the date-sorted list, to an id. */
@@ -186,7 +191,8 @@ export async function addEyeExam(exam) {
     console.log(`👁️ Eye exam added for ${stored.date} (MortalLoom)`);
     return stored;
   }
-  const stored = { ...exam, id: exam.id || randomUUID() };
+  // `createdAt` marks a minted id: without it the row reads as legacy and is re-keyed by content.
+  const stored = { ...exam, id: exam.id || randomUUID(), createdAt: new Date().toISOString() };
   await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
     data.exams.push(stored);
@@ -214,7 +220,8 @@ export async function updateEyeExam(id, updates) {
     const data = await loadLocalEyeExamsQueued();
     const target = data.exams.find(e => e.id === id);
     if (!target) return null;
-    Object.assign(target, patch);
+    // `updatedAt` is the per-row clock the federation merge resolves copies by.
+    Object.assign(target, patch, { updatedAt: new Date().toISOString() });
     data.exams.sort(byDate);
     await writeLocal(EYES_FILE, data);
     return target;
@@ -237,6 +244,8 @@ export async function removeEyeExam(id) {
     const found = data.exams.find(e => e.id === id);
     if (!found) return null;
     data.exams = data.exams.filter(e => e.id !== id);
+    // The marker keeps a peer that still holds the row from syncing it back.
+    data[ROW_TOMBSTONES_KEY] = recordTombstone(data[ROW_TOMBSTONES_KEY], id, { keyField: 'id' });
     await writeLocal(EYES_FILE, data);
     return found;
   });
