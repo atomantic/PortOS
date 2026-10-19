@@ -175,6 +175,14 @@ describe('submitVideoGenJob', () => {
     }
   });
 
+  it('persists prepared chunk beats byte-for-byte into queued params', async () => {
+    const chunkPrompts = [' \topening beat\n ', null, 'closing beat  '];
+    mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveChunkPrompts: chunkPrompts }));
+
+    await submitVideoGenJob({ prompt: 'Example shot', width: 1280, height: 720 }, {});
+    expect(mocks.enqueueJob.mock.calls[0][0].params.chunkPrompts).toEqual(chunkPrompts);
+  });
+
   it('cleans multipart uploads exactly once when submission fails', async () => {
     const failure = new Error('staging failed');
     const uploads = { sourceImage: { path: '/tmp/example-upload' } };

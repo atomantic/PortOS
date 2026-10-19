@@ -348,9 +348,9 @@ describe('prepareVideoGenParams', () => {
   });
 
   describe('per-chunk prompt beats (#3695)', () => {
-    it('normalizes beats and keeps a blank entry in position as a fallback marker', async () => {
-      const prepared = await prepare({ mode: 'image', chunks: 3, chunkPrompts: ['  opens the door  ', '', 'the storm breaks'] });
-      expect(prepared.effectiveChunkPrompts).toEqual(['opens the door', null, 'the storm breaks']);
+    it('preserves nonblank beats as authored and keeps a blank entry in position as a fallback marker', async () => {
+      const prepared = await prepare({ mode: 'image', chunks: 3, chunkPrompts: ['  opens the door\n\t', '', 'the storm breaks'] });
+      expect(prepared.effectiveChunkPrompts).toEqual(['  opens the door\n\t', null, 'the storm breaks']);
     });
 
     it('truncates a stale overlong list to the resolved chunk count', async () => {

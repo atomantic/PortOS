@@ -1125,7 +1125,7 @@ async function resolvePreparedParams({
   // identically instead of storing a useless array of nulls.
   const normalizedChunkPrompts = effectiveChunks > 1 && Array.isArray(body.chunkPrompts)
     ? body.chunkPrompts.slice(0, effectiveChunks)
-      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p.trim() : null))
+      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p : null))
     : undefined;
   const effectiveChunkPrompts = normalizedChunkPrompts?.some(Boolean)
     ? normalizedChunkPrompts
