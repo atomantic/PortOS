@@ -39,7 +39,8 @@ vi.mock('../lib/fileUtils.js', () => {
       })
     );
   }
-}));
+  };
+});
 
 vi.mock('./messageAccounts.js', () => ({
   getAccount: vi.fn(),
