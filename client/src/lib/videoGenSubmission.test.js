@@ -7,7 +7,7 @@ import { buildVideoGenSubmission } from './videoGenSubmission.js';
 // default). Every other field the local payload needs is filled with the
 // minimal values that keep the shared prompt/mode helpers from throwing.
 const baseArgs = (overrides = {}) => ({
-  isGrok: false, isFal: false, isReactor: false, remoteSubmissionFields: null,
+  hostedLane: null, remoteSubmissionFields: null,
   prompt: 'a fox running through a forest',
   negativePrompt: '',
   width: 768, height: 512, mode: 'text',
@@ -59,7 +59,7 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
 describe('buildVideoGenSubmission — fal options (#9232)', () => {
   it('carries selected resolution and provider audio only to the fal backend', () => {
     const options = { falResolution: '4k', falGenerateAudio: true };
-    expect(buildVideoGenSubmission(baseArgs({ isFal: true, ...options })))
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', ...options })))
       .toMatchObject({ backend: 'fal', falResolution: '4k', falGenerateAudio: true });
     const local = buildVideoGenSubmission(baseArgs(options));
     expect(local).not.toHaveProperty('falResolution');
@@ -68,16 +68,25 @@ describe('buildVideoGenSubmission — fal options (#9232)', () => {
 
   it('omits unset options so the server keeps its resolution and silent defaults', () => {
     const payload = buildVideoGenSubmission(baseArgs({
-      isFal: true, falResolution: '', falGenerateAudio: false,
+      hostedLane: 'fal', falResolution: '', falGenerateAudio: false,
     }));
     expect(payload).not.toHaveProperty('falResolution');
     expect(payload).not.toHaveProperty('falGenerateAudio');
   });
 });
 
+describe('buildVideoGenSubmission — lane dispatch', () => {
+  it('routes each hosted lane to its own payload and null to the local one', () => {
+    for (const lane of ['grok', 'fal', 'reactor', 'runway']) {
+      expect(buildVideoGenSubmission(baseArgs({ hostedLane: lane }))).toMatchObject({ backend: lane });
+    }
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: null }))).toMatchObject({ backend: 'local' });
+  });
+});
+
 describe('buildVideoGenSubmission — hosted image-mode source', () => {
   const source = { sourceImageFile: 'frame.png', sourceImageUpload: 'data:image/png;base64,AAA' };
-  const lanes = { grok: { isGrok: true }, fal: { isFal: true }, reactor: { isReactor: true } };
+  const lanes = { grok: { hostedLane: 'grok' }, fal: { hostedLane: 'fal' }, reactor: { hostedLane: 'reactor' } };
 
   for (const [backend, flag] of Object.entries(lanes)) {
     it(`${backend}: image mode copies the source, text mode sends empty strings`, () => {
@@ -98,19 +107,19 @@ describe('buildVideoGenSubmission — hosted image-mode source', () => {
 
   it('fal and reactor never send a negative prompt; grok does', () => {
     const args = { negativePrompt: 'blurry' };
-    expect(buildVideoGenSubmission(baseArgs({ isFal: true, ...args }))).not.toHaveProperty('negativePrompt');
-    expect(buildVideoGenSubmission(baseArgs({ isReactor: true, ...args }))).not.toHaveProperty('negativePrompt');
-    expect(buildVideoGenSubmission(baseArgs({ isGrok: true, ...args }))).toHaveProperty('negativePrompt');
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'reactor', ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'grok', ...args }))).toHaveProperty('negativePrompt');
   });
 
   it('fal omits an unset model id', () => {
-    expect(buildVideoGenSubmission(baseArgs({ isFal: true, falModelId: '' })).falModelId).toBeUndefined();
-    expect(buildVideoGenSubmission(baseArgs({ isFal: true, falModelId: 'm1' })).falModelId).toBe('m1');
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: '' })).falModelId).toBeUndefined();
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: 'm1' })).falModelId).toBe('m1');
   });
 });
 
 describe('buildVideoGenSubmission — reactor fields', () => {
-  const reactor = (o) => buildVideoGenSubmission(baseArgs({ isReactor: true, ...o }));
+  const reactor = (o) => buildVideoGenSubmission(baseArgs({ hostedLane: 'reactor', ...o }));
 
   it('sends a seed of 0 and omits an unset seed', () => {
     expect(reactor({ reactorSeed: 0 }).reactorSeed).toBe(0);
@@ -256,7 +265,7 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
   });
 
   it('sends no No music chip on a hosted lane, which never appends it', () => {
-    const payload = buildVideoGenSubmission(baseArgs({ isFal: true, currentModel: {}, stylePreset: preset, noMusic: true }));
+    const payload = buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', currentModel: {}, stylePreset: preset, noMusic: true }));
     expect(payload.promptAdditions).toEqual([{ id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' }]);
   });
 });

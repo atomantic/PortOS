@@ -942,6 +942,19 @@ describe('useVideoGenForm', () => {
     expect(result.current.modelId).toBe(LTX2.id);
   });
 
+  it('resolves a stored hosted backend whose key is no longer configured to the local lane', async () => {
+    const { result, rerender } = render({ grokEnabled: false });
+    const props = { models: MODELS, modelContext: MODEL_CONTEXT, availableLoras: [], grokEnabled: false };
+    rerender({ ...props, runwayEnabled: true });
+    act(() => result.current.handleBackendChange('runway'));
+    expect(result.current.hostedLane).toBe('runway');
+
+    rerender({ ...props, runwayEnabled: false });
+    expect(result.current.backend).toBe('runway');
+    expect(result.current.hostedLane).toBeNull();
+    expect(result.current.isRunway).toBe(false);
+  });
+
   it('applyFinish is inert without a record or a delivery model — it never starts a render', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
