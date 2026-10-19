@@ -22,12 +22,22 @@ const TEST_CHROME_CANDIDATES = Object.freeze([
   '/usr/bin/chromium-browser',
 ]);
 
-/** Playwright's bundled Chromium, when playwright-core is installed and a browser was downloaded; null otherwise. */
-export function bundledChromium(anchors = PLAYWRIGHT_RESOLVE_ROOTS) {
+/**
+ * Playwright's bundled Chromium, when playwright-core is installed and a browser was downloaded; null otherwise.
+ * Keeps walking workspace anchors past an install whose browser is missing, so a
+ * downloaded browser in a later workspace is still found. When none exists on disk,
+ * returns the first resolved path (callers check existence themselves).
+ */
+export function bundledChromium(anchors = PLAYWRIGHT_RESOLVE_ROOTS, exists = existsSync) {
+  let firstResolved = null;
   for (const anchor of anchors) {
-    try { return createRequire(anchor)('playwright-core').chromium.executablePath(); } catch { /* try the next workspace */ }
+    let path;
+    try { path = createRequire(anchor)('playwright-core').chromium.executablePath(); } catch { continue; }
+    if (!path) continue;
+    if (exists(path)) return path;
+    firstResolved ??= path;
   }
-  return null;
+  return firstResolved;
 }
 
 /**

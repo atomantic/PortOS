@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bundledChromium } from './testChrome.js';
 
@@ -31,5 +31,18 @@ describe('bundledChromium', () => {
     dirs.push(empty);
     writeFileSync(join(empty, 'package.json'), '{}');
     expect(bundledChromium([join(empty, 'package.json')])).toBeNull();
+  });
+
+  it('skips an anchor whose Chromium executable is missing for a later one that has it', () => {
+    const present = join(mkdtempSync(join(tmpdir(), 'testchrome-bin-')), 'chrome');
+    dirs.push(dirname(present));
+    writeFileSync(present, '');
+    const missingFirst = workspaceWithPlaywright(join(dirname(present), 'absent-chrome'));
+    expect(bundledChromium([missingFirst, workspaceWithPlaywright(present)])).toBe(present);
+  });
+
+  it('returns the first resolved path when no anchor executable exists', () => {
+    const first = workspaceWithPlaywright('/nope/a');
+    expect(bundledChromium([first, workspaceWithPlaywright('/nope/b')])).toBe('/nope/a');
   });
 });
