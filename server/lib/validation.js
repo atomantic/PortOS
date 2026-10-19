@@ -1501,6 +1501,14 @@ const scaffoldPortSchema = z.preprocess(
   z.number().int().min(1).max(65535).nullable().optional()
 );
 
+// GET /api/scaffold/directories. `includeFiles` is a query flag, so it arrives
+// as the string 'true' rather than a boolean. The path is not trimmed: a
+// directory name may legitimately begin or end with whitespace.
+export const scaffoldDirectoriesQuerySchema = z.object({
+  path: z.string().min(1).max(4096).optional(),
+  includeFiles: z.enum(['true', 'false']).optional(),
+});
+
 // Full request schema for POST /api/scaffold. Validated before the route
 // touches the filesystem — template enum, port range, and a name that yields a
 // usable directory slug are all enforced up front.

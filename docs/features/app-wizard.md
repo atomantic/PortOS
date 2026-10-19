@@ -57,7 +57,7 @@ Scaffold a new project from template:
 | POST /api/apps | Register existing app |
 | POST /api/scaffold | Create new app from template |
 | GET /api/scaffold/templates | List available templates |
-| GET /api/scaffold/directories | Browse directories for the location picker |
+| GET /api/scaffold/directories | Browse directories for the location picker (host control — operator session, or a local connection when no password is set) |
 | POST /api/scaffold/templates/create | Create an app from a template (user-friendly wrapper around POST /api/scaffold) |
 | POST /api/detect/port | Detect process on port |
 | POST /api/detect/repo | Validate repo path, detect type |

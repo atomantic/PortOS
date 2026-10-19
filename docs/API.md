@@ -236,7 +236,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/scaffold/directories` | List candidate parent directories |
+| GET | `/scaffold/directories` | Browse host directories for the location picker (host control: enumerates any readable directory) |
 | GET | `/scaffold/templates` | List available templates |
 | POST | `/scaffold/templates/create` | Create app from template |
 | POST | `/scaffold` | Scaffold a new app |

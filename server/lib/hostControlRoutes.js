@@ -13,7 +13,9 @@
  * the host, or when it sets what one will run (a repo path, a start command, a
  * task prompt, a shell job), or accesses live camera/microphone streams.
  * Ordinary read-only GETs stay open; raw backup archives require operator
- * authority because they export private records and credentials. Mutating routes in the
+ * authority because they export private records and credentials, and so does
+ * the directory picker (GET /api/scaffold/directories), which enumerates any
+ * readable host directory rather than a PortOS record. Mutating routes in the
  * same families that are deliberately left OUT:
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
@@ -485,7 +487,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/backup/restore',
   'POST /api/backup/restore-db',
 
-  // Scaffolding writes a new repo and runs git/npm in it.
+  // Scaffolding writes a new repo and runs git/npm in it. The picker lists
+  // directory and file names anywhere on the host (not only under the
+  // workspace roots: the same component browses /Applications for a Chrome
+  // binary), so it is operator-only too; the template catalog stays open.
+  'GET /api/scaffold/directories',
   'POST /api/scaffold',
   'POST /api/scaffold/templates/create',
 

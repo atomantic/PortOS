@@ -331,4 +331,11 @@ describe('GET /api/scaffold/directories', () => {
     expect(files.body.files).toEqual([{ name: 'chrome', path: join(resolve('/tmp/workspace'), 'chrome') }]);
     expect(files.body.directories).toEqual(folders.body.directories);
   });
+
+  it('rejects an includeFiles value that is not a flag before reading the directory', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/scaffold/directories?path=/tmp/workspace&includeFiles=yes');
+    expect(res.status).toBe(400);
+    expect(readdir).not.toHaveBeenCalled();
+  });
 });

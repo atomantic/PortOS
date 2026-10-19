@@ -284,7 +284,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/providers.js POST /runtimes/install',
   'routes/quotaBurn.js GET /',
   'routes/review.js GET /items',
-  'routes/scaffold.js GET /directories',
   'routes/sharing.js GET /subscriptions',
   'routes/spotify.js GET /oauth/callback',
   'routes/sprites.js GET /',
