@@ -905,12 +905,22 @@ describe('codex provider — launch refusal settlement', () => {
 });
 
 describe('codex provider — Windows shim lifecycle', () => {
+  // An npm cmd-shim, so a launch whose argv cmd.exe cannot carry (the image
+  // prompt always spans lines) bypasses cmd.exe for the shim's node target.
+  const writeCodexShim = async () => {
+    const cliDir = join(TEST_HOME, 'CLI shims');
+    const script = join(cliDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    await mkdir(join(cliDir, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+    await writeFile(script, '');
+    await writeFile(join(cliDir, 'node.exe'), '');
+    const shim = join(cliDir, 'codex.cmd');
+    await writeFile(shim, '@ECHO off\r\n"%dp0%\\node.exe"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n');
+    return { cliDir, shim, script, node: join(cliDir, 'node.exe') };
+  };
+
   it.each(['bare', 'explicit'])('prepares the %s shim for both probes and image launches without losing arguments', async kind => {
     setPlatform('win32');
-    const cliDir = join(TEST_HOME, 'CLI shims');
-    const shim = join(cliDir, 'codex.cmd');
-    await mkdir(cliDir, { recursive: true });
-    await writeFile(shim, '@echo off');
+    const { cliDir, shim, script, node } = await writeCodexShim();
     vi.stubEnv('PATH', cliDir);
     const codexPath = kind === 'explicit' ? shim : undefined;
 
@@ -929,11 +939,11 @@ describe('codex provider — Windows shim lifecycle', () => {
       prompt: 'a fox & tree | sky > clouds', initImagePath: image,
     });
     const call = spawnCalls[1];
-    expect(call.bin).toBe('cmd.exe');
+    expect(call.bin).toBe(node);
     expect(call.options.shell).toBe(false);
-    expect(call.args.slice(0, 3)).toEqual(['/c', shim, 'exec']);
+    expect(call.args.slice(0, 2)).toEqual([script, 'exec']);
     expect(call.args).toEqual(expect.arrayContaining([
-      'model_reasoning_effort=high', '-i', image, '-m', 'gpt-6.1-sol^&example', '--',
+      'model_reasoning_effort=high', '-i', image, '-m', 'gpt-6.1-sol&example', '--',
     ]));
     expect(call.args.at(-1)).toContain('a fox & tree | sky > clouds');
     expect(call.args.at(-1)).toMatch(/^\$imagegen /);
@@ -945,8 +955,9 @@ describe('codex provider — Windows shim lifecycle', () => {
 
   it.each(['win32', 'linux'])('terminates only the selected %s job, then cancel-all terminates the remaining job', async platform => {
     setPlatform(platform);
-    const first = await codex.generateImage({ prompt: 'first', codexPath: '/example/codex.cmd' });
-    const second = await codex.generateImage({ prompt: 'second', codexPath: '/example/codex.cmd' });
+    const { shim } = await writeCodexShim();
+    const first = await codex.generateImage({ prompt: 'first', codexPath: shim });
+    const second = await codex.generateImage({ prompt: 'second', codexPath: shim });
     const firstChild = spawnCalls[0].child;
     const secondChild = spawnCalls[1].child;
     firstChild.pid = 4242;
@@ -980,7 +991,8 @@ describe('codex provider — Windows shim lifecycle', () => {
   it.each(['win32', 'linux'])('uses the same platform termination path for the %s wall-clock limit', async platform => {
     setPlatform(platform);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const job = await codex.generateImage({ prompt: 'stalled synthetic render', codexPath: '/example/codex.cmd' });
+    const { shim } = await writeCodexShim();
+    const job = await codex.generateImage({ prompt: 'stalled synthetic render', codexPath: shim });
     const child = spawnCalls[0].child;
     child.pid = 4242;
     await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
@@ -990,7 +1002,7 @@ describe('codex provider — Windows shim lifecycle', () => {
       expect(child.kill).not.toHaveBeenCalled();
       expect(spawnCalls.filter(call => call.bin === 'taskkill')).toHaveLength(1);
     } else {
-      expect(spawnCalls[0].bin).toBe('/example/codex.cmd');
+      expect(spawnCalls[0].bin).toBe(shim);
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       await vi.advanceTimersByTimeAsync(4999);
       expect(child.kill).toHaveBeenCalledTimes(1);

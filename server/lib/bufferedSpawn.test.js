@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { ChildProcess } from './childProcess.js';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -399,12 +399,13 @@ describe('prepareWindowsSafeSpawn', () => {
     expect(result).toEqual({ command: 'opencode', args: ['exec', '-'] });
   });
 
-  it('caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
+  it('double-caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
     // foo&calc has no whitespace, so Node's own argv quoting would NOT wrap
-    // it in literal quotes — the bare `&` would reach cmd.exe's raw command
-    // line and be interpreted as a command separator without this.
+    // it in literal quotes. cmd.exe /c consumes one caret level and the batch
+    // file's `%*` re-parse consumes the second; a single caret let the `&`
+    // run as a command separator inside the shim (#12346).
     const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['foo&calc'], true);
-    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^&calc']);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^^^&calc']);
   });
 
   it('does NOT escape metacharacters in an arg that already contains whitespace (Node will quote it)', () => {
@@ -417,7 +418,7 @@ describe('prepareWindowsSafeSpawn', () => {
 
   it('escapes multiple metacharacters in an unquoted arg', () => {
     const result = prepareWindowsSafeSpawn('C:\\npm\\tool.cmd', ['a|b>c<d'], true);
-    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^|b^>c^<d']);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^^^|b^^^>c^^^<d']);
   });
 
   it('never escapes off Windows, even for an unquoted metacharacter arg', () => {
@@ -430,6 +431,84 @@ describe('prepareWindowsSafeSpawn', () => {
     // whitespace, would reach cmd.exe unquoted just like an unquoted arg.
     const result = prepareWindowsSafeSpawn('C:\\Tools&CLIs\\npm\\codex.cmd', ['exec'], true);
     expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\Tools^&CLIs\\npm\\codex.cmd', 'exec'] });
+  });
+});
+
+// The body npm's cmd-shim writes for a node bin, and the legacy layout older
+// npm and pnpm still emit. Both forward `%*` to the script.
+const NPM_CMD_SHIM = [
+  '@ECHO off',
+  'GOTO start',
+  ':find_dp0',
+  'SET dp0=%~dp0',
+  'EXIT /b',
+  ':start',
+  'SETLOCAL',
+  'CALL :find_dp0',
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ') ELSE (',
+  '  SET "_prog=node"',
+  '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+  ')',
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  '',
+].join('\r\n');
+const LEGACY_CMD_SHIM = [
+  '@IF EXIST "%~dp0\\node.exe" (',
+  '  "%~dp0\\node.exe"  "%~dp0\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  ') ELSE (',
+  '  node  "%~dp0\\node_modules\\fake-cli\\bin\\cli.js" %*',
+  ')',
+  '',
+].join('\r\n');
+const HOSTILE_PROMPT = 'Summarize this " & calc & " and %PATH%\nthen stop';
+
+describe('prepareWindowsSafeSpawn — argv cmd.exe cannot carry (#12346)', () => {
+  let shimDir;
+  let script;
+
+  beforeEach(async () => {
+    shimDir = await mkdtemp(join(tmpdir(), 'cmd-shim-'));
+    script = join(shimDir, 'node_modules', 'fake-cli', 'bin', 'cli.js');
+    await mkdir(join(shimDir, 'node_modules', 'fake-cli', 'bin'), { recursive: true });
+    await writeFile(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+  });
+
+  afterEach(async () => {
+    await rm(shimDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['current', NPM_CMD_SHIM],
+    ['legacy', LEGACY_CMD_SHIM],
+  ])('launches the %s npm shim target directly instead of handing a quoted prompt to cmd.exe', async (_layout, body) => {
+    const shim = join(shimDir, 'fake-cli.cmd');
+    await writeFile(shim, body);
+    await writeFile(join(shimDir, 'node.exe'), '');
+    const result = prepareWindowsSafeSpawn(shim, ['--print', HOSTILE_PROMPT], true);
+    expect(result).toEqual({ command: join(shimDir, 'node.exe'), args: [script, '--print', HOSTILE_PROMPT] });
+  });
+
+  it('refuses a batch file it cannot bypass rather than passing the prompt to cmd.exe', async () => {
+    const shim = join(shimDir, 'custom.bat');
+    await writeFile(shim, '@echo off\r\necho %*\r\n');
+    expect(() => prepareWindowsSafeSpawn(shim, ['--prompt', HOSTILE_PROMPT], true))
+      .toThrow(expect.objectContaining({ code: 'WINDOWS_BATCH_ARG_UNSAFE' }));
+  });
+
+  it.runIf(process.platform === 'win32')('delivers hostile arguments verbatim through a real npm shim', async () => {
+    const shim = join(shimDir, 'fake-cli.cmd');
+    await writeFile(shim, NPM_CMD_SHIM);
+    const payloads = [HOSTILE_PROMPT, 'a&echo.INJECTED', 'with space & (parens) | pipe', 'c^d'];
+    for (const payload of payloads) {
+      const { command, args } = prepareWindowsSafeSpawn(shim, ['--print', payload]);
+      const child = nodeSpawn(command, args, { windowsHide: true });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+      expect(JSON.parse(stdout)).toEqual(['--print', payload]);
+    }
   });
 });
 
