@@ -418,17 +418,21 @@ describe('live CoS restore boundary', () => {
   // A pre-#6182 snapshot keeps its config in state.json and ships no
   // config.json, so the live config.json is newer than the restore point.
   it.each([
-    { snapshotCarriesConfig: false, restoredConfig: null, expected: 7, parked: true },
-    { snapshotCarriesConfig: true, restoredConfig: { maxConcurrentAgents: 5 }, expected: 5, parked: false },
-  ])('restores the snapshot config over a newer config.json: %j', async ({ snapshotCarriesConfig, restoredConfig, expected, parked }) => {
+    { name: 'first restore', liveSlice: null, landed: true, legacy: true, expected: 7, parked: true },
+    { name: 'repeat restore', liveSlice: { maxConcurrentAgents: 7 }, landed: true, legacy: true, expected: 7, parked: true },
+    { name: 'transfer failed first', liveSlice: null, landed: false, legacy: true, expected: 3, parked: false },
+    { name: 'snapshot has config.json', liveSlice: null, landed: true, legacy: false, expected: 5, parked: false },
+  ])('restores the snapshot config over a newer config.json: $name', async ({ liveSlice, landed, legacy, expected, parked }) => {
     writeConfig({ maxConcurrentAgents: 3 });
-    writeState({ agents: {} });
+    writeState(liveSlice ? { agents: {}, config: liveSlice } : { agents: {} });
     const store = await freshModule();
-    await store.loadState();
-    await store.withLiveCosRestore(async () => {
-      if (restoredConfig) writeConfig(restoredConfig);
+    const restore = store.withLiveCosRestore(async () => {
+      if (!landed) throw new Error('rsync failed');
+      if (!legacy) writeConfig({ maxConcurrentAgents: 5 });
       writeState({ agents: {}, config: { maxConcurrentAgents: 7 } });
-    }, { snapshotCarriesConfig });
+    }, { snapshotLegacyConfig: legacy ? { maxConcurrentAgents: 7 } : null });
+    if (landed) await restore;
+    else await expect(restore).rejects.toThrow('rsync failed');
     expect((await store.getConfig()).maxConcurrentAgents).toBe(expected);
     expect(readJson(CONFIG_PATH).maxConcurrentAgents).toBe(expected);
     const aside = readdirSync(COS_DIR).filter(f => f.startsWith('config.pre-restore-'));

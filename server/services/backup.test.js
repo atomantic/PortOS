@@ -2295,6 +2295,22 @@ describe('restoreSnapshot manifest verification', () => {
     expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
   });
 
+  // A pre-#6182 snapshot keeps the CoS config in state.json's `config` slice.
+  it.each([
+    { name: 'pre-split snapshot, full restore', files: ['cos/state.json'], subdirFilter: undefined, expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, state.json scope', files: ['cos/state.json'], subdirFilter: 'cos/state.json', expected: { maxConcurrentAgents: 7 } },
+    { name: 'pre-split snapshot, agents scope', files: ['cos/state.json'], subdirFilter: 'cos/agents', expected: null },
+    { name: 'snapshot with config.json', files: ['cos/state.json', 'cos/config.json'], subdirFilter: undefined, expected: null },
+  ])('hands CoS restore the legacy config slice the snapshot installs: $name', async ({ files, subdirFilter, expected }) => {
+    const bodies = { 'cos/state.json': '{"agents":{},"config":{"maxConcurrentAgents":7}}', 'cos/config.json': '{"maxConcurrentAgents":5}' };
+    const manifest = {};
+    for (const file of files) manifest[file] = await writeSnapshotFile(file, bodies[file]);
+    await writeManifest(manifest);
+    withLiveCosRestore.mockClear();
+    await finishRestore({ dryRun: false, subdirFilter });
+    expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+  });
+
   it('names the unmanifested file so the operator can act on it', async () => {
     const relativePath = 'restore-integrity/example.json';
     await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });
@@ -3428,8 +3444,6 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json', 'cos/agents', 'cos/agents/', 'cos/agents/index.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
       expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
-      // This snapshot has no cos/config.json, like one taken before the #6182 split.
-      expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotCarriesConfig: false });
     });
     it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: true, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
       await runRestore('/dest', 'snap-1', options);

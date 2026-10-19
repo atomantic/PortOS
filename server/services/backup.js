@@ -1758,12 +1758,30 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
 const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'];
 
 /**
+ * The CoS config a restore of `scope` installs from a snapshot taken before the
+ * #6182 split: such a snapshot has no cos/config.json and keeps the settings in
+ * the `config` slice of cos/state.json. Null when the snapshot carries its own
+ * config.json or the scope leaves cos/state.json alone.
+ */
+async function snapshotLegacyCosConfig(srcDir, scope) {
+  if (scope && scope !== 'cos' && scope !== 'cos/state.json') return null;
+  const carriesConfigFile = await stat(join(srcDir, 'cos', 'config.json')).then(
+    info => info.isFile(),
+    error => { if (error.code === 'ENOENT') return false; throw error; },
+  );
+  if (carriesConfigFile) return null;
+  const { ok, value } = await readJSONFileStrict(join(srcDir, 'cos', 'state.json'), null, { logError: false });
+  const config = ok ? value?.config : null;
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : null;
+}
+
+/**
  * Owners a live file restore holds, OUTERMOST FIRST — this array order IS the
  * acquisition order, and each owner is released in reverse after everything
  * inside it (transfer plus partial-failure reconciliation) has settled.
  * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
- * `hold(inner, { srcDir })` acquires the owner, runs `inner`, and releases on
- * every exit; `srcDir` is the verified snapshot's data directory. Domain
+ * `hold(inner, { srcDir, scope })` acquires the owner, runs `inner`, and
+ * releases on every exit; `srcDir` is the verified snapshot's data directory. Domain
  * modules are imported only once every outer owner is held.
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
@@ -1807,14 +1825,10 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
     name: 'CoS config and runtime',
     appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
-    hold: async (inner, { srcDir }) => {
-      // A pre-split snapshot (#6182) has no config.json; its config is in state.json.
-      const snapshotCarriesConfig = await stat(join(srcDir, 'cos', 'config.json')).then(
-        info => info.isFile(),
-        error => { if (error.code === 'ENOENT') return false; throw error; },
-      );
+    hold: async (inner, { srcDir, scope }) => {
+      const snapshotLegacyConfig = await snapshotLegacyCosConfig(srcDir, scope);
       const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(inner, { snapshotCarriesConfig });
+      return withLiveCosRestore(inner, { snapshotLegacyConfig });
     },
   },
   {
@@ -1838,7 +1852,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
 /** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
 function withLiveFileRestoreOwners(scope, srcDir, operation) {
   const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
-    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir }) : inner),
+    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir, scope }) : inner),
     operation,
   );
   return nested();
