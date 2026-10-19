@@ -22,6 +22,17 @@ miss. Swapping the instance to a cached subclass whose ``__call__`` adds the
 delta, with the adapter arrays held outside the parameter tree, keeps every
 parameter name and every packed array untouched.
 
+Block streaming (#12327) rebinds ONE shared block per index from the mmap'd
+pack and runs it through ``mx.compile(shared, inputs=shared)``, so a delta held
+outside that block's parameter tree would be traced as a constant and applied
+to every index. Under streaming the model's class is swapped too: its block
+provider binds the packed weights exactly as the runtime does (runtime-owned
+``_lora_sources`` such as a custom-strength distilled LoRA still merge there),
+then points each quantized projection's adapter slots at block ``idx``'s
+arrays and fuses float targets into the freshly bound float weight. The block
+is recompiled with those slots as declared inputs, so every index sees only
+its own delta and the compiled graph stays valid.
+
 The math contract mirrors the runtime's ``apply_loras`` exactly — the same
 renamed keys, ``delta = strength * B @ A`` and no alpha rescale — so a q4 render
 and a bf16 render at one strength mean the same thing. Validation is stricter:
@@ -43,10 +54,6 @@ from typing import Any, Callable, Iterable
 STRATEGY_RUNTIME = "runtime-delta"
 STRATEGY_FUSED = "fused-float"
 STRATEGY_MIXED = "runtime-delta+fused-float"
-# Block streaming rebinds one shared, compiled block per index, so an
-# activation-space delta has nowhere stable to live; those renders keep the
-# runtime's own per-block merge-and-requantize and say so.
-STRATEGY_REQUANTIZED = "merged-requantized"
 
 _A_SUFFIX = ".lora_A.weight"
 _B_SUFFIX = ".lora_B.weight"
@@ -57,6 +64,16 @@ _IGNORED_SUFFIXES = (".alpha",)
 _ADAPTERS_ATTR = "_portos_runtime_lora"
 _BASE_CLASS_ATTR = "_portos_runtime_lora_base"
 _RUNTIME_CLASSES: dict[type, type] = {}
+
+_STREAMING_ATTR = "_portos_streaming_lora"
+_STREAMING_BASE_ATTR = "_portos_streaming_lora_base"
+_STREAMING_CLASSES: dict[type, type] = {}
+# The runtime's renamed adapter keys address blocks under this prefix
+# (ltx_core_mlx.loader.sd_ops.LTXV_LORA_BLOCK_PREFIX).
+_BLOCK_PREFIX = "transformer_blocks."
+# A float projection outside the streamed blocks is fused once; its pre-fusion
+# weight is kept so dropping one adapter can re-fuse the rest.
+_FUSED_BASE_ATTR = "_portos_fused_base"
 
 
 def _mlx():
@@ -95,6 +112,26 @@ def _module_at(model, target: str):
         except (AttributeError, IndexError, KeyError, TypeError):
             return None
     return node
+
+
+def is_streaming_model(model) -> bool:
+    """True for the runtime's StreamingLTXModel: one shared block rebound per index."""
+    attrs = getattr(model, "__dict__", {})
+    return "_streamer" in attrs and "_shared_block" in attrs
+
+
+def _locate(model, target: str):
+    """``(module, block)`` for a renamed target; ``block`` is ``(index, path)`` when streamed."""
+    if not is_streaming_model(model):
+        return _module_at(model, target), None
+    attrs = model.__dict__
+    if target.startswith(_BLOCK_PREFIX):
+        index, _, path = target[len(_BLOCK_PREFIX):].partition(".")
+        if index.isdigit() and path:
+            if int(index) >= attrs["_streamer"].block_count:
+                return None, None
+            return _module_at(attrs["_shared_block"], path), (int(index), path)
+    return _module_at(model.inner, target), None
 
 
 def _logical_shape(module, quantized: bool) -> tuple[int, int]:
@@ -138,7 +175,7 @@ def _plan(model, label: str, tensors: dict, strength: float) -> list[tuple]:
         if "A" not in pair or "B" not in pair:
             missing = "lora_B" if "A" in pair else "lora_A"
             raise ValueError(f"LoRA {label} target {target} has no {missing} tensor")
-        module = _module_at(model, target)
+        module, block = _locate(model, target)
         if module is None:
             raise ValueError(
                 f"LoRA {label} targets {target}, which this transformer does not have — "
@@ -162,40 +199,57 @@ def _plan(model, label: str, tensors: dict, strength: float) -> list[tuple]:
                 f"LoRA {label} target {target} has lora_A {tuple(down.shape)} / lora_B "
                 f"{tuple(up.shape)}, which do not fit a ({output_dims}, {input_dims}) projection"
             )
-        planned.append((target, module, quantized, down, up, float(strength)))
+        planned.append((target, module, quantized, down, up, float(strength), block))
     return planned
 
 
-def _apply(module, quantized: bool, down, up, strength: float) -> None:
+def _runtime_pair(down, up, strength: float, dtype) -> tuple:
+    """``(A, strength * B)`` in the quantized kernel's activation dtype."""
     mx, _nn = _mlx()
+    return down.astype(dtype), (up.astype(mx.float32) * strength).astype(dtype)
+
+
+def _fused_weight(weight, pairs) -> Any:
+    """``weight + sum(strength * B @ A)``, accumulated in float32."""
+    mx, _nn = _mlx()
+    fused = weight.astype(mx.float32)
+    for down, up, strength in pairs:
+        fused = fused + (up.astype(mx.float32) * strength) @ down.astype(mx.float32)
+    return fused.astype(weight.dtype)
+
+
+def _apply(module, quantized: bool, down, up, strength: float) -> None:
     if quantized:
         # The quantized kernel's scales carry the activation dtype the base
         # projection computes in; hold the delta in it so nothing promotes.
-        dtype = module.scales.dtype
-        entry = (down.astype(dtype), (up.astype(mx.float32) * strength).astype(dtype))
+        entry = _runtime_pair(down, up, strength, module.scales.dtype)
         if _ADAPTERS_ATTR not in module.__dict__:
             module.__class__ = _runtime_class(type(module))
             object.__setattr__(module, _ADAPTERS_ATTR, [])
         module.__dict__[_ADAPTERS_ATTR].append(entry)
         return
-    delta = (up.astype(mx.float32) * strength) @ down.astype(mx.float32)
-    module.weight = (module.weight.astype(mx.float32) + delta).astype(module.weight.dtype)
+    module.weight = _fused_weight(module.weight, [(down, up, strength)])
 
 
-def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]]) -> list[dict]:
+def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]], *, tag: str | None = None) -> list[dict]:
     """Attach ``(label, renamed_tensors, strength)`` adapters to ``model`` in place.
 
     Every adapter is validated before any module changes, so a malformed file
     later in the list cannot leave an earlier one half-applied. Returns one
     summary per adapter with the strategy its targets actually received.
+    ``tag`` lets ``drop_streaming_adapters`` remove these later from a streamed
+    model, which the runtime never reloads between stages.
     """
     plans = [(label, strength, _plan(model, label, tensors, strength)) for label, tensors, strength in adapters]
+    streaming = is_streaming_model(model)
     summaries = []
     for label, strength, planned in plans:
-        quantized_targets = 0
-        for _target, module, quantized, down, up, scale in planned:
-            _apply(module, quantized, down, up, scale)
-            quantized_targets += int(quantized)
+        if streaming:
+            _attach_streaming(model, planned, tag)
+        else:
+            for _target, module, quantized, down, up, scale, _block in planned:
+                _apply(module, quantized, down, up, scale)
+        quantized_targets = sum(int(quantized) for _t, _m, quantized, *_rest in planned)
         fused_targets = len(planned) - quantized_targets
         strategy = (STRATEGY_MIXED if quantized_targets and fused_targets
                     else STRATEGY_RUNTIME if quantized_targets else STRATEGY_FUSED)
@@ -209,6 +263,198 @@ def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]]) -> list[
     return summaries
 
 
+def _streaming_class(base_cls: type) -> type:
+    cls = _STREAMING_CLASSES.get(base_cls)
+    if cls is not None:
+        return cls
+
+    def __call__(self, *args, **kwargs):
+        if kwargs.get("block_provider") is None:
+            kwargs["block_provider"] = _block_provider(self, use_compiled=kwargs.get("perturbations") is None)
+        return base_cls.__call__(self, *args, **kwargs)
+
+    cls = type(f"RuntimeLora{base_cls.__name__}", (base_cls,), {
+        "__call__": __call__,
+        _STREAMING_BASE_ATTR: base_cls,
+    })
+    _STREAMING_CLASSES[base_cls] = cls
+    return cls
+
+
+def _block_provider(model, *, use_compiled: bool):
+    """The runtime's per-forward block provider, plus the per-index adapter bind.
+
+    Mirrors ``StreamingLTXModel.__call__`` at the pinned runtimes. ``_streamer``
+    and ``_lora_sources`` are read per forward because the two-stage pipelines
+    swap the streamer and append a distilled-LoRA source between stages; those
+    runtime-owned sources still merge inside ``bind``. Guidance perturbations
+    cannot be traced by mx.compile, so they run the eager block, as upstream.
+    """
+    attrs = model.__dict__
+    streamer, shared, state = attrs["_streamer"], attrs["_shared_block"], attrs[_STREAMING_ATTR]
+    runtime_sources = attrs.get("_lora_sources") or None
+    block = state["compiled"] if use_compiled else shared
+    previous: list[int | None] = [None]
+
+    def provider(index: int):
+        streamer.bind(shared, index, evict_previous=previous[0], lora_sources=runtime_sources)
+        previous[0] = index
+        _bind_streamed_block(state, shared, index)
+        return block
+
+    return provider
+
+
+def _bind_streamed_block(state: dict, shared, index: int) -> None:
+    """Point the shared block's adapters at block ``index`` right after its weights bind.
+
+    The casts are built here, per bind, so only the bound block's copies are
+    ever alive; a source tensor is whatever the adapter loader returned.
+    """
+    for path, slots in state["slots"].items():
+        for slot, source in zip(slots, state["slot_sources"][path]):
+            pair = source["blocks"].get(index)
+            slot[0], slot[1] = (source["zero"] if pair is None
+                                else _runtime_pair(*pair, source["strength"], source["dtype"]))
+    for path, sources in state["fused"].items():
+        pairs = [(*source["blocks"][index], source["strength"]) for source in sources if index in source["blocks"]]
+        if pairs:
+            module = _module_at(shared, path)
+            module.weight = _fused_weight(module.weight, pairs)
+
+
+def _streaming_state(model) -> dict:
+    state = model.__dict__.get(_STREAMING_ATTR)
+    if state is None:
+        # slots: path -> [[down, up], ...], the SAME lists the quantized
+        # projection iterates, declared as compile inputs. fused: float block
+        # projections, fused into each freshly bound weight. outside: targets
+        # beyond the streamed blocks, which stay resident.
+        state = {"slots": {}, "slot_sources": {}, "fused": {}, "outside": [], "compiled": None}
+        model.__class__ = _streaming_class(type(model))
+        object.__setattr__(model, _STREAMING_ATTR, state)
+    return state
+
+
+def _recompile(model) -> None:
+    """Compile the shared block with its adapter slots as declared inputs.
+
+    A fresh compiled function per slot layout: mx.compile retraces when input
+    shapes change, but a layout change with equal shapes would reuse a trace
+    that reads the wrong slots.
+    """
+    mx, _nn = _mlx()
+    state = model.__dict__[_STREAMING_ATTR]
+    shared = model.__dict__["_shared_block"]
+    state["compiled"] = mx.compile(shared, inputs=[shared, state["slots"]])
+
+
+def _attach_streaming(model, planned: list[tuple], tag: str | None) -> None:
+    mx, _nn = _mlx()
+    state = _streaming_state(model)
+    sources: dict[str, dict] = {}
+    for _target, module, quantized, down, up, strength, block in planned:
+        if block is None:
+            state["outside"].append(_attach_outside_blocks(module, quantized, down, up, strength, tag))
+            continue
+        index, path = block
+        source = sources.get(path)
+        if source is None:
+            source = sources[path] = {"tag": tag, "strength": strength, "blocks": {}}
+            if quantized:
+                dtype = module.scales.dtype
+                source["dtype"] = dtype
+                # A block this adapter does not address keeps the slot layout
+                # (and so the compiled trace) and adds nothing.
+                source["zero"] = (mx.zeros(down.shape, dtype=dtype), mx.zeros(up.shape, dtype=dtype))
+                slots = state["slots"].get(path)
+                if slots is None:
+                    slots = state["slots"][path] = []
+                    state["slot_sources"][path] = []
+                    module.__class__ = _runtime_class(type(module))
+                    object.__setattr__(module, _ADAPTERS_ATTR, slots)
+                slots.append(list(source["zero"]))
+                state["slot_sources"][path].append(source)
+            else:
+                state["fused"].setdefault(path, []).append(source)
+        source["blocks"][index] = (down, up)
+    _recompile(model)
+
+
+def _attach_outside_blocks(module, quantized: bool, down, up, strength: float, tag: str | None) -> dict:
+    """Apply a non-block target as ``_apply`` does, recording what a drop must undo."""
+    if not quantized:
+        module.__dict__.setdefault(_FUSED_BASE_ATTR, module.weight)
+    _apply(module, quantized, down, up, strength)
+    record = {"module": module, "quantized": quantized, "tag": tag, "delta": (down, up, strength)}
+    if quantized:
+        record["entry"] = module.__dict__[_ADAPTERS_ATTR][-1]
+    return record
+
+
+def drop_streaming_adapters(model, tag: str | None = None) -> int:
+    """Remove adapters attached with ``tag`` (every one when None) from a streamed model.
+
+    Under streaming the runtime's clean stage-2 refine keeps the same model and
+    only clears its own ``_lora_sources``, so an IC adapter is dropped here or
+    it would condition the refine. Returns the number of projections restored.
+    """
+    state = model.__dict__.get(_STREAMING_ATTR)
+    if state is None:
+        return 0
+    shared = model.__dict__["_shared_block"]
+
+    def dropped(item: dict) -> bool:
+        return tag is None or item["tag"] == tag
+
+    restored = 0
+    for path in list(state["slots"]):
+        keep = [i for i, source in enumerate(state["slot_sources"][path]) if not dropped(source)]
+        slots = state["slots"][path]
+        slots[:] = [slots[i] for i in keep]
+        state["slot_sources"][path] = [state["slot_sources"][path][i] for i in keep]
+        if not slots:
+            _restore_class(_module_at(shared, path))
+            del state["slots"][path], state["slot_sources"][path]
+            restored += 1
+    for path in list(state["fused"]):
+        state["fused"][path] = [source for source in state["fused"][path] if not dropped(source)]
+        if not state["fused"][path]:
+            del state["fused"][path]
+
+    removed = [record for record in state["outside"] if dropped(record)]
+    state["outside"] = [record for record in state["outside"] if not dropped(record)]
+    refuse: dict[int, Any] = {}
+    for record in removed:
+        module = record["module"]
+        if not record["quantized"]:
+            refuse[id(module)] = module
+            continue
+        entries = module.__dict__[_ADAPTERS_ATTR]
+        entries[:] = [entry for entry in entries if entry is not record["entry"]]
+        if not entries:
+            _restore_class(module)
+            restored += 1
+    for module in refuse.values():
+        remaining = [record["delta"] for record in state["outside"] if record["module"] is module]
+        module.weight = _fused_weight(module.__dict__[_FUSED_BASE_ATTR], remaining)
+        if not remaining:
+            del module.__dict__[_FUSED_BASE_ATTR]
+            restored += 1
+
+    if tag is None:
+        model.__class__ = getattr(type(model), _STREAMING_BASE_ATTR)
+        del model.__dict__[_STREAMING_ATTR]
+    else:
+        _recompile(model)
+    return restored
+
+
+def _restore_class(module) -> None:
+    module.__class__ = getattr(type(module), _BASE_CLASS_ATTR)
+    del module.__dict__[_ADAPTERS_ATTR]
+
+
 def runtime_adapter_targets(model) -> list[str]:
     """Names of the projections currently carrying an activation-space delta."""
     return [name for name, module in model.named_modules() if _ADAPTERS_ATTR in module.__dict__]
@@ -216,11 +462,10 @@ def runtime_adapter_targets(model) -> list[str]:
 
 def detach_runtime_adapters(model) -> int:
     """Restore every swapped projection to its original class. Returns the count."""
-    count = 0
+    count = drop_streaming_adapters(model)
     for _name, module in model.named_modules():
         if _ADAPTERS_ATTR in module.__dict__:
-            module.__class__ = getattr(type(module), _BASE_CLASS_ATTR)
-            del module.__dict__[_ADAPTERS_ATTR]
+            _restore_class(module)
             count += 1
     return count
 
@@ -278,33 +523,20 @@ def install_pipeline_adapters(
     ``ic=True`` the pipeline's ``_fuse_loras`` — called once, right before
     stage 1 — attaches the IC adapter(s) to the loaded DiT instead; the clean
     stage-2 reload goes back through the load hook and so carries the user
-    adapters but never the IC one.
+    adapters but never the IC one. Block streaming takes the same route: the
+    load hook returns a StreamingLTXModel and ``attach_adapters`` binds each
+    block's delta per index (#12327); its clean refine keeps the model, so the
+    reload wrapper drops the IC adapters from it instead.
 
     Paths must already be local files: `parse_user_loras` requires that, and
     the IC constructor resolves its repo ids before this runs.
     """
-    if getattr(pipe, "low_ram_streaming", False):
-        if user_specs:
-            pipe._pending_loras = list(user_specs)
-        merged = [("user", "all", spec) for spec in user_specs]
-        if ic:
-            merged += [("ic", "stage-1", spec) for spec in getattr(pipe, "_lora_paths", [])]
-        for role, stage, (path, strength) in merged:
-            report.record(role, stage, path, _requantized_summary(path, strength))
-        if merged:
-            names = ", ".join(Path(path).name for _role, _stage, (path, _s) in merged)
-            status(
-                "Block streaming merges LoRA deltas into the quantized weights per block; a low-bit "
-                f"pack can lose part of their effect ({names})"
-            )
-        return
-
     pipe._pending_loras = None
     load_transformer = pipe._load_transformer_with_optional_streaming
 
     def attach(dit, role: str, stage: str, specs) -> None:
         loaded = [(path, load_adapter(path), strength) for path, strength in specs]
-        for (path, _tensors, _strength), summary in zip(loaded, attach_adapters(dit, loaded)):
+        for (path, _tensors, _strength), summary in zip(loaded, attach_adapters(dit, loaded, tag=role)):
             if report.record(role, stage, path, summary):
                 status(
                     f"{role} LoRA {summary['name']}: {summary['strategy']} "
@@ -328,6 +560,15 @@ def install_pipeline_adapters(
 
         pipe._fuse_loras = attach_ic_adapters
 
+        reload_clean = getattr(pipe, "_reload_clean_transformer", None)
+        if callable(reload_clean):
+            def reload_clean_without_ic() -> None:
+                reload_clean()
+                if pipe.dit is not None and is_streaming_model(pipe.dit):
+                    drop_streaming_adapters(pipe.dit, "ic")
+
+            pipe._reload_clean_transformer = reload_clean_without_ic
+
 
 def release_pipeline_adapters(pipe) -> None:
     """Drop the transformer and every adapter this module attached to it.
@@ -342,13 +583,3 @@ def release_pipeline_adapters(pipe) -> None:
         pipe.dit = None
     if hasattr(pipe, "_loaded"):
         pipe._loaded = False
-
-
-def _requantized_summary(path: str, strength: float) -> dict:
-    return {
-        "name": Path(path).name,
-        "strength": float(strength),
-        "strategy": STRATEGY_REQUANTIZED,
-        "quantizedTargets": None,
-        "fusedTargets": None,
-    }
