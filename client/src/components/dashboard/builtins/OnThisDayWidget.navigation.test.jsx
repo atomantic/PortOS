@@ -114,7 +114,7 @@ describe('On This Day record destinations', () => {
     ['idea', '/brain/ideas/ideas/example-deleted', 'getBrainIdea'],
   ])('shows missing or unavailable %s without substituting the first list record', async (type, path, getter) => {
     if (type === 'memory') api[getter].mockResolvedValue(null);
-    else api[getter].mockRejectedValue(new Error('Example unavailable'));
+    else api[getter].mockRejectedValue(Object.assign(new Error('Example not found'), { status: 404 }));
     mount(type, path);
     expect(await screen.findByText('Entry not found')).toBeTruthy();
     expect(screen.getByText(/could not be loaded/)).toBeTruthy();
