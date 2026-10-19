@@ -33,6 +33,10 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 const MODULE_RE = /\.(?:[cm]?jsx?|tsx?)$/i;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
 const NEW_URL_RE = /new URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
+// A `/` after one of these words begins a regex literal, not a division.
+const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+// `if (x) /re/.test(y)`: a `)` closing one of these headers is followed by a statement.
+const CONTROL_HEADER_KEYWORDS = new Set(['if', 'while', 'for', 'with']);
 const COMPLETIONS = ['', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
 /**
@@ -56,6 +60,22 @@ function scanCode(source) {
   // `x++ / y`: a prefix ++/-- needs an operand, never a regex, so an adjacent
   // doubled +/- before `/` always ends an expression.
   const isPostfixStep = () => (prev === '+' || prev === '-') && prevAt > 0 && source[prevAt - 1] === prev;
+  // The identifier ending at source[end], or '' when it is a property name (`a.return / 2`).
+  const wordEndingAt = (end) => {
+    let start = end;
+    while (start > 0 && /[\w$]/.test(source[start - 1])) start -= 1;
+    if (start > end) return '';
+    let before = start - 1;
+    while (before >= 0 && /\s/.test(source[before])) before -= 1;
+    return before >= 0 && source[before] === '.' && source[before - 1] !== '.' ? '' : source.slice(start, end + 1);
+  };
+  const parens = []; // per open `(`: does it head an if/while/for/with?
+  let closedControlHeader = false;
+  const endsExpression = () => {
+    if (prev === ')') return !closedControlHeader;
+    if (/[\w$]/.test(prev)) return !REGEX_PRECEDING_KEYWORDS.has(wordEndingAt(prevAt));
+    return false;
+  };
   const readTemplate = (from) => {
     let j = from + 1;
     while (j < source.length) {
@@ -93,7 +113,7 @@ function scanCode(source) {
     } else if (ch === '`') {
       i = readTemplate(i);
       prev = '`';
-    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{;+-*%<>~^'.includes(prev)) && !isPostfixStep()) {
+    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{;+-*%<>~^'.includes(prev) || !endsExpression() && (prev === ')' || /[\w$]/.test(prev))) && !isPostfixStep()) {
       // `}` is deliberately not a regex start: it usually ends an object/function expression (`{} / d`), and mis-scanning a rare regex statement after a block is safer than dropping later imports from the check.
       let j = i + 1;
       let inClass = false;
@@ -107,6 +127,8 @@ function scanCode(source) {
       i = j + 1;
       prev = '/';
     } else {
+      if (ch === '(') parens.push(/[\w$]/.test(prev) && CONTROL_HEADER_KEYWORDS.has(wordEndingAt(prevAt)));
+      else if (ch === ')') closedControlHeader = parens.pop() === true;
       if (ch === '{') depth += 1;
       else if (ch === '}') {
         depth -= 1;
