@@ -60,6 +60,8 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: vi.fn(), updateAgent: vi.fn() }));
+
 // Mock memoryConfig
 vi.mock('./memoryConfig.js', () => ({
   DEFAULT_MEMORY_CONFIG: {
@@ -722,8 +724,17 @@ describe('memory service', () => {
         return Promise.resolve(def);
       });
 
+      // Exercise the real approval-count side effect behind the public memory workflow.
+      const lifecycle = await import('./cosAgentLifecycle.js');
+      lifecycle.getAgent.mockResolvedValue({ memoryExtraction: { pendingApproval: 2, created: 4 } });
+      lifecycle.updateAgent.mockResolvedValue(undefined);
+      const actualConfig = await vi.importActual('./memoryConfig.js');
+      decrementAgentPendingApproval.mockImplementationOnce(actualConfig.decrementAgentPendingApproval);
       const result = await approveMemory('mem-1');
 
+      expect(lifecycle.updateAgent).toHaveBeenCalledWith('agent-1', {
+        memoryExtraction: { pendingApproval: 1, created: 4 },
+      });
       expect(result.success).toBe(true);
       expect(result.memory.status).toBe('active');
       expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'mem-1');

@@ -1098,7 +1098,8 @@ export async function listSnapshots(destPath) {
           : source === MACHINE_HOST ? `${source} (current machine)` : source,
         selectionKey: `${source}/${id}`,
         currentMachine: source === MACHINE_HOST,
-        createdAt: manifest?.generatedAt ?? null,
+        createdAt: typeof manifest?.generatedAt === 'string' && !Number.isNaN(Date.parse(manifest.generatedAt))
+          ? manifest.generatedAt : null,
         fileCount: manifest?.fileCount ?? 0,
         incomplete,
         failed,
@@ -1118,8 +1119,8 @@ export async function listSnapshots(destPath) {
 /**
  * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
  * namespace beyond `retentionCount`. Called only from `runBackup()` after a
- * run reaches a completed snapshot (rsync + a pg_dump attempt, even a
- * degraded one) — a run that fails earlier never reaches this call, so an
+ * run reaches a completed snapshot with a successful or explicitly skipped
+ * database dump — a run that fails earlier never reaches this call, so an
  * in-progress or `.failed` snapshot is never a candidate; both are re-checked
  * here anyway via `snapshotState` in case an unrelated run left one behind.
  * Only ever walks `snapshots/<MACHINE_HOST>/` — never another machine's
@@ -1158,15 +1159,15 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   descriptors.sort((a, b) => b.id.localeCompare(a.id)
     || (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
 
-  // Unreadable-manifest snapshots still count toward retention but are never deleted.
-  const toDelete = [];
-  descriptors.slice(retentionCount).forEach(d => {
+  // Keep protected snapshots in addition to the readable retention budget,
+  // even when a bad clock placed a protected snapshot ahead of healthy ones.
+  const toDelete = descriptors.filter(d => {
     if (d.protectedFromPrune) {
       console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable)`);
-    } else {
-      toDelete.push(d);
+      return false;
     }
-  });
+    return true;
+  }).slice(retentionCount);
   let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
     // A snapshot a restore or download is reading stays; a later run prunes it

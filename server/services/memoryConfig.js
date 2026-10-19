@@ -40,7 +40,7 @@ export function generateSummary(content, maxLength = 150) {
 export async function decrementAgentPendingApproval(sourceAgentId) {
   if (!sourceAgentId) return;
 
-  const { getAgent, updateAgent } = await import('./cos.js');
+  const { getAgent, updateAgent } = await import('./cosAgentLifecycle.js');
   const agent = await getAgent(sourceAgentId).catch(() => null);
   if (!agent?.memoryExtraction?.pendingApproval) return;
 

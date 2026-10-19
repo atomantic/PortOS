@@ -302,7 +302,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const c = await receiptCheckout('receipt', { gitlink: true });
     const result = await c.retireReceipt();
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
-    expect(await registered(c.path)).toBe(false);
+    expect(await registered(c.release.path)).toBe(false);
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
     const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
     expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
@@ -362,7 +362,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     expect(await c.retireReceipt()).toMatchObject({ ok: false,
       reason: change === 'head' ? 'receipt-pr-head-changed' : 'retirement-supersession-not-accepted' });
-    expect(await registered(c.path)).toBe(true);
+    expect(await registered(c.release.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
@@ -379,7 +379,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
     expect(await c.retireReceipt()).toMatchObject({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
     expect(await readFile(join(c.path, 'vendor', 'unique.txt'), 'utf8')).toBe('submodule work');
-    expect(await registered(c.path)).toBe(true);
+    expect(await registered(c.release.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
@@ -390,7 +390,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       id: 'agent-live', status: 'running', workspacePath: c.release.path,
     }]) });
     expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active', archiveDir: expect.any(String) });
-    expect(await registered(c.path)).toBe(true);
+    expect(await registered(c.release.path)).toBe(true);
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
