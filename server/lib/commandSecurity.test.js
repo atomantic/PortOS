@@ -529,6 +529,14 @@ describe('commandSecurity', () => {
       ['glab api -X POST is an authenticated write', 'glab api -X POST /projects'],
       ['a bare gh has no read-only verb at all', 'gh'],
       ['a methodless -X is malformed and fails closed', 'gh api -X'],
+      // pflag also takes a shorthand's value attached or after clustered booleans.
+      ['an attached -XPOST is an authenticated write', 'gh api -XPOST /repos/x/y/issues'],
+      ['an attached -X=POST is an authenticated write', 'gh api -X=POST /repos/x/y/issues'],
+      ['a -XPOST clustered after -i is an authenticated write', 'gh api -iXPOST /repos/x/y/issues'],
+      ['glab api -XDELETE is an authenticated write', 'glab api -XDELETE /projects/1'],
+      ['an attached -F field uploads a local file in a POST', 'gh api /repos/x/y/issues -Fbody=@/example/file'],
+      ['an attached -f field makes gh api an implicit POST', 'gh api /repos/x/y/issues -ftitle=hi'],
+      ['--input= sends a local file as the request body', 'gh api /repos/x/y/issues --input=/example/file'],
     ])('rejects %s', (_label, cmd) => {
       expect(validateUnattendedCommand(cmd).valid).toBe(false)
     })
@@ -539,6 +547,9 @@ describe('commandSecurity', () => {
       'gh issue view 1',
       'gh api /rate_limit',
       'gh api -X GET /rate_limit',
+      'gh api -XGET /rate_limit',
+      'gh api -i /rate_limit',
+      'gh api /repos/x/y -q.name',
       'glab mr list',
       'glab issue view 1',
     ])('accepts read-only tracker command %s', (cmd) => {
