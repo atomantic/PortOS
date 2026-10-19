@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import SettingsLoadError from '../../ui/SettingsLoadError';
 import { Save, Loader2, MonitorPlay, RefreshCw, CheckCircle2, AlertCircle, ShieldQuestion, Search, ExternalLink, Download, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import FormField from '../../ui/FormField';
@@ -21,7 +22,7 @@ import {
 // page is the reliable historical path.
 export function YoutubeTab() {
   const {
-    loading, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving,
+    loading, loadError, retry, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving,
     status, setStatus, dirty, save,
   } = useSyncSourceSettings({ domain: 'youtube', defaultInterval: 480, getStatus: getYoutubeStatus });
   const [syncing, setSyncing] = useState(false);
@@ -110,6 +111,7 @@ export function YoutubeTab() {
 
   return (
     <div className="space-y-6">
+      {loadError && <SettingsLoadError onRetry={retry} />}
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <MonitorPlay size={16} className="text-port-accent" />
@@ -188,7 +190,7 @@ export function YoutubeTab() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || loadError}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}

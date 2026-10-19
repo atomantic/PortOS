@@ -1,8 +1,9 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import { Save, Download, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
+import SettingsLoadError from '../ui/SettingsLoadError';
 import {
   getSettings,
   updateSettings,
@@ -14,6 +15,7 @@ import { formatBytes, formatDateTime } from '../../utils/formatters';
 export function MortalLoomTab() {
   const icloudPathId = useId();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -26,19 +28,25 @@ export function MortalLoomTab() {
     if (s) setStatus(s);
   };
 
-  useEffect(() => {
-    Promise.all([getSettings().catch(() => ({})), getMortalLoomStatus().catch(() => null)])
+  const loadAll = useCallback(() => {
+    setLoading(true);
+    setLoadError(false);
+    return Promise.all([getSettings().catch(() => null), getMortalLoomStatus().catch(() => null)])
       .then(([settings, s]) => {
-        const ml = settings?.mortalloom || {};
+        if (s) setStatus(s);
+        if (!settings) { setLoadError(true); return; }
+        const ml = settings.mortalloom || {};
         setEnabled(Boolean(ml.enabled));
         setPath(ml.path || '');
         setLastImport(ml.lastImportAt || null);
-        if (s) setStatus(s);
       })
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { loadAll(); }, [loadAll]);
+
   const handleSave = async () => {
+    if (loadError) return;
     setSaving(true);
     try {
       await updateSettings({
@@ -67,6 +75,7 @@ const IMPORT_FAILURE_MESSAGES = {
 };
 
   const handleImport = async () => {
+    if (loadError) return;
     if (!status?.exists) {
       toast.error('MortalLoom.json not found at configured path');
       return;
@@ -94,6 +103,7 @@ const IMPORT_FAILURE_MESSAGES = {
 
   return (
     <div className="space-y-5">
+      {loadError && <SettingsLoadError onRetry={loadAll} />}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
         <div>
           <h3 className="text-lg font-semibold text-white mb-1">MortalLoom iCloud Sync</h3>
@@ -143,7 +153,7 @@ const IMPORT_FAILURE_MESSAGES = {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || loadError}
             className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
           >
             <Save size={14} className="inline mr-1" />
@@ -151,7 +161,7 @@ const IMPORT_FAILURE_MESSAGES = {
           </button>
           <button
             onClick={handleImport}
-            disabled={importing || !status?.exists || !enabled}
+            disabled={importing || loadError || !status?.exists || !enabled}
             className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-white rounded-lg text-sm transition-colors disabled:opacity-50"
             title={!enabled ? 'Enable sync first' : !status?.exists ? 'MortalLoom.json not found' : 'Import into PortOS'}
           >
