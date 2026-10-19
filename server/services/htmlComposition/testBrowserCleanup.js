@@ -319,6 +319,24 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
   });
 }
 
+// A loaded runner (CI IO pressure) can leave a healthy Chrome without a DevTools
+// address past the budget. Retry only that timeout, once, on a fresh child; any
+// other failure (spawn error, early exit) is deterministic and surfaces at once.
+// `onProc` hands every spawned child to the caller so its own cleanup owns it;
+// `discard` must terminate a child that is being abandoned for a retry.
+export async function _startTestChromeWithRetry({ launch, discard, onProc = () => {}, wait = _waitForTestChrome, attempts = 2 }) {
+  for (let attempt = 0; ; attempt++) {
+    const proc = launch(attempt);
+    onProc(proc);
+    try {
+      return await wait(proc);
+    } catch (error) {
+      if (attempt + 1 >= attempts || !/^Test Chrome did not start within/.test(error?.message)) throw error;
+      await discard(proc);
+    }
+  }
+}
+
 async function withinDeadline(action, timeoutMs, stage, facts = () => '') {
   let timer;
   try {
