@@ -1655,7 +1655,7 @@ function ProjectWorkspace({
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
   const reviewStage = selected ? approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active) : null;
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' || activeStage === 'produce' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : (activeStage === 'board' || activeStage === 'produce') ? 'storyboard' : 'final' }) : [];
 
   return (
     <>

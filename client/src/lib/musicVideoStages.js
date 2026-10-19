@@ -179,18 +179,17 @@ export function boardJobEstimate(project) {
 /**
  * Everything the docked preview can play, in the order it picks a default:
  * the final render (its resolved `finalVideoSrc`), the composition document,
- * then each finished draft excerpt, newest first (`draftsFirst`, on Final
- * render, puts the drafts before the composition; `storyboardFirst`, on
- * Storyboard, puts the live document, then the animatic, first). While editing the
- * composition (`liveFirst`, the Compose stage) the live document leads so an
- * old final render is not what the user sees by default. A final render whose
+ * then each finished draft excerpt, newest first. `leadWith` picks the
+ * ordering: `"final"` (default) as above; `"drafts"` (Final render stage)
+ * puts the drafts before the composition; `"storyboard"` (Plan and Shots
+ * stages) puts the live document, then the animatic, first. A final render whose
  * inputs changed is labelled out of date. Last comes the storyboard animatic —
  * the song under each shot's frame or card — so a project with a track and
  * shots always has something to watch — and after it the lyric timing
  * playthrough once the words are aligned. Each entry has a stable `id` (the
  * `?play=` value) and a `label` for the source picker.
  */
-export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false, draftsFirst = false, storyboardFirst = false } = {}) {
+export function listPreviewSources(project, { finalVideoSrc = null, leadWith = 'final' } = {}) {
   const sources = [];
   const final = project?.renderHistoryId && finalVideoSrc
     ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
@@ -204,13 +203,13 @@ export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = 
     label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
   }));
   // Final render is reviewed by watching its drafts until the final render exists.
-  const ordered = liveFirst || storyboardFirst ? [live, final, ...drafts] : draftsFirst ? [final, ...drafts, live] : [final, live, ...drafts];
+  const ordered = leadWith === 'storyboard' ? [live, final, ...drafts] : leadWith === 'drafts' ? [final, ...drafts, live] : [final, live, ...drafts];
   sources.push(...ordered.filter(Boolean));
   if (projectHasAudio(project) && (project?.scenes || []).length > 0) {
     const animatic = { id: 'animatic', kind: 'animatic', label: 'Storyboard animatic' };
     // On Storyboard the storyboard itself leads (the live document, else the animatic): a draft
     // clip covers only its own range, so most shots could not be played from it.
-    if (storyboardFirst) sources.splice(live ? 1 : 0, 0, animatic);
+    if (leadWith === 'storyboard') sources.splice(live ? 1 : 0, 0, animatic);
     else sources.push(animatic);
   }
   // The aligned words over a plain frame, for checking timing before there is any picture.
