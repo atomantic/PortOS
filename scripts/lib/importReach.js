@@ -27,7 +27,7 @@ import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTe
 
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'];
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"`])([^'"`]+?)\1\s*[,)]/g;
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(?:\/\*.*?\*\/\s*)*(['"`])([^'"`]+?)\1\s*[,)]/g;
 // `*` opens a comment continuation only when followed by space, `/` or EOL; `*gen() {}` is code.
 const COMMENT_LINE_RE = /^\s*(?:\/\/|\*(?:[\s/]|$))/;
 const LEADING_BLOCK_COMMENT_RE = /^\s*\/\*.*?\*\//;
