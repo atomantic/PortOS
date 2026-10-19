@@ -75,20 +75,28 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   if (release.branch === forge.defaultBranch) throw new Error('protected-branch');
   if (!oid(forge.changeBase) || !oid(forge.firstCommit) || !Array.isArray(forge.changedPaths)
     || !forge.changedPaths.length || !forge.changedPaths.every(safePath)) throw new Error('retirement-original-scope-unavailable');
-  for (const head of [forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit]) {
-    await git(['cat-file', '-e', `${head}^{commit}`], repoPath).catch(() => { throw new Error('retirement-local-objects-missing'); });
-  }
-  await git(['merge-base', '--is-ancestor', forge.mergeCommit, forge.defaultHead], repoPath)
-    .catch(() => { throw new Error('retirement-merge-not-in-default'); });
-  const parent = (await git(['rev-list', '--parents', '-n', '1', forge.firstCommit], repoPath)).trim().split(/\s+/);
+  // Independent reads run together (each Git spawn is mostly launch latency);
+  // the verdicts keep their original precedence.
+  await Promise.all([...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])]
+    .map(head => git(['cat-file', '-e', `${head}^{commit}`], repoPath).catch(() => { throw new Error('retirement-local-objects-missing'); })));
+  const [inDefault, parents, inPr] = await Promise.allSettled([
+    git(['merge-base', '--is-ancestor', forge.mergeCommit, forge.defaultHead], repoPath),
+    git(['rev-list', '--parents', '-n', '1', forge.firstCommit], repoPath),
+    git(['merge-base', '--is-ancestor', forge.firstCommit, forge.prHead], repoPath),
+  ]);
+  if (inDefault.status === 'rejected') throw new Error('retirement-merge-not-in-default');
+  if (parents.status === 'rejected') throw parents.reason;
+  const parent = parents.value.trim().split(/\s+/);
   if (parent.length !== 2 || parent[1] !== forge.changeBase) throw new Error('retirement-original-scope-unavailable');
-  await git(['merge-base', '--is-ancestor', forge.firstCommit, forge.prHead], repoPath)
-    .catch(() => { throw new Error('retirement-original-scope-unavailable'); });
+  if (inPr.status === 'rejected') throw new Error('retirement-original-scope-unavailable');
   const base = (await git(['merge-base', release.head, forge.changeBase], repoPath)).trim();
   if (base === release.head) throw new Error('retirement-original-scope-unavailable');
-  const localPaths = (await git(['diff', '--name-only', '-z', base, release.head], repoPath)).split('\0').filter(Boolean);
+  const [localPathsOut, localPatch] = await Promise.all([
+    git(['diff', '--name-only', '-z', base, release.head], repoPath),
+    git(['diff', '--binary', '--no-ext-diff', '--no-textconv', base, release.head], repoPath),
+  ]);
+  const localPaths = localPathsOut.split('\0').filter(Boolean);
   const paths = [...new Set([...forge.changedPaths, ...localPaths])].sort();
-  const localPatch = await git(['diff', '--binary', '--no-ext-diff', '--no-textconv', base, release.head], repoPath);
   const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, forge.defaultHead, '--', ...paths], repoPath) : '';
   // Historical ancestry/cherry equivalence does not establish that current
   // code still implements the original work (it may have been strengthened or

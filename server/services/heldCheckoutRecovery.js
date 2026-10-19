@@ -125,8 +125,20 @@ async function rawBlobId(source, size, format) {
  * The fingerprint is compared again immediately before removal.
  */
 async function snapshotContent(path) {
-  if ((await git(['ls-files', '-u', '-z'], path)).length) throw new Error('unmerged index entries cannot be archived');
-  const stage = zLines(await git(['ls-files', '--stage', '-z'], path));
+  // These reads are independent and each Git spawn is mostly launch latency, so
+  // they run together; every destructive boundary re-reads this snapshot anyway.
+  const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others] = await Promise.all([
+    git(['ls-files', '-u', '-z'], path),
+    git(['ls-files', '--stage', '-z'], path),
+    git(['ls-files', '-v', '-z'], path),
+    // A textconv or external diff driver can drop bytes from a patch.
+    git(['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path),
+    git(['diff', '--binary', '--no-textconv', '--no-ext-diff'], path),
+    git(['rev-parse', '--show-object-format'], path),
+    git(['ls-files', '--others', '-z'], path),
+  ]);
+  if (unmerged.length) throw new Error('unmerged index entries cannot be archived');
+  const stage = zLines(stageOut);
   const gitlinks = [];
   for (const line of stage.filter(row => row.startsWith('160000 '))) {
     const tab = line.indexOf('\t');
@@ -137,11 +149,8 @@ async function snapshotContent(path) {
     gitlinks.push({ path: rel, commit: header.split(' ')[1], state: info ? 'empty' : 'missing' });
   }
   // Assume-unchanged (lowercase tag) and skip-worktree (S) entries hide edits from diff.
-  const hidden = zLines(await git(['ls-files', '-v', '-z'], path)).find(line => /^[a-zS]/.test(line));
+  const hidden = zLines(tagged).find(line => /^[a-zS]/.test(line));
   if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
-  // A textconv or external diff driver can drop bytes from a patch.
-  const indexDiff = await git(['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path);
-  const worktreeDiff = await git(['diff', '--binary', '--no-textconv', '--no-ext-diff'], path);
 
   const files = [];
   let total = 0;
@@ -150,7 +159,7 @@ async function snapshotContent(path) {
     if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
     files.push({ path: rel, bytes: info.size, sha256: await sha256File(join(path, rel)), ...extra });
   };
-  const format = (await git(['rev-parse', '--show-object-format'], path)).trim() || 'sha1';
+  const format = objectFormat.trim() || 'sha1';
   for (const line of stage) {
     const tab = line.indexOf('\t');
     const [mode, blob] = line.slice(0, tab).split(' ');
@@ -162,7 +171,7 @@ async function snapshotContent(path) {
     if (await rawBlobId(join(path, rel), info.size, format) !== blob) await addFile(rel, info, { tracked: true });
   }
   const symlinks = [];
-  for (const rel of zLines(await git(['ls-files', '--others', '-z'], path))) {
+  for (const rel of zLines(others)) {
     // `ls-files --others` names a nested repository as `dir/` without its files.
     if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     const info = await lstat(join(path, rel));
@@ -190,17 +199,16 @@ async function archiveCheckout(input) {
 }
 
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review }) {
-  const snapshot = await snapshotContent(tree.path);
+  const [snapshot, administration] = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
   await ensureDir(dir);
   await chmod(dir, 0o700);
-  const administration = await snapshotAdministration(tree.path);
 
   // A bundle keeps the original commit objects, merges included, which a
   // squash-merged branch would otherwise lose to garbage collection.
   const bundle = join(dir, 'commits.bundle');
   await git(['bundle', 'create', bundle, 'HEAD'], tree.path);
-  await git(['bundle', 'verify', bundle], repoPath);
-  if (!(await git(['bundle', 'list-heads', bundle], repoPath)).startsWith(`${tree.head} `)) throw new Error('bundle head mismatch');
+  const [, heads] = await Promise.all([git(['bundle', 'verify', bundle], repoPath), git(['bundle', 'list-heads', bundle], repoPath)]);
+  if (!heads.startsWith(`${tree.head} `)) throw new Error('bundle head mismatch');
   await chmod(bundle, 0o600);
   for (const file of administration.files) {
     const destination = join(dir, 'administration', file.path);
@@ -209,7 +217,6 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     await chmod(destination, 0o600);
     if (await sha256File(destination) !== file.sha256) throw new Error('administration archive mismatch');
   }
-  if ((await snapshotAdministration(tree.path)).fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
   if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
   if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
@@ -220,7 +227,10 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     await copyFileGuarded(join(tree.path, file.path), destination);
     if (await sha256File(destination) !== file.sha256) throw new Error(`archived copy of ${file.path} does not match`);
   }
-  if ((await snapshotContent(tree.path)).fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
+  // Re-read after every copy so the check covers the whole archive window.
+  const [after, administrationAfter] = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+  if (administrationAfter.fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
+  if (after.fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
   await atomicWrite(join(dir, 'manifest.json'), {
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
@@ -324,14 +334,17 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     const verifyRemoval = async (holder) => {
       if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
       if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
-      const reason = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review) });
-      if (review) {
-        const fresh = await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts);
-        if (!fresh.ok || fresh.review.digest !== review.digest) return fresh.reason || 'retirement-review-changed';
-      }
-      if ((await snapshotAdministration(tree.path)).fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
+      // Independent final reads, all taken immediately before removal; the
+      // verdicts below keep their original precedence.
+      const [reason, fresh, administration, current] = await Promise.all([
+        ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review) }),
+        review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts) : null,
+        snapshotAdministration(tree.path),
+        snapshotContent(tree.path).catch(() => null),
+      ]);
+      if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
+      if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
       if (reason) return reason;
-      const current = await snapshotContent(tree.path).catch(() => null);
       return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
     };
     const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
