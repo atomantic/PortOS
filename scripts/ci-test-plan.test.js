@@ -420,9 +420,11 @@ it('requests DB verification for every suite in the real canonical inventory wit
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
-  for (const source of ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js']) {
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-    expect(buildCiTestPlan(inputs.changedFiles, inputs), source).toMatchObject({ full: false, db: true });
+  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
+  // One whole-repository collection; the union is a superset whose DB-dependency walk still covers each source.
+  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: sources, cwd });
+  for (const source of sources) {
+    expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
   }
 });
 
