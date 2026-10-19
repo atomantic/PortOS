@@ -62,8 +62,8 @@ describe('review-enabled completion merge gate', () => {
 
 describe('claim ownership binding instructions (#10089)', () => {
   it('binds every branch the run checks out before its worktree exists, whatever the completion policy', () => {
-    for (const leavePrOpen of [false, true]) {
-      const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen });
+    for (const prStaysOpen of [false, true]) {
+      const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen });
       expect(prompt).toContain('"agentId":"parent-example","action":"bind","branch":"BRANCH"');
       expect(prompt).toContain('a tracking epic');
       expect(prompt).toContain('do not create or enter that worktree');
@@ -98,7 +98,7 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).not.toMatch(/Keep admission through[^.]*CI/i);
     expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-admission');
   });
 });
 
@@ -110,7 +110,7 @@ describe('pending-merge handoff instructions (#12247)', () => {
     expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('Once required CI is green'));
     expect(prompt).toContain('NOT yet merged');
     expect(prompt).toContain('A refusal never permits merging without admission');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-handoff');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-handoff');
   });
 
   // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS
