@@ -77,11 +77,10 @@ const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
 const DEFAULT_CONFIG = {
   // Ollama uses OLLAMA_HOST (host:port, no scheme) by convention; also accept
   // an explicit OLLAMA_URL. Normalize to a scheme + no trailing slash + no /v1.
-  baseUrl: normalizeBaseUrl(managedOllamaBaseUrl()),
+  baseUrl: normalizeOllamaBaseUrl(managedOllamaBaseUrl()),
   timeout: DEFAULT_REQUEST_TIMEOUT_MS
 }
 
-const normalizeBaseUrl = normalizeOllamaBaseUrl
 
 let config = { ...DEFAULT_CONFIG }
 let isAvailable = null
@@ -348,7 +347,7 @@ async function readServiceStatus() {
 
 async function ollamaRequestAt(baseUrl, endpoint, options = {}) {
   const { timeout, headers, ...rest } = options
-  const response = await fetchWithTimeout(`${normalizeBaseUrl(baseUrl)}${endpoint}`, {
+  const response = await fetchWithTimeout(`${normalizeOllamaBaseUrl(baseUrl)}${endpoint}`, {
     ...rest,
     headers: { 'Content-Type': 'application/json', ...headers }
   }, timeout ?? config.timeout)
