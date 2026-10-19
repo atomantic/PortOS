@@ -28,7 +28,10 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 const storyboardProps = [];
 vi.mock('./StoryboardPanel', () => ({
   default: function StoryboardPanelStub(props) {
-    storyboardProps.push({ characters: props.characters, places: props.places, objects: props.objects });
+    storyboardProps.push({
+      characters: props.characters, places: props.places, objects: props.objects,
+      bibleStatus: props.bibleStatus, onRetryBible: props.onRetryBible,
+    });
     return <div data-testid="storyboard-panel" />;
   },
   STORYBOARD_TAB: {
@@ -164,5 +167,48 @@ describe('WorkEditor bible load disposal (#7242)', () => {
     expect(latest.characters).toEqual(A_CHARACTERS);
     expect(latest.places).toEqual(A_PLACES);
     expect(latest.objects).toEqual(A_OBJECTS);
+  });
+
+  // #12390: a failed read is an error status, never a successful empty roster,
+  // and a targeted retry recovers one kind without touching the others.
+  it('reports a failed read as an error, preserves other kinds, and retries one kind', async () => {
+    listWritersRoomCharacters.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(A_CHARACTERS);
+    listWritersRoomPlaces.mockResolvedValue(A_PLACES);
+    listWritersRoomObjects.mockResolvedValue(A_OBJECTS);
+
+    render(<RouterProvider router={routerFor(WORK_A)} />);
+    await act(async () => {});
+
+    let latest = storyboardProps.at(-1);
+    expect(latest.bibleStatus).toEqual({ characters: 'error', places: 'ready', objects: 'ready' });
+    expect(latest.places).toEqual(A_PLACES);
+
+    await act(async () => { latest.onRetryBible('characters'); });
+    latest = storyboardProps.at(-1);
+    expect(latest.bibleStatus.characters).toBe('ready');
+    expect(latest.characters).toEqual(A_CHARACTERS);
+    expect(listWritersRoomPlaces).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a retry that resolves after the work switched', async () => {
+    listWritersRoomCharacters.mockRejectedValueOnce(new Error('boom'));
+    listWritersRoomPlaces.mockResolvedValue([]);
+    listWritersRoomObjects.mockResolvedValue([]);
+
+    const view = render(<RouterProvider router={routerFor(WORK_A)} />);
+    await act(async () => {});
+
+    let release;
+    listWritersRoomCharacters.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await act(async () => { storyboardProps.at(-1).onRetryBible('characters'); });
+
+    listWritersRoomCharacters.mockResolvedValue([]);
+    view.rerender(<RouterProvider router={routerFor(WORK_B)} />);
+    await act(async () => {});
+    release(A_CHARACTERS);
+    await act(async () => {});
+
+    expect(storyboardProps.at(-1).characters).toEqual([]);
+    expect(storyboardProps.at(-1).bibleStatus.characters).toBe('ready');
   });
 });

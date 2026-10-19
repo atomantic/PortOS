@@ -70,6 +70,11 @@ function StoryboardPanel({
   onLiveRenderContextChange,
   registerSceneImageMerge,
   objects = [],
+  // Per-kind read state ('loading' | 'ready' | 'error') for the three bible
+  // arrays, plus a targeted retry. An empty array is only "no records" when
+  // its status is 'ready'.
+  bibleStatus = null,
+  onRetryBible = null,
   onObjectsChange,
   onRunObjects,
   hotRef = null,
@@ -325,6 +330,8 @@ function StoryboardPanel({
             kind="characters"
             workId={work.id}
             items={characters}
+            loadStatus={bibleStatus?.characters}
+            onRetry={onRetryBible && (() => onRetryBible('characters'))}
             onItemsChange={onCharactersChange}
             onRefresh={onRunCharacters}
             running={runningKind === 'characters'}
@@ -340,6 +347,8 @@ function StoryboardPanel({
             kind="world"
             workId={work.id}
             items={places}
+            loadStatus={bibleStatus?.places}
+            onRetry={onRetryBible && (() => onRetryBible('places'))}
             onItemsChange={onPlacesChange}
             onRefresh={onRunPlaces}
             running={runningKind === 'places'}
@@ -354,6 +363,8 @@ function StoryboardPanel({
             kind="objects"
             workId={work.id}
             items={objects}
+            loadStatus={bibleStatus?.objects}
+            onRetry={onRetryBible && (() => onRetryBible('objects'))}
             onItemsChange={onObjectsChange}
             onRefresh={onRunObjects}
             running={runningKind === 'objects'}

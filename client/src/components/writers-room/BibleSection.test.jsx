@@ -291,3 +291,51 @@ describe.each(SCENARIOS)('$label (BibleSection)', (s) => {
     expect(screen.getByRole('textbox', { name: s.primaryLabel })).toBeInTheDocument();
   });
 });
+
+// #12390: a failed read must not be indistinguishable from an empty roster.
+describe('BibleSection load failure (#12390)', () => {
+  afterEach(() => cleanup());
+
+  it('standalone: shows an alert + Retry instead of empty-state copy, and retry recovers', async () => {
+    listWritersRoomCharacters
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([{ id: 'char-1', name: 'Ada', aliases: [], role: '', physicalDescription: 'x' }]);
+
+    render(<CharactersBible workId="work-1" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load/i);
+    expect(screen.queryByText(/no .* yet/i)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Ada');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('controlled: a refresh failure keeps the prior rows visible beside the alert', async () => {
+    render(
+      <CharactersBible
+        workId="work-1"
+        characters={[{ id: 'char-1', name: 'Ada', aliases: [], role: '', physicalDescription: 'x' }]}
+        loadStatus="error"
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+  });
+
+  it('controlled: loadStatus=error renders the alert and routes Retry to onRetry; ready+empty keeps guidance', async () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(
+      <CharactersBible workId="work-1" characters={[]} loadStatus="error" onRetry={onRetry} />,
+    );
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText(/no .* yet/i)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    rerender(<CharactersBible workId="work-1" characters={[]} loadStatus="ready" onRetry={onRetry} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText(/no .* yet/i)).toBeInTheDocument();
+  });
+});

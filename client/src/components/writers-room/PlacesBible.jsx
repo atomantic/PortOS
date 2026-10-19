@@ -69,7 +69,7 @@ const PLACE_CONFIG = {
 // Controlled vs. uncontrolled: caller may pass `places` to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
-export default function PlacesBible({ workId, places, onPlacesChange, readingTheme = 'dark', hotRefId = null }) {
+export default function PlacesBible({ workId, places, onPlacesChange, readingTheme = 'dark', hotRefId = null, loadStatus, onRetry }) {
   return (
     <BibleSection
       workId={workId}
@@ -77,6 +77,8 @@ export default function PlacesBible({ workId, places, onPlacesChange, readingThe
       onItemsChange={onPlacesChange}
       readingTheme={readingTheme}
       hotRefId={hotRefId}
+      loadStatus={loadStatus}
+      onRetry={onRetry}
       config={PLACE_CONFIG}
     />
   );
