@@ -111,6 +111,13 @@ function restore(dryRun = false, snapshotId = 'old-schema') {
   return restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
 }
 
+// toMatchObject prints only the asserted keys of a mismatch, which hides why a
+// restore failed; carry the failure reason and error into the assertion message.
+function expectRestoreOk(result, dryRun) {
+  expect(result.status, `restore ${result.status}: ${result.reason ?? ''} ${result.error ?? ''}`).toBe('ok');
+  expect(result.dryRun).toBe(dryRun);
+}
+
 describe.skipIf(!ready)('restore older database schema', () => {
   let appliedBefore;
   let feedBefore;
@@ -195,7 +202,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
   }
 
   it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
-    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(), false);
     expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
     const feedAfter = await feedSequenceValues();
     for (const [name, value] of Object.entries(feedBefore)) {
@@ -226,8 +233,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const path = join(dir, 'portos-db.sql');
     await writeFile(path, sql);
     await query("UPDATE tribe_people SET name = 'Changed after newer-client backup' WHERE id = $1", [personId]);
-    expect(await restore(true, 'newer-client')).toMatchObject({ status: 'ok', dryRun: true });
-    expect(await restore(false, 'newer-client')).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(true, 'newer-client'), true);
+    expectRestoreOk(await restore(false, 'newer-client'), false);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
     expect(await readFile(path, 'utf8')).toBe(sql);
   });
@@ -243,7 +250,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const saved = (await ledger.consume(input)).operation;
     await ledger.advanceGenerationFloor({ hostInstanceId: executionHostId, peerInstanceId: input.peerInstanceId,
       action: input.intent.action, generation: 3, executionEpoch: epoch });
-    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expectRestoreOk(await restore(), false);
     expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'uncertain', fingerprint: saved.fingerprint });
     const current = ledger.authority.read();
     expect(current.epoch).not.toBe(epoch);
@@ -363,7 +370,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect((await query('SELECT * FROM restore_external.link')).rows).toEqual([{ person_id: personId }]);
     await query('DROP SCHEMA restore_external CASCADE');
     const before = (await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows;
-    expect(await restore(true)).toMatchObject({ status: 'ok', dryRun: true });
+    expectRestoreOk(await restore(true), true);
     expect((await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual(before);
   });
 });
