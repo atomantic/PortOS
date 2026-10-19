@@ -57,7 +57,7 @@
 
 import { existsSync, readdirSync } from 'fs';
 import { win32 } from 'path';
-import { findCommandOnPath } from './processEnv.js';
+import { findCommandOnPath, windowsPowerShell51Path } from './processEnv.js';
 
 // The Windows branch below assembles WINDOWS paths, so it joins with win32
 // semantics rather than the host's. On Windows the two are identical; off it,
@@ -122,10 +122,7 @@ function resolveWindowsShell(env, exists, readdir, findOnPath) {
   if (onPath) return onPath;
 
   // Windows PowerShell 5.1 — present on every supported Windows.
-  const ps5 = join(
-    env.SystemRoot || 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
-  );
+  const ps5 = windowsPowerShell51Path(env);
   if (exists(ps5)) return ps5;
 
   return env.COMSPEC || 'cmd.exe';

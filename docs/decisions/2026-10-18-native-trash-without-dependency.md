@@ -1,7 +1,7 @@
 # ADR: Recycle media through OS facilities PortOS owns, not the `trash` package
 
 **Date:** 2026-10-18
-**Status:** Accepted — macOS and Linux mechanisms proven; the Windows mechanism is specified and must pass its acceptance checks in the implementing PR before any adapter ships
+**Status:** Accepted — macOS and Linux mechanisms proven; the Windows mechanism is specified and must pass its acceptance checks in the implementing PR before any adapter ships. Implemented by issue #12246 (`server/lib/nativeTrash.js`, `server/lib/nativeTrashXdg.js`); the POC harnesses now import the production scripts. Windows checks executed on a `windows-latest` runner: check 2 passed on the `DriveType` pre-flight; check 3 showed that `FOF_WANTNUKEWARNING` makes the shell block on a confirmation no unattended process can answer (the deadline kill left the file intact), so the adapter adds the `BitBucket` `MaxCapacity` / `NukeOnDelete` pre-check — the shell-recorded value when present, else the OS default of 10% of the first 40 GB plus 5% of the rest, which matched the values the shell wrote for two fresh volumes; check 6 measured 0.5 s per batch after first use (4.2 s on a cold runner), so the P/Invoke stays and the `Microsoft.VisualBasic` call is not needed. PowerShell also serialises a redirected error stream as CLIXML, so the report is written to stdout on both paths
 **Evidence:** [Native trash feasibility study](../research/2026-10-18-native-trash-feasibility.md) (issue #12231)
 
 ## Question
@@ -23,7 +23,7 @@ components every supported OS already ships:
 |----|-----------|--------------|
 | macOS | `/usr/bin/osascript -l JavaScript` running an embedded JXA script that calls `NSFileManager.trashItemAtURL`, **one process per file** | Same Foundation API the package's binary wraps, no binary to ship or sign. One process per file is what gives every file a Finder *Put Back* record — the OS writes the record only for the first `trashItem` call in a process (reproduced on macOS 26.6), which is the bug the package's binary patches `.DS_Store` to hide. ~50 ms per file |
 | Windows | Windows PowerShell 5.1 (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, resolved like `interactiveShellResolver.js`) running an `-EncodedCommand` script that P/Invokes shell32 `SHFileOperationW(FO_DELETE)` with `FOF_ALLOWUNDO \| FOF_NOCONFIRMATION \| FOF_NOERRORUI \| FOF_SILENT \| FOF_WANTNUKEWARNING`, paths delivered in `PORTOS_TRASH_PATHS` (newline-separated), with a `DriveType == Fixed` pre-flight | The same shell machinery the package's `IFileOperation` helper and `Microsoft.VisualBasic`'s `SendToRecycleBin` use, without a compiled artifact. The pre-flight closes a hole the package leaves open: under `FOF_NOCONFIRMATION` the shell permanently deletes what it cannot recycle (network shares, removable media, bin capacity) |
-| Linux | `server/lib/nativeTrashXdg.js`, a freedesktop Trash 1.0 implementation on `node:fs` (proven as `docs/research/assets/native-trash-poc/xdgTrash.mjs`) | Byte-compatible with GLib's `gio trash` and readable/restorable by `trash-cli`; keeps original file names (the package uses random UUIDs), escapes `Path=` per the spec, writes `$topdir`-relative paths in volume trashes, honours the sticky `$topdir/.Trash` rule, refuses a trash directory that is not a caller-owned real directory (`TRASH_DIR_UNSAFE`, so a symlink planted on a shared volume cannot redirect the move), keeps `.trashinfo` names within NAME_MAX, discovers the volume from the physical parent so a directory symlink cannot misplace the trash, and refuses instead of copying across devices |
+| Linux | `server/lib/nativeTrashXdg.js`, a freedesktop Trash 1.0 implementation on `node:fs` (proven as `docs/research/assets/native-trash-poc/xdgTrash.mjs`) | Byte-compatible with GLib's `gio trash` and readable/restorable by `trash-cli`; keeps original file names (the package uses random UUIDs), escapes `Path=` per the spec, writes `$topdir`-relative paths in volume trashes, honours the sticky `$topdir/.Trash` rule only when root or the caller owns that directory (the sticky bit never binds the owner), refuses a trash directory that is not a caller-owned real directory and a volume root whose entries other users could rename (`TRASH_DIR_UNSAFE`, so a symlink planted on a shared volume cannot redirect the move), keeps `.trashinfo` names within NAME_MAX, discovers the volume from the physical parent so a directory symlink cannot misplace the trash, resolves mounts through `/proc/self/mountinfo` (with a `st_dev` fallback) so a bind mount sharing the home device gets its own volume trash rather than an `EXDEV`, and refuses instead of copying across devices |
 
 Nothing above `moveToNativeTrash` changes: `trashFiles.js` still filters to
 existing literal files, refuses directories, guards test data, verifies each
@@ -42,8 +42,8 @@ construction, on Windows by the pre-flight plus the acceptance checks below.
   deletion that the package does not have.
 - **The dependency buys code PortOS disables.** Of the 57 packages, the glob
   stack serves `{ glob: true }` (we pass `false`), the `execa`/`wsl-utils`
-  stack serves WSL, and `procfs`/`df`/`mount-point` reimplement a `st_dev` walk
-  that is ten lines of `node:fs`. The remaining value — three OS calls — is what
+  stack serves WSL, and `procfs`/`df`/`mount-point` reimplement a mount lookup
+  that is a few dozen lines of `node:fs`. The remaining value — three OS calls — is what
   the adapters contain.
 - **No binaries in the supply chain.** PortOS updates through `git pull` and
   `npm ci` on many independent installs (see the distribution model in
@@ -87,8 +87,9 @@ replaces the adapter and records the removal in `docs/DEPS.md`.
    delivery, deadline/killed, non-zero exit, unparsable output, no fallback)
    and `nativeTrashXdg.test.js` (real temp filesystem: escaping, date shape,
    collision + `O_EXCL` reservation, orphan protection, `EXDEV` cleanup,
-   `ENOENT`, topdir chooser, `TRASH_DIR_UNSAFE` on a symlinked or
-   foreign-owned trash directory, NAME_MAX-length names and extensions,
+   `ENOENT`, topdir chooser with the owner rule, `TRASH_DIR_UNSAFE` on a symlinked or
+   foreign-owned trash directory or a volume root other users could rename, mountinfo
+   parsing, a bind mount on the home device, NAME_MAX-length names and extensions,
    directory symlink into another volume, `XDG_DATA_HOME` on another device). `trashFiles.test.js` and the three caller suites
    stay as the contract for partial success and history preservation.
 4. **Windows validation gate** — run
@@ -141,8 +142,8 @@ replaces the adapter and records the removal in `docs/DEPS.md`.
   executables.
 - macOS deletes spawn one short-lived `osascript` per file (deletion batches
   are a handful of files; ~50 ms each).
-- Windows deletes pay an `Add-Type` compile per batch unless check 6 moves the
-  adapter to the no-compile VisualBasic call.
+- Windows deletes pay an `Add-Type` compile per batch (about 0.5 s once the
+  runtime is warm); check 6 confirmed that is well inside the deadline.
 - WSL installs recycle into an XDG trash on the mounted drive rather than the
   Windows Recycle Bin; documented, recoverable, out of scope.
 - If a future macOS release changes the per-process Put Back behaviour, the
