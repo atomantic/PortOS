@@ -11,13 +11,13 @@
  * A session-level advisory lock on the test database is held for the whole
  * run. It is connection-scoped, so a killed run releases it automatically.
  */
-import pg from 'pg';
-
 // Distinct from SCHEMA_DDL_ADVISORY_LOCK_KEY (5977001, lib/db.js) — ensureSchema
 // takes that one inside a run and would otherwise deadlock against this holder.
 export const DB_RUN_ADVISORY_LOCK_KEY = 5977002;
 
 const WAIT_LOG_INTERVAL_MS = 30_000;
+
+// `pg` loads lazily: a run that skips the lock (non-test database) never needs it.
 
 /** Connection target for the test database, mirroring lib/db.js defaults. */
 function testDatabaseConfig(env) {
@@ -37,14 +37,14 @@ function testDatabaseConfig(env) {
  */
 export async function acquireDbRunLock({
   env = process.env,
-  createClient = config => new pg.Client(config),
+  createClient = async config => new (await import('pg')).default.Client(config),
   log = console.log,
   waitLogIntervalMs = WAIT_LOG_INTERVAL_MS,
 } = {}) {
   const config = testDatabaseConfig(env);
   if (!/_test$/.test(config.database)) return async () => {};
 
-  const client = createClient(config);
+  const client = await createClient(config);
   client.on?.('error', () => {});
   try {
     await client.connect();
