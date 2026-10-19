@@ -55,20 +55,23 @@ export default {
 
       const installed = await readFile(installedPath, 'utf8');
       const installedHash = md5(installed);
+      const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
+      const sample = sampleExists ? await readFile(samplePath, 'utf8') : null;
 
-      if (installedHash === newShippedMd5) { alreadyNew++; continue; }
+      // Later migrations (020, 276) moved importer-issue-proposal.md past
+      // newShippedMd5, so a fresh install's copy of today's shipped body is
+      // current, not customized.
+      if (installedHash === newShippedMd5 || (sample !== null && installedHash === md5(sample))) { alreadyNew++; continue; }
       if (installedHash !== oldShippedMd5) {
         console.warn(`⚠️  importer-fence-source: ${filename} is customized — leaving as-is. If you have not added safeguards around \`{{source}}\` fencing, re-paste the shipped template manually.`);
         customized++;
         continue;
       }
 
-      const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
       if (!sampleExists) {
         console.warn(`⚠️  importer-fence-source: data.reference for ${filename} missing — cannot update`);
         continue;
       }
-      const sample = await readFile(samplePath, 'utf8');
       await writeFile(installedPath, sample, 'utf8');
       updated++;
       console.log(`✅ importer-fence-source: updated ${filename}`);
