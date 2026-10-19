@@ -66,6 +66,8 @@ export default function StoryboardBibleTab({
   hotRefId = null,
   dirty = false,
   segments = null,
+  loadStatus = 'ready',
+  onRetry = null,
 }) {
   const meta = BIBLE_KINDS[kind];
   const Bible = meta.Component;
@@ -75,6 +77,8 @@ export default function StoryboardBibleTab({
     [meta.changeProp]: onItemsChange,
     readingTheme,
     hotRefId,
+    loadStatus,
+    onRetry,
     // Only the character bible anchors anything to the manuscript (the
     // evolution lens, #6445); places and objects ignore it.
     ...(kind === 'characters' ? { segments } : {}),
@@ -88,7 +92,7 @@ export default function StoryboardBibleTab({
         running={running}
         anyRunning={anyRunning}
         onRefresh={onRefresh}
-        empty={items.length === 0}
+        empty={loadStatus === 'ready' && items.length === 0}
         dirty={dirty}
       />
       <Bible {...bibleProps} />

@@ -92,6 +92,15 @@ const ANALYSIS_LABELS = {
   [ANALYSIS_KIND.FORMAT]: 'Format pass',
 };
 
+// Bible rosters read per work. A failed read is a distinct status, never an
+// empty list: an empty array is "no records" only once its status is 'ready'.
+const BIBLE_READERS = {
+  characters: listWritersRoomCharacters,
+  places: listWritersRoomPlaces,
+  objects: listWritersRoomObjects,
+};
+const BIBLE_LOADING = { characters: 'loading', places: 'loading', objects: 'loading' };
+
 const SIDEBAR_WIDTH_KEY = 'wr.sidebarWidth';
 const SIDEBAR_DEFAULT = 480;
 const SIDEBAR_MIN = 320;
@@ -126,6 +135,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [characters, setCharacters] = useState([]);
   const [places, setPlaces] = useState([]);
   const [objects, setObjects] = useState([]);
+  const [bibleStatus, setBibleStatus] = useState(BIBLE_LOADING);
+  // Per-kind request generation: only the newest read for a kind may land.
+  const bibleGenRef = useRef({ characters: 0, places: 0, objects: 0 });
+  const workIdRef = useRef(work.id);
+  workIdRef.current = work.id;
   const [runningKind, setRunningKind] = useState(null);
   const [runStartedAt, setRunStartedAt] = useState(null);
   const [drawer, setDrawer] = useState(null);
@@ -290,20 +304,50 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // them, so nothing re-reads the server until the user re-runs an extraction.
   // In the meantime StoryboardPanel enriches work B's image-gen prompts with
   // work A's characters and places, and those renders are persisted.
+  const setBibleRows = useCallback((kind, rows) => {
+    if (kind === 'characters') setCharacters(rows);
+    else if (kind === 'places') setPlaces(rows);
+    else setObjects(rows);
+  }, []);
+
+  // A read that fails keeps the rows of the last successful read and surfaces
+  // an error status (retryable per kind) instead of installing an empty list.
+  const readBible = useCallback((kind, workId) => {
+    const gen = ++bibleGenRef.current[kind];
+    setBibleStatus((prev) => ({ ...prev, [kind]: 'loading' }));
+    return BIBLE_READERS[kind](workId).then((rows) => {
+      if (gen !== bibleGenRef.current[kind]) return;
+      setBibleRows(kind, rows || []);
+      setBibleStatus((prev) => ({ ...prev, [kind]: 'ready' }));
+    }).catch(() => {
+      if (gen !== bibleGenRef.current[kind]) return;
+      setBibleStatus((prev) => ({ ...prev, [kind]: 'error' }));
+    });
+  }, [setBibleRows]);
+
+  // An extraction result is the full merged roster: it supersedes any read in
+  // flight and clears a prior load error.
+  const applyBibleRows = useCallback((kind, rows) => {
+    bibleGenRef.current[kind] += 1;
+    setBibleRows(kind, rows);
+    setBibleStatus((prev) => ({ ...prev, [kind]: 'ready' }));
+  }, [setBibleRows]);
+
+  const retryBible = useCallback((kind) => readBible(kind, workIdRef.current), [readBible]);
+
   useEffect(() => {
     let active = true;
-    Promise.all([
-      listWritersRoomCharacters(work.id).catch(() => []),
-      listWritersRoomPlaces(work.id).catch(() => []),
-      listWritersRoomObjects(work.id).catch(() => []),
-    ]).then(([chars, plcs, objs]) => {
-      if (!active) return;
-      setCharacters(chars || []);
-      setPlaces(plcs || []);
-      setObjects(objs || []);
-    });
-    return () => { active = false; };
-  }, [work.id]);
+    // The previous work's rosters never stay visible while this one loads.
+    setCharacters([]);
+    setPlaces([]);
+    setObjects([]);
+    Object.keys(BIBLE_READERS).forEach((kind) => { if (active) readBible(kind, work.id); });
+    return () => {
+      active = false;
+      // Invalidate every in-flight read, including a retry started on this work.
+      Object.keys(bibleGenRef.current).forEach((kind) => { bibleGenRef.current[kind] += 1; });
+    };
+  }, [work.id, readBible]);
 
   useEffect(() => { onDirtyChange?.(dirty || polishBusy || !!runningKind); }, [dirty, polishBusy, runningKind, onDirtyChange]);
   const wordCount = useMemo(() => countWords(body), [body]);
@@ -645,13 +689,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
     toast.success(`${ANALYSIS_LABELS[kind] || kind} complete`);
     if (kind === 'characters' && Array.isArray(snapshot.result?.mergedProfiles)) {
-      setCharacters(snapshot.result.mergedProfiles);
+      applyBibleRows('characters', snapshot.result.mergedProfiles);
     }
     if (kind === 'places' && Array.isArray(snapshot.result?.mergedProfiles)) {
-      setPlaces(snapshot.result.mergedProfiles);
+      applyBibleRows('places', snapshot.result.mergedProfiles);
     }
     if (kind === 'objects' && Array.isArray(snapshot.result?.mergedProfiles)) {
-      setObjects(snapshot.result.mergedProfiles);
+      applyBibleRows('objects', snapshot.result.mergedProfiles);
     }
     if (kind === 'format' && snapshot.result?.formattedBody) {
       // Apply only if the buffer is untouched since the pass started. Comparing
@@ -666,7 +710,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       }
     }
     return true;
-  }, [runningKind, work.id, polishBusy, exercisePending]);
+  }, [runningKind, work.id, polishBusy, exercisePending, applyBibleRows]);
 
   // Sequential pipeline for the 3-step storyboard setup. Run characters →
   // places → script in order so each later step has the earlier bible to
@@ -1092,6 +1136,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             characters={characters}
             places={places}
             objects={objects}
+            bibleStatus={bibleStatus}
+            onRetryBible={retryBible}
             onCharactersChange={setCharacters}
             onPlacesChange={setPlaces}
             onObjectsChange={setObjects}

@@ -57,7 +57,7 @@ const OBJECT_CONFIG = {
 // see BibleSection.jsx for the shared implementation these three configure.
 // Distinct from analysis snapshots — this is the canonical roster that
 // survives across `objects` analysis runs and accepts hand-edits.
-export default function ObjectsBible({ workId, objects, onObjectsChange, readingTheme = 'dark', hotRefId = null }) {
+export default function ObjectsBible({ workId, objects, onObjectsChange, readingTheme = 'dark', hotRefId = null, loadStatus, onRetry }) {
   return (
     <BibleSection
       workId={workId}
@@ -65,6 +65,8 @@ export default function ObjectsBible({ workId, objects, onObjectsChange, reading
       onItemsChange={onObjectsChange}
       readingTheme={readingTheme}
       hotRefId={hotRefId}
+      loadStatus={loadStatus}
+      onRetry={onRetry}
       config={OBJECT_CONFIG}
     />
   );

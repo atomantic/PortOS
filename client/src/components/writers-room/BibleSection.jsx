@@ -61,13 +61,25 @@ export default function BibleSection({
   // editor host context it cannot fetch for itself (the Writers Room evolution
   // lens needs the active draft's segment index to offer real anchors).
   customProps = null,
+  // Controlled mode only: the parent's read state for `items` ('loading' |
+  // 'ready' | 'error') and a retry for it. A supplied array alone cannot say
+  // whether it is the work's real roster or what survived a failed read.
+  loadStatus: loadStatusProp = 'ready', onRetry: onRetryProp = null,
 }) {
   const [internalItems, setInternalItems] = useState(itemsProp || []);
   const items = itemsProp ?? internalItems;
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [ownStatus, setOwnStatus] = useState('ready');
+  const [retryKey, setRetryKey] = useState(0);
   const mountedRef = useMounted();
+  const controlled = !!itemsProp;
+  const loadStatus = controlled ? loadStatusProp : ownStatus;
+  const retry = controlled ? onRetryProp : () => setRetryKey((k) => k + 1);
+
+  // A different work starts from an empty roster; a retry (same work) keeps
+  // the rows from the last successful read.
+  useEffect(() => { if (!itemsProp) setInternalItems([]); }, [workId, itemsProp]);
 
   useEffect(() => {
     if (itemsProp) return undefined;
@@ -76,13 +88,16 @@ export default function BibleSection({
     // are not interchangeable. The component stays mounted across a work swap,
     // so only `active` keeps the previous work's bible out of this one.
     let active = true;
-    setLoading(true);
+    setOwnStatus('loading');
     config.api.list(workId)
-      .then((list) => { if (active && mountedRef.current) setInternalItems(list); })
-      .catch(() => { if (active && mountedRef.current) setInternalItems([]); })
-      .finally(() => { if (active && mountedRef.current) setLoading(false); });
+      .then((list) => {
+        if (!active || !mountedRef.current) return;
+        setInternalItems(list);
+        setOwnStatus('ready');
+      })
+      .catch(() => { if (active && mountedRef.current) setOwnStatus('error'); });
     return () => { active = false; };
-  }, [workId, itemsProp, mountedRef]);
+  }, [workId, itemsProp, mountedRef, retryKey]);
 
   // Internal state uses a functional updater so back-to-back saves (the add
   // form and a row editor can both be open) each merge against the freshest
@@ -118,11 +133,29 @@ export default function BibleSection({
         </button>
       </div>
 
-      {loading && items.length === 0 && (
+      {loadStatus === 'loading' && items.length === 0 && (
         <BrailleSpinner text="Loading…" />
       )}
 
-      {!loading && items.length === 0 && !creating && (
+      {loadStatus === 'error' && (
+        <div role="alert" className="flex items-center gap-2 px-1 mb-2 text-port-error">
+          <AlertTriangle size={11} className="shrink-0" />
+          <span className="flex-1">
+            Couldn&apos;t load this list{items.length > 0 ? ' — showing the last loaded rows' : ''}.
+          </span>
+          {retry && (
+            <button
+              type="button"
+              onClick={retry}
+              className="min-h-[44px] -my-2 px-2 underline hover:text-white"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {loadStatus === 'ready' && items.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">{config.emptyText}</div>
       )}
 
