@@ -205,7 +205,12 @@ describe.skipIf(process.platform === 'win32')('XDG trash adapter', () => {
     await expect(_topDirTrash(top, uid)).rejects.toMatchObject({ code: 'TRASH_DIR_UNSAFE' });
     await chmod(top, 0o1777);
     expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+    // A group may hold other users, which the mode cannot tell apart.
     await chmod(top, 0o775);
+    await expect(_topDirTrash(top, uid)).rejects.toMatchObject({ code: 'TRASH_DIR_UNSAFE' });
+    await chmod(top, 0o1775);
+    expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+    await chmod(top, 0o755);
     expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
     state.owners = { [top]: uid + 1 };
     await expect(_topDirTrash(top, uid)).rejects.toMatchObject({ code: 'TRASH_DIR_UNSAFE' });

@@ -77,13 +77,15 @@ const trustedOwner = (info, uid) => info.uid === 0 || info.uid === uid;
 
 // Whether a user other than root and the caller could rename entries of this
 // directory: anyone with write access to a non-sticky directory can, and in a
-// sticky one the directory owner still can. A directory that holds a per-user
-// trash must refuse that, or its owner swaps the checked trash directory for a
-// symlink between the check and the move. Group write stays allowed: Ubuntu's
-// user-private-group default (umask 002) makes 0775 the common mode of
-// user-owned directories.
+// sticky one the directory owner still can. A volume root that holds a
+// per-user trash must refuse that, or such a user swaps the checked trash
+// directory for a symlink between the check and the move. Group write counts
+// too: whether a group has other members is not knowable from the mode, and
+// NSS makes /etc/group an incomplete answer. Mount points are rarely
+// group-writable (udisks gives 0700, fstab mounts a root-owned 0755), unlike
+// the home data directory, which this check never covers.
 const othersCanRenameEntries = (info, uid) =>
-  !trustedOwner(info, uid) || ((info.mode & 0o002) !== 0 && (info.mode & 0o1000) === 0);
+  !trustedOwner(info, uid) || ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0);
 
 /**
  * Spec §"Trash directories": prefer `$topdir/.Trash/$uid` when `$topdir/.Trash`
