@@ -1502,9 +1502,10 @@ const scaffoldPortSchema = z.preprocess(
 );
 
 // GET /api/scaffold/directories. `includeFiles` is a query flag, so it arrives
-// as the string 'true' rather than a boolean.
+// as the string 'true' rather than a boolean. The path is not trimmed: a
+// directory name may legitimately begin or end with whitespace.
 export const scaffoldDirectoriesQuerySchema = z.object({
-  path: z.string().trim().min(1).max(4096).optional(),
+  path: z.string().min(1).max(4096).optional(),
   includeFiles: z.enum(['true', 'false']).optional(),
 });
 
