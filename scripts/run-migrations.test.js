@@ -473,6 +473,9 @@ export default {
     // The dead holder was killed mid ledger write: its temp file never renamed.
     const orphanTmp = `${appliedFile}.tmp-2147483646`;
     writeFileSync(orphanTmp, '["000-earlier.js"');
+    // A live process's temp file may be mid-write (a lock reclaimed by age).
+    const liveTmp = `${appliedFile}.tmp-${process.ppid}`;
+    writeFileSync(liveTmp, '["000-earlier.js"]');
 
     const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
 
@@ -480,6 +483,7 @@ export default {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer running'));
     expect(existsSync(lockDir)).toBe(false);
     expect(existsSync(orphanTmp)).toBe(false);
+    expect(existsSync(liveTmp)).toBe(true);
   });
 
   it('reclaims a lock held past the stale timeout even when its pid is unknown', async () => {

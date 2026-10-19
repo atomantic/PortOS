@@ -170,10 +170,14 @@ export async function runMigrations({
 async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   // A runner killed between writing the ledger's temp file and renaming it
   // leaves `migrations.applied.json.tmp-<pid>` behind, and no later run (a new
-  // pid) would ever reuse it. Under the lock no other runner can own one.
+  // pid) would ever reuse it. Remove only a dead writer's file: a lock reclaimed
+  // by age can still have a live holder mid-write.
   const tmpPrefix = `${basename(appliedFile)}.tmp-`;
   for (const name of await readdir(dirname(appliedFile))) {
-    if (name.startsWith(tmpPrefix)) await rm(join(dirname(appliedFile), name), { force: true });
+    if (!name.startsWith(tmpPrefix)) continue;
+    const pid = Number(name.slice(tmpPrefix.length));
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || pidAlive(pid)) continue;
+    await rm(join(dirname(appliedFile), name), { force: true });
   }
 
   // Load applied migrations list (repairing a corrupt file aside — see
