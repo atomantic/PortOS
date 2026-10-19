@@ -28,11 +28,17 @@ import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTe
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'];
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"`])([^'"`]+?)\1\s*[,)]/g;
-const COMMENT_LINE_RE = /^\s*(?:\/\/|\/?\*)/;
+// `*` opens a comment continuation only when followed by space, `/` or EOL; `*gen() {}` is code.
+const COMMENT_LINE_RE = /^\s*(?:\/\/|\*(?:[\s/]|$))/;
+const LEADING_BLOCK_COMMENT_RE = /^\s*\/\*.*?\*\//;
+const OPEN_BLOCK_COMMENT_RE = /^\s*\/\*/;
 
 /** `{ static, dynamic }` relative and bare specifiers, in source order. */
 export function importSpecifiersFromSource(src) {
-  const code = src.split('\n').filter((line) => !COMMENT_LINE_RE.test(line)).join('\n');
+  const code = src.split('\n')
+    .map((line) => line.replace(LEADING_BLOCK_COMMENT_RE, ''))
+    .filter((line) => !COMMENT_LINE_RE.test(line) && !OPEN_BLOCK_COMMENT_RE.test(line))
+    .join('\n');
   const dynamic = [];
   for (const match of code.matchAll(DYNAMIC_IMPORT_RE)) {
     if (!match[2].includes('${')) dynamic.push(match[2]);

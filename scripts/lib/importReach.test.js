@@ -15,10 +15,14 @@ const SOURCES = new Map([
     '// await import(\'./ghost.js\') in a comment is not an edge',
     "export const load = (name) => import(`./${name}.js`);",
     "export async function rare() { return (await import('./heavy.js')).run(); }",
+    "/* lazy */ export const lazyLeaf = () => import('./lazyLeaf.js');",
+    "export const gen = {\n  *walk() { return import('./genLeaf.js'); }\n};",
   ].join('\n')],
   ['svc/heavy.js', "import { core } from './core.js';\nexport const run = () => core;\n"],
   ['svc/core.js', 'export const core = 1;\n'],
   ['svc/leaf.js', 'export const leaf = 1;\n'],
+  ['svc/lazyLeaf.js', 'export const a = 1;\n'],
+  ['svc/genLeaf.js', 'export const b = 1;\n'],
   ['svc/ghost.js', 'export const ghost = 1;\n'],
   ['svc/caller.test.js', "import { load } from './caller.js';\n"],
   ['svc/core.test.js', "import { core } from './core';\n"],
@@ -28,7 +32,7 @@ const graph = buildImportGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ??
 
 describe('importReachReport', () => {
   it('counts a dynamic edge for selection while the static view stops at it', () => {
-    expect([...graph.get('svc/caller.js').dynamic]).toEqual(['svc/heavy.js']);
+    expect([...graph.get('svc/caller.js').dynamic]).toEqual(['svc/heavy.js', 'svc/lazyLeaf.js', 'svc/genLeaf.js']);
     const { rows, selected } = importReachReport(graph, ['svc/core.js', 'svc/heavy.js', 'svc/ghost.js'], isTest);
     expect(rows).toEqual([
       // core.test.js resolves `./core` without an extension, like Vite.
