@@ -236,7 +236,7 @@ export async function findPeerById(peerId) {
 // maps to null. Anything else (DB down, a sanitizer throwing) rethrows so the
 // push rejects before any network call or lastPushedHash write, and the caller
 // logs it (#11455).
-export function isNotFoundError(err) {
+function isNotFoundError(err) {
   const code = err?.code;
   return err?.status === 404 || (typeof code === 'string' && (code === 'NOT_FOUND' || code.endsWith('_NOT_FOUND')));
 }
