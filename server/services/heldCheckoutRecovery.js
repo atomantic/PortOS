@@ -131,9 +131,12 @@ async function snapshotContent(path) {
     git(['ls-files', '-u', '-z'], path),
     git(['ls-files', '--stage', '-z'], path),
     git(['ls-files', '-v', '-z'], path),
-    // A textconv or external diff driver can drop bytes from a patch.
-    git(['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path),
-    git(['diff', '--binary', '--no-textconv', '--no-ext-diff'], path),
+    // A textconv or external diff driver can drop bytes from a patch. Disable
+    // diff's stat-cache refresh too: an otherwise read-only diff can rewrite
+    // the index and race the concurrent administration snapshot. Git's
+    // --no-optional-locks alone does not disable diff.autoRefreshIndex.
+    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path),
+    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--binary', '--no-textconv', '--no-ext-diff'], path),
     git(['rev-parse', '--show-object-format'], path),
     git(['ls-files', '--others', '-z'], path),
   ]);
