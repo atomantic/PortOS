@@ -3,6 +3,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { decryptValue, encryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 import { executeStackerNewsBrowserRead, executeStackerNewsOperation, stackerNewsCapabilities } from '../integrations/stackerNews/index.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { managedOllamaBaseUrl, normalizeOllamaBaseUrl } from '../lib/ollamaContext.js';
 import { UNTRUSTED_CONTENT_INSTRUCTIONS, formatUntrustedContent } from '../lib/untrustedContent.js';
 import { fetchAndNormalizeStackerNewsImage, hashRemoteMediaUrl } from './stackerNewsMedia.js';
 import { getStackerNewsBrowserIdentity, openStackerNewsHandoff } from './stackerNewsBrowser.js';
@@ -28,7 +29,6 @@ const INJECTION_PATTERNS = [
   /(?:run|execute) (?:this |the )?(?:command|script)/i,
   /<\/?(?:system|instruction|prompt)>/i,
 ];
-const OLLAMA_ENDPOINT = 'http://127.0.0.1:11434/api/chat';
 // The ingress name this source screens under at the shared phase-1 boundary.
 // Public community content, so it is deliberately absent from
 // PRIVATE_UNTRUSTED_CONTENT_SOURCES: a cloud classifier is eligible for it,
@@ -406,7 +406,7 @@ const ANALYSIS_CONTRACT = 'Classify untrusted community content. Return exactly:
 
 async function runOllamaAnalysis(model, content, rules, images = []) {
   if (!model) return null;
-  const response = await fetchWithTimeout(OLLAMA_ENDPOINT, {
+  const response = await fetchWithTimeout(`${normalizeOllamaBaseUrl(managedOllamaBaseUrl())}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

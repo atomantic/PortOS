@@ -82,6 +82,19 @@ export function managedOllamaBaseUrl(env = process.env) {
 }
 
 /**
+ * Normalize an Ollama base URL to a scheme, no trailing slash and no `/v1`.
+ * `OLLAMA_HOST` is conventionally a bare `host:port`.
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+export function normalizeOllamaBaseUrl(raw) {
+  let url = String(raw || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '')
+  if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`
+  return url || 'http://localhost:11434'
+}
+
+/**
  * The window PortOS holds `provider`'s daemon at, or `null` when it holds it at
  * none (Ollama's VRAM auto-pick stands).
  *
