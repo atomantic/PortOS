@@ -508,7 +508,7 @@ export async function ensureSchema(options = {}) {
  * lists. Argument names, modes and defaults are stripped so each list can be
  * resolved through `to_regprocedure`.
  */
-export function ownedFunctionSignatures(statements) {
+function ownedFunctionSignatures(statements) {
   const owned = new Map();
   const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/gi;
   for (const sql of statements) {
