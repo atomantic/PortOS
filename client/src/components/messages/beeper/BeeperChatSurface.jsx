@@ -525,6 +525,7 @@ export default function BeeperChatSurface({
       setConversation(null);
       setMessages([]);
       setMessageCursor(null);
+      setConversationMissing(false);
     }
     setThreadLoading(true);
     setThreadError(null);

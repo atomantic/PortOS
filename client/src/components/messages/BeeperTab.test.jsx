@@ -1278,6 +1278,21 @@ describe('a conversation write that settles after a switch', () => {
     expect(screen.queryByText('Placeholder A body')).toBeNull();
     expect(screen.queryByPlaceholderText(/^Message /)).toBeNull();
   });
+
+  it('shows the new conversation\'s load error, not the previous one\'s not-found state', async () => {
+    api.getBeeperConversations.mockResolvedValue({ conversations: [CONV_B_RECORD], nextCursor: null });
+    api.getBeeperConversation.mockImplementation((id) => Promise.reject(id === CONV_B
+      ? Object.assign(new Error('Beeper mirror unavailable'), { status: 503 })
+      : Object.assign(new Error('Conversation not found'), { status: 404 })));
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await screen.findByText('Conversation not found');
+
+    fireEvent.click(await screen.findByRole('button', { name: /Example B/ }));
+
+    expect(await screen.findByText('Could not open this conversation')).toBeInTheDocument();
+    expect(screen.queryByText('Conversation not found')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
 });
 
 // The LOCAL "seen in PortOS" watermark (#83) — the fix for opening an unread
