@@ -345,6 +345,9 @@ export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
 /** The server's dependency projection says scenes changed after the final render was made. */
 export const isFinalRenderStale = (project) => !!project?.renderHistoryId && project.renderDependencyState?.status === 'stale';
 
+/** The server's dependency projection says the final render still matches every scene. */
+export const isFinalRenderCurrent = (project) => !!project?.renderHistoryId && project.renderDependencyState?.status === 'current';
+
 /**
  * Publish progress per enabled platform. `publish.targets` is the director's
  * enabled `[{ target, label }]` list (machine-level settings, so the caller
