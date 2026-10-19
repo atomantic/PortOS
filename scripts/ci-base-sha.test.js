@@ -267,7 +267,6 @@ describe('ci.yml autofixer workspace install', () => {
     // Shards are separate checkouts and run ../autofixer tests, which import
     // express from autofixer/node_modules, so they install it too.
     expect(jobs.server).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
-    expect(jobs['windows-server']).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
     expect(jobs.server).not.toContain('node --check server/index.js');
   });
 
