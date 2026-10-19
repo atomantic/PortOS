@@ -63,6 +63,9 @@ describe('user-triggered launch videos', () => {
     expect(kind).toBe('user');
     expect(task).toMatchObject({ description: 'Make launch video', app: 'example', targetInstanceId: 'example-instance', useWorktree: false, noCodeOutput: true, openPR: false, metadata: { analysisType: 'app-launch-video' } });
     expect(task.prompt).toContain('"tone":"deadpan"');
+    // Expanded by buildAgentPrompt on the machine that runs the agent (#12405).
+    expect(task.prompt).toContain('POST URL: {portosApiUrl}/api/html-composition/render');
+    expect(task.prompt).not.toContain('localhost:5555');
     expect(task.prompt).toContain('"format":"vertical"');
     expect(task.prompt).toContain('"targetDurationSec":18');
     expect(task.prompt).toContain(`launch-videos/example/${response.body.runId}`);

@@ -355,7 +355,7 @@ describe('taskSchedule', () => {
       expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
       expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
       expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
-      expect(PROMPT_VERSIONS['user-action-review']).toBe(2);
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(3);
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDetectors}');
       // The prompt proposes; it must never instruct the agent to enact.

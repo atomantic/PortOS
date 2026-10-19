@@ -8,6 +8,7 @@
  * is PortOS's own signal, so its task targets the PortOS repo.
  */
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
 
 export const HEALTH_AGENT_LABEL = 'Resolve with agent';
 
@@ -31,8 +32,8 @@ export function buildHealthAlertInvestigation(alert) {
       '3. Classify it. (a) FALSE ALARM: PortOS is misfiring (stale or too-broad evidence window, a threshold that is wrong for this signal, counting its own retries or cancellations, double counting, an alert that cannot clear after the cause is fixed). Fix the detector in PortOS, add a regression test that fails without the fix, and make sure the alert clears on its own. (b) REAL: find the root cause and fix it (code bug, bad configuration, broken provider or model setting, missing dependency). Do not merely disable the task, raise a threshold, or restart something to silence it.',
       '4. If the fix is larger than this task or needs a human decision (credentials, spend, hardware), file a tracker issue per AGENTS.md "Don\'t leave trash on the floor" and explain in your summary. Do not resolve the alert for work that is only deferred.',
       '5. When the cause is fixed and verified, or the alert is confirmed stale, mark it resolved from your shell:',
-      `   curl -sS -X POST "http://localhost:5555/api/review/queue/resolve" -H "Content-Type: application/json" -H "Authorization: Bearer \${PORTOS_API_TOKEN:-}" -d '{"id":"${queueId}","operation":"complete"}'`,
-      '   (Use the :5553 loopback mirror if HTTPS is on.) A 404 means the alert already cleared; that is fine. Do not resolve it if the cause is unfixed.',
+      `   curl -sS -X POST "${PORTOS_API_URL_TOKEN}/api/review/queue/resolve" -H "Content-Type: application/json" -H "Authorization: Bearer \${PORTOS_API_TOKEN:-}" -d '{"id":"${queueId}","operation":"complete"}'`,
+      '   A 404 means the alert already cleared; that is fine. Do not resolve it if the cause is unfixed.',
       '6. Finish with a summary: false alarm or real, root cause, what changed, and how you verified the alert is gone. Mention any follow-up issues filed.',
       '',
       'Constraints: keep machine names, paths, secrets and personal data out of commits, issues and PRs; use synthetic data in tests. Follow the repo AGENTS.md conventions and run the relevant tests.',

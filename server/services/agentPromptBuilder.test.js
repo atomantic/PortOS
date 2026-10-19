@@ -1,12 +1,13 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
+import { setHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
 // Isolate personal instructions so contributor config cannot decide assertions.
 // Tests of global-instruction loading override this with a fixture home (#3475).
@@ -4755,4 +4756,51 @@ it.each(['api', 'cli', 'tui'])('requires a per-agent disposition checkpoint and 
   expect(prompt).toContain('.agent-audit-findings-audit-example.json');
   expect(prompt).toContain('AUDIT_FINDINGS_JSON');
   expect(prompt.indexOf('## Required finding disposition register')).toBeLessThan(prompt.indexOf('Stop after one fix'));
+});
+
+describe('{portosApiUrl} spawn-time expansion (#12405)', () => {
+  const task = makeTask({
+    description: 'Report back: curl -X POST {portosApiUrl}/api/example\nSecond use: GET {portosApiUrl}/api/other',
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('PORT', '5555');
+    vi.stubEnv('PORTOS_HTTP_PORT', '5553');
+  });
+
+  afterEach(() => {
+    setHttpsEnabledAtBoot(false);
+    vi.unstubAllEnvs();
+  });
+
+  // A plain-HTTP curl to a TLS-only :5555 fails at the transport layer, so on an
+  // HTTPS install every agent path must resolve to the loopback mirror.
+  it.each([
+    [true, 'http://127.0.0.1:5553'],
+    [false, 'http://127.0.0.1:5555'],
+  ])('expands every token on the api, light and split paths (https=%s)', async (https, origin) => {
+    setHttpsEnabledAtBoot(https);
+    const paths = {
+      api: await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'api' }),
+      light: await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'tui', providerCommand: 'claude' }),
+    };
+    for (const prompt of Object.values(paths)) {
+      expect(prompt).not.toContain('{portosApiUrl}');
+      expect(prompt).toContain(`curl -X POST ${origin}/api/example`);
+      expect(prompt).toContain(`GET ${origin}/api/other`);
+    }
+
+    const parts = await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'tui', providerCommand: 'claude', split: true });
+    expect(parts.userPrompt).toContain(`${origin}/api/example`);
+    expect(JSON.stringify(parts)).not.toContain('{portosApiUrl}');
+  });
+
+  it('expands a token that arrives through the queued metadata.prompt', async () => {
+    setHttpsEnabledAtBoot(true);
+    const prompt = await buildAgentPrompt(
+      makeTask({ description: 'Short title', metadata: { prompt: 'PATCH {portosApiUrl}/api/creative-director/cd-1/treatment' } }),
+      {}, '/repo', null, { providerType: 'api' },
+    );
+    expect(prompt).toContain('PATCH http://127.0.0.1:5553/api/creative-director/cd-1/treatment');
+  });
 });

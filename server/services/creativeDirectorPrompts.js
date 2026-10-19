@@ -26,8 +26,8 @@ import {
 } from '../lib/creativeDirectorPresets.js';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from '../lib/reactorVideoClip.js';
-import { PORTOS_API_URL } from '../lib/portosUrls.js';
 import { buildPrompt } from './promptService.js';
+import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
 
 // Shared project-block view used by both prompt stages. Defaults out
 // nullable fields to `''` so the templates' `{{#x}}`/`{{^x}}` Mustache-spec
@@ -75,7 +75,7 @@ function buildTreatmentView(project) {
     project: buildProjectView(project),
     aspect,
     quality,
-    apiUrl: PORTOS_API_URL,
+    apiUrl: PORTOS_API_URL_TOKEN,
     startingImageFileLiteral,
     hasCast,
     standaloneVideo: project.workspace === 'video',
@@ -143,7 +143,7 @@ function buildPlanView(project, toolSpecs, videoModels) {
   };
   return {
     project: buildProjectView(project),
-    apiUrl: PORTOS_API_URL,
+    apiUrl: PORTOS_API_URL_TOKEN,
     render,
     directive: {
       goal: directive.goal || '',
@@ -227,7 +227,7 @@ function buildEvaluateView(project, scene) {
     project: buildProjectView(project),
     aspect,
     quality,
-    apiUrl: PORTOS_API_URL,
+    apiUrl: PORTOS_API_URL_TOKEN,
     scene: {
       sceneId: scene.sceneId,
       workRevision: scene.workRevision || 0,
