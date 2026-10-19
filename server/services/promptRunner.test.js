@@ -49,16 +49,15 @@ vi.mock('./providers.js', () => ({
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] }),
 }));
 
-// autoFixer.js is called from runPromptThroughProvider on a successful
-// fallback retry to cancel the deferred investigation task. Mock the export
-// to a spy so tests can assert it was/wasn't invoked without wiring up the
-// full task system.
-vi.mock('./autoFixer.js', () => ({
+// initAutoFixer() registers these at boot; runPromptThroughProvider reports
+// fallback lifecycle through the registry. Spies stand in for the auto-fixer
+// so tests can assert it was/wasn't invoked without wiring up the task system.
+const autoFixer = {
   noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
   noteFallbackFailed: vi.fn(),
   escalateProviderFailure: vi.fn().mockResolvedValue(undefined),
-}));
+};
 
 // aiToolkitState lookups gate the retry path on a real providerStatus
 // service being present. By default the mock returns null so the retry
@@ -81,7 +80,7 @@ const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
 const executionReadiness = await import('./providerExecutionReadiness.js');
 const providers = await import('./providers.js');
-const autoFixer = await import('./autoFixer.js');
+(await import('./providerRecoveryHooks.js')).registerProviderRecoveryHandlers(autoFixer);
 const toolkitState = await import('../lib/aiToolkitState.js');
 const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');

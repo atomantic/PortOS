@@ -1,7 +1,7 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { bindMaintenanceIo } from './maintenanceControl.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
-import { noteReadinessChanged } from './readinessNotify.js';
+import { noteReadinessChanged } from './readinessSignal.js';
 /**
  * Server boot orchestration.
  *

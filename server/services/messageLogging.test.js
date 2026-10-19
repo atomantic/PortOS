@@ -28,7 +28,7 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));
-vi.mock('./readinessNotify.js', () => ({ noteReadinessChanged: () => {} }));
+vi.mock('./readinessSignal.js', () => ({ noteReadinessChanged: () => {} }));
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({ getAccessToken: async () => ({ token: 'synthetic-token' }) }), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 vi.mock('./gmailApi.js', () => ({
   createGmailApi: () => ({

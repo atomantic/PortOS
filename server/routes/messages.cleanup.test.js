@@ -19,7 +19,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, unlink: vi.fn(actual.unlink) };
 });
-vi.mock('../services/readinessNotify.js', () => ({ noteReadinessChanged: vi.fn() }));
+vi.mock('../services/readinessSignal.js', () => ({ noteReadinessChanged: vi.fn() }));
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
 vi.mock('../services/messageSender.js', () => ({ sendDraft: vi.fn() }));
 vi.mock('../services/messagePlaywrightSync.js', () => ({
