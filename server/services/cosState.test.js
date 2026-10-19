@@ -420,7 +420,8 @@ describe('live CoS restore boundary', () => {
   it.each([
     { name: 'first restore', liveSlice: null, landed: true, legacy: true, expected: 7, parked: true },
     { name: 'repeat restore', liveSlice: { maxConcurrentAgents: 7 }, landed: true, legacy: true, expected: 7, parked: true },
-    { name: 'transfer failed first', liveSlice: null, landed: false, legacy: true, expected: 3, parked: false },
+    // 339 can leave a config-first copy in both files; a failed transfer installed nothing.
+    { name: 'failed transfer over a matching live slice', liveSlice: { maxConcurrentAgents: 7 }, landed: false, legacy: true, expected: 3, parked: false },
     { name: 'snapshot has config.json', liveSlice: null, landed: true, legacy: false, expected: 5, parked: false },
   ])('restores the snapshot config over a newer config.json: $name', async ({ liveSlice, landed, legacy, expected, parked }) => {
     writeConfig({ maxConcurrentAgents: 3 });

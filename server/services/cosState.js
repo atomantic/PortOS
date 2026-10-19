@@ -557,10 +557,11 @@ const legacyConfigSlice = (state) => (isPlainObject(state?.config) ? JSON.string
  * state.json and carries no config.json. Restored over an upgraded install, the
  * live config.json is newer than the snapshot yet wins every read (and migration
  * 339 no-ops on its presence), so the restored settings were silently discarded
- * and then stripped by the next saveState. Once the transfer has installed the
- * snapshot's slice (a failed partial transfer may not have), move config.json
- * aside — kept for manual recovery, never deleted — so readConfig() completes
- * the split from the restored slice.
+ * and then stripped by the next saveState. After a transfer that completed and
+ * installed the snapshot's slice, move config.json aside — kept for manual
+ * recovery, never deleted — so readConfig() completes the split from the
+ * restored slice. A failed transfer is left alone: the live state.json may
+ * already hold the same slice without this restore having installed it.
  */
 async function supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig) {
   if (!existsSync(STATE_FILE) || !existsSync(CONFIG_FILE)) return;
@@ -599,7 +600,7 @@ export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {
     configCache = null;
     stateCache = null;
     const [reload] = await Promise.allSettled([(async () => {
-      if (snapshotLegacyConfig) await supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig);
+      if (snapshotLegacyConfig && result.status === 'fulfilled') await supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig);
       const { reloadAgentIndexAfterRestore } = await import('./cosAgentIndex.js');
       await reloadAgentIndexAfterRestore();
       const state = await loadState();
