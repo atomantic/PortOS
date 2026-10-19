@@ -9,6 +9,9 @@ import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { PATHS } from '../lib/paths.js';
+// The leaf, not readinessNotify.js: its observer's lazy imports would join
+// pm2.js's ~280 suites to the CoS cluster's CI selection (#12285).
+import { noteReadinessChanged } from './readinessSignal.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -23,22 +26,14 @@ const cacheKey = (pm2Home) => pm2Home || '_default';
 
 // Track PM2 read failures per home so we log only on state change or reason change
 const jlistFailureState = new Map(); // home -> { lastError: string }
-let readinessChangedLoader;
-
-function notifyReadinessChanged(kind) {
-  readinessChangedLoader ??= import('./readinessNotify.js').then(({ noteReadinessChanged }) => noteReadinessChanged);
-  void readinessChangedLoader
-    .then(noteReadinessChanged => noteReadinessChanged(kind))
-    .catch(error => console.error(`❌ Readiness invalidation failed: ${error.message}`));
-}
 
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
  * @param {string|null} [pm2Home=null]
  */
 export function clearJlistCache(pm2Home = null) {
-  notifyReadinessChanged('health');
-  notifyReadinessChanged('capabilities');
+  noteReadinessChanged('health');
+  noteReadinessChanged('capabilities');
   if (pm2Home !== undefined && pm2Home !== null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {

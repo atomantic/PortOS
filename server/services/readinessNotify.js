@@ -12,10 +12,12 @@
  * Tailscale/cert state. Shared snapshot readers keep observer and HTTP failure
  * semantics identical; timestamps alone never trigger an invalidation.
  */
-const subscribers = new Set();
+import { cancelPendingReadiness, noteReadinessChanged, readinessSubscribers as subscribers } from './readinessSignal.js';
+
+// Writers import the leaf directly; these re-exports keep the observer's API whole.
+export { noteReadinessChanged, READINESS_COALESCE_MS } from './readinessSignal.js';
+
 const previous = new Map();
-const pendingDomains = new Set();
-let flushTimer = null;
 let observerTimer = null;
 let observing = false;
 let generation = 0;
@@ -25,35 +27,13 @@ const READERS = {
   health: () => import('./systemHealthSnapshot.js').then(m => m.getSystemHealthSnapshot()),
   capabilities: () => import('./capabilitiesSnapshot.js').then(m => m.getCapabilitiesSnapshot()),
 };
-const EVENTS = { health: 'system:health:changed', capabilities: 'capabilities:changed' };
 export const READINESS_OBSERVE_MS = 20_000;
-export const READINESS_COALESCE_MS = 100;
 
 // Clock fields must not turn an unchanged observer sample into an invalidation.
 // Resource usage is real telemetry and remains part of health change detection.
 function signature(snapshot) {
   return JSON.stringify(snapshot, (key, value) =>
     ['timestamp', 'checkedAt', 'responseTime', 'uptime', 'uptimeFormatted'].includes(key) ? undefined : value);
-}
-
-export function noteReadinessChanged(domain = 'capabilities') {
-  if (!EVENTS[domain] || !subscribers.size) return;
-  pendingDomains.add(domain);
-  if (flushTimer) return;
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    const domains = [...pendingDomains];
-    pendingDomains.clear();
-    for (const socket of subscribers) {
-      if (!socket.connected) continue;
-      try {
-        for (const name of domains) socket.emit(EVENTS[name], {});
-      } catch (err) {
-        console.error(`❌ Readiness notification failed: ${err.message}`);
-      }
-    }
-  }, READINESS_COALESCE_MS);
-  flushTimer.unref?.();
 }
 
 async function observe() {
@@ -86,10 +66,8 @@ function scheduleObservation() {
 function stopObservation() {
   generation += 1;
   clearTimeout(observerTimer);
-  clearTimeout(flushTimer);
   observerTimer = null;
-  flushTimer = null;
-  pendingDomains.clear();
+  cancelPendingReadiness();
   previous.clear();
 }
 

@@ -11,6 +11,7 @@ import { fileInvestigationTask, __resetInvestigationCircuit } from './investigat
 import { investigationFingerprint } from '../lib/investigationTasks.js';
 import { errorEvents } from '../lib/errorHandler.js';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
+import { registerProviderRecoveryHandlers } from './providerRecoveryHooks.js';
 
 // Track recent errors to prevent duplicate auto-fix tasks
 const recentErrors = new Map();
@@ -403,6 +404,9 @@ let autoFixerInitialized = false;
 export function initAutoFixer() {
   if (autoFixerInitialized) return;
   autoFixerInitialized = true;
+
+  // promptRunner.js reaches these through the registry, not an import (#12285).
+  registerProviderRecoveryHandlers({ noteFallbackStarted, noteFallbackFailed, noteFallbackHandled, escalateProviderFailure });
 
   errorEvents.on('error', (error) => {
     (async () => {

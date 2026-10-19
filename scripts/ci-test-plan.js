@@ -10,6 +10,7 @@ import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { ATTESTABLE_STAGES, selectAttestation } from './lib/pregateAttestation.js';
+import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
@@ -958,9 +959,13 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
-  const { forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null } = options;
+  const { forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, serverReach = null } = options;
+  // Informational: names the changed source behind a large related selection
+  // (#12285). It never changes what runs.
+  const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
   return {
     ...plan,
+    ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
     promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
     linuxContainment: forceFull
       || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
@@ -1598,12 +1603,30 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
     .map((path) => [path, classifyDependencyChange(path, baseSha ? readAtBase(path) : null, readInTree(path))]));
 
+  // `vitest related` follows dynamic imports too; report that fan-out per
+  // changed server source so the selection size is attributable. A failed
+  // walk only loses the note.
+  let serverReach = null;
+  if (hasRelatedServerSource) {
+    try {
+      serverReach = measureRepoImportReach({
+        cwd,
+        files: dependencyFiles,
+        sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
+          && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
+      });
+    } catch (err) {
+      console.warn(`⚠️ Dynamic-aware reach not measured: ${err.message}`);
+    }
+  }
+
   // A forced-full run always runs both gated jobs, so it skips the walks.
   const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs };
+    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs,
+    serverReach };
 }
 
 // ---------------------------------------------------------------------------
@@ -1871,7 +1894,7 @@ function main() {
   }
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
-    dependencyChanges, promptHistoryInputs, linuxContainmentInputs,
+    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, serverReach,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
@@ -1889,6 +1912,7 @@ function main() {
     dependencyChanges,
     promptHistoryInputs,
     linuxContainmentInputs,
+    serverReach,
   });
   // Last, over the finished plan: the attestation only ever removes work.
   emitGitHubPlan(applyAttestation(plan, resolveCiAttestation()));

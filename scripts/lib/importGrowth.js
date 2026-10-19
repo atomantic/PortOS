@@ -7,6 +7,7 @@
  * counted once per test that reaches them, because that is how the suite pays
  * import cost: every worker re-evaluates the closure. Dynamic `import()` is
  * invisible here, on purpose — the same rule `staticImportGraph.js` uses.
+ * CI selection does follow it; `importReach.js` reports that view (#12285).
  *
  * An absolute ceiling on the sum made ordinary growth fail. A new leaf on a
  * widely reached module, or a new suite's own closure, inched the repository

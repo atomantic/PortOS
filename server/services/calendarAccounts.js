@@ -1,4 +1,4 @@
-import { noteReadinessChanged } from './readinessNotify.js';
+import { noteReadinessChanged } from './readinessSignal.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
