@@ -3,7 +3,8 @@
 // the shipped windows-trash.exe, and a developer's real bin must stay untouched
 // unless they set PORTOS_NATIVE_TRASH_SMOKE themselves.
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, realpath, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { execFileSync } from './childProcess.js';
@@ -30,7 +31,7 @@ describe.runIf(process.platform === 'win32' && process.env.PORTOS_NATIVE_TRASH_S
 
   it('recycles a temp file and leaves a $I record naming its original path', async () => {
     // The shell records the long form; the runner's tmpdir is an 8.3 short path.
-    dir = await mkdtemp(join(await realpath.native(tmpdir()), 'portos-native-trash-smoke-'));
+    dir = await mkdtemp(join(realpathSync.native(tmpdir()), 'portos-native-trash-smoke-'));
     const file = join(dir, 'smoke target.txt');
     await writeFile(file, 'native trash smoke');
     const sid = execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true })
