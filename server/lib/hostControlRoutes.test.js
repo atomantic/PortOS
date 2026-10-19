@@ -152,6 +152,9 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(isHostControlRoute('POST', '/api//runs')).toBe(false);
 
     expect(isHostControlRoute('PUT', '/api/apps/example-app/documents/docs/example.md')).toBe(true);
+    // The host directory picker is the gated read; the template catalog beside it is not.
+    expect(isHostControlRoute('GET', '/api/scaffold/directories')).toBe(true);
+    expect(isHostControlRoute('GET', '/api/scaffold/templates')).toBe(false);
     // Read-only GETs and neighbouring paths stay open.
     expect(isHostControlRoute('GET', '/api/apps/example-app/start')).toBe(false);
     expect(isHostControlRoute('GET', '/api/git/submodules/status')).toBe(false);

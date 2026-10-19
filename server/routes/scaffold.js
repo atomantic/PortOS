@@ -9,7 +9,7 @@ import { promisify } from 'util';
 import { platform } from 'os';
 import { createApp, getReservedPorts, notifyAppsChanged } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/validation.js';
+import { validateRequest, scaffoldDirectoriesQuerySchema, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -27,9 +27,11 @@ const __dirname = dirname(__filename);
 
 const router = Router();
 
-// GET /api/scaffold/directories - Browse directories for directory picker
+// GET /api/scaffold/directories - Browse directories for directory picker.
+// Operator-only (HOST_CONTROL_ROUTES): it enumerates any readable host
+// directory, so the workspace roots that scope POST / below do not apply.
 router.get('/directories', asyncHandler(async (req, res) => {
-  const { path: dirPath } = req.query;
+  const { path: dirPath, includeFiles } = validateRequest(scaffoldDirectoriesQuerySchema, req.query);
 
   // Default to parent of PortOS project if no path provided
   const defaultPath = resolve(join(__dirname, '../../..'));
@@ -90,7 +92,7 @@ router.get('/directories', asyncHandler(async (req, res) => {
     currentPath: targetPath,
     parentPath: canGoUp ? parentPath : null,
     directories,
-    ...(req.query.includeFiles === 'true' && { files: entries
+    ...(includeFiles === 'true' && { files: entries
       .filter(entry => (entry.isFile() || entry.isSymbolicLink()) && !entry.name.startsWith('.'))
       .map(entry => ({ name: entry.name, path: join(targetPath, entry.name) }))
       .sort((a, b) => a.name.localeCompare(b.name)) }),
