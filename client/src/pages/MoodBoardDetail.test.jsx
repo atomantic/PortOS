@@ -667,6 +667,26 @@ describe('MoodBoardDetail layout', () => {
     expect(screen.getByTestId('generate-more-panel')).toBeInTheDocument();
   });
 
+  it('edits the board prompt as a multi-line field in the tool panel', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'Old prompt', items: [] });
+    mockUpdateMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'New prompt\nSecond line', items: [] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    const tools = screen.getByRole('complementary', { name: 'Board tools' });
+    const field = screen.getByLabelText('Board prompt');
+    expect(tools).toContainElement(field);
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(Number(field.getAttribute('rows'))).toBeGreaterThan(1);
+    expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull();
+
+    fireEvent.change(field, { target: { value: 'New prompt\nSecond line' } });
+    expect(screen.queryByRole('button', { name: 'Save', exact: true })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save prompt' }));
+    await waitFor(() => expect(mockUpdateMoodBoard).toHaveBeenCalledWith('a', { name: 'Board A', description: 'New prompt\nSecond line' }, { silent: true }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull());
+  });
+
   it('remembers the last tool used for the next board', async () => {
     mockGetMoodBoard.mockResolvedValue({ id: 'a', name: 'Board A', items: [] });
     const { unmount } = renderPage();

@@ -237,7 +237,9 @@ function MoodBoardEditor({ id }) {
     };
   }, [id, mountedRef]);
 
-  const metaDirty = board && (name.trim() !== (board.name || '') || description !== (board.description || ''));
+  const nameDirty = Boolean(board) && name.trim() !== (board.name || '');
+  const descriptionDirty = Boolean(board) && description !== (board.description || '');
+  const metaDirty = nameDirty || descriptionDirty;
 
   // The item under analysis (#4188 Phase 3), re-derived from board state so the
   // modal's stored-analysis view stays fresh after the persist PATCH. The
@@ -845,19 +847,7 @@ function MoodBoardEditor({ id }) {
             {formatCount(items.length)} item{items.length === 1 ? '' : 's'} · {formatCount(analyzedCount)} analyzed
           </p>
         </div>
-        <div className="min-w-0 flex-[2_1_20rem]">
-          <label htmlFor="board-description" className="sr-only">Description</label>
-          <textarea
-            id="board-description"
-            value={description}
-            maxLength={5000}
-            rows={1}
-            placeholder="Add a description…"
-            onChange={(e) => setDescription(e.target.value)}
-            className="block w-full h-[34px] focus:h-28 bg-transparent border border-transparent hover:border-port-border focus:border-port-accent focus:bg-port-bg rounded px-2 py-1.5 text-sm text-gray-300 outline-none resize-none transition-[height]"
-          />
-        </div>
-        {metaDirty || savingMeta ? (
+        {nameDirty || (savingMeta && !descriptionDirty) ? (
           <button
             type="button"
             onClick={handleSaveMeta}
@@ -1173,6 +1163,32 @@ function MoodBoardEditor({ id }) {
               ? 'port-opaque-surface fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] overflow-y-auto rounded-t-xl bg-port-card border-t border-port-border shadow-2xl p-3 pb-6 space-y-3'
               : 'hidden'}
         >
+          {/* The board-wide prompt is long prose, so it gets a real multi-line
+              field beside the tools rather than a line in the header. */}
+          <div className="bg-port-card border border-port-border rounded-md p-3 space-y-2">
+            <label htmlFor="board-description" className="block text-xs text-gray-400">Board prompt</label>
+            <textarea
+              id="board-description"
+              value={description}
+              maxLength={5000}
+              rows={5}
+              placeholder="Describe the board’s story, mood and look…"
+              onChange={(e) => setDescription(e.target.value)}
+              className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent outline-none resize-y"
+            />
+            {descriptionDirty || (savingMeta && !nameDirty) ? (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleSaveMeta}
+                  disabled={savingMeta}
+                  className="min-h-[40px] flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+                >
+                  <Save className="w-4 h-4" aria-hidden="true" /> Save prompt
+                </button>
+              </div>
+            ) : null}
+          </div>
           <div className="flex items-center gap-1">
             <TabPills
               variant="pills"

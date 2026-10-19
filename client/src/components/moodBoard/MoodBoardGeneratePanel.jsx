@@ -146,7 +146,7 @@ export default function MoodBoardGeneratePanel({ board, disabled = false, embedd
             onChange={(width, height) => setSize({ width, height })} />
         </div>
         <p className="text-xs text-gray-500">Uses the renderer’s configured image model and settings. Only backends supported by the media queue are offered. Prompt writing survives navigation; if the server restarts, saved prompts remain on the board.</p>
-        {disabled && <p className="text-xs text-port-warning">Save the board description before generating.</p>}
+        {disabled && <p className="text-xs text-port-warning">Save the board prompt before generating.</p>}
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => generate()} disabled={!ready}
             className="min-h-[44px] px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50">
