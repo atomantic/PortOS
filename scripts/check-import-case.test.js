@@ -55,6 +55,14 @@ describe('relativeSpecifiers ignores non-executable text', () => {
     ].join("\n");
     expect(relativeSpecifiers(source)).toEqual(['./AfterInc.js', './AfterDec.js', './AfterParen.js', './AfterBracket.js', './AfterRegex.js']);
   });
+
+  it('treats division after an object literal or function expression as division', () => {
+    const source = [
+      "const ratio = {} / divisor; await import('./AfterObject.js');",
+      "const half = function () {} / 2; await import('./AfterFunction.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./AfterObject.js', './AfterFunction.js']);
+  });
 });
 
 describe('importCaseMismatches', () => {

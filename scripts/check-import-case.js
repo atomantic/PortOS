@@ -93,7 +93,8 @@ function scanCode(source) {
     } else if (ch === '`') {
       i = readTemplate(i);
       prev = '`';
-    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{};+-*%<>~^'.includes(prev)) && !isPostfixStep()) {
+    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{;+-*%<>~^'.includes(prev)) && !isPostfixStep()) {
+      // `}` is deliberately not a regex start: it usually ends an object/function expression (`{} / d`), and mis-scanning a rare regex statement after a block is safer than dropping later imports from the check.
       let j = i + 1;
       let inClass = false;
       while (j < source.length && source[j] !== '\n' && (inClass || source[j] !== '/')) {
