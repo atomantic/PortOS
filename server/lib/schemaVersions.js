@@ -232,7 +232,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `generatedAt` means there's no per-field strip-then-LWW-back corruption to
   // gate against. The FIRST incompatible outline-doc shape change (reverseOutline.js
   // SCHEMA_VERSION 1→2) MUST introduce a gate then, same as the review above.
-  mediaCollections: 1,
+  // mediaCollections v2 = per-item `removedItems` removal records (#12433). A
+  // v1 peer's sanitizer strips them and its union merge re-adds the removed
+  // item, so a v2 sender is ahead and that peer refuses its collections until
+  // it upgrades. A v1 sender stays accepted: its copies keep their original
+  // `addedAt`, which the v2 receiver's removal records already supersede.
+  mediaCollections: 2,
   // v1 = card decks (PostgreSQL `decks` + `deck_cards`) federated via the
   // per-record peer-sync push pipeline (record kind `deck`, sync category
   // `decks`). A brand-NEW synced record type, so it gets its own per-category

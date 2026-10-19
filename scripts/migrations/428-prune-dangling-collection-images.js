@@ -1,8 +1,11 @@
 /** Drop media-collection image rows whose file no longer exists in the gallery.
  * Gallery deletes used to leave them behind, so every sharing export of the
  * owning universe warned about the missing asset. Input-gated on the
- * collections and the gallery directory; ships no seed. Bumps `updatedAt` so
- * peers pick the trimmed collection up through normal LWW sync. */
+ * collections and the gallery directory; ships no seed. Bumps `updatedAt`, but
+ * writes no per-item removal record: item lists union on merge, so a peer that
+ * still lists a pruned image re-adds it on the next sync. Only removals made
+ * through the service (which records `removedItems`, #12433) stick. Retired
+ * (#12398): run-migrations.js records it as applied without running it. */
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './_lib.js';

@@ -1192,6 +1192,9 @@ async function runTombstoneSweep() {
     const collections = `${result.collections} collection${result.collections === 1 ? '' : 's'}`;
     console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}, ${collections}`);
   }
+  if (result && result.collectionItemRemovals > 0) {
+    console.log(`🪦 Tombstone GC: pruned ${result.collectionItemRemovals} collection item removal record${result.collectionItemRemovals === 1 ? '' : 's'}`);
+  }
   if (result && result.orphanBaseHashes > 0) {
     console.log(`🧹 Tombstone GC: swept ${result.orphanBaseHashes} orphaned base-hash entr${result.orphanBaseHashes === 1 ? 'y' : 'ies'}`);
   }
