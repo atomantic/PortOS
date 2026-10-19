@@ -1664,6 +1664,10 @@ const isRunnerConfig = (path) => FULL_TRIGGER_RULES.some((rule) => rule.re.test(
 const isSourceUnder = (path, prefixes) => isExecutable(path) && !isTestFile(path) && !isDocumentationOnly(path)
   && prefixes.some((prefix) => path.startsWith(prefix));
 
+// A full-mode runner selects every test it owns, so `files` is empty there and
+// the membership check alone would let a base-side test change slip through.
+const selectsTest = (selection, runner, path) => selection.files.includes(path) || (selection.mode === 'full' && runnerForTest(path) === runner);
+
 /**
  * Per stage, whether a base-side path could change that stage's outcome:
  * (a) a test file the plan selected for the runner, (b) a non-test source
@@ -1671,8 +1675,8 @@ const isSourceUnder = (path, prefixes) => isExecutable(path) && !isTestFile(path
  * is the first offending path, for the refusal reason.
  */
 const STAGE_DRIFT_RULES = Object.freeze({
-  server: (plan, path) => plan.server.files.includes(path) || isSourceUnder(path, RUNNER_ROOTS.server) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
-  client: (plan, path) => plan.client.files.includes(path) || isSourceUnder(path, RUNNER_ROOTS.client) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
+  server: (plan, path) => selectsTest(plan.server, 'server', path) || isSourceUnder(path, RUNNER_ROOTS.server) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
+  client: (plan, path) => selectsTest(plan.client, 'client', path) || isSourceUnder(path, RUNNER_ROOTS.client) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
   lint: (plan, path) => isLintSurface(path),
   build: (plan, path) => isSourceUnder(path, ['client/']) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
   smoke: (plan, path) => isSourceUnder(path, ['server/']) || path === 'scripts/smoke-boot.js' || WORKSPACE_CACHE_SERVER_INPUTS.has(path),

@@ -28,7 +28,7 @@ const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: []
 /** A receipt as pregate writes it, with the given stage outcomes. */
 const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [], base = { ref: 'origin/main', sha: BASE } }) => buildPregateReport({
   plan, options: { base: base.ref }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
-  runtime: {}, startedAt: 's', finishedAt: 'f', downgraded,
+  runtime: { node: 'v26.10.0', platform: OS }, startedAt: 's', finishedAt: 'f', downgraded,
 });
 
 describe('attestation encoding', () => {
@@ -139,7 +139,7 @@ describe('repository resolution', () => {
 });
 
 describe('planAttestation', () => {
-  const commit = { sha: SHA, treeOf: () => TREE, isPushed: () => true, remote: 'origin', defaultMergeBase: BASE, os: OS, node: NODE };
+  const commit = { sha: SHA, treeOf: () => TREE, isPushed: () => true, remote: 'origin', defaultMergeBase: BASE };
   const green = receipt({ stages: [stage('scan'), stage('lint'), stage('server'), stage('smoke')] });
 
   it('attests exactly the passed stages of a green, stable receipt on a pushed commit with that tree', () => {
@@ -170,12 +170,20 @@ describe('planAttestation', () => {
     expect(result.stages).toEqual(['scan', 'smoke', 'db']);
     expect(result.notes[0]).toMatch(/not attesting lint, server, client: the receipt was planned against base fffffffff \(HEAD~1\), not the default branch's merge base eeeeeeeee/);
     // The probe shape: no base sha recorded at all.
-    const probe = { passed: true, treeStable: true, tree: TREE, options: { base: 'HEAD~1' }, base: { ref: 'HEAD~1' }, plan: { downgraded: false }, stages: [stage('scan'), stage('server')] };
+    const probe = { runtime: green.runtime, passed: true, treeStable: true, tree: TREE, options: { base: 'HEAD~1' }, base: { ref: 'HEAD~1' }, plan: { downgraded: false }, stages: [stage('scan'), stage('server')] };
     expect(planAttestation(probe, commit).stages).toEqual(['scan']);
     // An unresolved default merge base fails the same way.
     expect(planAttestation(green, { ...commit, defaultMergeBase: null }).stages).toEqual(['scan', 'smoke']);
     // Nothing left after the drop is a refusal that says why.
     expect(() => planAttestation(receipt({ stages: [stage('server')], base: { ref: 'HEAD~1', sha: 'f'.repeat(40) } }), commit)).toThrow(/attests no stage.*not attesting server/);
+  });
+
+  it('describes the receipt\'s runtime, not the attesting process\'s, and refuses a receipt without a valid one', () => {
+    const elsewhere = { ...green, runtime: { node: 'v22.3.0', platform: 'linux' } };
+    expect(planAttestation(elsewhere, commit).description).toBe(`tree=${TREE} os=linux node=22 stages=scan,lint,server,smoke`);
+    for (const runtime of [undefined, {}, { node: 'v26.10.0' }, { platform: OS }, { node: 'garbage', platform: OS }, { node: 'v26.10.0', platform: 'Mac OS' }]) {
+      expect(() => planAttestation({ ...green, runtime }, commit), JSON.stringify(runtime)).toThrow(/no valid runtime/);
+    }
   });
 
   it('refuses when nothing attestable passed', () => {
@@ -207,7 +215,7 @@ describe('runAttest', () => {
   ];
   const green = receipt({ stages: [stage('scan'), stage('lint'), stage('db', 'passed', 'provision'), stage('db', 'passed', 'suite')] });
   const io = () => { const out = []; const err = []; return { out, err, log: (line) => out.push(line), error: (line) => err.push(line) }; };
-  const run = (options) => runAttest({ platform: OS, nodeVersion: 'v26.10.0', ...options });
+  const run = (options) => runAttest(options);
 
   it('posts the status through gh on the upstream remote with the receipt-derived description', () => {
     const calls = [];

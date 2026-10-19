@@ -105,10 +105,10 @@ const refusal = (message) => Object.assign(new Error(message), { refusal: true }
  * so this is testable without a repository.
  *
  * @param {object} report - the parsed receipt
- * @param {{sha: string, treeOf: (sha: string) => string|null, isPushed: (sha: string) => boolean, remote: string, defaultMergeBase?: string|null, os?: string, node?: number}} commit
+ * @param {{sha: string, treeOf: (sha: string) => string|null, isPushed: (sha: string) => boolean, remote: string, defaultMergeBase?: string|null}} commit
  * @returns {{sha: string, tree: string, stages: string[], description: string, notes: string[]}}
  */
-export function planAttestation(report, { sha, treeOf, isPushed, remote, defaultMergeBase = null, os = process.platform, node = nodeMajor(process.version) }) {
+export function planAttestation(report, { sha, treeOf, isPushed, remote, defaultMergeBase = null }) {
   if (!report || typeof report !== 'object') throw refusal(`no receipt at ${PREGATE_REPORT_PATH}; ${RERUN}`);
   if (typeof report.plan?.downgraded !== 'boolean') {
     throw refusal(`receipt at ${PREGATE_REPORT_PATH} predates attestation (no plan.downgraded); ${RERUN}`);
@@ -116,6 +116,12 @@ export function planAttestation(report, { sha, treeOf, isPushed, remote, default
   if (report.passed !== true) throw refusal(`receipt at ${PREGATE_REPORT_PATH} did not pass; fix the failure and ${RERUN}`);
   if (report.treeStable !== true) {
     throw refusal(`the working tree changed while pregate ran (${String(report.tree).slice(0, 12)} → ${String(report.treeAfterRun).slice(0, 12)}); ${RERUN}`);
+  }
+  // The runtime the stages ran on is the receipt's, not the attesting process's.
+  const os = report.runtime?.platform;
+  const node = nodeMajor(report.runtime?.node);
+  if (typeof os !== 'string' || !/^[a-z0-9]+$/.test(os) || node === null) {
+    throw refusal(`receipt at ${PREGATE_REPORT_PATH} has no valid runtime (platform/node); ${RERUN}`);
   }
   const tree = treeOf(sha);
   if (!tree) throw refusal(`cannot resolve ${sha}^{tree}: is ${sha.slice(0, 9)} a commit in this checkout?`);
@@ -176,7 +182,7 @@ export function resolveRepository(remoteUrl, { ghRepoView }) {
  *
  * @returns {number} the process exit code
  */
-export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = console.log, error = console.error, readReceipt = defaultReadReceipt, platform = process.platform, nodeVersion = process.version } = {}) {
+export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = console.log, error = console.error, readReceipt = defaultReadReceipt } = {}) {
   let options;
   try {
     options = parseArgs(argv);
@@ -245,7 +251,7 @@ export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = 
     // `<remote>/main` when the symbolic ref was never set.
     const defaultBranch = git(['symbolic-ref', '--short', '-q', `refs/remotes/${remote}/HEAD`]) || `${remote}/main`;
     const defaultMergeBase = git(['merge-base', defaultBranch, sha]);
-    const attestation = planAttestation(readReceipt(cwd), { sha, treeOf, isPushed, remote, defaultMergeBase, os: platform, node: nodeMajor(nodeVersion) });
+    const attestation = planAttestation(readReceipt(cwd), { sha, treeOf, isPushed, remote, defaultMergeBase });
     attestation.notes.forEach((note) => log(`⚠️ ${note}.`));
     const request = statusRequest(repository, { ...attestation, targetUrl: options.targetUrl });
 

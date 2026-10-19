@@ -31,6 +31,21 @@ describe('relativeSpecifiers', () => {
   });
 });
 
+describe('relativeSpecifiers ignores non-executable text', () => {
+  it('skips specifier-shaped text inside strings, template literals and regex literals but keeps template expressions', () => {
+    const source = [
+      'const a = "import(\x27./InString.js\x27)";',
+      "const b = 'new URL(\"./InUrl.js\", import.meta.url)';",
+      "const c = `import('./InTemplate.js')\nimport x from './TemplateStatic.js';`;",
+      "const d = /import\\('.\\/InRegex.js'\\)/;",
+      "const e = `${await import('./InExpression.js')}`;",
+      "const f = 4 / 2; const g = await import('./Real.js');",
+      "const h = '/* not a comment'; const i = await import('./AfterString.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./InExpression.js', './Real.js', './AfterString.js']);
+  });
+});
+
 describe('importCaseMismatches', () => {
   it('flags a case-only mismatch in each import shape and resolves extension and index completions', () => {
     const source = "import a from './foo.js';\nconst b = import('./util/helpers');\nconst c = new URL('./DATA.json', import.meta.url);\nimport d from './lib';";

@@ -35,14 +35,98 @@ const DYNAMIC_IMPORT_RE = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
 const NEW_URL_RE = /new URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
 const COMPLETIONS = ['', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
-/** Every relative specifier in a module's source, in source order. */
+/**
+ * Classify every character of a module so specifier regexes can ignore text
+ * that is not executable: comments and template-literal text are blanked in
+ * `code` (newlines kept, so line anchors still work), and `inString` marks
+ * characters inside a quoted string. Regex literals are skipped by a
+ * previous-token heuristic; `${…}` inside a template is code again.
+ */
+function scanCode(source) {
+  const code = source.split('');
+  const inString = new Uint8Array(source.length);
+  const blank = (from, to) => {
+    for (let i = from; i < to; i += 1) if (code[i] !== '\n') code[i] = ' ';
+  };
+  const templates = []; // brace depth at which each open `${` resumes template text
+  let depth = 0;
+  let prev = ''; // last significant code character
+  let i = 0;
+  const readTemplate = (from) => {
+    let j = from + 1;
+    while (j < source.length) {
+      if (source[j] === '\\') j += 2;
+      else if (source[j] === '`') { blank(from, j + 1); return j + 1; }
+      else if (source[j] === '$' && source[j + 1] === '{') {
+        blank(from, j + 2);
+        templates.push(depth);
+        depth += 1;
+        return j + 2;
+      } else j += 1;
+    }
+    blank(from, source.length);
+    return source.length;
+  };
+  while (i < source.length) {
+    const ch = source[i];
+    const two = source.slice(i, i + 2);
+    if (two === '//') {
+      let j = source.indexOf('\n', i);
+      if (j < 0) j = source.length;
+      blank(i, j);
+      i = j;
+    } else if (two === '/*') {
+      let j = source.indexOf('*/', i + 2);
+      j = j < 0 ? source.length : j + 2;
+      blank(i, j);
+      i = j;
+    } else if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < source.length && source[j] !== ch && source[j] !== '\n') j += source[j] === '\\' ? 2 : 1;
+      inString.fill(1, i, Math.min(j + 1, source.length));
+      i = j + 1;
+      prev = ch;
+    } else if (ch === '`') {
+      i = readTemplate(i);
+      prev = '`';
+    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{};+-*%<>~^'.includes(prev))) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length && source[j] !== '\n' && (inClass || source[j] !== '/')) {
+        if (source[j] === '\\') j += 1;
+        else if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        j += 1;
+      }
+      inString.fill(1, i, Math.min(j + 1, source.length));
+      i = j + 1;
+      prev = '/';
+    } else {
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (templates.length > 0 && templates[templates.length - 1] === depth) {
+          templates.pop();
+          i = readTemplate(i);
+          prev = '`';
+          continue;
+        }
+      }
+      if (!/\s/.test(ch)) prev = ch;
+      i += 1;
+    }
+  }
+  return { code: code.join(''), inString };
+}
+
+/** Every relative specifier in a module's executable code, in source order. */
 export function relativeSpecifiers(source) {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const { code, inString } = scanCode(source);
   const found = [...staticImportSpecifiersFromSource(code)];
   for (const re of [DYNAMIC_IMPORT_RE, NEW_URL_RE]) {
     re.lastIndex = 0;
     let match;
-    while ((match = re.exec(code)) !== null) found.push(match[1]);
+    while ((match = re.exec(code)) !== null) if (!inString[match.index]) found.push(match[1]);
   }
   return found.filter((specifier) => specifier.startsWith('./') || specifier.startsWith('../'))
     .map((specifier) => specifier.split(/[?#]/)[0]);

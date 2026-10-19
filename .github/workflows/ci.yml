@@ -331,6 +331,12 @@ jobs:
         if: steps.server-modules-usable.outcome != 'success'
         run: npm ci --prefix server
 
+      # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
+      # express, resolved from autofixer/node_modules). Shards are separate
+      # checkouts, so the impact job's resolution check does not reach them.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
+
       # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
       # this explicit rebuild. Same condition as the install: whenever this job
       # builds the tree it will cache, it must build a rebuilt one — and the
@@ -1035,6 +1041,12 @@ jobs:
       - name: Install server dependencies
         if: steps.server-modules-usable.outcome != 'success'
         run: npm ci --prefix server
+
+      # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
+      # express, resolved from autofixer/node_modules). Shards are separate
+      # checkouts, so the impact job's resolution check does not reach them.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
 
       # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
       # this explicit rebuild. Same condition as the install: whenever this job
