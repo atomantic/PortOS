@@ -9,9 +9,10 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _createTestArtifactsRoot, _selectTestChrome, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -35,15 +36,8 @@ const health = await checkHealth().catch(error => ({ connected: false, error: er
 const dbReady = requireDbOrSkip('codeAnimation/stages.realBrowser.db.test', health.connected, health.error);
 if (dbReady) await ensureSchema();
 
-const selected = _selectTestChrome([
-  { source: 'env', path: process.env.CHROME_PATH },
-  { source: 'playwright', path: chromium.executablePath() },
-  { source: 'mac-app', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-  { source: 'system-google-chrome', path: '/usr/bin/google-chrome' },
-  { source: 'system-chromium', path: '/usr/bin/chromium' },
-  { source: 'system-chromium-browser', path: '/usr/bin/chromium-browser' },
-]);
-const chrome = selected?.path;
+const chrome = resolveTestChrome();
+const selected = chrome ? { source: 'resolveTestChrome', path: chrome } : null;
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
 

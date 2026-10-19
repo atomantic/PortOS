@@ -1,17 +1,15 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { chromium } from 'playwright-core';
-import { browserSuiteCanRun } from '../../../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSuiteGate.js';
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 import { gateAutoReview } from '../../autoReviewJudge.js';
 
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
 const lyricType = readFileSync(new URL('../shared/lyricType.js', import.meta.url), 'utf8');
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('layered overlay browser', { Chrome: chrome });
 
 describe.skipIf(!canRun)('layered footage review through rendered browser pixels', () => {

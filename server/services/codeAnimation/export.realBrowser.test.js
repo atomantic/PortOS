@@ -2,7 +2,7 @@
 // the staged document runs in real Chrome, renderComposition encodes it with
 // real ffmpeg, and the MP4 is compared to direct renderFrame(t) screenshots.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -31,10 +31,7 @@ const { renderComposition } = await import('../htmlComposition/index.js');
 const { openComposition } = await import('../htmlComposition/browser.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
 
@@ -79,6 +76,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 window.ANIMATION_META = { title: 'Three', duration: 1, fps: ${FPS}, width: ${WIDTH}, height: ${HEIGHT} };
 const film = document.getElementById('film');
 const renderer = new THREE.WebGLRenderer({ canvas: film, antialias: false, preserveDrawingBuffer: true });

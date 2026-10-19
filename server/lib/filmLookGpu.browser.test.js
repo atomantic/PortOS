@@ -7,20 +7,18 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import { _withTestPreviewLoadDiagnostics } from '../services/musicVideo/testPreviewLoadDiagnostics.js';
-import { browserSuiteCanRun } from './browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from './browserSuiteGate.js';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, filmLookFilterMarkup, filmLookPreset, normalizeFilmLook } from './filmLook.js';
 import { filmLookGpuRuntimeSource } from './filmLookGpu.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const canRun = browserSuiteCanRun('film look GPU browser', { Chrome: chrome });
 const width = 320;
 const height = 180;

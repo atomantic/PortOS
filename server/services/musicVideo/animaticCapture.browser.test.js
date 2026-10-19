@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,7 +8,7 @@ import express from 'express';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
-import { browserSuiteCanRun } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
@@ -21,7 +20,7 @@ const requireClient = createRequire(join(client, 'package.json'));
 let bundlers;
 try { bundlers = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map((name) => requireClient.resolve(name)); }
 catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium'].find((path) => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('animatic frame capture', { Chrome: chrome, ffmpeg, 'client dependencies': bundlers });
 

@@ -9,13 +9,12 @@
  * never substitutes for the suite. A failed probe leaves the suite reported
  * as not covered, with the remedy, rather than a green stage that ran nothing.
  */
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import databaseSettings from './databaseSettings.cjs';
 import { parseEnvFile } from './envFile.js';
 import { findFfmpeg } from '../../server/lib/ffmpeg.js';
-import { browserSuiteBlockReason, chromeWithH264 } from '../../server/lib/browserSuiteGate.js';
+import { browserSuiteBlockReason, chromeWithH264, resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
 
 /** The only database the DB stage may target; `server/lib/db.js` refuses the rest. */
 export const TEST_DATABASE = 'portos_test';
@@ -27,11 +26,6 @@ const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
 /** The suite whose guard also needs a Chrome that decodes H.264. */
 const H264_SUITE = 'server/services/musicVideo/documentRender.browser.test.js';
 
-// The same candidate order every registered browser suite uses to find Chrome.
-const CHROME_CANDIDATES = [
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-];
 const CLIENT_BUNDLER_PACKAGES = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'];
 
 /**
@@ -109,14 +103,7 @@ export async function probeTestDatabase(stageEnv, { repoRoot }) {
  * decode — and return the guards' own wording when something is missing.
  */
 export async function probeBrowserPrerequisites(files, { repoRoot, env = process.env }) {
-  const requireServer = createRequire(join(repoRoot, 'server', 'package.json'));
-  let bundledChrome;
-  try {
-    bundledChrome = requireServer('playwright-core').chromium.executablePath();
-  } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
-  }
-  const chrome = [env.CHROME_PATH, bundledChrome, ...CHROME_CANDIDATES].find((path) => path && existsSync(path));
+  const chrome = resolveTestChrome(env);
   let bundler;
   try {
     const requireClient = createRequire(join(repoRoot, 'client', 'package.json'));

@@ -8,7 +8,6 @@ vi.mock('../services/promptRunner.js', () => ({
   resolveProviderAndModel: async () => ({ provider: { id: 'stub-provider', type: 'api', enabled: true }, selectedModel: 'fixture-model' }),
   runPromptThroughProvider: async ({ prompt }) => { author.prompt = prompt; return { text: JSON.stringify({ sections: [{ id: author.sectionId, source: richSceneSource }] }) }; },
 }));
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -17,7 +16,7 @@ import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../lib/browserSuiteGate.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-rich-ui-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
@@ -29,7 +28,7 @@ let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
 // cross-workspace visual test runs when all three local QA prerequisites exist.

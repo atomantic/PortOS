@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, platform, arch } from 'node:os';
 import { runNpm, toRunnerPath } from './run-ci-tests.js';
@@ -40,18 +39,14 @@ export function fidelityChildEnv(env, diagnostics) {
 }
 
 async function fidelityToolchain(env) {
-  const require = createRequire(new URL('../server/package.json', import.meta.url));
-  const { chromium } = require('playwright-core');
   const { findFfmpeg } = await import('../server/lib/ffmpeg.js');
   const { _testChromeCaptureArgs } = await import('../server/services/htmlComposition/testBrowserCleanup.js');
-  const chromePath = [env.CHROME_PATH, chromium.executablePath(),
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome',
-    '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(path => path && existsSync(path));
+  const { resolveTestChrome, probeChromeH264, describeH264Probe } = await import('../server/lib/browserSuiteGate.js');
+  const chromePath = resolveTestChrome(env);
   const ffmpegPath = await findFfmpeg();
   if (!chromePath || !ffmpegPath) throw Error('Fidelity Chrome/FFmpeg toolchain unavailable.');
   // Surface the structured probe cause here: the suite's own prerequisite gate
   // reports through vitest output, which this command's refusal never relays.
-  const { probeChromeH264, describeH264Probe } = await import('../server/lib/browserSuiteGate.js');
   const probe = await probeChromeH264(chromePath);
   if (!probe.ok) throw Error(describeH264Probe(probe));
   const version = (path, args) => {

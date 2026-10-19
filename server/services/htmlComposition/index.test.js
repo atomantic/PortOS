@@ -13,6 +13,7 @@ import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
 import { installMotionKit } from './motionKit.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from './testBrowserCleanup.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 vi.mock('./encode.js', async importOriginal => {
   const actual = await importOriginal();
@@ -29,10 +30,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await i
   dataRoot: () => lazyTempDataRoot('portos-html-composition-'),
 }));
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 let proc;
 let browser;
