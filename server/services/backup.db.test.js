@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
@@ -64,11 +65,26 @@ const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
   health.connected && spawnSync('psql', ['--version']).status === 0,
   'test database or PostgreSQL client tools unavailable');
+// Every restore replaces the whole database, so two runs cannot share
+// portos_test. A session advisory lock queues an overlapping run behind this one.
+const RESTORE_SUITE_LOCK_KEY = 5977002;
+let suiteLock = null;
+if (ready) {
+  suiteLock = new pg.Client(POOL_CONFIG);
+  await suiteLock.connect();
+  await suiteLock.query('SELECT pg_advisory_lock($1)', [RESTORE_SUITE_LOCK_KEY]);
+}
 let dest;
 let dumpPath;
-const folderId = 'restore-schema-folder-probe';
-const issueId = 'restore-schema-issue-probe';
-const personId = '00000000-0000-4000-8000-000000000862';
+// Per-run identifiers: a row an earlier or overlapping run left behind can
+// never collide with this run's inserts, and teardown deletes only its own.
+const runId = randomUUID();
+const folderId = `restore-schema-folder-${runId}`;
+const issueId = `restore-schema-issue-${runId}`;
+const seriesId = `restore-schema-series-${runId}`;
+const probeAppId = `restore-probe-${runId}`;
+const personId = randomUUID();
+const postSnapshotPersonId = randomUUID();
 const executionHostId = randomUUID();
 const pendingMigration = '007-storyboard-scene-durable-ids.js';
 const connectionArgs = ['-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port), '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database];
@@ -92,8 +108,8 @@ afterAll(async () => {
       await query('DELETE FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
       await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
       await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
-      await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
-      await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
+      await query('DELETE FROM tribe_people WHERE id = ANY($1::uuid[])', [[personId, postSnapshotPersonId]]);
+      await query('DELETE FROM app_quality_measurements WHERE app_id = $1', [probeAppId]);
       await runDbMigrations();
     }
   } finally {
@@ -102,6 +118,7 @@ afterAll(async () => {
       close(),
       dest && rm(dest, { recursive: true, force: true }),
       dataRoot.path && rm(dataRoot.path, { recursive: true, force: true }),
+      suiteLock?.end(),
     ]);
   }
   await drained;
@@ -162,8 +179,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await runDbMigrations();
     appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
     await query('INSERT INTO writers_room_folders (id, name, data) VALUES ($1, $2, $3)', [folderId, folder.name, folder]);
-    await query("INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, 'restore-schema-series', $2)", [
-      issueId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
+    await query('INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, $2, $3)', [
+      issueId, seriesId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
     ]);
     await query("INSERT INTO tribe_people (id, name) VALUES ($1, 'Snapshot person')", [personId]);
     // The snapshot predates this table and its inbound FK to tribe_people.
@@ -185,10 +202,10 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await ensureSchema({ force: true });
     await runDbMigrations();
     await query("UPDATE tribe_people SET name = 'After backup' WHERE id = $1", [personId]);
-    await query("INSERT INTO tribe_people (id, name) VALUES ('00000000-0000-4000-8000-000000000863', 'Post-snapshot person')");
+    await query("INSERT INTO tribe_people (id, name) VALUES ($1, 'Post-snapshot person')", [postSnapshotPersonId]);
     // A simpler approved additive table holds post-snapshot rows to prove a
     // full replacement, independently of Beeper's account/conversation graph.
-    await query("INSERT INTO app_quality_measurements VALUES ('restore-probe', 'test', 'agent', NOW(), '{}')");
+    await query("INSERT INTO app_quality_measurements VALUES ($1, 'test', 'agent', NOW(), '{}')", [probeAppId]);
     // Feed positions handed out after the dump must never be reissued (#8710).
     await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 5)");
     feedBefore = await feedSequenceValues();
@@ -205,8 +222,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(BigInt(next)).toBeGreaterThan(BigInt(feedBefore.memories_sync_feed_seq));
     expect(await listFolders()).toContainEqual(folder);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
-    expect((await query("SELECT id FROM tribe_people WHERE id = '00000000-0000-4000-8000-000000000863'")).rowCount).toBe(0);
-    expect((await query("SELECT * FROM app_quality_measurements WHERE app_id = 'restore-probe'")).rowCount).toBe(0);
+    expect((await query('SELECT id FROM tribe_people WHERE id = $1', [postSnapshotPersonId])).rowCount).toBe(0);
+    expect((await query('SELECT * FROM app_quality_measurements WHERE app_id = $1', [probeAppId])).rowCount).toBe(0);
     expect((await query('SELECT * FROM beeper_participants')).rowCount).toBe(0);
     expect((await query("SELECT 1 FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass AND confrelid = 'tribe_people'::regclass")).rowCount).toBe(1);
     const issue = await query('SELECT data FROM pipeline_issues WHERE id = $1', [issueId]);
