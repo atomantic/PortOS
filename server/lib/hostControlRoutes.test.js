@@ -1071,3 +1071,39 @@ describe('Telegram bot and bridge authority policy (#11431)', () => {
     expect(HOST_CONTROL_SETTINGS_SLICES).toContain('telegram');
   });
 });
+
+describe('caller-named host paths', () => {
+  it('gates the routes whose body names a host path PortOS reads, writes or runs against', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const route of [
+      'POST /api/apps/:appId/reference-repos',
+      'POST /api/sharing/buckets',
+      'POST /api/sprites/import',
+      'POST /api/timeline/import/gmail',
+    ]) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+    // The record-only neighbours and the upload-based importers stay open.
+    for (const [method, path] of [
+      ['PATCH', '/api/apps/:appId/reference-repos/:refId'],
+      ['POST', '/api/apps/:appId/reference-repos/:refId/reviewed'],
+      ['PUT', '/api/sharing/buckets/:id'],
+      ['DELETE', '/api/sharing/buckets/:id'],
+      ['POST', '/api/sharing/buckets/:id/export'],
+      ['POST', '/api/sprites'],
+      ['POST', '/api/timeline/import/whatsapp'],
+      ['POST', '/api/timeline/import/browser'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+
+  it('gates a reference-repo PATCH only when it re-points the repo or branch', () => {
+    const path = '/api/apps/example-app/reference-repos/ref-1';
+    expect(hostControlBodyKeys('PATCH', path, { repoUrl: '~/example/repo' })).toEqual(['repoUrl']);
+    expect(hostControlBodyKeys('patch', `${path}/`, { branch: 'main', name: 'Example' })).toEqual(['branch']);
+    expect(hostControlBodyKeys('PATCH', path, { name: 'Example', notes: 'n', lastReviewedSha: 'a'.repeat(40) })).toEqual([]);
+    expect(hostControlBodyKeys('PATCH', path, undefined)).toEqual([]);
+    expect(hostControlBodyKeys('PUT', path, { repoUrl: '~/example/repo' })).toEqual([]);
+  });
+});

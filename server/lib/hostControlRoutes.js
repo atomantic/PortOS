@@ -104,6 +104,17 @@
  *     its non-loopback opt-in, the MortalLoom store path (all change-gated,
  *     below) and `PUT /api/lmstudio/config` (base URL plus timeout, in
  *     memory, with no UI writer).
+ *   - Caller-named host paths: a request body that names a host directory or
+ *     file PortOS then reads, writes or runs against is the same choice as a
+ *     stored host-file setting, made once. A remote password-free caller
+ *     could otherwise point PortOS at any path the host user owns. Gated:
+ *     reference-repo create (and a PATCH that changes `repoUrl`/`branch`,
+ *     which the scheduled reference-watch runs git in and hands to an
+ *     analysis agent), share-bucket create (PortOS writes records into and
+ *     imports manifests from the folder), the sprite source-tree import and
+ *     the path-based Gmail mbox import. Rename/notes/mode PATCHes, bucket
+ *     export into an operator-chosen bucket, and the upload-based importers
+ *     stay open: they name no host path.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
  *     downloads DELETE removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
@@ -974,7 +985,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Reference repos (#8742): a check that finds new commits queues a CoS
   // analysis agent against them. `reviewed` only advances a recorded SHA.
+  // Create names the repo — a local path is a host directory the weekly
+  // reference-watch task runs git in and hands to that agent unattended, so
+  // choosing it is operator work; a PATCH gates per body (repoUrl/branch).
+  'POST /api/apps/:appId/reference-repos',
   'POST /api/apps/:appId/reference-repos/:refId/check',
+
+  // Caller-named host paths (rationale in the header): the folder, source
+  // tree or mailbox file each body names. Their record-only and upload-based
+  // neighbours stay open.
+  'POST /api/sharing/buckets',
+  'POST /api/sprites/import',
+  'POST /api/timeline/import/gmail',
 
   // Persistent Mind lifecycle (#8742): starting/waking/resuming the mind arms
   // its own agentic loop, which can queue CoS tasks on its own initiative
@@ -1112,6 +1134,10 @@ const COMPILED_BODY_ROUTES = [
   // Importer commit runs one LLM reformat call per excerpt only when asked to
   // (#11036); the default deterministic commit stays open.
   ['POST /api/importer/commit', (body) => body?.cleanupFormatting === true ? ['cleanupFormatting'] : []],
+  // A reference-repo PATCH that re-points the repo or branch chooses what the
+  // scheduled reference-watch runs git in; name, notes and the reviewed SHA
+  // are records.
+  ['PATCH /api/apps/:appId/reference-repos/:refId', (body) => ['repoUrl', 'branch'].filter((key) => body?.[key] !== undefined)],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
