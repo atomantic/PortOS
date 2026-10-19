@@ -1440,6 +1440,144 @@ async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedB
   }
 }
 
+function logPrimaryCheckoutDrift(agentId, task, drift) {
+  if (drift.drifted) {
+    emitLog('warn', `${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
+      agentId, taskId: task?.id, category: drift.category
+    });
+  } else if (drift.unattributed) {
+    // #3703: commits WERE stranded on the primary, but none are patch-equivalent
+    // to this agent's own branch — another actor (a coding-on-main agent, the
+    // human's terminal, `update.sh`'s pull) moved it. Unreviewed commits on the
+    // primary are still worth surfacing, but this run did not cause them, so it is
+    // warn-logged WITHOUT downgrading an otherwise-successful run to a failure.
+    emitLog('warn', `${drift.message} — not attributable to ${agentId}; this run stays successful`, {
+      agentId, taskId: task?.id
+    });
+  } else if (drift.fastForwarded) {
+    // Movement without stranded commits — a pull, not a branch-jack. Logged so
+    // "the primary moved during this run" stays visible without being a failure.
+    emitLog('info', `↪️ Primary checkout moved ${drift.commitCount ?? '?'} commit(s) during ${agentId}, all already upstream — not a branch-jack`, {
+      agentId, taskId: task?.id
+    });
+  }
+}
+
+function logPrCompletionVerdict({ agentId, task, prEvidence, primaryPrObservation }) {
+  const prCompletionVerdict = prEvidence.completionVerdict;
+  if (!prEvidence.completionOk) {
+    emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
+      agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
+    });
+  } else if (prEvidence.branchProvenEmpty) {
+    // A no-op run is a legitimate completion, not a silent one — the human still
+    // wants to know a task burned an agent and concluded there was nothing to do.
+    emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
+      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
+    });
+  } else if (primaryPrObservation.outcome === PR_OBSERVATION.WORK_LANDED_ELSEWHERE) {
+    // The parallel-claim stand-down: this run's commits are redundant, the work
+    // itself is on the default branch via a change request the forge confirmed
+    // merged. Worth surfacing — the branch cleanup will discard the duplicate
+    // commits, and the human should know why.
+    emitLog('info', `🤝 ${agentId} opened no change request for ${prEvidence.evidenceBranch} but its summary's landed work was verified merged — recording the run as complete`, {
+      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
+    });
+  }
+}
+
+/**
+ * Task-specific corrections to the output hook's result, applied in this order.
+ * Returns the hook result unchanged when neither applies.
+ */
+function correctHookResultForTask(task, hookResult) {
+  let corrected = hookResult;
+  // A private assessment's deliverable is the validated, persisted report.
+  // A skipped, thrown or timed-out hook cannot establish that deliverable,
+  // even when the CLI exited zero. Keep other task types' existing semantics.
+  if (isPrivateSecurityTask(task) && (!corrected?.ran || corrected.threw
+    || corrected.outcome?.accepted !== true)) {
+    corrected = {
+      ...corrected,
+      ran: true,
+      outcome: corrected?.outcome?.accepted === false ? corrected.outcome : {
+        accepted: false,
+        permanent: true,
+        reason: 'private-security-report-unverified',
+        message: 'Private assessment report was not validated and saved. Inspect the local output and retry explicitly.',
+      },
+    };
+  }
+
+  // A persisted assessment or delivered PR cannot hide an untracked finding.
+  // Keep assessment, execution and disposition as separate evidence.
+  if (Number(task.metadata?.auditDispositionVersion) === 1
+    && corrected?.auditDisposition?.status !== 'complete') {
+    corrected = { ...corrected, ran: true, outcome: {
+      accepted: false, permanent: true, reason: 'audit-disposition-incomplete',
+      message: 'Audit findings are not fully disposed: ' + (corrected?.auditDisposition?.reason || 'register could not be verified and saved'),
+    } };
+  }
+  return corrected;
+}
+
+function hookTaskMetadataPatch(hookResult) {
+  const hookOutcome = hookResult?.outcome;
+  return hookOutcome?.taskMetadata && typeof hookOutcome.taskMetadata === 'object'
+    && !Array.isArray(hookOutcome.taskMetadata)
+    ? hookOutcome.taskMetadata
+    : null;
+}
+
+/**
+ * The task write for a finished run. `preHookTask` is the task as it stood
+ * before the hook's metadata patch; only a success, or a failure the hook itself
+ * judged, carries that patch forward (see the hookMetadata note in finalizeAgent).
+ */
+async function resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId }) {
+  if (isLegacyDeepAudit(task.metadata) && !terminatedByUser) {
+    return { status: 'in_progress', metadata: { ...preHookTask.metadata, ...retryHoldMetadata(agentId) } };
+  }
+  if (terminatedByUser) {
+    return {
+      status: 'blocked',
+      metadata: {
+        ...preHookTask.metadata,
+        blockedReason: 'Terminated by user',
+        blockedCategory: 'user-terminated',
+        blockedAt: new Date().toISOString(),
+      },
+    };
+  }
+  if (verdict.success) {
+    return hookMetadata ? { status: 'completed', metadata: task.metadata } : { status: 'completed' };
+  }
+  return resolveFailedTaskUpdate(verdict.source === 'hook' ? task : preHookTask, verdict.errorAnalysis, agentId);
+}
+
+function completionRecord({ task, verdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed }) {
+  return {
+    success: verdict.success,
+    validationPassed,
+    ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
+    ...(isAuditTaskType(resolveTaskHookType(task)) ? {
+      auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
+      ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: hookResult?.auditDisposition || { status: 'unverified' } } : {}),
+    } : {}),
+    exitCode,
+    duration,
+    outputLength: outputBuffer?.length ?? 0,
+    errorAnalysis: verdict.errorAnalysis,
+    ...(executionInterruption ? { executionInterruption } : {}),
+    // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
+    // and cleared the run, which is what makes a run with no `goalFidelity` block
+    // legible as "never judged" rather than "judged fine".
+    ...(fidelity.review ? { goalFidelity: fidelity.review } : {}),
+    ...(verdict.error !== undefined ? { error: verdict.error } : {}),
+    ...(verdict.completionReason !== undefined ? { completionReason: verdict.completionReason } : {}),
+  };
+}
+
 /**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
@@ -1574,26 +1712,7 @@ export async function finalizeAgent({
     emitLog('warn', `⚠️ Primary-checkout drift check failed for ${agentId}: ${err.message}`, { agentId });
     return { drifted: false };
   });
-  if (drift.drifted) {
-    emitLog('warn', `${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
-      agentId, taskId: task?.id, category: drift.category
-    });
-  } else if (drift.unattributed) {
-    // #3703: commits WERE stranded on the primary, but none are patch-equivalent
-    // to this agent's own branch — another actor (a coding-on-main agent, the
-    // human's terminal, `update.sh`'s pull) moved it. Unreviewed commits on the
-    // primary are still worth surfacing, but this run did not cause them, so it is
-    // warn-logged WITHOUT downgrading an otherwise-successful run to a failure.
-    emitLog('warn', `${drift.message} — not attributable to ${agentId}; this run stays successful`, {
-      agentId, taskId: task?.id
-    });
-  } else if (drift.fastForwarded) {
-    // Movement without stranded commits — a pull, not a branch-jack. Logged so
-    // "the primary moved during this run" stays visible without being a failure.
-    emitLog('info', `↪️ Primary checkout moved ${drift.commitCount ?? '?'} commit(s) during ${agentId}, all already upstream — not a branch-jack`, {
-      agentId, taskId: task?.id
-    });
-  }
+  logPrimaryCheckoutDrift(agentId, task, drift);
   // The run's outcome is one pure resolution over the evidence (see
   // resolveAgentFinalVerdict for the drift > PR > fidelity > hook > reported
   // ladder). Fidelity and the output hook are themselves gated on an earlier
@@ -1609,26 +1728,7 @@ export async function finalizeAgent({
     prEvidence,
   };
   const deliveredVerdict = resolveAgentFinalVerdict(verdictEvidence);
-  const prCompletionVerdict = prEvidence.completionVerdict;
-  if (!prEvidence.completionOk) {
-    emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
-      agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
-    });
-  } else if (branchProvenEmpty) {
-    // A no-op run is a legitimate completion, not a silent one — the human still
-    // wants to know a task burned an agent and concluded there was nothing to do.
-    emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
-      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
-    });
-  } else if (primaryPrObservation.outcome === PR_OBSERVATION.WORK_LANDED_ELSEWHERE) {
-    // The parallel-claim stand-down: this run's commits are redundant, the work
-    // itself is on the default branch via a change request the forge confirmed
-    // merged. Worth surfacing — the branch cleanup below will discard the
-    // duplicate commits, and the human should know why.
-    emitLog('info', `🤝 ${agentId} opened no change request for ${prEvidence.evidenceBranch} but its summary's landed work was verified merged — recording the run as complete`, {
-      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
-    });
-  }
+  logPrCompletionVerdict({ agentId, task, prEvidence, primaryPrObservation });
 
   // #5994: the run shipped — but did it ship what was asked? Runs only on a run
   // that would otherwise be recorded a success, for the same reason the drift
@@ -1682,33 +1782,8 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath, recovery });
-  // A private assessment's deliverable is the validated, persisted report.
-  // A skipped, thrown or timed-out hook cannot establish that deliverable,
-  // even when the CLI exited zero. Keep other task types' existing semantics.
-  if (isPrivateSecurityTask(task) && (!hookResult?.ran || hookResult.threw
-    || hookResult.outcome?.accepted !== true)) {
-    hookResult = {
-      ...hookResult,
-      ran: true,
-      outcome: hookResult?.outcome?.accepted === false ? hookResult.outcome : {
-        accepted: false,
-        permanent: true,
-        reason: 'private-security-report-unverified',
-        message: 'Private assessment report was not validated and saved. Inspect the local output and retry explicitly.',
-      },
-    };
-  }
-
-  // A persisted assessment or delivered PR cannot hide an untracked finding.
-  // Keep assessment, execution and disposition as separate evidence.
-  if (Number(task.metadata?.auditDispositionVersion) === 1
-    && hookResult?.auditDisposition?.status !== 'complete') {
-    hookResult = { ...hookResult, ran: true, outcome: {
-      accepted: false, permanent: true, reason: 'audit-disposition-incomplete',
-      message: 'Audit findings are not fully disposed: ' + (hookResult?.auditDisposition?.reason || 'register could not be verified and saved'),
-    } };
-  }
+  const hookResult = correctHookResultForTask(task,
+    await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath, recovery }));
 
   // Output hooks may return a trusted metadata patch that advances a staged
   // workflow. Apply it before task persistence and cleanup so the next stage
@@ -1719,11 +1794,7 @@ export async function finalizeAgent({
   // succeeded — any other failure or a user termination is resolved against the
   // task as it stood before the hook ran, so a retry does not inherit a stage
   // advance its own run never earned.
-  const hookOutcome = hookResult?.outcome;
-  const hookMetadata = hookOutcome?.taskMetadata && typeof hookOutcome.taskMetadata === 'object'
-    && !Array.isArray(hookOutcome.taskMetadata)
-    ? hookOutcome.taskMetadata
-    : null;
+  const hookMetadata = hookTaskMetadataPatch(hookResult);
   const preHookTask = hookMetadata ? { ...task } : task;
   if (hookMetadata) {
     task.metadata = { ...task.metadata, ...hookMetadata };
@@ -1742,21 +1813,7 @@ export async function finalizeAgent({
   });
 
   const taskType = task?.taskType || 'user';
-  const taskUpdate = isLegacyDeepAudit(task.metadata) && !terminatedByUser
-    ? { status: 'in_progress', metadata: { ...preHookTask.metadata, ...retryHoldMetadata(agentId) } }
-    : terminatedByUser
-    ? {
-      status: 'blocked',
-      metadata: {
-        ...preHookTask.metadata,
-        blockedReason: 'Terminated by user',
-        blockedCategory: 'user-terminated',
-        blockedAt: new Date().toISOString(),
-      },
-    }
-    : verdict.success
-      ? (hookMetadata ? { status: 'completed', metadata: task.metadata } : { status: 'completed' })
-      : await resolveFailedTaskUpdate(verdict.source === 'hook' ? task : preHookTask, verdict.errorAnalysis, agentId);
+  const taskUpdate = await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
 
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
@@ -1795,26 +1852,9 @@ export async function finalizeAgent({
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
-  await completeAgent(agentId, {
-    success: verdict.success,
-    validationPassed,
-    ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
-    ...(isAuditTaskType(resolveTaskHookType(task)) ? {
-      auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
-      ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: hookResult?.auditDisposition || { status: 'unverified' } } : {}),
-    } : {}),
-    exitCode,
-    duration,
-    outputLength: outputBuffer?.length ?? 0,
-    errorAnalysis: verdict.errorAnalysis,
-    ...(executionInterruption ? { executionInterruption } : {}),
-    // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
-    // and cleared the run, which is what makes a run with no `goalFidelity` block
-    // legible as "never judged" rather than "judged fine".
-    ...(fidelity.review ? { goalFidelity: fidelity.review } : {}),
-    ...(verdict.error !== undefined ? { error: verdict.error } : {}),
-    ...(verdict.completionReason !== undefined ? { completionReason: verdict.completionReason } : {}),
-  });
+  await completeAgent(agentId, completionRecord({
+    task, verdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
+  }));
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
