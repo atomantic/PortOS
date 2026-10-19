@@ -5,11 +5,11 @@
  * image drops (`shell-<id>-<name>`, pasted into a PTY once and never read
  * again), CoS task screenshots (`POST /api/screenshots`, referenced from a
  * task's `metadata.screenshots[]`), and vision-test / universe-describe inputs.
- * Nothing else ever deletes them, so a photo handed to an agent once stayed on
- * disk, in every backup, indefinitely.
+ * Persistent Mind attachments share the directory but own their lifecycle.
  *
  * Rules:
  * - `shell-*` files older than 7 days are removed — single-use PTY hand-offs.
+ * - Mind attachments and pending markers are excluded regardless of age.
  * - Every other file older than 30 days is removed unless a CoS task that is
  *   neither completed nor failed still lists it in `metadata.screenshots[]`.
  *
@@ -22,6 +22,7 @@
 import { readdir, stat } from 'fs/promises';
 import { join, basename } from 'path';
 import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 import { getAllTasks } from './cosTaskStore.js';
 
@@ -70,7 +71,7 @@ export async function _sweepScreenshots({
   readTasks = getAllTasks,
 } = {}) {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const files = entries.filter((e) => e.isFile()).map((e) => e.name);
+  const files = entries.filter((e) => e.isFile() && !isPersistentMindScreenshotEntry(e.name)).map((e) => e.name);
   const result = { deleted: 0, keptReferenced: 0, keptYoung: 0 };
   if (files.length === 0) return result;
 

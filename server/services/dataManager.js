@@ -7,6 +7,7 @@ import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
@@ -186,7 +187,7 @@ export const CATEGORIES = {
   'review': { label: 'Review', description: 'Review Hub todos, action requests and assessment reports', archivable: true, deletable: false },
   'rigging': { label: 'Rigging Clip Library', description: 'User-dropped animation-bearing GLB source files for retargeting — the only copy of assets you supplied', archivable: false, deletable: false },
   'runs': { label: 'AI Runs', description: 'Agent run logs and outputs', archivable: true, deletable: true, purgeScope: 'category' },
-  'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them', archivable: true, deletable: true, purgeScope: 'category' },
+  'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them; Persistent Mind attachments are retained by Mind', archivable: true, deletable: true, purgeScope: 'category', purgeFilter: name => !isPersistentMindScreenshotEntry(name) },
   'settings': { label: 'Settings', description: 'Per-feature settings files', archivable: true, deletable: false },
   'sharing': { label: 'Peer Sync State', description: 'Peer-sync bookkeeping — purging forces a full resync and can resurrect deleted records', archivable: true, deletable: false },
   'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false },
@@ -550,6 +551,11 @@ export async function purgeCategory(categoryKey, options = {}) {
     if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
 
     if (wantsItem) {
+      if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
+        throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
+          status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+        });
+      }
       const resolvedRoot = resolve(dirPath);
       const resolvedTarget = resolve(join(dirPath, options.subPath));
       // Boundary-aware containment check: use path.relative so a prefix like

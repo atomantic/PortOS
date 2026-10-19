@@ -63,6 +63,14 @@ describe('_sweepScreenshots', () => {
     expect(result).toEqual({ deleted: 2, keptReferenced: 1, keptYoung: 1 });
   });
 
+  it('leaves old Mind attachments and upload recovery markers to their owning cleanup', async () => {
+    const owned = ['mind-claimed-photo.png', 'mind-unindexed-photo.png', '.mind-pending-unindexed'];
+    for (const name of [...owned, 'ordinary.png']) await put(name, 90);
+    await _sweepScreenshots({ now: NOW, dir, readTasks: tasks([]) });
+    for (const name of owned) expect(existsSync(join(dir, name))).toBe(true);
+    expect(existsSync(join(dir, 'ordinary.png'))).toBe(false);
+  });
+
   it('deletes nothing and logs an error when the task store read throws', async () => {
     await put('shell-cccc3333-old.png', 30);
     await put('old.png', 90);
