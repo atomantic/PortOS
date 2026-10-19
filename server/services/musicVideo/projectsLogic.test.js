@@ -19,6 +19,7 @@ import {
 } from './projectsLogic.js';
 
 import { productionReviewBasis } from './productionReview.js';
+import { musicVideoProjectCreateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
@@ -408,6 +409,10 @@ describe('applyProjectPatch', () => {
       falLipSyncResolution: null,
       falMusicModelId: null,
       falMusicResolution: null,
+      falLipSyncTranscription: null,
+      runwayModelId: null,
+      runwayDuration: null,
+      runwayResolution: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -427,6 +432,10 @@ describe('applyProjectPatch', () => {
       falLipSyncResolution: null,
       falMusicModelId: null,
       falMusicResolution: null,
+      falLipSyncTranscription: null,
+      runwayModelId: null,
+      runwayDuration: null,
+      runwayResolution: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -1017,4 +1026,85 @@ it('preserves optional project moodboard uploads through create, patch and clone
   expect(applyProjectPatch(project, { name: 'Updated' }).styleReferences).toEqual(styleReferences);
   expect(cloneProjectRecord(project, { id: 'mv-clone', now: '2026-01-02' }).styleReferences).toEqual(styleReferences);
   expect(applyProjectPatch(project, { styleReferences: [] }).styleReferences).toEqual([]);
+});
+
+// Create-schema parity (#12435): every key the create schemas accept must survive
+// the builder. A new schema key without a sample here fails the first assertion.
+describe('create-schema parity', () => {
+  const VIDEO_SETTING_SAMPLES = {
+    renderPool: { mode: 'peers', peers: [{ peerId: '3f1c2b8e-9d4a-4f6b-8c2e-1a2b3c4d5e6f', modelId: 'peer-model' }] },
+    backend: 'runway',
+    modelId: 'local-model',
+    grokDuration: 10,
+    falDuration: 7,
+    falModelId: 'fal-model',
+    falResolution: '720p',
+    falEndFrameModelId: 'fal-end-model',
+    falLipSyncResolution: '1080P',
+    falLipSyncTranscription: false,
+    falMusicModelId: 'fal-music-model',
+    falMusicResolution: '480p',
+    runwayModelId: 'runway-model',
+    runwayDuration: 5,
+    runwayResolution: '1080p',
+    generationMode: 'suppliedAudio',
+    audioReactiveLora: 'style.safetensors',
+    audioReactiveScale: 0.5,
+  };
+
+  const SCENE_SAMPLES = {
+    label: 'Verse 1',
+    sectionLabel: 'Verse',
+    prompt: 'a wide shot',
+    framePrompt: 'a frame',
+    startSec: 1,
+    endSec: 4,
+    beatAligned: true,
+    loop: true,
+    sectionIndex: 2,
+    lyricText: 'line one',
+    visualIntent: 'calm',
+    frameReferenceIds: ['ref-a', 'ref-b'],
+    camera: { move: 'slow-dolly-in' },
+    visualLayer: 'still',
+    stillMove: 'push',
+    frameFit: 'fill',
+    speedFps: 12,
+    offsetFrames: 6,
+    reverse: true,
+    holdLastFrame: true,
+    filmLook: { preset: 'vhs' },
+    transitionIn: 'vhs-glitch',
+    transitionOut: 'vhs-glitch',
+    glitches: [{ atSec: 0.5, style: 'vhs-glitch' }],
+    cutEffect: { style: 'dissolve' },
+    imageEffect: 'end-fade',
+    imageEffectSec: 2,
+    cardText: 'Card',
+    codeOverlay: true,
+    codeClip: true,
+    cardColor: '#112233',
+    textZone: 'upper-left',
+    lyricRole: 'hook',
+    lyricSize: 'large',
+    shotMode: 'performance',
+    performanceSpeaker: 'Singer',
+    performanceStyle: 'music',
+  };
+
+  it('stores every accepted video setting key on the project record', () => {
+    const shape = musicVideoProjectCreateSchema.shape.videoSettings.unwrap().shape;
+    expect(Object.keys(shape).sort()).toEqual(Object.keys(VIDEO_SETTING_SAMPLES).sort());
+    const input = musicVideoProjectCreateSchema.parse({ name: 'Parity', videoSettings: VIDEO_SETTING_SAMPLES });
+    const project = buildProjectRecord(input, { id: 'mv-parity', now: 'n' });
+    expect(project.videoSettings).toMatchObject(VIDEO_SETTING_SAMPLES);
+  });
+
+  it('stores every accepted shot key on the scene', () => {
+    const shape = musicVideoSceneCreateSchema.shape;
+    expect(Object.keys(shape).sort()).toEqual(Object.keys(SCENE_SAMPLES).sort());
+    const { project } = addScene(baseProject(), SCENE_SAMPLES);
+    const scene = project.scenes[0];
+    expect(scene).toMatchObject(SCENE_SAMPLES);
+  });
 });
