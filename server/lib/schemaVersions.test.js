@@ -89,13 +89,17 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects repair, timing, narrative event and lyric warning metadata on older music-video peers', async () => {
+  it('rejects repair, timing, narrative event, lyric warning and title/ending/subject/tool metadata on older music-video peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(21);
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20]) {
+    expect(meta.schemaVersions.musicVideoProjects).toBe(22);
+    // v21 builds re-normalize the v22 fields away; the gate must stop that peer receiving them.
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 21, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 22, receiverV });
     }
+    const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 21 };
+    expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 22, receiverV: 21 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
