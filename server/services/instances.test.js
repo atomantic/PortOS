@@ -1205,7 +1205,7 @@ describe('instances.js', () => {
         expect(JSON.stringify(result.lastProbe)).toContain('loopback or link-local');
       }
 
-      dns.lookup.mockResolvedValueOnce([{ address: '100.64.0.7', family: 4 }]);
+      dns.lookup.mockResolvedValueOnce([{ address: '100.64.0.50', family: 4 }]);
       fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ instanceId: 'remote-id' }) });
       const allowed = await probePeer(peer);
       expect(JSON.stringify(allowed.lastProbe)).not.toContain('loopback or link-local');
@@ -1670,8 +1670,8 @@ describe('instances.js', () => {
         const refused = await handleAnnounce({ address: '192.0.2.10', port: 5555, instanceId: 'bad', host: badHost });
         expect(refused.peer.host).toBeNull();
         readJSONFile.mockResolvedValue({ self: null, peers: [] });
-        const ok = await handleAnnounce({ address: '192.0.2.11', port: 5555, instanceId: 'good', host: 'box.tail1234.ts.net' });
-        expect(ok.peer.host).toBe('box.tail1234.ts.net');
+        const ok = await handleAnnounce({ address: '192.0.2.11', port: 5555, instanceId: 'good', host: 'box.example-tailnet.ts.net' });
+        expect(ok.peer.host).toBe('box.example-tailnet.ts.net');
       });
 
     it('should create a new peer from announcement', async () => {
