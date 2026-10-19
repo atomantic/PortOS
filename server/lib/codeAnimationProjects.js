@@ -24,18 +24,26 @@ const localSettingsSchema = z.object({
   substitution: z.enum(['pinned', 'allowed']).default('pinned'),
 }).strict();
 
+const referenceIntentSchema = z.object({
+  universeId: z.string().max(128).nullable().default(null),
+  moodBoardId: z.string().max(128).nullable().default(null),
+  notes: z.string().max(16000).default(''),
+}).strict();
+
 export const codeAnimationProjectSchema = z.object({
   manifest: codeAnimationManifestSchema,
   budgets: codeAnimationBudgetsSchema.prefault({}),
   localSettings: localSettingsSchema.prefault({}),
-  referenceIntent: z.object({
-    universeId: z.string().max(128).nullable().default(null),
-    moodBoardId: z.string().max(128).nullable().default(null),
-    notes: z.string().max(16000).default(''),
-  }).strict().prefault({}),
+  referenceIntent: referenceIntentSchema.prefault({}),
 }).strict();
 
-export const codeAnimationProjectPatchSchema = partialWithoutDefaults(codeAnimationProjectSchema);
+// Nested objects get their own defaults-free partials: the top-level partial
+// does not recurse into them, and a filled-in default would overwrite stored fields.
+export const codeAnimationProjectPatchSchema = partialWithoutDefaults(codeAnimationProjectSchema).extend({
+  budgets: partialWithoutDefaults(codeAnimationBudgetsSchema).optional(),
+  localSettings: partialWithoutDefaults(localSettingsSchema).optional(),
+  referenceIntent: partialWithoutDefaults(referenceIntentSchema).optional(),
+}).strict();
 
 // POST /projects/:id/stage-runs. Starting is an explicit user action; the body
 // can only name which stored revision to work from or which stopped run to resume.
