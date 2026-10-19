@@ -53,9 +53,10 @@ function escapeCmdMetachars(value, carets) {
  * The direct launch an npm-style cmd-shim performs — `[node.exe, script]` for
  * a node shim, `[target.exe]` for a native one — or `null` when the file is
  * unreadable or not a shim this recognizes. Mirrors the shim's own interpreter
- * choice: a `node.exe` beside it, else `node` on PATH, else this process's node.
+ * choice: a `node.exe` beside it, else `node` on the child's PATH, else this
+ * process's node.
  */
-function resolveCmdShimLaunch(shimPath) {
+function resolveCmdShimLaunch(shimPath, searchEnv) {
   let source;
   try { source = readFileSync(shimPath, 'utf8'); } catch { return null; }
   const targets = [...source.matchAll(CMD_SHIM_TARGET_RE)].map((m) => m[1]);
@@ -66,7 +67,7 @@ function resolveCmdShimLaunch(shimPath) {
   if (!existsSync(targetPath)) return null;
   if (CMD_SHIM_NODE_RE.test(source)) {
     const localNode = join(shimDir, 'node.exe');
-    const pathNode = resolveWindowsExecutable('node', true);
+    const pathNode = resolveWindowsExecutable('node', true, searchEnv);
     const nodeExe = existsSync(localNode) ? localNode
       : (pathNode && /\.exe$/i.test(pathNode) ? pathNode : process.execPath);
     return { command: nodeExe, args: [targetPath] };
@@ -87,12 +88,13 @@ function resolveCmdShimLaunch(shimPath) {
  * cannot carry at all (CMD_UNCARRYABLE_RE — agent prompts on argv) bypasses
  * cmd.exe by launching the shim's target directly; when the shim is not one
  * that can be resolved, the launch is refused rather than handing untrusted
- * text to cmd.exe's parser.
+ * text to cmd.exe's parser. `searchEnv` is the child's env, so the bypass
+ * picks the same `node` the shim would have.
  */
-export function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
+export function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32', searchEnv = process.env) {
   if (!isWin32 || !WIN_BATCH_EXT_RE.test(command)) return { command, args };
   if (args.some((arg) => CMD_UNCARRYABLE_RE.test(String(arg)))) {
-    const direct = resolveCmdShimLaunch(command);
+    const direct = resolveCmdShimLaunch(command, searchEnv);
     if (!direct) {
       const error = new Error(`Cannot pass this argument safely through cmd.exe to ${command}: it contains a double quote, percent sign, or line break, and the batch file is not an npm shim that can be launched directly. Install the CLI with npm or as a native .exe.`);
       error.code = 'WINDOWS_BATCH_ARG_UNSAFE';

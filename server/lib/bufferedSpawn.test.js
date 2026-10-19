@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { ChildProcess } from './childProcess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 import { tmpdir } from 'os';
 
 // Mock child_process.spawn so we can drive the buffered-spawn machinery without
@@ -488,6 +488,15 @@ describe('prepareWindowsSafeSpawn — argv cmd.exe cannot carry (#12346)', () =>
     await writeFile(join(shimDir, 'node.exe'), '');
     const result = prepareWindowsSafeSpawn(shim, ['--print', HOSTILE_PROMPT], true);
     expect(result).toEqual({ command: join(shimDir, 'node.exe'), args: [script, '--print', HOSTILE_PROMPT] });
+  });
+
+  it('picks node from the child PATH, as the shim would, when none sits beside it', async () => {
+    await writeFile(join(shimDir, 'fake-cli.cmd'), NPM_CMD_SHIM);
+    const nodeDir = join(shimDir, 'provider-node');
+    await mkdir(nodeDir);
+    await writeFile(join(nodeDir, 'node.exe'), '');
+    const result = prepareCliSpawn('fake-cli', [HOSTILE_PROMPT], { PATH: [shimDir, nodeDir].join(delimiter) }, true);
+    expect(result).toEqual({ command: join(nodeDir, 'node.exe'), args: [script, HOSTILE_PROMPT] });
   });
 
   it('refuses a batch file it cannot bypass rather than passing the prompt to cmd.exe', async () => {

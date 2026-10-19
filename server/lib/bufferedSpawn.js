@@ -68,7 +68,7 @@ export const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
  */
 export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 = IS_WIN32) {
   const resolved = resolveWindowsExecutable(command, isWin32, searchEnv) || command;
-  return prepareWindowsSafeSpawn(resolved, args, isWin32);
+  return prepareWindowsSafeSpawn(resolved, args, isWin32, searchEnv);
 }
 
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only

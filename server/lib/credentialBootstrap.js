@@ -330,5 +330,5 @@ export function processGroupKillable(child, processGroup) {
 export function resolveCliSpawn(provider, command, args, childEnv, options = {}) {
   const bootstrapped = applyCredentialBootstrap(provider, command, args, options);
   const resolvedCommand = resolveWindowsExecutable(bootstrapped.command, undefined, childEnv) || bootstrapped.command;
-  return { ...prepareWindowsSafeSpawn(resolvedCommand, bootstrapped.args), wrapped: bootstrapped.wrapped };
+  return { ...prepareWindowsSafeSpawn(resolvedCommand, bootstrapped.args, undefined, childEnv), wrapped: bootstrapped.wrapped };
 }
