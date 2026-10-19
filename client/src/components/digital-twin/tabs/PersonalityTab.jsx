@@ -21,6 +21,7 @@ import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterGenerationModels } from '../../../utils/providers.js';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import SettingsLoadError from '../../ui/SettingsLoadError';
 
 // Pure helpers are exported for unit tests (PersonalityTab.test.jsx).
 
@@ -213,6 +214,8 @@ export default function PersonalityTab() {
   const [historyCap, setHistoryCap] = useState(200);
   const [defaultAlignment, setDefaultAlignment] = useState(true); // the SAVED default, distinct from this run's toggle
   const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -224,11 +227,13 @@ export default function PersonalityTab() {
       api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
       // No limit — fetch the full retained history (server-capped) so every
       // kept record is reachable for compare/delete.
-      api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => []),
+      api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => null),
       api.getModelPersonalitySettings({ silent: true }).catch(() => null)
     ]);
     setProviders((providersData.providers || []).filter((p) => p.enabled));
-    setHistory(Array.isArray(historyData) ? historyData : []);
+    setHistoryError(!Array.isArray(historyData));
+    setSettingsError(!settingsData);
+    if (Array.isArray(historyData)) setHistory(historyData);
     if (settingsData) {
       setIncludeAlignment(settingsData.defaultIncludeAlignment ?? true);
       setDefaultAlignment(settingsData.defaultIncludeAlignment ?? true);
@@ -293,6 +298,7 @@ export default function PersonalityTab() {
   };
 
   const saveSettings = async () => {
+    if (settingsError) return;
     setSavingSettings(true);
     const saved = await api
       .updateModelPersonalitySettings({
@@ -422,6 +428,7 @@ export default function PersonalityTab() {
       {showOptions && (
         <div className="bg-port-card rounded-lg border border-port-border p-4 space-y-4">
           <h3 className="font-semibold text-white">Options</h3>
+          {settingsError && <SettingsLoadError onRetry={loadData} />}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <ProviderModelSelector
               label="Alignment scorer provider"
@@ -473,7 +480,7 @@ export default function PersonalityTab() {
           </label>
           <button
             onClick={saveSettings}
-            disabled={savingSettings}
+            disabled={savingSettings || settingsError}
             className="px-4 py-2 min-h-[40px] text-sm bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50"
           >
             {savingSettings ? 'Saving...' : 'Save Options'}
@@ -555,6 +562,7 @@ export default function PersonalityTab() {
       )}
 
       {/* History */}
+      {historyError && <SettingsLoadError onRetry={loadData}>Failed to load run history. Retry to see past runs.</SettingsLoadError>}
       {history.length > 0 && (
         <div className="bg-port-card rounded-lg border border-port-border p-4">
           <div className="flex items-center justify-between mb-1">

@@ -10,6 +10,7 @@ accessibility). Feature-specific components live under their own feature directo
 | --- | --- |
 | `AutoSizeTextarea` | Controlled `<textarea>` that grows to fit its content — no internal scroll, no hand-resize. |
 | `Banner` | Toned alert block (icon + content + actions) for warnings, errors, and info callouts. |
+| `SettingsLoadError` | Inline "failed to load saved settings" banner with Retry; pair with a disabled Save so defaults are never written over stored values. |
 | `BeatPulse` | Metronome dot row — one dot per beat of the bar, the current one lit. |
 | `CollapsibleListItem` | Successful-delete row collapse with reduced-motion support and focus transfer; set `removing`, then filter local state in `onExited`. Owns row spacing. |
 | `CollapsibleSection` | Disclosure section header — chevron, leading icon, collapsed summary, `aria-expanded`/`aria-controls`; `keepMounted` hides the body instead of unmounting it. |
