@@ -631,6 +631,10 @@ describe('updater status invalidation', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(io.emit).toHaveBeenCalledTimes(1);
     expect(deps.watch.mock.calls[0][0].every(path => !path.endsWith('index'))).toBe(true);
+    // chokidar guards the native watch handle against Windows EPERM only for
+    // persistent watchers; a non-persistent one crashes the server when git
+    // prunes a watched refs/ subdirectory.
+    expect(deps.watch.mock.calls[0][1]).toMatchObject({ persistent: true });
     __resetAutoUpdateSchedulerForTests();
     expect(watcher.close).toHaveBeenCalledTimes(1);
   });

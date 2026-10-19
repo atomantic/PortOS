@@ -5,7 +5,7 @@
  * the segments it reaches, and a film look change keeps every base segment.
  */
 import { describe, it, expect, vi, afterAll, afterEach, beforeAll } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -43,7 +43,7 @@ afterEach(() => { applyFilmLookFinish.mockReset(); applyFilmLookFinish.mockResol
 // Runs against the installed ffmpeg; skipped where none is on PATH (Linux CI).
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 const run = (args) => execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...args]);
-const probe = (path, entries) => execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', entries, '-of', 'default=nw=1:nk=1', path]).toString().trim().split('\n');
+const probe = (path, entries) => execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', entries, '-of', 'default=nw=1:nk=1', path]).toString().trim().split(/\r?\n/);
 
 const project = (over = {}) => ({
   id: 'mv-segments-test', name: 'Example', composition: { mode: 'composed' },
@@ -112,8 +112,10 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     run(args.filter((a, i) => a !== '-progress' && args[i - 1] !== '-progress').map((a, i, all) => (all[i - 1] === '-preset' ? 'medium' : a)));
     const tags = 'setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709';
     const lavfi = `[0:v]${tags}[a];[1:v]${tags}[b];[a][b]psnr`;
-    const report = execFileSync('sh', ['-c', `ffmpeg -hide_banner -i '${out}' -i '${whole}' -lavfi '${lavfi}' -f null - 2>&1 | grep -o 'average:[0-9.inf]*'`]).toString();
-    const average = report.split(':')[1].trim();
+    // psnr prints its summary on stderr; read it directly rather than through a
+    // POSIX shell pipeline so the test also runs where no `sh` is on PATH.
+    const report = spawnSync('ffmpeg', ['-hide_banner', '-i', out, '-i', whole, '-lavfi', lavfi, '-f', 'null', '-'], { encoding: 'utf8' });
+    const average = /average:([0-9.inf]+)/.exec(`${report.stderr}`)?.[1];
     expect(average === 'inf' || Number(average) > 35).toBe(true);
   }, 60000);
 
