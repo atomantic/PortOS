@@ -73,21 +73,13 @@ const createSubmissionInputs = () => {
   };
 };
 
-const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
-  let fableLoomRenderSettings = null;
-  if (body.fableLoom) {
-    const taggedLoom = await getLoom(body.fableLoom.loomId);
-    if (taggedLoom) {
-      fableLoomRenderSettings = asFableLoomRenderSettings(taggedLoom.renderSettings);
-      body.width = fableLoomRenderSettings.width;
-      body.height = fableLoomRenderSettings.height;
-    }
-  }
-
-  if (body.musicVideo) {
-    const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
-    body = await applyProjectRenderPool(body);
-  }
+/**
+ * Acquire a submission's inputs: a federated peer's negotiated request, or
+ * this machine's staged uploads, plus any supplied song window. `inputs` owns
+ * each durable file the moment it exists. Final scene/song revalidation stays
+ * at the queue-write boundary, never here.
+ */
+async function prepareVideoSubmissionInputs(body, uploads, inputs) {
   let prepared;
   // Federated render (#4348): submit to the selected peer instead of running
   // locally. Handled before local preparation, which resolves this machine's
@@ -193,6 +185,26 @@ const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
     prepared.uploadedTempPaths = [...(prepared.uploadedTempPaths || []), audio.audioFilePath];
     body.audioStartSec = 0;
   }
+  return { body, prepared };
+}
+
+const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
+  let fableLoomRenderSettings = null;
+  if (body.fableLoom) {
+    const taggedLoom = await getLoom(body.fableLoom.loomId);
+    if (taggedLoom) {
+      fableLoomRenderSettings = asFableLoomRenderSettings(taggedLoom.renderSettings);
+      body.width = fableLoomRenderSettings.width;
+      body.height = fableLoomRenderSettings.height;
+    }
+  }
+
+  if (body.musicVideo) {
+    const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
+    body = await applyProjectRenderPool(body);
+  }
+  let prepared;
+  ({ body, prepared } = await prepareVideoSubmissionInputs(body, uploads, inputs));
   const { backend } = prepared;
 
   if (body.fableLoom) {
