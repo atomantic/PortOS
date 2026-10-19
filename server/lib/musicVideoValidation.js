@@ -145,8 +145,9 @@ export const musicVideoVideoSettingsSchema = z.object({
   // null clears the per-project pin so this install's configured default wins.
   // 'fal' is the metered fal.ai queue REST backend (server/services/videoGen/fal.js,
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
-  // (see generationMode below).
-  backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
+  // (see generationMode below). 'runway' is Runway's developer API
+  // (services/videoGen/runway.js), cutaways only.
+  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
@@ -177,6 +178,12 @@ export const musicVideoVideoSettingsSchema = z.object({
   // falls back to the default (OmniHuman v1.5).
   falMusicModelId: z.string().min(1).max(200).nullable().optional(),
   falMusicResolution: z.string().min(1).max(16).nullable().optional(),
+  // Runway cutaway model (lib/runwayVideoModels.js), clip length and output
+  // size. Loosely validated like falModelId; null/omitted = the default model,
+  // the length covering each shot, that model's default size.
+  runwayModelId: z.string().min(1).max(64).nullable().optional(),
+  runwayDuration: z.number().min(1).max(60).nullable().optional(),
+  runwayResolution: z.string().min(1).max(16).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
@@ -1614,7 +1621,7 @@ export const musicVideoSceneReorderSchema = z.object({
 // Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();

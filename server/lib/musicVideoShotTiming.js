@@ -35,8 +35,11 @@
  *     take makes on the fal lane and its estimated cost, shared by the board,
  *     the submit path and the production autopilot's spend cap.
  *
- * Dependency-free (only grokVideoClip.js and falVideoModels.js, themselves
- * dependency-free) so the client
+ *   - `runwaySceneTake` — the same answer for a cutaway on the Runway lane;
+ *     `meteredSceneTake` picks the paid lane's take for a backend.
+ *
+ * Dependency-free (only grokVideoClip.js, falVideoModels.js and
+ * runwayVideoModels.js, themselves dependency-free) so the client
  * re-exports it from `client/src/lib/musicVideoShotTiming.js` and the two sides
  * cannot drift.
  */
@@ -54,6 +57,13 @@ import {
   getFalVideoModel,
   resolveFalVideoResolution,
 } from './falVideoModels.js';
+import {
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL,
+  coerceRunwayVideoSeconds,
+  estimateRunwayVideoCostUsd,
+  getRunwayVideoModel,
+  resolveRunwayVideoResolution,
+} from './runwayVideoModels.js';
 
 export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 
@@ -218,8 +228,8 @@ export function performanceCapability(backend, { scene = null, videoSettings = n
  */
 export function performanceBlockedReason(backend) {
   if (performanceCapability(backend)) return null;
-  if (backend === 'grok') {
-    return 'Grok video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
+  if (backend === 'grok' || backend === 'runway') {
+    return `${backend === 'grok' ? 'Grok' : 'Runway'} video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.`;
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }
@@ -578,6 +588,51 @@ export const falTakeRequestFields = (take) => (take.performance
     ...(take.seconds != null ? { falDuration: take.seconds } : {}),
     ...(take.resolution ? { falResolution: take.resolution } : {}),
   });
+
+/**
+ * The Runway request one cutaway take of `scene` makes, and its estimated cost:
+ * `videoSettings.runwayModelId` (default Gen-4.5) at `runwayResolution`, for
+ * the pinned `runwayDuration` or else the shot's span rounded UP to a length the
+ * model delivers. A shot with an end frame stays on its model; the end frame is
+ * sent only when that model takes one (musicVideoEndFrame.js). Returns
+ * `{ performance: false, modelId, seconds, resolution, costUsd }`; Runway has
+ * no performance lane, so a performance scene is priced as nothing (null).
+ */
+export function runwaySceneTake({ scene, videoSettings = {} } = {}) {
+  const settings = videoSettings || {};
+  const modelId = settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL;
+  const model = getRunwayVideoModel(modelId);
+  if (isPerformanceScene(scene) || !model) {
+    return { performance: isPerformanceScene(scene), modelId, seconds: null, resolution: null, costUsd: null };
+  }
+  const spanSec = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
+    ? scene.endSec - scene.startSec
+    : null;
+  const seconds = coerceRunwayVideoSeconds(model, settings.runwayDuration || spanSec);
+  const resolution = resolveRunwayVideoResolution(model, settings.runwayResolution);
+  return { performance: false, modelId, seconds, resolution, costUsd: estimateRunwayVideoCostUsd({ modelId, seconds, resolution }) };
+}
+
+/** A `runwaySceneTake` as `/api/video-gen` fields. */
+export const runwayTakeRequestFields = (take) => ({
+  runwayModelId: take.modelId,
+  ...(take.seconds != null ? { runwayDuration: take.seconds } : {}),
+  ...(take.resolution ? { runwayResolution: take.resolution } : {}),
+});
+
+/**
+ * The priced take of `scene` on a paid lane (`fal` or `runway`), or null for a
+ * lane PortOS cannot price (local, Grok): the one answer the board's cost line,
+ * the batch estimate, the submit path and the autopilot's cap read.
+ */
+export function meteredSceneTake(backend, options = {}) {
+  if (backend === 'fal') return falSceneTake(options);
+  if (backend === 'runway') return runwaySceneTake(options);
+  return null;
+}
+
+/** The label of a paid take's model, from whichever catalog holds it. */
+export const meteredModelLabel = (modelId) => getFalVideoModel(modelId)?.label || getRunwayVideoModel(modelId)?.label || null;
 
 /** A repair needs measured complete coverage and a genuine pause between words.
  * Returned times distinguish song, excerpt and provider-clip timebases.

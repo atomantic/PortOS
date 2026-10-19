@@ -38,18 +38,20 @@ export const QUEUEABLE_IMAGE_MODES = Object.freeze([
 
 // Video deliberately shares the image backend discriminator namespace. Local
 // video's text/image/fflf modes are a separate semantic value carried elsewhere.
-// REACTOR has no image-gen counterpart (issue #6214 is video-only), so it is a
-// video-only literal rather than a re-export of an IMAGE_GEN_MODE entry.
+// REACTOR and RUNWAY have no image-gen counterpart, so they are video-only
+// literals rather than re-exports of an IMAGE_GEN_MODE entry.
 export const VIDEO_GEN_MODE = Object.freeze({
   LOCAL: IMAGE_GEN_MODE.LOCAL,
   GROK: IMAGE_GEN_MODE.GROK,
   FAL: IMAGE_GEN_MODE.FAL,
   REACTOR: 'reactor',
+  // Runway's developer API (services/videoGen/runway.js).
+  RUNWAY: 'runway',
 });
 
 export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
 export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
-  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR,
+  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY,
 ]);
 
 /**

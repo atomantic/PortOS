@@ -14,7 +14,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
-  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
+  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
 } from '../lib/musicVideoShotTiming.js';
 
 // The image backends accept at most four reference images for most models
@@ -357,6 +357,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
+    // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
+    const runwayFields = settings.backend === 'runway'
+      ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings }))
+      : null;
     videoLane.startScene(scene.sceneId);
     return generateVideo({
       prompt,
@@ -372,8 +376,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // pinned length) and its resolution; a performance clip's length
         // follows its song slice (server-side), so it sends only the lip-sync
         // resolution.
-        : falFields
-          ? falFields
+        : falFields || runwayFields
+          ? falFields || runwayFields
           : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
             ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio: true }
@@ -386,7 +390,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
       ...(card && (card.endFrame === false || songAudio) ? {} : sceneEndFrameRequestFields(scene, {
-        backend: settings.backend, falModelId: falFields?.falModelId, mode, // A card's local pick names its own model; else the active one.
+        backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, mode, // A card's local pick names its own model; else the active one.
         localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
       })),
       ...(audioReactiveSelected ? {

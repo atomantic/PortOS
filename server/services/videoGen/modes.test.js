@@ -11,8 +11,8 @@ describe('VIDEO_GEN_MODE', () => {
     // rather than re-typing is what keeps a schema from drifting from dispatch.
     expect(VIDEO_GEN_MODE.LOCAL).toBe(IMAGE_GEN_MODE.LOCAL);
     expect(VIDEO_GEN_MODE.GROK).toBe(IMAGE_GEN_MODE.GROK);
-    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok', 'fal', 'reactor']);
-    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok', 'fal', 'reactor']);
+    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok', 'fal', 'reactor', 'runway']);
+    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok', 'fal', 'reactor', 'runway']);
     expect(Object.isFrozen(VIDEO_GEN_MODE)).toBe(true);
   });
 });

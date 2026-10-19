@@ -1,6 +1,6 @@
 import { formatUsd } from '../utils/formatters.js';
 import {
-  falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
+  grokCoverage, isPerformanceScene, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from './musicVideoShotTiming.js';
 
 // "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
@@ -28,8 +28,9 @@ export function buildSceneTimingPresentation({
     ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
     : null;
   const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
-  const falTake = lipSyncBackend === 'fal' && layer === 'footage'
-    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec, lineCues })
+  // The priced take on a paid lane (fal.ai or Runway); `falTake` keeps its name for the fal-shaped consumers.
+  const falTake = layer === 'footage'
+    ? meteredSceneTake(lipSyncBackend, { scene, videoSettings: falVideoSettings || {}, songDurationSec, lineCues })
     : null;
   const falCost = falEstimate(falTake);
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;

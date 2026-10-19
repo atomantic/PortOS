@@ -180,6 +180,7 @@ export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
   [VIDEO_GEN_MODE.FAL]: 'fal.ai',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
+  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
 });
 
 // The fal.ai model picker rows — one per catalog family, keyed by its

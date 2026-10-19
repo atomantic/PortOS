@@ -31,6 +31,7 @@ const VIDEO_TOOL_LABELS = {
   [VIDEO_GEN_MODE.GROK]: 'Grok video',
   [VIDEO_GEN_MODE.FAL]: 'fal.ai video',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor video',
+  [VIDEO_GEN_MODE.RUNWAY]: 'Runway video',
 };
 
 // Metered = spends money or remote quota (the cloud lists); the budget cap is

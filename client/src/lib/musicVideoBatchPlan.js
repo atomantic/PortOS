@@ -1,5 +1,4 @@
-import { falSceneTake } from './musicVideoShotTiming.js';
-import { getFalVideoModel } from './falVideoModels.js';
+import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { formatUsd } from '../utils/formatters.js';
 
 /**
@@ -29,23 +28,23 @@ export function videosButtonLabel({ renderableCount, footageCount, waiting }) {
 }
 
 /**
- * The confirm line for a clip batch. fal takes are priced per scene with the
- * same `falSceneTake` the scene card shows; a scene it cannot price is counted
- * as unpriced. Local and Grok renders show the count only.
+ * The confirm line for a clip batch. fal and Runway takes are priced per scene
+ * with the same `meteredSceneTake` the scene card shows; a scene it cannot
+ * price is counted as unpriced. Local and Grok renders show the count only.
  */
 export function videoBatchPreview({ scenes, backend, videoSettings, songDurationSec = null }) {
   const count = scenes.length;
-  if (backend !== 'fal') return { count, backend, text: `Generate ${plural(count, 'clip')} on ${backend === 'grok' ? 'Grok' : 'the local renderer'}` };
-  const takes = scenes.map((scene) => falSceneTake({ scene, videoSettings, songDurationSec }));
+  if (backend !== 'fal' && backend !== 'runway') return { count, backend, text: `Generate ${plural(count, 'clip')} on ${backend === 'grok' ? 'Grok' : 'the local renderer'}` };
+  const takes = scenes.map((scene) => meteredSceneTake(backend, { scene, videoSettings, songDurationSec }));
   const priced = takes.filter((take) => take.costUsd != null);
   const costUsd = priced.reduce((sum, take) => sum + take.costUsd, 0);
   const modelIds = [...new Set(takes.map((take) => take.modelId))];
-  const model = modelIds.length === 1 ? (getFalVideoModel(modelIds[0])?.label || modelIds[0]) : `${modelIds.length} models`;
+  const model = modelIds.length === 1 ? (meteredModelLabel(modelIds[0]) || modelIds[0]) : `${modelIds.length} models`;
   const resolutions = [...new Set(takes.map((take) => take.resolution).filter(Boolean))];
   const unpriced = takes.length - priced.length;
   return {
     count, backend, costUsd, unpriced,
-    text: `Generate ${plural(count, 'clip')} on fal / ${model}${resolutions.length === 1 ? ` ${resolutions[0]}` : ''}`
+    text: `Generate ${plural(count, 'clip')} on ${backend === 'runway' ? 'Runway' : 'fal'} / ${model}${resolutions.length === 1 ? ` ${resolutions[0]}` : ''}`
       + ` · est. ${formatUsd(costUsd)}${unpriced > 0 ? ` (${unpriced} unpriced)` : ''}`,
   };
 }

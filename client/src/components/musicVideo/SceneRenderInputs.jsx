@@ -1,5 +1,6 @@
 import { falHearsAudioReference, getFalVideoModel } from '../../lib/falVideoModels.js';
-import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
 import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
@@ -33,6 +34,7 @@ export function shotCardRenderRequest({
   project = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
 }) {
   const falModel = settings.backend === 'fal' ? getFalVideoModel(falSceneTake({ scene, videoSettings: settings }).modelId) : null;
+  const runwayModel = settings.backend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: settings }).modelId) : null;
   const localModel = settings.backend === 'local'
     ? models.find((model) => model.id === (settings.modelId || defaultModel)) || null : null;
   const span = `${clock(scene?.startSec)}–${clock(scene?.endSec)}`;
@@ -82,7 +84,7 @@ export function shotCardRenderRequest({
     prompt,
     promptAdditions,
     promptUsed: falModel?.prompt !== 'none',
-    maxChars: falModel?.promptMaxChars ?? null,
+    maxChars: falModel?.promptMaxChars ?? runwayModel?.promptMaxChars ?? null,
     endFrame,
     songAudio,
     wholeLine,

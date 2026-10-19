@@ -375,6 +375,14 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // #10157: a board-started (manual or auto-review) fal clip records the
         // estimate it was priced at so project spend counts it. A production-run
         // step is already charged to the run's own usage, so it is skipped.
+        if (scene && backend === VIDEO_GEN_MODE.RUNWAY && !body.musicVideo.productionRunId) {
+          const { runwaySceneTake } = await import('../../lib/musicVideoShotTiming.js');
+          const { costUsd, modelId: costModelId } = runwaySceneTake({
+            scene,
+            videoSettings: { runwayModelId: body.runwayModelId, runwayDuration: body.runwayDuration, runwayResolution: body.runwayResolution },
+          });
+          if (Number.isFinite(costUsd)) Object.assign(params, { musicVideoCostUsd: costUsd, musicVideoCostModelId: costModelId });
+        }
         if (scene && backend === VIDEO_GEN_MODE.FAL && !body.musicVideo.productionRunId) {
           const { falSceneTake } = await import('../../lib/musicVideoShotTiming.js');
           const { costUsd, modelId: costModelId } = falSceneTake({
@@ -434,7 +442,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     // the model takes an aspect ratio, and its frames cropped to it where the
     // output follows the start frame (falFrameAspect.js). An explicit
     // visual-conditioning aspect (FableLoom) still wins.
-    const projectAspect = backend === VIDEO_GEN_MODE.FAL && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
+    const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
       ? await musicVideoProjectAspect(body.musicVideo.projectId).catch(async (error) => { await cleanupStaged(); throw error; })
       : null;
     const { jobId, position, status } = await enqueue({

@@ -45,6 +45,12 @@ export const CREDENTIALS = Object.freeze([
     settingsPath: 'videoGen.reactor.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
+    id: 'runway', label: 'Runway', privateStore: true,
+    unlocks: 'Video generation through Runway\'s developer API.', tier: 'metered',
+    getUrl: 'https://dev.runwayml.com/', envVars: Object.freeze(['RUNWAYML_API_SECRET']),
+    settingsPath: 'videoGen.runway.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
     id: 'github',
     label: 'GitHub',
     unlocks: 'CoS agent PRs, `gh` on spawned CLIs, and the GitHub Dev Tools page.',

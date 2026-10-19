@@ -11,9 +11,8 @@ import {
 import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
-import { falSceneTake } from './musicVideoShotTiming.js';
+import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { unlockedShots } from './musicVideoSceneAttention.js';
-import { getFalVideoModel } from './falVideoModels.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
@@ -133,7 +132,7 @@ export function projectFalSpend(project) {
   const add = (modelId, usd) => {
     if (!(Number.isFinite(usd) && usd > 0)) return;
     const key = modelId || null;
-    const row = byModel.get(key) || { modelId: key, label: key ? getFalVideoModel(key)?.label || key : 'Model not recorded', usd: 0, count: 0 };
+    const row = byModel.get(key) || { modelId: key, label: key ? meteredModelLabel(key) || key : 'Model not recorded', usd: 0, count: 0 };
     row.usd += usd;
     row.count += 1;
     byModel.set(key, row);
@@ -145,7 +144,7 @@ export function projectFalSpend(project) {
   }
   for (const run of Array.isArray(project?.productionRuns) ? project.productionRuns : []) {
     for (const step of Array.isArray(run?.steps) ? run.steps : []) {
-      if (step?.route?.mode === 'fal' && step.status !== 'refused') add(step.costModelId || step.route.model, Number(step.costUsd));
+      if ((step?.route?.mode === 'fal' || step?.route?.mode === 'runway') && step.status !== 'refused') add(step.costModelId || step.route.model, Number(step.costUsd));
     }
   }
   const models = [...byModel.values()].map((row) => ({ ...row, usd: Math.round(row.usd * 1e4) / 1e4 })).sort((a, b) => b.usd - a.usd);
@@ -169,9 +168,7 @@ export function boardJobEstimate(project) {
   let knownUsd = 0;
   let unpriced = missingFrames;
   for (const scene of missingClips) {
-    const cost = settings.backend === 'fal'
-      ? falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }).costUsd
-      : null;
+    const cost = meteredSceneTake(settings.backend, { scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })?.costUsd ?? null;
     if (Number.isFinite(cost)) knownUsd += cost;
     else unpriced += 1;
   }
