@@ -1,17 +1,20 @@
 import { expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitestTempFixture, fixtureReadyFailureSource } from './lib/vitestTempRootFixture.js';
+import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
+
+// The nested run's own ceiling; the outer budget adds headroom so it is never tighter.
+const RUN_CEILING_MS = 120000;
 
 // Hold the real clean route at its first publication write, then let a different
 // worker cancel the test. Its body must finish before its gallery is removed.
-it('drains the image cleaner request before removing its cancelled fixture', () => {
+it('drains the image cleaner request before removing its cancelled fixture', async () => {
   const host = mkdtempSync(join(tmpdir(), 'image-clean-cancel-'));
   try {
-    const { args, options } = createVitestTempFixture(host, 'server', '');
+    const fixtureRun = createVitestTempFixture(host, 'server', '');
+    const { args } = fixtureRun;
     const fixture = join(host, 'fixture');
     const ready = join(fixture, 'ready');
     const traceFile = join(fixture, 'trace.json');
@@ -66,7 +69,7 @@ it('drains the image cleaner request before removing its cancelled fixture', () 
     args[args.indexOf('--maxWorkers') + 1] = '2';
     args.push('--bail=1', '--reporter=default', '--reporter=json', '--outputFile.json', resultsFile,
       '--reporter=junit', '--outputFile.junit', junitFile);
-    const result = spawnSync(process.execPath, args, options);
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS);
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);
@@ -89,4 +92,4 @@ it('drains the image cleaner request before removing its cancelled fixture', () 
   } finally {
     rmSync(host, { recursive: true, force: true });
   }
-}, 25000);
+}, RUN_CEILING_MS + 15000);
