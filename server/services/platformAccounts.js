@@ -15,6 +15,19 @@ const ACCOUNTS_FILE = join(PATHS.agentPersonalities, 'accounts.json');
 const store = createCachedStore(ACCOUNTS_FILE, { accounts: {} }, { context: 'platformAccounts' });
 const loadAccounts = store.load;
 
+/**
+ * Mask the secrets an account carries: the API key, and the Moltworld agentId
+ * (its auth credential). Only the last 4 characters of each survive.
+ */
+function maskAccountCredentials(credentials) {
+  const mask = (value) => (value ? '***' + value.slice(-4) : null);
+  return {
+    ...credentials,
+    apiKey: mask(credentials?.apiKey),
+    ...(credentials?.agentId ? { agentId: mask(credentials.agentId) } : {})
+  };
+}
+
 // Event emitter for account changes
 export const platformAccountEvents = new EventEmitter();
 export const invalidateCache = store.invalidateCache;
@@ -31,11 +44,7 @@ export async function getAllAccounts() {
   return Object.entries(data.accounts).map(([id, account]) => ({
     id,
     ...account,
-    // Mask the API key for security
-    credentials: {
-      ...account.credentials,
-      apiKey: account.credentials?.apiKey ? '***' + account.credentials.apiKey.slice(-4) : null
-    }
+    credentials: maskAccountCredentials(account.credentials)
   }));
 }
 
@@ -58,10 +67,7 @@ export async function getAccountById(id, maskCredentials = true) {
   return {
     id,
     ...account,
-    credentials: maskCredentials ? {
-      ...account.credentials,
-      apiKey: account.credentials?.apiKey ? '***' + account.credentials.apiKey.slice(-4) : null
-    } : account.credentials
+    credentials: maskCredentials ? maskAccountCredentials(account.credentials) : account.credentials
   };
 }
 
@@ -100,10 +106,7 @@ export async function createAccount(accountData) {
   return {
     id,
     ...account,
-    credentials: {
-      ...account.credentials,
-      apiKey: '***' + account.credentials.apiKey.slice(-4)
-    }
+    credentials: maskAccountCredentials(account.credentials)
   };
 }
 
