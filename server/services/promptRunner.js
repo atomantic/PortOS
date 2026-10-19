@@ -1185,15 +1185,18 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   for (const p of all.providers) providersMap[p.id] = p;
   // A composite (`harness.method@service`, #7564) never sits in the stored map;
   // the failed provider's own id may be one, and it must be in the map for the
-  // toolkit's self-loop guard and `fallbackProvider` read to see it. Lazy: the
-  // resolver's closure reaches the graph store, which this request-path module
-  // must not drag in for the preset-only common case.
-  if (isCompositeProviderId(failed.id)) {
-    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [failed.id]);
+  // toolkit's self-loop guard and `fallbackProvider` read to see it. The
+  // toolkit's boot-registered resolver already materializes composite ids;
+  // reusing it keeps the host resolver graph out of request-path CI selection.
+  if (isCompositeProviderId(failed.id) && !providersMap[failed.id]) {
+    const record = await getProviderById(failed.id);
+    if (record) providersMap[failed.id] = record;
   }
   const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
-  if (chainComposites.length) {
-    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+  for (const id of chainComposites) {
+    if (providersMap[id]) continue;
+    const record = await getProviderById(id);
+    if (record) providersMap[id] = record;
   }
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);

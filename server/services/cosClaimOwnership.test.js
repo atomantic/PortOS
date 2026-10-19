@@ -18,7 +18,9 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 
-const { updateClaimOwnership, checkReconcileOwnership, withClaimOwnershipLock, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+const { updateClaimOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+// Hold the same leaf fence cleanup uses while exercising binding through its public service.
+const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
 
 const { withStateLock, readAgentsStateForSafetyCheck, saveState } = await import('./cosState.js');

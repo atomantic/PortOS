@@ -1,3 +1,4 @@
+import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claimAppOperation, endAppOperation, __resetAppOperations } from './appOperations.js';
 import { cosEvents } from './cosEvents.js';
@@ -5,7 +6,6 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import {
   SYSTEM_ACTIVITY_COALESCE_MS,
   agentCompletionPhase,
-  armSystemActivityWatchers,
   attachLlmActivityHooks,
   bindSystemActivityIo,
   drainActivityNotesForTests,
@@ -15,13 +15,33 @@ import {
   taskQueuePhase,
 } from './systemActivityNotify.js';
 
+let stopWatchers;
+
 afterEach(() => {
+  stopWatchers?.();
+  stopWatchers = null;
   resetSystemActivityNotifyForTests();
   __resetAppOperations();
   vi.useRealTimers();
 });
 
 describe('system activity invalidation', () => {
+  it('detaches boot watchers and can arm them again without losing the shared signal', async () => {
+    const first = armSystemActivityWatchers();
+    const repeated = armSystemActivityWatchers();
+    expect(repeated).toBe(first);
+    stopWatchers = await first;
+    const previousStop = stopWatchers;
+    stopWatchers();
+    drainActivityNotesForTests();
+    cosEvents.emit('agent:spawned', { id: 'agent-before-rearm' });
+    expect(drainActivityNotesForTests()).toEqual([]);
+    stopWatchers = await armSystemActivityWatchers();
+    previousStop(); // A stale teardown must not detach the new registration.
+    cosEvents.emit('agent:spawned', { id: 'agent-after-rearm' });
+    expect(drainActivityNotesForTests()).toEqual([{ source: 'agents', phase: 'start' }]);
+  });
+
   it('coalesces a burst into one frame that carries no snapshot', () => {
     vi.useFakeTimers();
     const emit = vi.fn();
@@ -63,7 +83,8 @@ describe('system activity invalidation', () => {
   });
 
   it('notifies start, completion, failure, cancellation, and queue drain for every event-backed source', async () => {
-    await armSystemActivityWatchers();
+    stopWatchers = await armSystemActivityWatchers();
+    expect(await armSystemActivityWatchers()).toBe(stopWatchers);
     drainActivityNotesForTests();
 
     mediaJobEvents.emit('enqueued', { id: 'job-1' });
