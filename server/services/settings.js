@@ -381,16 +381,32 @@ export const getSettingsWithStatus = async () => {
 export const getSettings = async () => (await getSettingsWithStatus()).settings;
 export const saveSettings = (settings, options) => queueWrite(() => save(settings, options));
 
+// The merge base for every partial write, read strictly inside the queued turn.
+// loadRaw() reads a present-but-unreadable or malformed file as `{}`, and a
+// partial write merged onto that replaced every setting (auth secret included)
+// with just its patch. A confirmed-absent file (fresh install) is a valid empty
+// base; anything else refuses until the file is repaired or restored.
+const loadWriteBase = async () => {
+  const { corrupt, settings } = await readSettingsStrict();
+  if (corrupt) {
+    const err = new Error('Cannot update settings: data/settings.json is unreadable or malformed — repair it or restore it from a backup');
+    err.code = 'SETTINGS_UNREADABLE';
+    throw err;
+  }
+  return hydratePrivateKeys(settings, PATHS.data);
+};
+
 // Merge against the unstripped on-disk snapshot so save() sees every
 // MortalLoom store key in one place — guaranteeing exactly one warning
 // per updateSettings call, only when the write succeeds. The whole
 // read-merge-write runs inside one queued turn so it merges against the
 // freshest persisted snapshot, not a stale pre-image.
 export const updateSettings = (patch, options) => queueWrite(async () => {
-  const raw = await loadRaw();
+  const raw = await loadWriteBase();
+  const previous = structuredClone(stripStoreKeys(raw));
   const incoming = isPlainObject(patch) ? patch : {};
   const merged = { ...raw, ...incoming };
-  return save(merged, options);
+  return save(merged, options, previous);
 });
 
 // Read-modify-write INSIDE the write queue. For callers whose merge semantics
@@ -403,19 +419,11 @@ export const updateSettings = (patch, options) => queueWrite(async () => {
 // saveSettings(...)` pattern: there, a concurrent `updateSettings` landing
 // between the external read and the queued write was clobbered by the caller's
 // stale pre-image. Here the read and the write share one queued turn, so the
-// mutator always sees the latest persisted snapshot.
-// Pass { requireReadable: true } to refuse unreadable/malformed snapshots rather
-// than using the legacy empty fallback; a confirmed absent file is still valid.
+// mutator always sees the latest persisted snapshot. An unreadable or malformed
+// file refuses (loadWriteBase) rather than handing the mutator an empty base.
 export const updateSettingsWith = (mutate, options) => queueWrite(async () => {
-  // Partial mutations must never turn a failed read into an empty base. Keep
-  // ordinary readers/legacy writers compatible, but opt this contract into the
-  // strict reader inside the same queued turn as the mutation and write.
-  const strict = options?.requireReadable ? await readSettingsStrict() : null;
-  if (strict?.corrupt) throw new Error('Cannot update settings: persisted settings are unreadable or malformed');
-  const current = stripStoreKeys(strict
-    ? await hydratePrivateKeys(strict.settings, PATHS.data)
-    : await loadRaw());
-  const previous = strict ? structuredClone(current) : undefined;
+  const current = stripStoreKeys(await loadWriteBase());
+  const previous = structuredClone(current);
   const next = await mutate(current);
   // Guard the mutator's return BEFORE persisting: unlike the old
   // saveSettings(objectLiteral) callers, a mutator with a missing `return`

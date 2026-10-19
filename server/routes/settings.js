@@ -714,7 +714,7 @@ const saveSettingsPatch = async (body, slicePatch) => {
       mergeFederationSlice(next, current),
       current,
     );
-  }, { actor: 'user', ...(slicePatch ? { requireReadable: true } : {}) });
+  }, { actor: 'user' });
   if (settingsPatch.instanceFeatures?.eidoverse !== undefined) {
     const { reconcileEidoverseRuntime } = await import('../services/eidoverseRuntime.js');
     await reconcileEidoverseRuntime()

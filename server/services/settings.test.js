@@ -384,6 +384,30 @@ describe('settings.js', () => {
     });
   });
 
+  describe('partial writes refuse an unreadable or malformed file', () => {
+    // Before this contract a failed read merged the patch onto `{}`, so one
+    // unrelated save replaced every persisted setting, including secrets.auth.
+    const writers = [
+      ['updateSettings', () => updateSettings({ theme: 'dark' })],
+      ['updateSettingsWith', () => updateSettingsWith((current) => ({ ...current, theme: 'dark' }))],
+    ];
+
+    for (const [name, write] of writers) {
+      it(`${name} refuses malformed content and an unreadable file, then recovers on a clean read`, async () => {
+        tryReadFile.mockResolvedValue('{ "secrets": { "auth": ');
+        await expect(write()).rejects.toMatchObject({ code: 'SETTINGS_UNREADABLE' });
+
+        tryReadFileStrict.mockResolvedValueOnce({ ok: false, value: null });
+        await expect(write()).rejects.toMatchObject({ code: 'SETTINGS_UNREADABLE' });
+        expect(atomicWrite).not.toHaveBeenCalled();
+
+        tryReadFile.mockResolvedValue(JSON.stringify({ secrets: { auth: { enabled: true } } }));
+        await write();
+        expect(JSON.parse(atomicWrite.mock.calls[0][1])).toEqual({ secrets: { auth: { enabled: true } }, theme: 'dark' });
+      });
+    }
+  });
+
   describe('live settings restore boundary', () => {
     it('drains admitted mutations and gives waiting mutations the restored warm-store base', async () => {
       let disk = { exampleSetting: 'before' };
