@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, mkdir, rm, stat, writeFile } from 'fs/promises';
+import { readFile, mkdir, rm, stat, writeFile, rename } from 'fs/promises';
 import { join, dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { isWorktreeRoot } from '../server/lib/dataRoot.js';
@@ -64,7 +64,11 @@ const pidAlive = (pid) => {
 };
 
 const readLockOwner = (lockDir) => readFile(join(lockDir, LOCK_OWNER_FILE), 'utf-8')
-  .then((raw) => JSON.parse(raw), () => null)
+  .then((raw) => {
+    // A reader can land between the holder's mkdir and a complete owner write;
+    // an unparseable file means "owner unknown", same as a missing one.
+    try { return JSON.parse(raw); } catch { return null; }
+  }, () => null)
   .then((owner) => (owner && typeof owner === 'object' ? owner : null));
 
 /**
@@ -100,7 +104,10 @@ async function acquireMigrationLock(lockDir, { waitMs = LOCK_WAIT_MS, pollMs = L
       throw err;
     });
     if (taken) {
-      await writeFile(join(lockDir, LOCK_OWNER_FILE), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      // temp + rename so a concurrent runner sees no owner file or a whole one.
+      const ownerPath = join(lockDir, LOCK_OWNER_FILE);
+      await writeFile(`${ownerPath}.tmp`, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      await rename(`${ownerPath}.tmp`, ownerPath);
       return () => rm(lockDir, { recursive: true, force: true });
     }
     const stale = await lockStaleReason(lockDir);

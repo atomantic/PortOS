@@ -443,6 +443,17 @@ export default {
     expect(appliedCount()).toBe(1);
   });
 
+  it('waits on a lock whose owner file is empty (torn read) instead of throwing', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), '');
+    setTimeout(() => rmSync(lockDir, { recursive: true, force: true }), 40);
+
+    const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 2000, lockPollMs: 10 });
+
+    expect(ran).toBeTruthy();
+    expect(appliedCount()).toBeGreaterThan(0);
+  });
+
   it('gives up after the bounded wait while a live holder keeps the lock', async () => {
     mkdirSync(lockDir);
     writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
