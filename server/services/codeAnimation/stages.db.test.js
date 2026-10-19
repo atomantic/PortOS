@@ -639,4 +639,25 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(unfreeze).not.toHaveBeenCalled();
     expect(render).not.toHaveBeenCalled();
   });
+
+  it('keeps unsent nested project settings when a partial PATCH names one field of each nested object', async () => {
+    const created = await createProductionProject({
+      manifest: manifest(),
+      budgets: { iterations: 3, diskBytes: 2 * 1024 * 1024 },
+      localSettings: { providerId: 'example-provider', connectionId: 'example-connection', mode: 'api', model: 'example-model', effort: 'medium', substitution: 'allowed' },
+      referenceIntent: { universeId: 'example-universe', moodBoardId: 'example-board', notes: 'keep me' },
+    });
+    ids.push(created.id);
+    await patchProductionProject(created.id, { budgets: { renderSeconds: 60 } });
+    await patchProductionProject(created.id, { localSettings: { model: 'other-model' } });
+    await patchProductionProject(created.id, { referenceIntent: { notes: 'new notes' } });
+    const saved = await getProductionProject(created.id);
+    expect(saved.budgets).toEqual({ iterations: 3, timeSeconds: 900, tokens: 128000, renderSeconds: 60, diskBytes: 2 * 1024 * 1024 });
+    expect(saved.localSettings).toMatchObject({ providerId: 'example-provider', connectionId: 'example-connection', mode: 'api', model: 'other-model', effort: 'medium', substitution: 'allowed' });
+    expect(saved.referenceIntent).toEqual({ universeId: 'example-universe', moodBoardId: 'example-board', notes: 'new notes' });
+    await patchProductionProject(created.id, { localSettings: { model: null }, referenceIntent: { universeId: null } });
+    const cleared = await getProductionProject(created.id);
+    expect(cleared.localSettings).toMatchObject({ model: null, providerId: 'example-provider' });
+    expect(cleared.referenceIntent).toMatchObject({ universeId: null, moodBoardId: 'example-board', notes: 'new notes' });
+  });
 });
