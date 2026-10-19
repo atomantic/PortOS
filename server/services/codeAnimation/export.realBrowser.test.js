@@ -10,6 +10,7 @@ import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
+import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
@@ -76,7 +77,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 window.ANIMATION_META = { title: 'Three', duration: 1, fps: ${FPS}, width: ${WIDTH}, height: ${HEIGHT} };
 const film = document.getElementById('film');
 const renderer = new THREE.WebGLRenderer({ canvas: film, antialias: false, preserveDrawingBuffer: true });
