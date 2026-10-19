@@ -1,17 +1,14 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright-core';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
+import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const chrome = resolveTestChrome();
 const steps = ['idea', 'universeAesthetic', 'plotArc', 'readerMap', 'characters', 'issues', 'production']
   .map((id, index) => ({ id, label: ['Idea', 'Universe Aesthetic', 'Plot Arc', 'Reader Map', 'Characters', 'Issues', 'Production'][index], description: 'Review the current work.' }));
 

@@ -31,7 +31,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
-import { resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
+import { resolveTestChrome } from './testChrome.js';
 import { WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';

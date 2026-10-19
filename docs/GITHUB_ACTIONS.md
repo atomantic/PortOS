@@ -929,7 +929,7 @@ version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
 python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
 interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
 the browser suites, found with the suites' own candidate list,
-`resolveTestChrome` in `server/lib/browserSuiteGate.js`); an unknown program
+`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
 handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
 `scripts/vitestCiPool.js`, `package.json` and lockfile; the full Node
 version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
