@@ -130,6 +130,27 @@ describe('applyRemote meatspace eyes.json identity', () => {
     expect(exams).toEqual([{ id: legacyRowId(legacy), ...legacy }]);
   });
 
+  // An exam minted before #12432 has an id but no createdAt. Two machines that
+  // each edited it keep one row (its id), not one per edit.
+  it('keeps one row for a pre-#12432 exam edited differently on two machines', async () => {
+    const mintedBeforeFix = { id: 'exam-old', date: '2025-03-01', leftSphere: -1 };
+    const editedHere = { ...mintedBeforeFix, leftSphere: -1.25 };
+    const editedThere = { ...mintedBeforeFix, leftSphere: -1.5 };
+    await persist('eyes.json', { exams: [editedHere] });
+    await apply('eyes.json', { exams: [editedThere] });
+    const exams = (await readDoc('eyes.json')).exams;
+    expect(exams).toHaveLength(1);
+    expect(exams[0].id).toBe('exam-old');
+  });
+
+  it('keeps a legacy exam deleted before the copies converged, though the peer stamped it differently', async () => {
+    const legacy = { date: '2025-04-01', rightSphere: -2 };
+    await persist('eyes.json', { exams: [{ id: 'stamp-here', ...legacy }] });
+    await health.removeEyeExam('stamp-here');
+    expect((await apply('eyes.json', { exams: [{ id: 'stamp-there', ...legacy }] })).applied).toBe(false);
+    expect((await readDoc('eyes.json')).exams).toEqual([]);
+  });
+
   it('resolves two copies of one exam to the newer edit on either side', async () => {
     const original = { id: 'exam-x', createdAt: minted, date: '2026-05-01', leftSphere: -1 };
     const edited = { ...original, leftSphere: -1.5, updatedAt: '2026-06-01T00:00:00.000Z' };

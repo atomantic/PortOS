@@ -16,14 +16,17 @@ const seed = async (doc) => {
 };
 const read = async () => JSON.parse(await readFile(eyesPath(), 'utf8'));
 
-it('collapses random-stamped copies of one legacy exam, re-keys singles, keeps minted rows, and is idempotent', async () => {
+it('collapses copies of one legacy exam to its content id, stamps id-less rows, keeps every other id, and is idempotent', async () => {
   const legacy = { date: '2024-05-01', leftSphere: -1, rightSphere: -1.25 };
-  const single = { date: '2023-02-01', leftSphere: -0.5 };
+  const idless = { date: '2023-02-01', leftSphere: -0.5 };
+  // A pre-#12432 addEyeExam row: random id, no createdAt, edited since. Its id is kept.
+  const preFixEdited = { id: '22222222-0000-4000-8000-000000000002', date: '2023-09-01', leftSphere: -0.75 };
   const minted = { id: 'exam-minted', createdAt: '2026-01-01T00:00:00.000Z', date: '2026-01-01', leftSphere: -2 };
   await seed({
     exams: [
       { id: '11111111-0000-4000-8000-000000000001', ...legacy }, // stamped on this machine
-      { id: '22222222-0000-4000-8000-000000000002', ...single },
+      { ...idless },
+      preFixEdited,
       { id: '33333333-0000-4000-8000-000000000003', ...legacy }, // the peer's stamp, appended by a sync
       minted,
     ],
@@ -34,7 +37,8 @@ it('collapses random-stamped copies of one legacy exam, re-keys singles, keeps m
   const doc = await read();
   expect(doc.note).toBe('kept');
   expect(doc.exams).toEqual([
-    { id: legacyRowId(single), ...single },
+    { id: legacyRowId(idless), ...idless },
+    preFixEdited,
     { id: legacyRowId(legacy), ...legacy },
     minted,
   ]);

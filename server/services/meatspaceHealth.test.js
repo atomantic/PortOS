@@ -291,12 +291,19 @@ describe('eye exams by id', () => {
     const legacy = { date: '2025-01-01', leftSphere: -1.5 };
     disk = { exams: [{ ...legacy }] };
     const first = (await getEyeExams()).exams[0].id;
-    // A second machine holding the same row, or one this machine stamped with a
-    // random id before #12432 (no createdAt), lands on the same id.
-    disk = { exams: [{ ...legacy, id: '4f1c2a9e-0000-4000-8000-000000000000' }] };
+    // A second machine stamping its own copy of the same row lands on the same id.
+    disk = { exams: [{ ...legacy }] };
     const second = (await getEyeExams()).exams[0].id;
     expect(first).toMatch(/^legacy-/);
     expect(second).toBe(first);
+  });
+
+  it('tombstones a legacy exam under its content key too, so a peer copy with another id stays deleted', async () => {
+    disk = { exams: [{ id: 'random-stamp-a', date: '2025-01-01', leftSphere: -1 }] };
+    await removeEyeExam('random-stamp-a');
+    expect(disk.rowTombstones.map(t => t.id).sort()).toEqual(
+      ['random-stamp-a', expect.stringMatching(/^legacy-/)].sort(),
+    );
   });
 
   it('stamps createdAt on a new exam and updatedAt on an edit, so peers resolve copies by clock', async () => {

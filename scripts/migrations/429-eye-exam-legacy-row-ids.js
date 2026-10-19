@@ -1,10 +1,12 @@
-/** Re-key legacy eye exams to content-derived ids and collapse their duplicates
+/** Collapse duplicated legacy eye exams and give id-less ones their content id
  * (#12432). Before this, each machine stamped an id-less eyes.json row with its
  * own `randomUUID()`, so syncing peers appended each other's copy of the same
- * exam. Every row without `createdAt` predates minted ids, so its random stamp
- * is replaced by the `legacy-` id every peer derives from the row's content, and
- * rows that land on the same id are one exam. Rows created since keep their id.
- * Input-gated on eyes.json; ships no seed. Idempotent: re-keyed rows keep their id. */
+ * exam. Rows without `createdAt` whose content is identical are copies of one
+ * exam: they collapse to one row carrying the `legacy-` id every peer derives
+ * from that content. A single row keeps its id — it may have been minted before
+ * #12432 and edited — and still meets a peer's differently-stamped copy through
+ * the sync merge's content key. Input-gated on eyes.json; ships no seed.
+ * Idempotent: the output has no id-less rows and no duplicates left. */
 import { join } from 'node:path';
 import { readJsonOrNull, writeJsonAtomic } from './_lib.js';
 import { normalizeLegacyRows } from '../../server/lib/meatspaceRowIdentity.js';

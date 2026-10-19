@@ -17,13 +17,7 @@ import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
 import { GOAL_TOMBSTONES_KEY, reconcileGoalTombstones } from './identity/goalTombstones.js';
-import {
-  ROW_TOMBSTONES_KEY,
-  contentRowIdentity,
-  legacyRowIdentity,
-  preferRowCopy,
-  rowLiveStamp,
-} from '../lib/meatspaceRowIdentity.js';
+import { ROW_TOMBSTONES_KEY, mergeRowCopies, rowLiveStamp } from '../lib/meatspaceRowIdentity.js';
 import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
@@ -135,12 +129,12 @@ const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
 // Blood/epigenetic/eye records merge by row identity (`mergeRowUnionFile`), not
 // by `date`: two labs on one day, a retest, or left/right exams entered
-// separately share a date (#10910). Identity is the row's minted id, or for a
-// legacy row a content-derived `legacy-` id every machine computes alike
-// (`lib/meatspaceRowIdentity.js`, #12432). Copies of one row resolve by per-row
+// separately share a date (#10910). Identity is the row's id, plus for a row of
+// unknown provenance (no `createdAt`) a content-derived `legacy-` key every
+// machine computes alike (`lib/meatspaceRowIdentity.js`, #12432). Copies of one row resolve by per-row
 // `updatedAt` LWW, and a delete travels as a `rowTombstones` entry, so edits and
 // deletes reach peers at `PORTOS_SCHEMA_VERSIONS.meatspace` 2. `legacyIds` marks
-// the file whose pre-#12432 readers stamped random ids on legacy rows.
+// the file whose rows are addressed by id (id-less rows get their content key).
 const MEATSPACE_FILES = {
   'daily-log.json': { type: 'daily-log' }, // mergeDailyLogFile
   'blood-tests.json': { type: 'row-union', arrayKey: 'tests' },
@@ -416,40 +410,19 @@ function mergeArraysByKey(localArr, remoteArr, idField, timestampField, mergeRec
  * Merge a peer's row-union file (blood / epigenetic / eye records) into the
  * local one. Pure: returns the file to persist.
  *
- * Rows match by identity (`legacyRowIdentity` for an id-stamping file, else
- * `contentRowIdentity`); copies of one row resolve to `preferRowCopy`, so an
- * edit stamped with `updatedAt` wins on every machine. Local rows that share an
- * identity in a non-stamping file are kept as they are — only a peer's copy is
- * deduped against them — so the merge never drops a local row it cannot tell
- * apart. Tombstones union both ways and drop a row unless it was edited after
- * the delete; a row that outlives its tombstone prunes it.
+ * Copies of one row (`mergeRowCopies`: same id, or same content key for a row
+ * without `createdAt`) resolve to the newer `updatedAt`, so an edit wins on
+ * every machine. Tombstones union both ways and drop a row when any of its keys
+ * is tombstoned, unless it was edited after the delete; a row that outlives its
+ * tombstone prunes it.
  */
 function mergeRowUnionFile(localFile, remoteFile, { arrayKey, legacyIds = false }) {
   const local = isPlainObject(localFile) ? localFile : {};
   const remote = isPlainObject(remoteFile) ? remoteFile : {};
-  const identity = legacyIds ? legacyRowIdentity : contentRowIdentity;
-  const rows = [];
-  const keys = [];
-  const indexByKey = new Map();
-  const add = (row, fromLocal) => {
-    if (!isPlainObject(row)) {
-      if (fromLocal) { rows.push(row); keys.push(null); }
-      return;
-    }
-    const key = identity(row);
-    const keyed = legacyIds && row.id !== key ? { ...row, id: key } : row;
-    const index = indexByKey.get(key);
-    if (index !== undefined && (legacyIds || !fromLocal)) {
-      rows[index] = preferRowCopy(rows[index], keyed);
-      return;
-    }
-    if (index === undefined) indexByKey.set(key, rows.length);
-    rows.push(keyed);
-    keys.push(key);
-  };
-  for (const row of Array.isArray(local[arrayKey]) ? local[arrayKey] : []) add(row, true);
-  for (const row of Array.isArray(remote[arrayKey]) ? remote[arrayKey] : []) add(row, false);
-
+  const entries = mergeRowCopies(local[arrayKey], remote[arrayKey], {
+    stampIds: legacyIds,
+    keepLocalDuplicates: !legacyIds,
+  });
   const { merged: unionTombstones } = mergeTombstones(
     local[ROW_TOMBSTONES_KEY],
     remote[ROW_TOMBSTONES_KEY],
@@ -457,14 +430,14 @@ function mergeRowUnionFile(localFile, remoteFile, { arrayKey, legacyIds = false 
   );
   const kept = [];
   const liveStamps = [];
-  rows.forEach((row, i) => {
-    if (keys[i] !== null) {
+  for (const { row, keys } of entries) {
+    if (keys) {
       const stamp = rowLiveStamp(row);
-      if (isTombstoned(unionTombstones, keys[i], stamp, 'id')) return;
-      liveStamps.push({ id: keys[i], stamp });
+      if ([...keys].some((key) => isTombstoned(unionTombstones, key, stamp, 'id'))) continue;
+      for (const key of keys) liveStamps.push({ id: key, stamp });
     }
     kept.push(row);
-  });
+  }
   const tombstones = pruneTombstones(unionTombstones, liveStamps, { keyField: 'id', timestampField: 'stamp' });
   // Stable by date; same-date rows keep local-then-remote order.
   kept.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));

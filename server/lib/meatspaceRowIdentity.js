@@ -2,16 +2,17 @@
  * Cross-machine identity for MeatSpace health rows (blood / epigenetic / eye
  * records) that federate through the `row-union` snapshot merge (#12432).
  *
- * A row created before rows carried identity has no `id`, or an `id` a machine
- * stamped with `randomUUID()` on first read — two machines holding the same
- * legacy row then gave it two different ids, and every sync duplicated it. A
- * legacy row's identity is therefore derived from its content
- * (`legacy-<sha256>`), so every machine names the same legacy row the same way.
- * Rows created since carry a minted id plus `createdAt`; the id is their
- * identity and two identical rows with different ids stay two records.
+ * Before #12432 an id-less eye exam was stamped with `randomUUID()` on each
+ * machine's first read, so two machines gave the same exam two ids and every
+ * sync appended the peer's copy. Rows created since carry `createdAt`, and
+ * their `id` alone is their identity. A row without `createdAt` has unknown
+ * provenance — an id-less legacy row, a random stamp, or an id minted before
+ * #12432 — so it answers to its own id AND to `legacy-<sha256>` of its content,
+ * which every machine computes alike. Two copies that meet only through the
+ * content key converge on that key as their id.
  *
- * Pure. Migration 429 imports `normalizeLegacyRows`, so the derivation here IS
- * the on-disk id: changing it would re-key every peer's rows differently.
+ * Pure. Migration 429 calls `normalizeLegacyRows`, so `legacyRowId` IS an
+ * on-disk id: changing it would key every peer's rows differently.
  */
 
 import { createHash } from 'crypto';
@@ -26,8 +27,6 @@ export const ROW_TOMBSTONES_KEY = 'rowTombstones';
 
 const hasStringId = (row) => typeof row?.id === 'string' && row.id !== '';
 
-export const isLegacyRowId = (id) => typeof id === 'string' && id.startsWith(LEGACY_ROW_ID_PREFIX);
-
 /** Deterministic id for a legacy row: a hash of its content without identity or clock fields. */
 export function legacyRowId(row) {
   const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...content } = row;
@@ -35,20 +34,14 @@ export function legacyRowId(row) {
   return `${LEGACY_ROW_ID_PREFIX}${digest.slice(0, 24)}`;
 }
 
-/**
- * The identity of a row whose file once stamped random ids (eyes.json). A row
- * without `createdAt` predates minted identity, so a non-legacy id on it is a
- * per-machine random stamp and is replaced by the content-derived id. An
- * edited legacy row keeps its `legacy-` id even though its content moved on.
- */
-export function legacyRowIdentity(row) {
-  if (hasStringId(row) && (row.createdAt !== undefined || isLegacyRowId(row.id))) return row.id;
-  return legacyRowId(row);
-}
-
-/** Identity for rows that never had random stamps: their own id, else their content. */
-export function contentRowIdentity(row) {
-  return hasStringId(row) ? row.id : legacyRowId(row);
+/** Every key a row answers to; the content key last. A delete tombstones all of them. */
+export function rowIdentityKeys(row) {
+  const keys = hasStringId(row) ? [row.id] : [];
+  if (row.createdAt === undefined) {
+    const contentKey = legacyRowId(row);
+    if (!keys.includes(contentKey)) keys.push(contentKey);
+  }
+  return keys;
 }
 
 /** A row's newest clock: `updatedAt`, else `createdAt` (string, or undefined). */
@@ -73,27 +66,56 @@ export function preferRowCopy(a, b) {
 }
 
 /**
- * Re-key every row of an id-stamping file to `legacyRowIdentity` and collapse
- * rows that share an identity to their preferred copy (content-identical legacy
- * rows are one record). Order follows each identity's first occurrence.
- * Non-object rows are kept as they are.
+ * Collapse copies of one record across `localRows` then `remoteRows`. Each
+ * entry of the result is `{ row, keys }` (`keys` is null for a non-object row,
+ * which is kept only from the local side). Copies resolve to `preferRowCopy`;
+ * copies with different ids that met through the content key take that key as
+ * their id.
+ *
+ * `stampIds` gives an id-less row its content key as its id (eyes.json, whose
+ * rows are addressed by id). `keepLocalDuplicates` keeps rows of `localRows`
+ * that share a key as separate rows (blood/epigenetic files, whose id-less rows
+ * were never deduped locally); only a remote copy is matched against them.
+ */
+export function mergeRowCopies(localRows, remoteRows = [], { stampIds = false, keepLocalDuplicates = false } = {}) {
+  const entries = [];
+  const indexByKey = new Map();
+  const register = (keys, index) => {
+    for (const key of keys) if (!indexByKey.has(key)) indexByKey.set(key, index);
+  };
+  const add = (row, fromLocal) => {
+    if (!isPlainObject(row)) {
+      if (fromLocal) entries.push({ row, keys: null });
+      return;
+    }
+    const keys = rowIdentityKeys(row);
+    const keyed = stampIds && !hasStringId(row) ? { ...row, id: keys[keys.length - 1] } : row;
+    const matchKey = keys.find((key) => indexByKey.has(key));
+    if (matchKey === undefined || (keepLocalDuplicates && fromLocal)) {
+      register(keys, entries.length);
+      entries.push({ row: keyed, keys: new Set(keys) });
+      return;
+    }
+    const entry = entries[indexByKey.get(matchKey)];
+    const preferred = preferRowCopy(entry.row, keyed);
+    const id = entry.row.id === keyed.id ? preferred.id : matchKey;
+    entry.row = preferred.id === id ? preferred : { ...preferred, id };
+    for (const key of [...keys, ...rowIdentityKeys(entry.row)]) entry.keys.add(key);
+    register(entry.keys, indexByKey.get(matchKey));
+  };
+  for (const row of Array.isArray(localRows) ? localRows : []) add(row, true);
+  for (const row of Array.isArray(remoteRows) ? remoteRows : []) add(row, false);
+  return entries;
+}
+
+/**
+ * Give id-less eye exams their content id and collapse copies of one exam (the
+ * duplicates pre-#12432 syncs created). Returns `{ rows, changed }`; rows keep
+ * the order of each record's first occurrence.
  */
 export function normalizeLegacyRows(rows) {
-  const out = [];
-  const indexById = new Map();
-  for (const row of Array.isArray(rows) ? rows : []) {
-    if (!isPlainObject(row)) { out.push(row); continue; }
-    const id = legacyRowIdentity(row);
-    const keyed = row.id === id ? row : { ...row, id };
-    const index = indexById.get(id);
-    if (index === undefined) {
-      indexById.set(id, out.length);
-      out.push(keyed);
-    } else {
-      out[index] = preferRowCopy(out[index], keyed);
-    }
-  }
-  const changed = out.length !== (Array.isArray(rows) ? rows.length : 0)
-    || out.some((row, i) => row !== rows[i]);
+  const list = Array.isArray(rows) ? rows : [];
+  const out = mergeRowCopies(list, [], { stampIds: true }).map((entry) => entry.row);
+  const changed = out.length !== list.length || out.some((row, i) => row !== list[i]);
   return { rows: out, changed };
 }
