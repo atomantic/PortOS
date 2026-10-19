@@ -201,6 +201,36 @@ describe('recorded key', () => {
     expect(withRecord(unresolvable, 'server/lib/side.test.js', ['server/lib/side.test.js']).recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('readServerSource') });
   });
 
+  it('takes the setup files and custom environment from the record, not their static closure', () => {
+    const files = {
+      ...TREE,
+      'server/vitest.config.js': [
+        "import { vitestCiPool } from '../scripts/vitestCiPool.js';",
+        "export default { test: { environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)), setupFiles: ['./vitest.setup.js'] } };",
+      ].join('\n'),
+      'server/vitest.setup.js': "import { helper } from './lib/setupHelper.js';\nvi.mock('./services/instances.js', async (importOriginal) => importOriginal());\n",
+      'server/lib/setupHelper.js': 'export const helper = 1;\n',
+      'server/services/instances.js': "import { peer } from '../lib/peerLeaf.js';\nexport const getPeers = () => [peer];\n",
+      'server/lib/peerLeaf.js': 'export const peer = 1;\n',
+      'server/test/mediaRegistryEnvironment.js': "import { observe } from './envHelper.js';\nexport default { name: 'env', setup: observe };\n",
+      'server/test/envHelper.js': 'export const observe = () => ({ teardown() {} });\n',
+    };
+    const loaded = [...recorded, 'server/vitest.setup.js', 'server/lib/setupHelper.js', 'server/test/mediaRegistryEnvironment.js', 'server/test/envHelper.js'];
+    const change = (rel) => ({ ...files, [rel]: `${files[rel]}// changed\n` });
+    const baseline = withRecord(files, 'server/lib/a.test.js', loaded);
+    expect(baseline.recorded.memoizable).toBe(true);
+    // The setup phase never loaded instances.js (no suite imported it): its closure is outside the recorded key, inside the floor key.
+    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', loaded).recorded.key).toBe(baseline.recorded.key);
+    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', loaded).floor.key).not.toBe(baseline.floor.key);
+    for (const rel of ['server/lib/setupHelper.js', 'server/test/envHelper.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js']) {
+      expect(withRecord(change(rel), 'server/lib/a.test.js', loaded).recorded.key, rel).not.toBe(baseline.recorded.key);
+    }
+    // A record without the environment (a per-file pragma) keeps the full static base.
+    const withoutEnv = loaded.filter((rel) => !rel.startsWith('server/test/'));
+    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', withoutEnv).recorded.key)
+      .not.toBe(withRecord(files, 'server/lib/a.test.js', withoutEnv).recorded.key);
+  });
+
   it('is not memoizable when the loaded set reaches outside the repository', () => {
     const info = keyOf(TREE, 'server/lib/a.test.js', { records: new Map([['server/lib/a.test.js', [...recorded, '../outside/x.js']]]) });
     expect(info.recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('outside the repository') });

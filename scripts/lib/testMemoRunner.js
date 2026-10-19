@@ -32,7 +32,7 @@ import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
-import { WORKSPACE_BASE_INPUTS, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
+import { WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
 
@@ -56,7 +56,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
   const analyzer = createTestMemoAnalyzer(options);
-  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope]);
+  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]);
   const analyze = (test, recorded) => analyzer.analyzeTest(test, { baseClosure, recorded });
   // A second analyzer with empty caches re-reads every input after the run,
   // so an entry is written only for inputs that did not change meanwhile.
@@ -64,7 +64,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const freshAnalyze = (test, recorded) => {
     if (!fresh) {
       const again = createTestMemoAnalyzer(options);
-      fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope]) };
+      fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
     return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded });
   };
