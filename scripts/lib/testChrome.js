@@ -1,5 +1,11 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// playwright-core is installed per workspace, so resolve from each workspace (and the root), not from scripts/lib.
+const PLAYWRIGHT_RESOLVE_ROOTS = Object.freeze(['server', 'client', ''].map((dir) => join(REPO_ROOT, dir, 'package.json')));
 
 /**
  * Where the browser suites look for a Chrome after `CHROME_PATH` and
@@ -17,8 +23,11 @@ const TEST_CHROME_CANDIDATES = Object.freeze([
 ]);
 
 /** Playwright's bundled Chromium, when playwright-core is installed and a browser was downloaded; null otherwise. */
-function bundledChromium() {
-  try { return createRequire(import.meta.url)('playwright-core').chromium.executablePath(); } catch { return null; }
+export function bundledChromium(anchors = PLAYWRIGHT_RESOLVE_ROOTS) {
+  for (const anchor of anchors) {
+    try { return createRequire(anchor)('playwright-core').chromium.executablePath(); } catch { /* try the next workspace */ }
+  }
+  return null;
 }
 
 /**
