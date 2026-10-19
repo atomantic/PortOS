@@ -908,3 +908,4 @@ export * from './securityScanEvidence.js';
 export * from './musicDesignerValidation.js';
 
 export * from './mediaJobPreparation.js';
+export * from './eventLoopLagProbe.js';
