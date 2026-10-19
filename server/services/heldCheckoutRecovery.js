@@ -334,15 +334,13 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     const verifyRemoval = async (holder) => {
       if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
       if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
-      // Independent final reads, all taken immediately before removal; the
-      // verdicts below keep their original precedence.
-      const [reason, fresh, administration, current] = await Promise.all([
+      const [reason, fresh] = await Promise.all([
         ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review) }),
         review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts) : null,
-        snapshotAdministration(tree.path),
-        snapshotContent(tree.path).catch(() => null),
       ]);
       if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
+      // The byte comparisons stay last so nothing else ages between them and removal.
+      const [administration, current] = await Promise.all([snapshotAdministration(tree.path), snapshotContent(tree.path).catch(() => null)]);
       if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
       if (reason) return reason;
       return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
