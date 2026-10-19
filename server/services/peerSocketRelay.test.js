@@ -79,7 +79,7 @@ describe('peer socket relay with hostile payloads', () => {
     await done;
     recorder.stop();
 
-    const agentEvents = recorder.seen.filter(([event]) => /spawned|updated$|completed/.test(event) && event !== 'peer:agents:updated');
+    const agentEvents = recorder.seen.filter(([event]) => ['peer:agent:spawned', 'peer:agent:updated', 'peer:agent:completed'].includes(event));
     expect(agentEvents.map(([event, { agent }]) => [event, agent.id, agent.status])).toEqual([
       ['peer:agent:spawned', 'agent-valid', 'running'],
       ['peer:agent:updated', 'agent-valid', 'reviewing'],
@@ -90,8 +90,7 @@ describe('peer socket relay with hostile payloads', () => {
     const outputs = recorder.seen.filter(([event]) => event === 'peer:agent:output').map(([, payload]) => payload);
     expect(outputs.every((payload) => payload.peerId === PEER.id)).toBe(true);
     expect(outputs).toContainEqual({ peerId: PEER.id, agentId: 'agent-valid', line: 'example' });
-    for (const [event, payload] of recorder.seen.filter(([name]) => name === 'peer:agents:updated')) {
-      expect(payload.agents.every((agent) => typeof agent?.id === 'string' && agent.id), event).toBe(true);
-    }
+    const snapshotAgents = recorder.seen.filter(([event]) => event === 'peer:agents:updated').flatMap(([, { agents }]) => agents);
+    expect(snapshotAgents.every((agent) => typeof agent?.id === 'string' && agent.id)).toBe(true);
   });
 });
