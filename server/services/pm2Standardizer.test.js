@@ -400,12 +400,16 @@ describe('applyStandardization — preserve existing ecosystem.config.cjs', () =
 describe('model-authored plan fields at the apply sink', () => {
   it('emits an ecosystem file PM2 can load even when a model string carries quotes', () => {
     const hostile = "x' + require('child_process').execSync('id') + '";
-    const content = standardizerInternals.generateEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', env: { HOSTILE: hostile, 'key"name': 1 } }], 'app');
+    const content = standardizerInternals.generateEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', ports: { ui: 5570 }, env: { HOSTILE: hostile, 'key"name': 1, 'a: 1, b': 2 } }], 'app');
     expect(content).toContain(PORTOS_ECOSYSTEM_MARKER);
+    // parseEcosystemConfig (streamingDetect.js) keys on bare identifier keys.
+    expect(content).toMatch(/\n\s+name: "it's",\n/);
+    expect(content).toMatch(/\n\s+ports: \{\n\s+ui: 5570\n/);
     const module = { exports: {} };
     new Function('module', content)(module);
     expect(module.exports.apps[0].env.HOSTILE).toBe(hostile);
     expect(module.exports.apps[0].env['key"name']).toBe(1);
+    expect(module.exports.apps[0].env['a: 1, b']).toBe(2);
     expect(module.exports.apps[0].name).toBe("it's");
   });
 

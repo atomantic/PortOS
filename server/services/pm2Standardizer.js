@@ -433,6 +433,23 @@ function parseAnalysisResponse(response, promptToStrip = '') {
 /**
  * Generate ecosystem.config.cjs content from processes
  */
+const IDENTIFIER_KEY_RE = /^[A-Za-z_$][\w$]*$/;
+
+/** A JS object literal with unquoted identifier keys; every other token is JSON-encoded. */
+function jsObjectLiteral(value, depth = 1) {
+  const pad = '  '.repeat(depth);
+  const close = '  '.repeat(depth - 1);
+  if (Array.isArray(value)) {
+    return value.length === 0 ? '[]' : `[\n${value.map((item) => `${pad}${jsObjectLiteral(item, depth + 1)}`).join(',\n')}\n${close}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined);
+    if (entries.length === 0) return '{}';
+    return `{\n${entries.map(([key, item]) => `${pad}${IDENTIFIER_KEY_RE.test(key) ? key : JSON.stringify(key)}: ${jsObjectLiteral(item, depth + 1)}`).join(',\n')}\n${close}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 function generateEcosystemContent(processes, appName) {
   const apps = processes.map(proc => {
     const config = {
@@ -463,13 +480,16 @@ function generateEcosystemContent(processes, appName) {
     return config;
   });
 
-  // Plain JSON is a valid JS object literal and PM2 `require()`s this file.
-  // Every process field is model output steered by the scanned repository, so
-  // the old quote rewrite (which left `'` unescaped) could turn a value into code.
+  // PM2 `require()`s this file and parseEcosystemConfig (streamingDetect.js)
+  // reads it back with regexes keyed on bare `name:` / `ports:` / `env:` keys,
+  // so the literal keeps identifier keys unquoted. Every value is model output
+  // steered by the scanned repository: strings are JSON-encoded (the old quote
+  // rewrite left `'` free to close the string and run code on load) and a key
+  // that is not an identifier is quoted the same way.
   return `// PM2 Ecosystem Configuration
 // ${PORTOS_ECOSYSTEM_MARKER}
 
-module.exports = ${JSON.stringify({ apps }, null, 2)};
+module.exports = ${jsObjectLiteral({ apps })};
 `;
 }
 
