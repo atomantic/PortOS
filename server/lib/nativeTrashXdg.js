@@ -10,13 +10,14 @@
  * volume without a usable per-volume trash surfaces `EXDEV`/`EACCES` with the
  * original left in place.
  */
-import { chmod, lstat, mkdir, open, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { codedError } from './codedError.js';
 
 const NAME_MAX_BYTES = 255;
 const INFO_SUFFIX = '.trashinfo';
+const MOUNT_TABLE = '/proc/self/mountinfo';
 
 const homeTrashDir = () => {
   const dataHome = process.env.XDG_DATA_HOME;
@@ -24,21 +25,45 @@ const homeTrashDir = () => {
 };
 const missing = error => { if (error.code === 'ENOENT') return null; throw error; };
 
-// Device of a path that may not exist yet (the home trash before first use):
-// the nearest existing ancestor decides. `stat` follows a symlinked ancestor
-// (an XDG_DATA_HOME pointing at another filesystem) to the device the trash
-// would really be created on; a symlinked trash directory itself is still
-// refused by ensureOwnedDir.
-async function deviceOf(path) {
+// Nearest existing ancestor of a path that may not exist yet (the home trash
+// before first use). `stat` follows a symlinked ancestor (an XDG_DATA_HOME
+// pointing at another filesystem) to where the trash would really be created;
+// a symlinked trash directory itself is still refused by ensureOwnedDir.
+async function nearestExisting(path) {
   for (let dir = path; ; dir = dirname(dir)) {
-    const info = await stat(dir).catch(missing);
-    if (info) return info.dev;
+    if (await stat(dir).catch(missing)) return dir;
     if (dirname(dir) === dir) throw codedError(`No existing ancestor for ${path}`, 'ENOENT');
   }
 }
 
-// Mount point of `path`: the highest ancestor still on the same device.
-async function topDirOf(path, dev) {
+/**
+ * Rows of `/proc/self/mountinfo`: `<id> <parent> <major:minor> <root> <mount point> …`,
+ * with space, tab, newline and backslash in paths escaped as `\ooo` octal. Mount
+ * identity, not `st_dev`, decides where rename(2) may move a file: a bind mount
+ * shares the device number of the filesystem it comes from yet is a separate
+ * mount, and a rename between the two fails with EXDEV.
+ */
+export function _parseMountInfo(text) {
+  const unescape = field => field.replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+  return text.split('\n')
+    .map(line => line.split(' '))
+    .filter(fields => fields.length >= 5)
+    .map(fields => ({ id: fields[0], mountPoint: unescape(fields[4]) }));
+}
+
+/** The mount holding a real directory: the longest covering mount point, the last row among equals (a later mount shadows an earlier one). */
+export function _mountOf(realDir, mounts) {
+  let best = null;
+  for (const mount of mounts) {
+    const point = mount.mountPoint;
+    const covers = point === '/' || realDir === point || realDir.startsWith(`${point}/`);
+    if (covers && (!best || point.length >= best.mountPoint.length)) best = mount;
+  }
+  return best;
+}
+
+// Without a mount table (not Linux, or no procfs): the highest ancestor still on the same device.
+async function topDirByDevice(path, dev) {
   let dir = dirname(path);
   for (;;) {
     const parent = dirname(dir);
@@ -48,27 +73,57 @@ async function topDirOf(path, dev) {
   }
 }
 
+const trustedOwner = (info, uid) => info.uid === 0 || info.uid === uid;
+
+// Whether a user other than root and the caller could rename entries of this
+// directory: anyone with write access to a non-sticky directory can, and in a
+// sticky one the directory owner still can. A directory that holds a per-user
+// trash must refuse that, or its owner swaps the checked trash directory for a
+// symlink between the check and the move. Group write stays allowed: Ubuntu's
+// user-private-group default (umask 002) makes 0775 the common mode of
+// user-owned directories.
+const othersCanRenameEntries = (info, uid) =>
+  !trustedOwner(info, uid) || ((info.mode & 0o002) !== 0 && (info.mode & 0o1000) === 0);
+
 /**
  * Spec §"Trash directories": prefer `$topdir/.Trash/$uid` when `$topdir/.Trash`
  * is a sticky, non-symlink directory; otherwise `$topdir/.Trash-$uid`. A
- * `.Trash` that fails the checks MUST NOT be used.
+ * `.Trash` that fails the checks MUST NOT be used. Two checks beyond the spec,
+ * both because the sticky bit never binds the directory owner: `.Trash` must be
+ * owned by root (the administrator the spec expects to create it) or the caller,
+ * and `$topdir` itself must not let other users rename its entries, since
+ * `.Trash-$uid` lives directly in it. The home data directory is never checked
+ * this way — it is the user's own, as every implementation assumes.
  */
 export async function _topDirTrash(topDir, uid) {
+  if (othersCanRenameEntries(await lstat(topDir), uid)) {
+    throw codedError(`Volume root lets other users replace its trash directory: ${topDir}`, 'TRASH_DIR_UNSAFE');
+  }
   const shared = join(topDir, '.Trash');
   const info = await lstat(shared).catch(missing);
-  if (info?.isDirectory() && !info.isSymbolicLink() && (info.mode & 0o1000) !== 0) return join(shared, String(uid));
+  if (info?.isDirectory() && !info.isSymbolicLink() && (info.mode & 0o1000) !== 0 && trustedOwner(info, uid)) {
+    return join(shared, String(uid));
+  }
   return join(topDir, `.Trash-${uid}`);
 }
 
-// The home trash serves every file on the device the home trash itself lives on
+// The home trash serves every file on the mount the home trash itself lives on
 // (XDG_DATA_HOME may sit on another volume than $HOME); anything else gets the
-// per-volume trash of its own mount point.
-async function trashLocation(absPath) {
+// per-volume trash of its own mount point. The directory entry being moved
+// belongs to the parent, so the parent's mount is the file's mount.
+async function trashLocation(absPath, uid) {
+  const source = await lstat(absPath);
   const home = homeTrashDir();
-  const fileDev = (await lstat(absPath)).dev;
-  if (fileDev === await deviceOf(home)) return { dir: home, topDir: null };
-  const topDir = await topDirOf(absPath, fileDev);
-  return { dir: await _topDirTrash(topDir, process.getuid()), topDir };
+  const mounts = _parseMountInfo(await readFile(MOUNT_TABLE, 'utf8').catch(() => ''));
+  const fileMount = _mountOf(dirname(absPath), mounts);
+  const homeMount = fileMount && _mountOf(await realpath(await nearestExisting(home)), mounts);
+  if (homeMount) {
+    if (fileMount.id === homeMount.id) return { dir: home, topDir: null };
+    return { dir: await _topDirTrash(fileMount.mountPoint, uid), topDir: fileMount.mountPoint };
+  }
+  if (source.dev === (await stat(await nearestExisting(home))).dev) return { dir: home, topDir: null };
+  const topDir = await topDirByDevice(absPath, source.dev);
+  return { dir: await _topDirTrash(topDir, uid), topDir };
 }
 
 // A per-user trash directory and its files/ and info/ children must be real
@@ -127,18 +182,18 @@ function trashName(base, attempt) {
  * Move one file into the XDG trash that serves its volume. Resolves with the
  * trashed payload path and its `.trashinfo` path; rejects with a coded error
  * (`ENOENT`, `EXDEV`, `EACCES`, `TRASH_DIR_UNSAFE` for a symlinked or foreign-owned
- * trash directory, `TRASH_NAME_EXHAUSTED`)
+ * trash directory or a volume root other users could swap it in, `TRASH_NAME_EXHAUSTED`)
  * and the original untouched on any refusal.
  */
 export async function trashXdg(path) {
-  // Device and mount-point discovery need the physical parent: through a directory
-  // symlink into another volume, lexical ancestors would place the volume trash
-  // below the real mount root where no trash tool looks. The final component is
-  // kept as given so a source that is itself a symlink is what gets recycled.
+  // Mount discovery needs the physical parent: through a directory symlink into
+  // another volume, lexical ancestors would place the volume trash below the
+  // real mount root where no trash tool looks. The final component is kept as
+  // given so a source that is itself a symlink is what gets recycled.
   const given = resolve(path);
   const absPath = join(await realpath(dirname(given)), basename(given));
   const uid = process.getuid();
-  let { dir, topDir } = await trashLocation(absPath);
+  let { dir, topDir } = await trashLocation(absPath, uid);
   try {
     await prepareTrashDir(dir, uid);
   } catch (error) {

@@ -6,16 +6,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { _topDirTrash, trashXdg } from './nativeTrashXdg.js';
+import { _mountOf, _parseMountInfo, _topDirTrash, trashXdg } from './nativeTrashXdg.js';
 
-const state = vi.hoisted(() => ({ homedir: null, renameError: null }));
+// `mountInfo` replaces /proc/self/mountinfo (null reads the real table, absent off
+// Linux); `owners` fakes the uid lstat reports for a path, since a test cannot chown.
+const state = vi.hoisted(() => ({ homedir: null, renameError: null, mountInfo: null, owners: {} }));
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, homedir: () => state.homedir ?? actual.homedir() };
 });
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, rename: (...args) => (state.renameError ? Promise.reject(state.renameError) : actual.rename(...args)) };
+  return {
+    ...actual,
+    rename: (...args) => (state.renameError ? Promise.reject(state.renameError) : actual.rename(...args)),
+    readFile: (path, ...rest) => (path === '/proc/self/mountinfo' && state.mountInfo !== null ? Promise.resolve(state.mountInfo) : actual.readFile(path, ...rest)),
+    lstat: async (path, ...rest) => {
+      const info = await actual.lstat(path, ...rest);
+      if (path in state.owners) info.uid = state.owners[path];
+      return info;
+    },
+  };
 });
 
 const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/;
@@ -52,6 +63,8 @@ describe.skipIf(process.platform === 'win32')('XDG trash adapter', () => {
   afterEach(async () => {
     state.renameError = null;
     state.homedir = null;
+    state.mountInfo = null;
+    state.owners = {};
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   });
@@ -162,7 +175,7 @@ describe.skipIf(process.platform === 'win32')('XDG trash adapter', () => {
     expect(await readlink(trashedPath)).toBe('target.txt');
   });
 
-  it('chooses $topdir/.Trash/$uid only for a sticky real directory', async () => {
+  it('chooses $topdir/.Trash/$uid only for a sticky real directory owned by root or the caller', async () => {
     const uid = process.getuid();
     const top = join(root, 'vol');
     await mkdir(top);
@@ -171,10 +184,64 @@ describe.skipIf(process.platform === 'win32')('XDG trash adapter', () => {
     expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
     await chmod(join(top, '.Trash'), 0o1777);
     expect(await _topDirTrash(top, uid)).toBe(join(top, '.Trash', String(uid)));
+    // The sticky bit does not bind the directory owner: another user's .Trash
+    // could swap the per-user directory for a symlink after the check.
+    state.owners = { [join(top, '.Trash')]: uid + 1 };
+    expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+    state.owners = { [join(top, '.Trash')]: 0 };
+    expect(await _topDirTrash(top, uid)).toBe(join(top, '.Trash', String(uid)));
+    state.owners = {};
     const linked = join(root, 'vol2');
     await mkdir(linked);
     await symlink(join(top, '.Trash'), join(linked, '.Trash'));
     expect(await _topDirTrash(linked, uid)).toBe(join(linked, `.Trash-${uid}`));
+  });
+
+  it('refuses a volume root whose entries other users can rename, where .Trash-<uid> would live', async () => {
+    const uid = process.getuid();
+    const top = join(root, 'vol');
+    await mkdir(top, { mode: 0o755 });
+    await chmod(top, 0o777);
+    await expect(_topDirTrash(top, uid)).rejects.toMatchObject({ code: 'TRASH_DIR_UNSAFE' });
+    await chmod(top, 0o1777);
+    expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+    await chmod(top, 0o775);
+    expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+    state.owners = { [top]: uid + 1 };
+    await expect(_topDirTrash(top, uid)).rejects.toMatchObject({ code: 'TRASH_DIR_UNSAFE' });
+    state.owners = { [top]: 0 };
+    expect(await _topDirTrash(top, uid)).toBe(join(top, `.Trash-${uid}`));
+  });
+
+  it('reads mount points from /proc/self/mountinfo with octal escapes, shadowing and no false prefixes', () => {
+    const mounts = _parseMountInfo([
+      '21 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw',
+      '40 21 8:1 /srv/data /data rw,relatime - ext4 /dev/sda1 rw',
+      '41 21 0:30 / /mnt/my\\040disk rw - tmpfs tmpfs rw',
+      '42 21 0:31 / /data rw - tmpfs tmpfs rw',
+      '',
+    ].join('\n'));
+    expect(mounts.map(m => m.mountPoint)).toEqual(['/', '/data', '/mnt/my disk', '/data']);
+    expect(_mountOf('/data/x', mounts).id).toBe('42');
+    expect(_mountOf('/data', mounts).id).toBe('42');
+    expect(_mountOf('/data2/x', mounts).id).toBe('21');
+    expect(_mountOf('/mnt/my disk/x', mounts).id).toBe('41');
+    expect(_mountOf('/', mounts).id).toBe('21');
+    expect(_mountOf('/x', [])).toBeNull();
+  });
+
+  it('uses the per-volume trash of a bind mount that shares the home device, where rename would fail with EXDEV', async () => {
+    const uid = process.getuid();
+    const bound = join(root, 'bound');
+    await mkdir(bound);
+    const path = join(bound, 'file.txt');
+    await writeFile(path, 'bound');
+    state.mountInfo = ['21 1 8:1 / / rw - ext4 /dev/sda1 rw', `40 21 8:1 /srv/bound ${bound} rw - ext4 /dev/sda1 rw`, ''].join('\n');
+    const { trashedPath, infoPath } = await trashXdg(path);
+    expect(trashedPath).toBe(join(bound, `.Trash-${uid}`, 'files', 'file.txt'));
+    expect(await readFile(trashedPath, 'utf8')).toBe('bound');
+    expect(await readInfo(infoPath)).toBe('file.txt');
+    expect(await exists(homeTrash)).toBe(false);
   });
 
   describe('across devices', () => {
