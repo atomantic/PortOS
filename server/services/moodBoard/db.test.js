@@ -12,7 +12,7 @@
 import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { rmSync } from 'fs';
 import { join } from 'path';
-import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { checkHealth, ensureSchema, query, close, withTransaction } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
@@ -117,6 +117,58 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     const [first, repeated] = await Promise.all([db.addBoardItem(board.id, input), db.addBoardItem(board.id, input)]);
     expect(repeated.id).toBe(first.id);
     expect((await db.getBoard(board.id)).items).toEqual([first]);
+  });
+
+  it('waits for an already-saving pin before taking the retirement ownership snapshot', async () => {
+    const board = await db.createBoard({ name: 'Retirement overlap fixture' });
+    created.push(board.id);
+    const saved = { ...board, items: [{ type: 'video', mediaKey: 'video:retained-final.mp4' }] };
+    const ready = Promise.withResolvers();
+    const commit = Promise.withResolvers();
+    const writer = withTransaction(async client => {
+      await client.query('UPDATE mood_boards SET data = $2::jsonb WHERE id = $1', [board.id, JSON.stringify(saved)]);
+      ready.resolve();
+      await commit.promise;
+    });
+    writer.catch(ready.reject);
+    await ready.promise;
+    const snapshot = db.withBoardMediaReferences(boards => boards.find(item => item.id === board.id));
+    try {
+      await expect.poll(async () => (await query("SELECT count(*)::int AS count FROM pg_locks WHERE relation = 'mood_boards'::regclass AND mode = 'ShareLock' AND NOT granted")).rows[0].count).toBe(1);
+    } finally {
+      commit.resolve();
+      await writer;
+    }
+    expect(await snapshot).toEqual(saved);
+  });
+
+  it('holds local pins and peer merges until retirement settles and releases them after failure', async () => {
+    const board = await db.createBoard({ name: 'Retirement fence fixture' });
+    created.push(board.id);
+    const remote = { ...board, id: `${board.id}-peer`, items: [{ type: 'video', mediaKey: 'video:peer-final.mp4' }] };
+    created.push(remote.id);
+    const ready = Promise.withResolvers();
+    const settle = Promise.withResolvers();
+    const retirement = db.withBoardMediaReferences(async () => {
+      ready.resolve();
+      await settle.promise;
+      throw new Error('Retirement failed');
+    });
+    retirement.catch(ready.reject);
+    const failure = expect(retirement).rejects.toThrow('Retirement failed');
+    await ready.promise;
+    const pin = db.addBoardItem(board.id, { type: 'video', mediaKey: 'video:local-final.mp4' });
+    const merge = db.mergeBoardsFromSync([remote]);
+    try {
+      await expect.poll(async () => (await query("SELECT count(*)::int AS count FROM pg_locks WHERE relation = 'mood_boards'::regclass AND mode = 'RowExclusiveLock' AND NOT granted")).rows[0].count).toBe(2);
+      expect((await db.getBoard(board.id)).items).toEqual([]);
+      expect(await db.getBoard(remote.id)).toBeNull();
+    } finally {
+      settle.resolve();
+      await Promise.all([failure, pin, merge]);
+    }
+    expect((await db.getBoard(board.id)).items[0].mediaKey).toBe('video:local-final.mp4');
+    expect((await db.getBoard(remote.id)).items).toEqual(remote.items);
   });
 
   it('removeBoardItem is a no-op for an unknown item id', async () => {
