@@ -1,5 +1,5 @@
 import { sceneEndFramePlan } from '../../../../server/lib/musicVideoEndFrame.js';
-import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 
 /**
  * Whether a clip rendered with `settings` (the project's saved renderer, or a
@@ -12,8 +12,9 @@ import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
 export function sceneEndFramePlanFor(scene, settings = {}, { models = [], defaultModel = '' } = {}) {
   const mode = settings.generationMode === 'suppliedAudio' || (settings.backend === 'local' && settings.generationMode === 'audioReactive') ? 'a2v' : 'image';
   const falModelId = settings.backend === 'fal' ? falSceneTake({ scene, videoSettings: settings }).modelId : null;
+  const runwayModelId = settings.backend === 'runway' ? runwaySceneTake({ scene, videoSettings: settings }).modelId : null;
   const localRuntime = settings.backend === 'local'
     ? models.find((model) => model.id === (settings.modelId || defaultModel))?.runtime ?? null
     : null;
-  return sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId, mode, localRuntime });
+  return sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId, runwayModelId, mode, localRuntime });
 }

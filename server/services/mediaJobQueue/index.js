@@ -200,6 +200,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [IMAGE_GEN_MODE.GROK]: () => import('../videoGen/grok.js'),
       [VIDEO_GEN_MODE.FAL]: () => import('../videoGen/fal.js'),
       [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
+      [VIDEO_GEN_MODE.RUNWAY]: () => import('../videoGen/runway.js'),
       default: () => import('../videoGen/local.js'),
     },
     invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),
@@ -2173,7 +2174,7 @@ export async function cancelJob(jobId) {
       if (isRemoteMediaJob(runningJob)) await persist();
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
-    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok'].includes(runningJob.params.mode)) {
+    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok', 'runway'].includes(runningJob.params.mode)) {
       runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
       await persist();
     }

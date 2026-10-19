@@ -27,6 +27,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const [loras, setLoras] = useState([]);
   const [defaultModel, setDefaultModel] = useState('');
   const [falEnabled, setFalEnabled] = useState(false);
+  const [runwayEnabled, setRunwayEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [framePinSaving, setFramePinSaving] = useState(false);
 
@@ -43,6 +44,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
         // isVideoModeUsable() check a render itself is gated on (mirrors the
         // general Video Gen page's `falEnabled`).
         setFalEnabled(status?.falEnabled === true);
+        setRunwayEnabled(status?.runwayEnabled === true);
         setModelsLoading(false);
       })
       .catch(() => {
@@ -82,6 +84,12 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // null means FAL_MUSIC_VIDEO_DEFAULT_MODEL (MiniMax H3 Max reference) at its own default size, resolved by falSceneTake.
     falMusicModelId: project?.videoSettings?.falMusicModelId ?? null,
     falMusicResolution: project?.videoSettings?.falMusicResolution ?? null,
+    // Runway cutaway model / clip length / size — null means the catalog
+    // default (RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, the shot's covering length,
+    // the project aspect), resolved by runwaySceneTake.
+    runwayModelId: project?.videoSettings?.runwayModelId ?? null,
+    runwayDuration: project?.videoSettings?.runwayDuration ?? null,
+    runwayResolution: project?.videoSettings?.runwayResolution ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,
@@ -112,7 +120,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     ? 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model'
     : pick.backend === 'fal' && !falEnabled
       ? 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'
-      : null);
+      : pick.backend === 'runway' && !runwayEnabled
+        ? 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first'
+        : null);
   const videoBlockedReason = blockedReasonFor(settings);
 
   const change = (patch) => {
@@ -168,6 +178,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     modelsLoading,
     defaultModel,
     falEnabled,
+    runwayEnabled,
     saving,
     framePinSaving,
     settings,

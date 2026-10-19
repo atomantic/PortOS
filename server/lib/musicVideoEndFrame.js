@@ -10,6 +10,7 @@
  * and the production dispatcher make the same call.
  */
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from './falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from './runwayVideoModels.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 import { isLastFrameAnchoredRuntime } from './runners.js';
 import { VIDEO_RUNTIME_MODES } from './videoModeProfiles.js';
@@ -23,13 +24,13 @@ const localRuntimeEndsOnFrame = (runtime) => isLastFrameAnchoredRuntime(runtime)
 const endImageOf = (scene) => (typeof scene?.endImageId === 'string' && scene.endImageId.trim() ? scene.endImageId : null);
 
 /**
- * Whether a clip for `scene` on `backend` (with `falModelId` for fal, the local
+ * Whether a clip for `scene` on `backend` (with `falModelId` for fal, `runwayModelId` for Runway, the local
  * model's `localRuntime` for local, and the request's video `mode`,
  * image-to-video by default) sends the scene's end frame. Returns
  * `{ endImageId, used, reason }`: `reason` names why a selected end frame is
  * ignored, and is null when it is used or absent.
  */
-export function sceneEndFramePlan(scene, { backend = null, falModelId = null, mode = 'image', localRuntime = null } = {}) {
+export function sceneEndFramePlan(scene, { backend = null, falModelId = null, runwayModelId = null, mode = 'image', localRuntime = null } = {}) {
   const endImageId = endImageOf(scene);
   if (!endImageId) return { endImageId: null, used: false, reason: null };
   const ignored = (reason) => ({ endImageId, used: false, reason });
@@ -40,7 +41,13 @@ export function sceneEndFramePlan(scene, { backend = null, falModelId = null, mo
       ? { endImageId, used: true, reason: null }
       : ignored('This local model animates from the start frame only; local LTX-2.x and MiniMax H3 end on the end frame');
   }
-  if (backend !== 'fal') return ignored('Only fal.ai models that take an end frame and local LTX use it; this renderer ignores it');
+  if (backend === 'runway') {
+    const model = getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+    return model?.endImage
+      ? { endImageId, used: true, reason: null }
+      : ignored(`${model?.label || 'This Runway model'} takes no end frame; choose one that does`);
+  }
+  if (backend !== 'fal') return ignored('Only fal.ai and Runway models that take an end frame and local LTX use it; this renderer ignores it');
   const model = getFalVideoModel(falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   if (!model?.endImage) return ignored(`${model?.label || 'This fal.ai model'} takes no end frame; choose one that does`);
   return { endImageId, used: true, reason: null };

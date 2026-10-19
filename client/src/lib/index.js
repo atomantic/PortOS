@@ -52,6 +52,7 @@ export * from './fableLoomReadiness.js';
 export * from './glbFailure.js';
 export * from './grokVideoClip.js';
 export * from './reactorVideoClip.js';
+export * from './runwayVideoModels.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
 // Namespace export: imageGenBackends re-exports every imageGenModes symbol

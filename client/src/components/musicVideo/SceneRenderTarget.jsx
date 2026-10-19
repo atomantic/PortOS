@@ -2,6 +2,9 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import {
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, coerceRunwayVideoSeconds, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
+} from '../../lib/runwayVideoModels.js';
 import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
@@ -13,20 +16,22 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
  * offers only its curated start-frame models; a lip-synced shot renders on
  * fal's lip-sync route, so fal is one choice there, a music-driven shot offers
  * each music-driven model (the song slice drives the picture), and Grok (no
- * audio) renders cutaways only.
- * The pick is a value string: '' (saved), 'local', 'grok', 'fal' or 'fal:<modelId>'.
+ * audio) and Runway (image-to-video only here) render cutaways only.
+ * The pick is a value string: '' (saved), 'local', 'grok', 'fal', 'fal:<modelId>'
+ * or 'runway:<modelId>'.
  *
  * A picked lane shows its own options, from the same definitions the Video Gen
  * form and the project's render settings read: the local model and clip length
  * (frame counts), Grok's clip lengths, and a fal model's lengths and
- * resolutions. Each length defaults to the shortest one that covers the shot.
- * `options` holds only what the director changed: `{ modelId, numFrames,
- * grokDuration, falDuration, falResolution }`.
+ * resolutions (a Runway model's likewise). Each length defaults to the
+ * shortest one that covers the shot. `options` holds only what the director
+ * changed: `{ modelId, numFrames, grokDuration, falDuration, falResolution,
+ * runwayDuration, runwayResolution }`.
  *
  * A card opens on the last pick made on this device (lastRenderTarget), with
  * its local model or fal size; lengths stay sized to each shot.
  */
-const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai' };
+const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway' };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
 const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -41,6 +46,9 @@ const falPerformanceLabel = (saved, scene) => {
 function savedLabel(saved, performance, scene) {
   if (saved.backend === 'fal') {
     return `fal.ai · ${performance ? falPerformanceLabel(saved, scene) : getFalVideoModel(saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
+  }
+  if (saved.backend === 'runway' && !performance) {
+    return `Runway · ${getRunwayVideoModel(saved.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
   }
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
@@ -63,6 +71,13 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
         const rate = describeFalVideoRate(model.id);
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
+    // Runway takes no song audio, so a performance shot cannot render there.
+    ...(performance
+      ? [{ value: 'runway', label: 'Runway (cutaways only)', disabled: true }]
+      : RUNWAY_VIDEO_MODELS.map((model) => {
+        const rate = describeRunwayVideoRate(model.id);
+        return { value: `runway:${model.id}`, label: `Runway · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
+      })),
   ];
 }
 
@@ -70,7 +85,9 @@ const LAST_PICK_KEY = 'portos.musicVideo.lastRenderOn';
 
 /** Remember a card's pick for the next card opened on this device. */
 export function rememberRenderTarget(pick, options = {}) {
-  safeWriteJsonStorage(LAST_PICK_KEY, { pick, modelId: options.modelId || null, falResolution: options.falResolution || null });
+  safeWriteJsonStorage(LAST_PICK_KEY, {
+    pick, modelId: options.modelId || null, falResolution: options.falResolution || null, runwayResolution: options.runwayResolution || null,
+  });
 }
 
 /**
@@ -84,8 +101,10 @@ export function lastRenderTarget({ performance, saved }) {
   if (performance && pick.startsWith('fal:')) pick = 'fal';
   if (!renderTargetOptions({ performance, saved }).some((option) => option.value === pick && !option.disabled)) pick = '';
   const falModel = pick.startsWith('fal:') ? getFalVideoModel(pick.slice(4)) : null;
+  const runwayModel = pick.startsWith('runway:') ? getRunwayVideoModel(pick.slice(7)) : null;
   const options = pick === 'local' && last.modelId ? { modelId: last.modelId }
-    : falModel && falVideoResolutions(falModel).includes(last.falResolution) ? { falResolution: last.falResolution } : {};
+    : falModel && falVideoResolutions(falModel).includes(last.falResolution) ? { falResolution: last.falResolution }
+      : runwayModel && runwayVideoResolutions(runwayModel).includes(last.runwayResolution) ? { runwayResolution: last.runwayResolution } : {};
   return { pick, options };
 }
 
@@ -147,6 +166,18 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
   if (value === 'grok') {
     return { backend: 'grok', ...(options.grokDuration || spanSec != null ? { grokDuration: options.grokDuration || grokCoverage(spanSec).requestSec } : {}) };
   }
+  if (value.startsWith('runway')) {
+    const runwayModelId = value.slice(7) || null;
+    if (!runwayModelId) return { backend: 'runway' };
+    // Lengths and sizes are per model, so the saved ones only carry over to the saved model.
+    const sameModel = runwayModelId === (saved.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+    return {
+      backend: 'runway', runwayModelId,
+      ...(sameModel ? {} : { runwayDuration: null, runwayResolution: null }),
+      ...(options.runwayDuration ? { runwayDuration: options.runwayDuration } : {}),
+      ...(options.runwayResolution ? { runwayResolution: options.runwayResolution } : {}),
+    };
+  }
   const falModelId = value.slice(4) || null;
   if (!falModelId) return { backend: 'fal' };
   // A music-driven shot's pick is its music model, at that model's own default size.
@@ -188,6 +219,7 @@ export default function SceneRenderTarget({
   const localChoices = localModelChoices(models, performance);
   const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
   const falModel = value.startsWith('fal:') ? getFalVideoModel(overrides.falModelId) : null;
+  const runwayModel = value.startsWith('runway:') ? getRunwayVideoModel(overrides.runwayModelId) : null;
   const coversLabel = (sec) => (spanSec != null ? `${formatSec(sec)} · covers shot` : `${formatSec(sec)} · default`);
   return (
     <>
@@ -244,6 +276,26 @@ export default function SceneRenderTarget({
               <option value="">{`${falModel.resolution.default} · default`}</option>
               {falVideoResolutions(falModel).filter((res) => res !== falModel.resolution.default).map((res) => (
                 <option key={res} value={res}>{`${res} · ${describeFalVideoRate(falModel.id, res)}`}</option>
+              ))}
+            </OptionSelect>
+          )}
+        </>
+      )}
+      {runwayModel && !performance && (
+        <>
+          {runwayVideoLengths(runwayModel).length > 0 && (
+            <OptionSelect id={`${id}-length`} label="Length" value={options.runwayDuration || ''} disabled={disabled}
+              onChange={(sec) => set({ runwayDuration: Number(sec) || null })}>
+              <option value="">{coversLabel(coerceRunwayVideoSeconds(runwayModel, spanSec))}</option>
+              {runwayVideoLengths(runwayModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
+            </OptionSelect>
+          )}
+          {runwayVideoResolutions(runwayModel).length > 1 && (
+            <OptionSelect id={`${id}-resolution`} label="Size" value={options.runwayResolution || ''} disabled={disabled}
+              onChange={(runwayResolution) => set({ runwayResolution: runwayResolution || null })}>
+              <option value="">{`${runwayModel.size.default} · default`}</option>
+              {runwayVideoResolutions(runwayModel).filter((res) => res !== runwayModel.size.default).map((res) => (
+                <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>
               ))}
             </OptionSelect>
           )}

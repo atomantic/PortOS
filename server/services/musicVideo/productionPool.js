@@ -30,7 +30,7 @@ import { resolveFalApiKey } from '../falQueue.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
-import { falSceneTake, isPerformanceScene, performanceBlockedReason } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, isPerformanceScene, performanceBlockedReason, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
@@ -56,6 +56,12 @@ export const falRouteVideoSettings = (project, route) => ({
   ...(route?.model ? { falModelId: route.model } : {}),
 });
 
+/** The render settings a Runway route renders a scene with: the project's Runway pins, a route's own model winning. */
+export const runwayRouteVideoSettings = (project, route) => ({
+  ...(project?.videoSettings || {}),
+  ...(route?.model ? { runwayModelId: route.model } : {}),
+});
+
 /**
  * The price per generation this install can vouch for: 0 for local, the
  * catalog estimate of a default-length cutaway take for a fal video route
@@ -76,6 +82,9 @@ function routePriceUsd(route, project = null) {
     return falSceneTake({ scene: null, videoSettings: falRouteVideoSettings(project, route) }).costUsd;
   }
   if (route.kind === 'image' && route.mode === 'fal') return falImageRoutePriceUsd(route.model);
+  if (route.kind === 'video' && route.mode === 'runway') {
+    return runwaySceneTake({ scene: null, videoSettings: runwayRouteVideoSettings(project, route) }).costUsd;
+  }
   return null;
 }
 
@@ -86,6 +95,9 @@ function routePriceUsd(route, project = null) {
  * length that covers the shot); otherwise the route's flat price.
  */
 export function stepPriceUsd({ route, project, scene, stepKind }) {
+  if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'runway' && scene) {
+    return runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) }).costUsd;
+  }
   if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'fal' && scene) {
     return falSceneTake({
       scene,
@@ -102,6 +114,9 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
  * end-frame upgrade included), a fal image route's own model, else null.
  */
 export function stepCostModelId({ route, project, scene, stepKind }) {
+  if (route?.mode === 'runway' && route.kind === 'video') {
+    return scene ? runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) }).modelId : route.model || null;
+  }
   if (route?.mode !== 'fal') return null;
   if (stepKind !== 'frame' && route.kind === 'video' && scene) {
     return falSceneTake({ scene, videoSettings: falRouteVideoSettings(project, route) }).modelId;

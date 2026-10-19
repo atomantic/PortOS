@@ -29,10 +29,10 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
-import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
+import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -121,6 +121,7 @@ async function dispatchClip({ project, scene, route, tag }) {
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
+    runway: runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) })),
   };
   // A local model ends on the end frame only when its runtime anchors the last
   // frame (#11258), so the plan needs the model this route actually renders on.
@@ -138,7 +139,7 @@ async function dispatchClip({ project, scene, route, tag }) {
     ...(byBackend[route.mode] || {}),
     // A style-break end frame (#11173), when this fal or local model takes one.
     ...sceneEndFrameRequestFields(scene, {
-      backend: route.mode, falModelId: byBackend.fal?.falModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
+      backend: route.mode, falModelId: byBackend.fal?.falModelId, runwayModelId: byBackend.runway?.runwayModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
     }),
     musicVideo: { ...tag, compose: true },
     ...(fixes ? { _clipFixes: fixes } : {}),

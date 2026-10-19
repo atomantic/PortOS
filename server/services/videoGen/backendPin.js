@@ -192,6 +192,14 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
       ...(duration != null ? { duration } : {}),
     };
   }
+  if (pin.mode === VIDEO_GEN_MODE.RUNWAY) {
+    return {
+      ...base,
+      mode: VIDEO_GEN_MODE.RUNWAY,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      ...(duration != null ? { duration } : {}),
+    };
+  }
   if (pin.mode === VIDEO_GEN_MODE.REACTOR) {
     const seconds = params.seconds ?? duration;
     const aspect = Number(params.width) > 0 && Number(params.height) > 0

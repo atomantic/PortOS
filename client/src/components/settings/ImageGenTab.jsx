@@ -272,7 +272,7 @@ export function ImageGenTab() {
   // (GET /api/settings/credentials, same one CredentialsTab renders) and
   // saves/clears through the write-only PUT /api/settings/credentials/:id
   // setter — never through the slice PATCHes this tab otherwise uses.
-  const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null });
+  const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null, runway: null });
   // One busy flag for both keys since only one save/clear can be in flight
   // from this panel at a time; the value names which button is spinning.
   const [videoCredentialBusy, setVideoCredentialBusy] = useState(null);
@@ -284,6 +284,7 @@ export function ImageGenTab() {
         setCredentialRows({
           fal: rows.find((row) => row.id === 'fal') || null,
           reactor: rows.find((row) => row.id === 'reactor') || null,
+          runway: rows.find((row) => row.id === 'runway') || null,
         });
       })
       .catch(() => {});

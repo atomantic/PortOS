@@ -3,6 +3,9 @@ import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_MUSIC_VIDEO_DEFAULT_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
+import {
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
+} from '../../lib/runwayVideoModels.js';
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
@@ -11,6 +14,10 @@ import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocal
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
 const falOptionLabel = (model) => {
   const rate = describeFalVideoRate(model.id);
+  return rate ? `${model.label} · ${rate}` : model.label;
+};
+const runwayOptionLabel = (model, resolution) => {
+  const rate = describeRunwayVideoRate(model.id, resolution);
   return rate ? `${model.label} · ${rate}` : model.label;
 };
 
@@ -46,6 +53,12 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   // only; each option shows what a typical short (2 s) shot bills.
   const endFrameQuotes = falImageVideoQuotes({ seconds: 2, endFrame: true });
   const falSpend = project ? projectFalSpend(project) : null;
+  // Runway is image-to-video only here, so it renders cutaways; performance
+  // shots stay on the lip-sync lane. Length and size alphabets are per model,
+  // so a model change clears both pins.
+  const runwayModel = getRunwayVideoModel(settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+  const runwayResolutions = runwayVideoResolutions(runwayModel);
+  const runwayLengths = runwayVideoLengths(runwayModel);
   return (
     <>
       <RenderPoolPicker settings={settings} change={change} disabled={locked} />
@@ -64,6 +77,8 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             performance (lip-sync) shots need fal.ai (#8977). */}
         <option value="grok">Grok video (cutaway only)</option>
         <option value="fal">fal.ai video</option>
+        {/* Runway is image-to-video only, so like Grok it renders cutaways. */}
+        <option value="runway">Runway video (cutaway only)</option>
       </select>
       {settings.backend === 'local' && (
         <>
@@ -302,9 +317,66 @@ export default function VideoRenderSettings({ videoSettings, generating, project
           </select>
         </>
       )}
+      {settings.backend === 'runway' && (
+        <>
+          <label htmlFor="mv-runway-model" className="sr-only">Runway cutaway model</label>
+          <select
+            id="mv-runway-model"
+            value={settings.runwayModelId || ''}
+            onChange={(e) => change({ runwayModelId: e.target.value || null, runwayDuration: null, runwayResolution: null })}
+            disabled={locked}
+            title="Runway image-to-video model for this project's cutaway scenes (list price per generated second)"
+            className={`${falSelectCls} sm:max-w-[280px]`}
+          >
+            <option value="">{`Default · ${runwayOptionLabel(getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL))}`}</option>
+            {RUNWAY_VIDEO_MODELS.filter((model) => model.id !== RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL).map((model) => (
+              <option key={model.id} value={model.id}>{runwayOptionLabel(model)}</option>
+            ))}
+            {settings.runwayModelId && !runwayModel && (
+              <option value={settings.runwayModelId}>{`${settings.runwayModelId} · cost unknown`}</option>
+            )}
+          </select>
+          {runwayResolutions.length > 1 && (
+            <>
+              <label htmlFor="mv-runway-resolution" className="sr-only">Runway cutaway resolution</label>
+              <select
+                id="mv-runway-resolution"
+                value={runwayResolutions.includes(settings.runwayResolution) ? settings.runwayResolution : ''}
+                onChange={(e) => change({ runwayResolution: e.target.value || null })}
+                disabled={locked}
+                title="Output resolution for Runway cutaway renders — higher can cost more per second"
+                className={falSelectCls}
+              >
+                <option value="">{`${runwayModel.size.default} (model default)`}</option>
+                {runwayResolutions.map((res) => (
+                  <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>
+                ))}
+              </select>
+            </>
+          )}
+          {runwayLengths.length > 0 && (
+            <>
+              <label htmlFor="mv-runway-duration" className="sr-only">Runway scene clip length</label>
+              <select
+                id="mv-runway-duration"
+                value={runwayLengths.includes(settings.runwayDuration) ? settings.runwayDuration : ''}
+                onChange={(e) => change({ runwayDuration: e.target.value === '' ? null : Number(e.target.value) })}
+                disabled={locked}
+                title="Clip length for this project's Runway cutaway renders. Shot length renders the shortest length the model offers that covers each shot."
+                className={falSelectCls}
+              >
+                <option value="">Shot length</option>
+                {runwayLengths.map((sec) => (
+                  <option key={sec} value={sec}>{`${sec}s clips`}</option>
+                ))}
+              </select>
+            </>
+          )}
+        </>
+      )}
       {falSpend?.totalUsd > 0 && (
-        <p className="w-full min-w-0 break-words text-xs text-port-text-muted" title="Estimated from the price each fal render was quoted at; fal's own invoice is the final word">
-          {`fal spend (est.) ${formatUsd(falSpend.totalUsd)}: `}
+        <p className="w-full min-w-0 break-words text-xs text-port-text-muted" title="Estimated from the price each paid render was quoted at; the provider's own invoice is the final word">
+          {`Paid video spend (est.) ${formatUsd(falSpend.totalUsd)}: `}
           {falSpend.models.map((row) => `${row.label} ${formatUsd(row.usd)} (${row.count})`).join(' · ')}
         </p>
       )}

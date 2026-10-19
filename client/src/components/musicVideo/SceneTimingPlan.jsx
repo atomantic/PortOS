@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Merge, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
-import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { meteredModelLabel } from '../../lib/musicVideoShotTiming.js';
 
 const SPLIT_BUTTON = 'inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0';
 // The shortest piece the server leaves on either side of a split (projectsLogic MIN_SPLIT_PIECE_SEC).
@@ -58,8 +58,8 @@ export default function SceneTimingPlan({ timing, sceneId, lipSyncBackend, onSpl
       )}
       {falTake && !falTake.performance && (
         <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
-          fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
-          {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
+          {lipSyncBackend === 'runway' ? 'Runway' : 'fal.ai'} renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {meteredModelLabel(falTake.modelId) || falTake.modelId}
+          {' · '}{falCost || `cost unknown — billed to your ${lipSyncBackend === 'runway' ? 'Runway' : 'fal.ai'} account`}
         </p>
       )}
       {grokPlan && (

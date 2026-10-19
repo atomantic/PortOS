@@ -42,6 +42,11 @@ const VIDEO_KEY_ROWS = [
     hint: 'Enables the reactor.inc fast-h3 video backend on the Video Gen page and in FableLoom, or set the REACTOR_API_KEY environment variable instead.',
     missing: 'No reactor.inc key configured — the reactor.inc video backend will be unavailable.',
   },
+  {
+    id: 'runway', label: 'Runway API key', placeholder: 'key_...', envLabel: 'RUNWAYML_API_SECRET',
+    hint: 'Enables the Runway video backend on the Video Gen page and in Music Video shots. Get a key at dev.runwayml.com, or set the RUNWAYML_API_SECRET environment variable instead.',
+    missing: 'No Runway key configured — the Runway video backend will be unavailable.',
+  },
 ];
 
 function VideoKeyRow({ row, spec, busy, onSave, onClear }) {

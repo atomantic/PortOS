@@ -213,6 +213,7 @@ export * from './fontMetadata.js';
 export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';
+export * from './runwayVideoModels.js';
 export * from './reactorVideoClip.js';
 export * from './heavyJobClaim.js';
 export * from './hfErrors.js';

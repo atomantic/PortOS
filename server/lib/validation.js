@@ -2145,6 +2145,10 @@ export const videoGenSettingsSchema = z.object({
   reactor: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
   }).optional(),
+  // Runway developer API — same settings-wins-over-env (RUNWAYML_API_SECRET) precedence.
+  runway: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+  }).optional(),
 });
 
 // POST /api/video-gen/model-terms — record (or withdraw) the acknowledgement of

@@ -290,7 +290,7 @@ const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -318,6 +318,16 @@ const generateBodySchema = z.object({
     (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
     z.boolean().optional(),
   ),
+  // Runway model id and clip length (lib/runwayVideoModels.js). Loosely
+  // validated like falModelId: the provider refuses an uncatalogued id and
+  // rounds a length up to one the model delivers.
+  runwayModelId: z.string().min(1).max(64).optional(),
+  runwayDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'runwayDuration'),
+  ),
+  // Output size ('720p', '1080p'); resolved per model, falling back to its default.
+  runwayResolution: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(16).optional()),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
   // which start a fresh render each time) and clip length in seconds. The
@@ -591,6 +601,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // settings object alone missed that case entirely.
     falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
     reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
+    runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
   });
 }));
 
