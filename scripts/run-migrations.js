@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFile, mkdir, rm, stat, writeFile, rename } from 'fs/promises';
-import { join, dirname } from 'path';
+import { readFile, readdir, mkdir, rm, stat, writeFile, rename } from 'fs/promises';
+import { basename, join, dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { isWorktreeRoot } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -168,6 +168,14 @@ export async function runMigrations({
 }
 
 async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
+  // A runner killed between writing the ledger's temp file and renaming it
+  // leaves `migrations.applied.json.tmp-<pid>` behind, and no later run (a new
+  // pid) would ever reuse it. Under the lock no other runner can own one.
+  const tmpPrefix = `${basename(appliedFile)}.tmp-`;
+  for (const name of await readdir(dirname(appliedFile))) {
+    if (name.startsWith(tmpPrefix)) await rm(join(dirname(appliedFile), name), { force: true });
+  }
+
   // Load applied migrations list (repairing a corrupt file aside — see
   // readAppliedList).
   const applied = await readAppliedList(appliedFile, { repair: true });

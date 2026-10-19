@@ -470,12 +470,16 @@ export default {
     mkdirSync(lockDir);
     // Above every platform's pid ceiling, so the liveness probe reports ESRCH.
     writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+    // The dead holder was killed mid ledger write: its temp file never renamed.
+    const orphanTmp = `${appliedFile}.tmp-2147483646`;
+    writeFileSync(orphanTmp, '["000-earlier.js"');
 
     const ran = await runMigrations({ rootDir, migrationsDir, lockWaitMs: 60, lockPollMs: 10 });
 
     expect(ran).toBe(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer running'));
     expect(existsSync(lockDir)).toBe(false);
+    expect(existsSync(orphanTmp)).toBe(false);
   });
 
   it('reclaims a lock held past the stale timeout even when its pid is unknown', async () => {
