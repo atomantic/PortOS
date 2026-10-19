@@ -404,6 +404,20 @@ describe('questionResultSchema chunkId/element (issue #2016)', () => {
     expect(parsed.tasks[0].questions[0].element).toBeUndefined();
   });
 
+  // Both keys index plain-object mastery maps; `__proto__` would write the
+  // mastery update onto Object.prototype.
+  it.each(['__proto__', 'constructor', 'prototype'])('rejects %s as a mastery chunk or element key', (key) => {
+    const session = (question) => ({
+      modules: ['memory'],
+      tasks: [{ module: 'memory', type: 'memory-sequence', memoryItemId: 'song-1', questions: [{ prompt: 'a', expected: 'b', answered: 'b', correct: true, responseMs: 1, ...question }], totalMs: 1 }],
+    });
+    expect(postSessionSubmitSchema.safeParse(session({ chunkId: key })).success).toBe(false);
+    expect(postSessionSubmitSchema.safeParse(session({ element: key })).success).toBe(false);
+    expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: key, results: [{ correct: true }] }).success).toBe(false);
+    expect(memoryPracticeSchema.safeParse({ mode: 'element-flash', results: [{ correct: true, element: key }] }).success).toBe(false);
+    expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: 'verse-1', results: [{ correct: true, chunkId: 'verse-1' }] }).success).toBe(true);
+  });
+
   it('accepts a null chunkId (question with no matching chunk)', () => {
     const parsed = postSessionSubmitSchema.parse({
       modules: ['memory'],
