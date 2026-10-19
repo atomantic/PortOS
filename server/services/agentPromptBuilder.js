@@ -105,7 +105,7 @@ const AGENTS_DIR = PATHS.cosAgents;
  * TLS-only (#12405). The replacement is function-form so the URL is inserted
  * literally.
  */
-export function expandPortosApiUrl(prompt) {
+function expandPortosApiUrl(prompt) {
   const parts = typeof prompt === 'string' ? [prompt] : [prompt?.userPrompt, prompt?.systemPrompt];
   if (!parts.some(part => typeof part === 'string' && part.includes(PORTOS_API_URL_TOKEN))) return prompt;
   const apiBase = localApiBaseUrl();
