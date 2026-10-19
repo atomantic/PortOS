@@ -79,8 +79,9 @@ describe('relativeSpecifiers ignores non-executable text', () => {
       "if (ok) /[/]'/.test(s); await import('./AfterIf.js');",
       "const q = obj.return / 2; await import('./AfterProp.js');",
       "const w = (a) / 2; await import('./AfterGroup.js');",
+      "const of = 4; const r = of / 2; await import('./AfterOf.js');",
     ].join('\n');
-    expect(relativeSpecifiers(source)).toEqual(['./AfterReturn.js', './AfterTypeof.js', './AfterIf.js', './AfterProp.js', './AfterGroup.js']);
+    expect(relativeSpecifiers(source)).toEqual(['./AfterReturn.js', './AfterTypeof.js', './AfterIf.js', './AfterProp.js', './AfterGroup.js', './AfterOf.js']);
   });
 });
 

@@ -34,7 +34,7 @@ const MODULE_RE = /\.(?:[cm]?jsx?|tsx?)$/i;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
 const NEW_URL_RE = /new URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
 // A `/` after one of these words begins a regex literal, not a division.
-const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
 // `if (x) /re/.test(y)`: a `)` closing one of these headers is followed by a statement.
 const CONTROL_HEADER_KEYWORDS = new Set(['if', 'while', 'for', 'with']);
 const COMPLETIONS = ['', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
