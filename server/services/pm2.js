@@ -78,6 +78,8 @@ function logJlistRecovery(pm2Home) {
 // Resolve PM2 CLI binary path from our local dependency using require.resolve
 // to handle hoisted node_modules correctly.
 const require = createRequire(import.meta.url);
+const ECOSYSTEM_FILE = 'ecosystem.config.cjs';
+const LEGACY_ECOSYSTEM_FILE = 'ecosystem.config.js';
 const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 
 /**
@@ -807,7 +809,7 @@ export async function getSavedProcessNames(pm2Home = null) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function startFromEcosystem(cwd, processNames = [], pm2Home = null) {
-  const ecosystemFile = ['ecosystem.config.cjs', 'ecosystem.config.js']
+  const ecosystemFile = [ECOSYSTEM_FILE, LEGACY_ECOSYSTEM_FILE]
     .find(f => existsSync(`${cwd}/${f}`));
 
   if (!ecosystemFile) {
@@ -829,15 +831,16 @@ export async function startFromEcosystem(cwd, processNames = [], pm2Home = null)
  * try to require() .cmd batch files as JavaScript).
  */
 async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Home) {
-  const configPath = join(cwd, ecosystemFile);
+  // Each file name is a module-level literal joined at its own require() so the
+  // test memo can key every tracked ecosystem file (scripts/lib/testMemo.js).
+  const configPath = ecosystemFile === ECOSYSTEM_FILE ? join(cwd, ECOSYSTEM_FILE) : join(cwd, LEGACY_ECOSYSTEM_FILE);
 
   // Try to load and patch the config
   let config;
   try {
-    const require = createRequire(configPath);
     // Clear module cache to get fresh config on repeated starts
     try { delete require.cache[require.resolve(configPath)]; } catch {}
-    config = require(configPath);
+    config = ecosystemFile === ECOSYSTEM_FILE ? require(join(cwd, ECOSYSTEM_FILE)) : require(join(cwd, LEGACY_ECOSYSTEM_FILE));
   } catch (err) {
     // If we can't load the config (syntax error, missing deps, etc.),
     // fall back to unpatched start — PM2 may still handle it

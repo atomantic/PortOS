@@ -33,16 +33,129 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 const MODULE_RE = /\.(?:[cm]?jsx?|tsx?)$/i;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
 const NEW_URL_RE = /new URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
+// A `/` after one of these words begins a regex literal, not a division.
+const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+// `if (x) /re/.test(y)`: a `)` closing one of these headers is followed by a statement.
+const CONTROL_HEADER_KEYWORDS = new Set(['if', 'while', 'for', 'with']);
 const COMPLETIONS = ['', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
-/** Every relative specifier in a module's source, in source order. */
+/**
+ * Classify every character of a module so specifier regexes can ignore text
+ * that is not executable: comments and template-literal text are blanked in
+ * `code` (newlines kept, so line anchors still work), and `inString` marks
+ * characters inside a quoted string. Regex literals are skipped by a
+ * previous-token heuristic; `${…}` inside a template is code again.
+ */
+function scanCode(source) {
+  const code = source.split('');
+  const inString = new Uint8Array(source.length);
+  const blank = (from, to) => {
+    for (let i = from; i < to; i += 1) if (code[i] !== '\n') code[i] = ' ';
+  };
+  const templates = []; // brace depth at which each open `${` resumes template text
+  let depth = 0;
+  let prev = ''; // last significant code character
+  let prevAt = -1; // its index in source
+  let i = 0;
+  // `x++ / y`: a prefix ++/-- needs an operand, never a regex, so an adjacent
+  // doubled +/- before `/` always ends an expression.
+  const isPostfixStep = () => (prev === '+' || prev === '-') && prevAt > 0 && source[prevAt - 1] === prev;
+  // The identifier ending at source[end], or '' when it is a property name (`a.return / 2`).
+  const wordEndingAt = (end) => {
+    let start = end;
+    while (start > 0 && /[\w$]/.test(source[start - 1])) start -= 1;
+    if (start > end) return '';
+    let before = start - 1;
+    while (before >= 0 && /\s/.test(source[before])) before -= 1;
+    return before >= 0 && source[before] === '.' && source[before - 1] !== '.' ? '' : source.slice(start, end + 1);
+  };
+  const parens = []; // per open `(`: does it head an if/while/for/with?
+  let closedControlHeader = false;
+  const endsExpression = () => {
+    if (prev === ')') return !closedControlHeader;
+    if (/[\w$]/.test(prev)) return !REGEX_PRECEDING_KEYWORDS.has(wordEndingAt(prevAt));
+    return false;
+  };
+  const readTemplate = (from) => {
+    let j = from + 1;
+    while (j < source.length) {
+      if (source[j] === '\\') j += 2;
+      else if (source[j] === '`') { blank(from, j + 1); return j + 1; }
+      else if (source[j] === '$' && source[j + 1] === '{') {
+        blank(from, j + 2);
+        templates.push(depth);
+        depth += 1;
+        return j + 2;
+      } else j += 1;
+    }
+    blank(from, source.length);
+    return source.length;
+  };
+  // After readTemplate: a closed template is an operand ('`'); entering `${` starts a fresh expression, so a leading `/` is a regex ('{' is a regex-start context).
+  const templateEnd = (end) => (source[end - 1] === '`' ? '`' : '{');
+  while (i < source.length) {
+    const ch = source[i];
+    const two = source.slice(i, i + 2);
+    if (two === '//') {
+      let j = source.indexOf('\n', i);
+      if (j < 0) j = source.length;
+      blank(i, j);
+      i = j;
+    } else if (two === '/*') {
+      let j = source.indexOf('*/', i + 2);
+      j = j < 0 ? source.length : j + 2;
+      blank(i, j);
+      i = j;
+    } else if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < source.length && source[j] !== ch && source[j] !== '\n') j += source[j] === '\\' ? 2 : 1;
+      inString.fill(1, i, Math.min(j + 1, source.length));
+      i = j + 1;
+      prev = ch;
+    } else if (ch === '`') {
+      i = readTemplate(i);
+      prev = templateEnd(i);
+    } else if (ch === '/' && (prev === '' || '(,=:[!&|?{;+-*%<>~^'.includes(prev) || !endsExpression() && (prev === ')' || /[\w$]/.test(prev))) && !isPostfixStep()) {
+      // `}` is deliberately not a regex start: it usually ends an object/function expression (`{} / d`), and mis-scanning a rare regex statement after a block is safer than dropping later imports from the check.
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length && source[j] !== '\n' && (inClass || source[j] !== '/')) {
+        if (source[j] === '\\') j += 1;
+        else if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        j += 1;
+      }
+      inString.fill(1, i, Math.min(j + 1, source.length));
+      i = j + 1;
+      prev = '/';
+    } else {
+      if (ch === '(') parens.push(/[\w$]/.test(prev) && CONTROL_HEADER_KEYWORDS.has(wordEndingAt(prevAt)));
+      else if (ch === ')') closedControlHeader = parens.pop() === true;
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (templates.length > 0 && templates[templates.length - 1] === depth) {
+          templates.pop();
+          i = readTemplate(i);
+          prev = templateEnd(i);
+          continue;
+        }
+      }
+      if (!/\s/.test(ch)) { prev = ch; prevAt = i; }
+      i += 1;
+    }
+  }
+  return { code: code.join(''), inString };
+}
+
+/** Every relative specifier in a module's executable code, in source order. */
 export function relativeSpecifiers(source) {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const { code, inString } = scanCode(source);
   const found = [...staticImportSpecifiersFromSource(code)];
   for (const re of [DYNAMIC_IMPORT_RE, NEW_URL_RE]) {
     re.lastIndex = 0;
     let match;
-    while ((match = re.exec(code)) !== null) found.push(match[1]);
+    while ((match = re.exec(code)) !== null) if (!inString[match.index]) found.push(match[1]);
   }
   return found.filter((specifier) => specifier.startsWith('./') || specifier.startsWith('../'))
     .map((specifier) => specifier.split(/[?#]/)[0]);

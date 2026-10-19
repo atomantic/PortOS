@@ -11,7 +11,7 @@ table in Python. These tests cover the Python layer: that it honors whatever
 bounds it is handed (so a direct/script caller is still guarded), and that it
 rejects nonsense bounds instead of trusting them.
 
-Run: python3 scripts/generate_ltx2_ic_lora_test.py
+Run: python3 scripts/generate_ltx2_ic_lora_test.py (CI: generate_ltx2_ic_lora.test.js)
 """
 from __future__ import annotations
 
@@ -63,8 +63,20 @@ class RunIcLoraBoundsTest(unittest.TestCase):
         recorded = self.recorded = {}
 
         class FakeICLoraPipeline:
+            # The surface ltx_runtime_lora.install_pipeline_adapters replaces:
+            # the per-load hook, the pre-Stage-1 _fuse_loras, and the streaming
+            # flag that decides between inference-time and merged adapters.
+            low_ram_streaming = False
+
             def __init__(self, **kwargs):
                 recorded["init"] = kwargs
+                self._lora_paths = list(kwargs.get("lora_paths") or [])
+
+            def _load_transformer_with_optional_streaming(self, path):
+                return path
+
+            def _fuse_loras(self):
+                raise AssertionError("upstream merge-and-requantize _fuse_loras must be replaced")
 
             # `bind_output_fps` rebinds this to inject the output frame rate, so
             # it has to exist even though nothing decodes here.
@@ -77,6 +89,8 @@ class RunIcLoraBoundsTest(unittest.TestCase):
                 # reads _pending_loras when it lazily loads the DiT inside this
                 # call, so that is when both channels must be populated.
                 recorded["pending_loras"] = getattr(self, "_pending_loras", None)
+                recorded["fuse_replaced"] = "_fuse_loras" in vars(self)
+                recorded["load_hooked"] = "_load_transformer_with_optional_streaming" in vars(self)
                 return kwargs.get("output_path")
 
         ic_lora = types.ModuleType("ltx_pipelines_mlx.ic_lora")
@@ -216,19 +230,20 @@ class RunIcLoraBoundsTest(unittest.TestCase):
         self.assertIn("does not exist", str(ctx.exception))
 
     def test_ic_weight_rides_lora_paths_so_user_loras_stack(self):
-        # The payoff of the Phase 1 channel split: the IC weight is fused via the
-        # constructor's `lora_paths` (pre-Stage-1 `_fuse_loras`) while user LoRAs
-        # go through `_pending_loras`, so an Ingredients x Character stack
-        # COMPOSES rather than one displacing the other.
+        # The IC weight still rides the constructor's `lora_paths` (it carries
+        # the reference downscale factor) and attaches once, before Stage 1;
+        # user LoRAs attach on every transformer load, so an Ingredients x
+        # Character stack COMPOSES. Neither goes through the runtime's
+        # merge-and-requantize channels (#12262): `_pending_loras` stays empty
+        # and the pipeline's own _fuse_loras is replaced. The attach itself is
+        # proven on real quantized modules in ltx_runtime_lora_test.py.
         user = [("/fake/character.safetensors", 0.9)]
         args = self._args(references=self.refs[:2], user_loras=user)
         self.helper.run_ic_lora(args)
-        # IC weight → constructor `lora_paths` (fused pre-Stage-1 at strength 1.0:
-        # the weight IS the mode, not a stylistic dial).
         self.assertEqual(self.recorded["init"]["lora_paths"], [(self.weight, 1.0)])
-        # User LoRAs → the SEPARATE `_pending_loras` hook. Both channels populated
-        # at once is the assertion that matters; one list would mean replacement.
-        self.assertEqual(self.recorded["pending_loras"], user)
+        self.assertIsNone(self.recorded["pending_loras"])
+        self.assertTrue(self.recorded["fuse_replaced"])
+        self.assertTrue(self.recorded["load_hooked"])
 
     def test_every_reference_carries_the_strength_dial(self):
         args = self._args(references=self.refs[:3])

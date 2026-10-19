@@ -31,60 +31,11 @@ import { tmpdir } from 'node:os';
 import { join, basename, parse } from 'node:path';
 
 const execFileAsync = promisify(execFile);
-const POWERSHELL = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-// Paths travel in an environment variable (newline-separated; newlines are illegal in
-// Windows file names) so no path ever touches PowerShell's parser.
-const SCRIPT = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-using System.Runtime.InteropServices;
-public static class PortOSRecycle {
-  // 64-bit layout (no Pack): PortOS runs under 64-bit Node; Pack=1 is the x86 layout.
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  public struct SHFILEOPSTRUCT {
-    public IntPtr hwnd; public uint wFunc;
-    [MarshalAs(UnmanagedType.LPWStr)] public string pFrom;
-    [MarshalAs(UnmanagedType.LPWStr)] public string pTo;
-    public ushort fFlags;
-    [MarshalAs(UnmanagedType.Bool)] public bool fAnyOperationsAborted;
-    public IntPtr hNameMappings;
-    [MarshalAs(UnmanagedType.LPWStr)] public string lpszProgressTitle;
-  }
-  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-  static extern int SHFileOperationW(ref SHFILEOPSTRUCT op);
-  const uint FO_DELETE = 3;
-  // FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI | FOF_WANTNUKEWARNING
-  const ushort FLAGS = 0x0004 | 0x0010 | 0x0040 | 0x0400 | 0x4000;
-  public static int Recycle(string path, out bool aborted) {
-    var op = new SHFILEOPSTRUCT { wFunc = FO_DELETE, pFrom = path + "\0\0", fFlags = FLAGS };
-    int rc = SHFileOperationW(ref op);
-    aborted = op.fAnyOperationsAborted;
-    return rc;
-  }
-  // Pre-flight: only a Fixed drive owns a $Recycle.Bin; shares and removable media
-  // would otherwise be permanently deleted by the shell under FOF_NOCONFIRMATION.
-  public static string DriveType(string path) {
-    return new DriveInfo(Path.GetPathRoot(path)).DriveType.ToString();
-  }
-}
-'@
-$results = @()
-$failed = $false
-foreach ($path in ($env:PORTOS_TRASH_PATHS -split [char]10 | Where-Object { $_ -ne '' })) {
-  if (-not (Test-Path -LiteralPath $path)) { $failed = $true; $results += @{ path = $path; code = 2; error = 'missing' }; continue }
-  $type = [PortOSRecycle]::DriveType($path)
-  if ($type -ne 'Fixed') { $failed = $true; $results += @{ path = $path; code = -1; error = "no recycle bin on $type drive" }; continue }
-  $aborted = $false
-  $rc = [PortOSRecycle]::Recycle($path, [ref]$aborted)
-  if ($rc -ne 0 -or $aborted -or (Test-Path -LiteralPath $path)) { $failed = $true; $results += @{ path = $path; code = $rc; aborted = $aborted } }
-  else { $results += @{ path = $path; recycled = $true } }
-}
-$json = ConvertTo-Json -Compress -InputObject @($results)
-if ($failed) { [Console]::Error.WriteLine($json); exit 1 }
-[Console]::Out.WriteLine($json)
-`;
+// The exact script and PowerShell path `server/lib/nativeTrash.js` uses, so this
+// harness proves the production body rather than a copy of it.
+import { WINDOWS_TRASH_SCRIPT as SCRIPT } from '../../../../server/lib/nativeTrash.js';
+import { windowsPowerShell51Path } from '../../../../server/lib/processEnv.js';
+const POWERSHELL = windowsPowerShell51Path();
 
 async function powershellRecycle(paths) {
   const started = Date.now();
@@ -95,7 +46,7 @@ async function powershellRecycle(paths) {
     return { ok: true, ms: Date.now() - started, results: [].concat(JSON.parse(stdout.trim())) };
   } catch (error) {
     let results = null;
-    try { results = [].concat(JSON.parse(String(error.stderr || '').trim())); } catch {}
+    try { results = [].concat(JSON.parse(String(error.stdout || '').replace(/^\uFEFF/, '').trim())); } catch {}
     return { ok: false, ms: Date.now() - started, exitCode: error.code, killed: error.killed, results, stderr: results ? undefined : String(error.stderr || '').trim().slice(0, 500) };
   }
 }

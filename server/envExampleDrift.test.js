@@ -87,6 +87,7 @@ const INHERITED_ENV = {
   DYLD_LIBRARY_PATH: 'macOS dynamic-loader path, passed through to child processes',
   LD_LIBRARY_PATH: 'Linux dynamic-loader path, passed through to child processes',
   XDG_CACHE_HOME: 'XDG base-directory spec, set by the desktop environment',
+  XDG_DATA_HOME: 'XDG base-directory spec, set by the desktop environment (home trash location on Linux)',
 
   // Injected by a toolchain PortOS runs under.
   NODE_ENV: 'set by the launcher (pm2) and forced to "test" by vitest.config.js',

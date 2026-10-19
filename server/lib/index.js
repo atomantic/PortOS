@@ -321,6 +321,7 @@ export * from './fileCore.js';
 export * from './mediaFileInfo.js';
 export * from './trashFiles.js';
 export * from './nativeTrash.js';
+export * from './nativeTrashXdg.js';
 export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueCli.js';

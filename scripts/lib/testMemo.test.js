@@ -237,6 +237,39 @@ describe('recorded key', () => {
   });
 });
 
+describe('non-literal native require() in a product module', () => {
+  const test = ["import { it } from 'vitest';", "import { start } from './boot.js';", "it('b', () => start());"].join('\n');
+  const tree = (boot) => ({
+    ...TREE,
+    'server/lib/boot.js': boot,
+    'server/lib/boot.test.js': test,
+    'ecosystem.config.cjs': 'module.exports = { apps: [] };\n',
+    'sub/ecosystem.config.cjs': 'module.exports = { apps: [1] };\n',
+    'server/node_modules/native-driver/package.json': '{"name":"native-driver","version":"1.0.0"}',
+  });
+  const floor = (files) => keyOf(files, 'server/lib/boot.test.js').floor;
+
+  it('keys every tracked file of the basename when the directory is unknown', () => {
+    const boot = ["import { createRequire } from 'node:module';", "import { join } from 'node:path';", 'const require = createRequire(import.meta.url);', "const NAME = 'ecosystem.config.cjs';",
+      'export const start = (root) => { const configPath = join(root.dir, NAME); return require(configPath); };'].join('\n');
+    const base = floor(tree(boot));
+    expect(base.memoizable).toBe(true);
+    expect(floor({ ...tree(boot), 'ecosystem.config.cjs': 'module.exports = { apps: [2] };\n' }).key).not.toBe(base.key);
+    expect(floor({ ...tree(boot), 'sub/ecosystem.config.cjs': 'module.exports = { apps: [2] };\n' }).key).not.toBe(base.key);
+    // A non-literal basename is still unknown.
+    expect(floor(tree(boot.replace("join(root.dir, NAME)", 'join(root.dir, root.name)')))).toMatchObject({ memoizable: false, reason: expect.stringContaining('non-literal') });
+    // A bare name may be a directory Node loads via index.js or package.json main: not provably a file.
+    expect(floor(tree(boot.replace("'ecosystem.config.cjs'", "'plugin'")))).toMatchObject({ memoizable: false, reason: expect.stringContaining('non-literal') });
+  });
+
+  it('keys a package-name constant by the installed package version', () => {
+    const boot = ["import { createRequire } from 'node:module';", 'const require = createRequire(import.meta.url);', "const DRIVER = 'native-driver';", 'export const start = () => require(DRIVER);'].join('\n');
+    const base = floor(tree(boot));
+    expect(base.memoizable).toBe(true);
+    expect(floor({ ...tree(boot), 'server/node_modules/native-driver/package.json': '{"name":"native-driver","version":"2.0.0"}' }).key).not.toBe(base.key);
+  });
+});
+
 describe('python sidecars, external tools and machine-local state', () => {
   it('hashes a python sidecar and its resolvable sibling imports, and keys the python version', () => {
     const files = {
@@ -264,6 +297,25 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(key(viaHelper).key).not.toBe(key(viaHelper, { toolVersion: () => 'Python 3.13.0' }).key);
     const unknownProgram = { ...files, 'scripts/tool.test.js': ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "it('p', () => spawnSync(process.env.INTERPRETER, [new URL('./tool.py', import.meta.url).pathname]));"].join('\n') };
     expect(key(unknownProgram)).toMatchObject({ memoizable: false, reason: expect.stringContaining('unknown program') });
+  });
+
+  it('follows importlib.import_module with a literal name and fails closed on a computed one', () => {
+    const files = {
+      ...TREE,
+      'scripts/tool.py': "import importlib\nmod = importlib.import_module('_pins')\n",
+      'scripts/_pins.py': 'PINS = 1\n',
+      'scripts/tool.test.js': ["import { it } from 'vitest';", "import { spawnSync } from 'node:child_process';", "it('p', () => spawnSync('python3', [new URL('./tool.py', import.meta.url).pathname]));"].join('\n'),
+    };
+    const key = (tree) => keyOf(tree, 'scripts/tool.test.js', { toolVersion: () => 'Python 3.12.1' }).floor;
+    expect(key(files).memoizable).toBe(true);
+    expect(key({ ...files, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(key(files).key);
+    expect(key({ ...files, 'scripts/tool.py': 'import importlib\nmod = importlib.import_module(name)\n' })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
+    // A literal prefix of a computed name is not the whole argument.
+    expect(key({ ...files, 'scripts/tool.py': "import importlib\nmod = importlib.import_module('_pins' + suffix)\n" })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
+    // Whitespace between the name and '(' is valid Python and must not bypass either path.
+    const spaced = { ...files, 'scripts/tool.py': "import importlib\nmod = importlib.import_module ('_pins')\n" };
+    expect(key({ ...spaced, 'scripts/_pins.py': 'PINS = 2\n' }).key).not.toBe(key(spaced).key);
+    expect(key({ ...files, 'scripts/tool.py': 'import importlib\nmod = importlib.import_module (name)\n' })).toMatchObject({ memoizable: false, reason: expect.stringContaining('import_module') });
   });
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {

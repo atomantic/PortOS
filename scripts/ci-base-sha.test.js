@@ -252,7 +252,7 @@ describe('ci.yml autofixer workspace install', () => {
   const installers = Object.entries(jobs)
     .filter(([, body]) => body.includes('npm ci --prefix autofixer'));
 
-  it('resolves the autofixer lockfile and checks the server entry point on the job that always runs', () => {
+  it('resolves the autofixer lockfile and checks the server entry point on the job that always runs and each shard', () => {
     // autofixer/ carries its own package.json, its own tracked lockfile, and
     // its own .npmrc, and `npm run setup` / scripts/ensure-deps.js install it
     // on every user's machine. When no CI job ran `npm ci` against it, a
@@ -264,7 +264,9 @@ describe('ci.yml autofixer workspace install', () => {
     // Named, so the loop below is never vacuously green on a deleted step.
     expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
     expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node --check server\/index\.js/);
-    expect(jobs.server).not.toContain('npm ci --prefix autofixer');
+    // Shards are separate checkouts and run ../autofixer tests, which import
+    // express from autofixer/node_modules, so they install it too.
+    expect(jobs.server).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
     expect(jobs.server).not.toContain('node --check server/index.js');
   });
 

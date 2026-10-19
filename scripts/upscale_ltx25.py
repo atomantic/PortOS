@@ -29,12 +29,16 @@ gated model card:
   - The schedule is the fixed distilled one: `DISTILLED_SIGMAS` is 8 steps.
     Passing no step count selects exactly that, which is why this runner
     exposes no steps flag.
-  - Quantization-safe fusion is the runtime's own contract: `apply_loras()`
-    dequantizes an int4/int8 weight, adds the delta, and re-quantizes. What it
-    does NOT do is complain when an adapter addresses keys the transformer does
-    not have — every delta is simply missing, the fusion is a silent no-op, and
-    the render is the plain base model. `assert_adapter_fuses` is the guard for
-    that: it is the "loads but produces garbage" case #6512 names.
+  - The runtime's `apply_loras()` dequantizes an int4/int8 weight, adds the
+    delta and re-quantizes, which rounds most of a rank-r delta away on a
+    low-bit pack (#12262). This runner instead applies the adapters at
+    inference through `ltx_runtime_lora`: quantized projections keep their
+    packed weights and add the delta in activation space, float ones fuse.
+    `apply_loras()` also never complains when an adapter addresses keys the
+    transformer does not have — the delta simply vanishes and the render is the
+    plain base model, the "loads but produces garbage" case #6512 names.
+    `assert_adapter_targets_resolve` refuses that from the headers alone, and
+    the runtime attach re-checks every target and shape on the loaded model.
   - `reference_downscale_factor` is read from the adapter's safetensors
     `__metadata__` (`iclora_utils.read_lora_reference_downscale_factor`) and
     enforced against the STAGE-1 dims, which are half the output. It is
@@ -70,6 +74,12 @@ from _upscale_contract import (  # noqa: E402
     read_safetensors_header,
     reference_downscale_factor,
     validate_args,
+)
+# Stdlib-only at import; MLX loads only when an adapter is attached.
+from ltx_runtime_lora import (  # noqa: E402
+    AdapterReport,
+    install_pipeline_adapters,
+    release_pipeline_adapters,
 )
 
 # The 2.5 pack's own prompt conditioner. Its absence is a hard refusal rather
@@ -198,6 +208,10 @@ def make_pipeline(pipeline_cls, model_dir: Path, transformer_path: Path, lora_pa
     runs (`skip_stage_2`), reading a ~1 GB weight into memory that then sits
     beside the DiT for the whole render. Pre-seeding the slot makes `load()`
     skip it; nothing under `skip_stage_2` dereferences the upsampler.
+
+    The adapters are applied at inference rather than merged and re-quantized
+    (#12262): `install_pipeline_adapters` replaces this instance's `_fuse_loras`,
+    and what each adapter received lands in `LORA_REPORT`.
     """
     class PackLayoutPipeline(pipeline_cls):
         def load(self):
@@ -207,10 +221,15 @@ def make_pipeline(pipeline_cls, model_dir: Path, transformer_path: Path, lora_pa
                 self.upsampler = _UNUSED_UPSAMPLER
             super().load()
 
-    return PackLayoutPipeline(model_dir=str(model_dir), lora_paths=list(lora_paths))
+    pipe = PackLayoutPipeline(model_dir=str(model_dir), lora_paths=list(lora_paths))
+    install_pipeline_adapters(pipe, [], report=LORA_REPORT, status=lambda message: log(f"STATUS:{message}"), ic=True)
+    return pipe
 
 
 _UNUSED_UPSAMPLER = object()
+
+# What each adapter received, emitted as LORASTRATEGY: after the render.
+LORA_REPORT = AdapterReport()
 
 
 def transformer_weight_keys(transformer_path: Path) -> "set[str]":
@@ -235,17 +254,18 @@ def transformer_weight_keys(transformer_path: Path) -> "set[str]":
     }
 
 
-def assert_adapter_fuses(adapter_path: str, model_keys, rename) -> int:
-    """Refuse an adapter whose tensors address none of the transformer's weights.
+def assert_adapter_targets_resolve(adapter_path: str, model_keys, rename) -> int:
+    """Refuse an adapter with any tensor pair that addresses no transformer weight.
 
     This is the failure #6512 calls out: `apply_loras` reports nothing when a
-    key does not match — every delta is simply absent, the fusion is a silent
-    no-op, and the render is the un-adapted base model dressed as an upscale.
-    Only headers are read, so the check costs no tensor I/O and runs BEFORE the
+    key does not match — the delta is simply absent, and an adapter that misses
+    every key renders the un-adapted base model dressed as an upscale. The
+    runtime attach (#12262) refuses ANY unplaceable target, so this header-only
+    pre-check holds the same line and fails in milliseconds, BEFORE the
     pipeline loads anything.
 
-    Returns the number of weights the adapter will actually fuse into, so the
-    render records real coverage instead of "it loaded".
+    Returns the number of weights the adapter applies to, so the render records
+    real coverage instead of "it loaded".
     """
     header = read_safetensors_header(adapter_path)
     if not header:
@@ -258,13 +278,27 @@ def assert_adapter_fuses(adapter_path: str, model_keys, rename) -> int:
             "Could not read the LTX-2.5 transformer's weight names, so there is no way to tell whether "
             "the upscale adapter would fuse into anything. Repair the model in Video Gen."
         )
-    renamed = [rename(name) for name in header if name != "__metadata__"]
-    matched = lora_target_keys(name for name in renamed if name) & set(model_keys)
+    renamed = [name for name in (rename(raw) for raw in header if raw != "__metadata__") if name]
+    targets = lora_target_keys(renamed)
+    matched = targets & set(model_keys)
     if not matched:
         raise SystemExit(
-            "The upscale adapter's tensors do not address any weight in this transformer, so fusing it "
+            "The upscale adapter's tensors do not address any weight in this transformer, so applying it "
             "would be a no-op and the 'upscale' would be an un-adapted render. The adapter and the "
             "LTX-2.5 pack are mismatched — repair both in Video Gen."
+        )
+    half_pairs = {
+        name.rsplit(".", 2)[0] + ".weight"
+        for name in renamed
+        if name.endswith((".lora_A.weight", ".lora_B.weight"))
+    } - targets
+    unplaced = sorted((targets - matched) | half_pairs)
+    if unplaced:
+        shown = ", ".join(unplaced[:3]) + (f" (+{len(unplaced) - 3} more)" if len(unplaced) > 3 else "")
+        raise SystemExit(
+            f"The upscale adapter addresses {len(unplaced)} weight(s) this transformer cannot take ({shown}), "
+            "so part of it would silently not apply. The adapter and the LTX-2.5 pack are mismatched — "
+            "repair both in Video Gen."
         )
     return len(matched)
 
@@ -296,12 +330,12 @@ def main() -> None:
     transformer_path, pack_loras = resolve_transformer_layout(model_dir)
     layout = " + ".join([transformer_path.name, *(Path(path).name for path, _ in pack_loras)])
     log(f"STATUS:Transformer layout: {layout}")
-    fused = assert_adapter_fuses(
+    targets = assert_adapter_targets_resolve(
         args.ic_lora_path,
         transformer_weight_keys(transformer_path),
         LTXV_LORA_COMFY_RENAMING_MAP.apply_to_key,
     )
-    log(f"STATUS:Adapter fuses into {fused} transformer weights")
+    log(f"STATUS:Adapter applies to {targets} transformer weights")
 
     log("STAGE:load-pipeline")
     log(f"STATUS:Loading LTX-2.5 MLX upscale pipeline ({args.width}x{args.height}, {args.num_frames} frames)")
@@ -316,17 +350,21 @@ def main() -> None:
         # output (see `conditioned_stage_request`). No stage-1 step count:
         # `DISTILLED_SIGMAS` IS the distilled schedule (8 steps), and passing a
         # count would truncate it.
-        pipe.generate_and_save(
-            prompt=args.prompt,
-            output_path=str(output),
-            video_conditioning=[(reference, REFERENCE_STRENGTH) for reference in args.ic_reference],
-            height=request_height,
-            width=request_width,
-            num_frames=args.num_frames,
-            frame_rate=args.fps,
-            seed=args.seed,
-            skip_stage_2=True,
-        )
+        try:
+            pipe.generate_and_save(
+                prompt=args.prompt,
+                output_path=str(output),
+                video_conditioning=[(reference, REFERENCE_STRENGTH) for reference in args.ic_reference],
+                height=request_height,
+                width=request_width,
+                num_frames=args.num_frames,
+                frame_rate=args.fps,
+                seed=args.seed,
+                skip_stage_2=True,
+            )
+        finally:
+            release_pipeline_adapters(pipe)
+    LORA_REPORT.emit()
     if not output.is_file():
         raise SystemExit(f"The LTX-2.5 upscale completed but did not write {output}.")
     log(f"STATUS:Upscaled {output.name} ({args.width}x{args.height}, {args.num_frames} frames)")

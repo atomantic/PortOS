@@ -88,6 +88,18 @@ a `<filename>.metadata.json` snapshot of that video's history record, preserving
 its prompt/settings without moving the shared history store. Temporary render
 cleanup still permanently removes temporary files.
 
+Recycling uses facilities the operating system already ships, with no
+third-party package or bundled binary: on macOS each file is trashed in its
+own `osascript` process so Finder keeps a *Put Back* record for every one; on
+Linux files land in the freedesktop trash (`~/.local/share/Trash` or the
+volume's `.Trash-<uid>`) under their original names, where `gio`, `trash-cli`
+and desktop file managers can list and restore them; on Windows the Recycle
+Bin is used through the shell, and a file the shell could not recycle — one
+on a volume without a Recycle Bin (a network share or removable media), one
+larger than that volume's Recycle Bin capacity, or any file when the Recycle
+Bin is disabled for the volume — is refused and left in place rather than
+permanently deleted.
+
 Recycling errors fail the request; there is no permanent-delete fallback.
 History and derived index rows are retired only after the file operation
 confirms the files are gone. Native recycling can partially succeed, so after

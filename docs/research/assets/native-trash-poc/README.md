@@ -8,13 +8,14 @@ removes everything it created, including from the Trash / Recycle Bin.
 
 | File | Platform | Status |
 |------|----------|--------|
-| `mac-poc.mjs` | macOS — `/usr/bin/osascript -l JavaScript` + `NSFileManager.trashItemAtURL` | Executed 2026-10-18 on macOS 26.6 (home volume + RAM-disk volume) |
-| `xdgTrash.mjs` | Linux — proposed PortOS-owned freedesktop Trash 1.0 adapter (`node:fs` only) | Executed 2026-10-18 in Docker (Debian bookworm, GLib 2.74, trash-cli 0.17) |
+| `mac-poc.mjs` | macOS — `/usr/bin/osascript -l JavaScript` + `NSFileManager.trashItemAtURL`; runs the production `MACOS_TRASH_SCRIPT` | Executed 2026-10-18 on macOS 26.6 (home volume + RAM-disk volume); re-run 2026-10-19 on macOS 27 against `server/lib/nativeTrash.js` (#12246) |
+| `xdgTrash.mjs` | Linux — re-exports the production adapter `server/lib/nativeTrashXdg.js` (freedesktop Trash 1.0, `node:fs` only) | Executed 2026-10-18 in Docker (Debian bookworm, GLib 2.74, trash-cli 0.17) as the proposed adapter, since shipped unchanged (#12246) |
 | `linux-poc.mjs`, `linux-docker-run.sh` | Linux harness: home trash, `$topdir/.Trash-$uid`, sticky `$topdir/.Trash/$uid`, refusal, `gio trash` / `trash-cli` interop | Executed with the adapter above |
-| `windows-poc.mjs` | Windows — Windows PowerShell 5.1 + shell32 `SHFileOperationW` (`FOF_ALLOWUNDO`) | **Not executed** — no Windows host; exits non-zero unless every acceptance check passes, including the two operator-supplied refusal scenarios |
+| `windows-poc.mjs` | Windows — Windows PowerShell 5.1 + shell32 `SHFileOperationW` (`FOF_ALLOWUNDO`); runs the production `WINDOWS_TRASH_SCRIPT` | Executed 2026-10-19 on a GitHub `windows-latest` runner (Windows PowerShell 5.1, Node 22) against `server/lib/nativeTrash.js`: `PASS` on all six checks, with the no-bin volume supplied as a mapped loopback share and the over-capacity file against a pinned 10 MB `MaxCapacity` (#12246). Exits non-zero unless every acceptance check passes, including the two operator-supplied refusal scenarios |
 
 These are investigation tools, not product code: nothing under `server/` imports
-them, and the implementation plan in the ADR owns the production versions.
+them. They import the production scripts and adapter from `server/lib/` so a
+re-run proves what ships, not a copy.
 
 The Windows CI job also runs `server/lib/nativeTrash.smoke.test.js` against the
 runner's real Recycle Bin (opt-in via `PORTOS_NATIVE_TRASH_SMOKE=1`, set only on the
