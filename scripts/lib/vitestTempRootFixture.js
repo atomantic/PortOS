@@ -107,6 +107,7 @@ it('controlled sibling failure', async ({ signal }) => {
 }
 
 const WATCH_READY_MS = 60000;
+const FIXTURE_RUN_CEILING_MS = 120000;
 
 function killProcessTree(child) {
   if (!child.pid || child.exitCode !== null) return;
@@ -119,6 +120,39 @@ function killProcessTree(child) {
   } catch {
     child.kill('SIGKILL');
   }
+}
+
+/**
+ * Run a fixture to completion. The only clock is one generous ceiling — a cold
+ * import graph on a loaded host can take over a minute, so `createVitestTempFixture`'s
+ * fixed `timeout` (kept for spawnSync callers) is dropped. Resolves like spawnSync's
+ * result; `error` is set only when the ceiling is reached, after the whole detached
+ * process group is killed.
+ */
+export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RUN_CEILING_MS) {
+  const { timeout: _bounded, ...spawnOptions } = options;
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, {
+      ...spawnOptions,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let error;
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      error = new Error(`fixture run exceeded ${ceilingMs}ms`);
+      killProcessTree(child);
+    }, ceilingMs);
+    child.once('error', (spawnError) => { error = spawnError; });
+    child.once('close', (status) => {
+      clearTimeout(timer);
+      killProcessTree(child); // reap any worker the run left in its group
+      resolve({ status, stdout, stderr, error });
+    });
+  });
 }
 
 /**
