@@ -35,7 +35,7 @@ import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfac
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
 import {
-  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
+  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, normalizeOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
@@ -77,15 +77,10 @@ const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
 const DEFAULT_CONFIG = {
   // Ollama uses OLLAMA_HOST (host:port, no scheme) by convention; also accept
   // an explicit OLLAMA_URL. Normalize to a scheme + no trailing slash + no /v1.
-  baseUrl: normalizeBaseUrl(managedOllamaBaseUrl()),
+  baseUrl: normalizeOllamaBaseUrl(managedOllamaBaseUrl()),
   timeout: DEFAULT_REQUEST_TIMEOUT_MS
 }
 
-function normalizeBaseUrl(raw) {
-  let url = String(raw || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '')
-  if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`
-  return url || 'http://localhost:11434'
-}
 
 let config = { ...DEFAULT_CONFIG }
 let isAvailable = null
@@ -352,7 +347,7 @@ async function readServiceStatus() {
 
 async function ollamaRequestAt(baseUrl, endpoint, options = {}) {
   const { timeout, headers, ...rest } = options
-  const response = await fetchWithTimeout(`${normalizeBaseUrl(baseUrl)}${endpoint}`, {
+  const response = await fetchWithTimeout(`${normalizeOllamaBaseUrl(baseUrl)}${endpoint}`, {
     ...rest,
     headers: { 'Content-Type': 'application/json', ...headers }
   }, timeout ?? config.timeout)

@@ -8,6 +8,7 @@
 
 import { getProviderById } from '../providers.js';
 import { DEFAULT_VOICE_BACKEND } from './config.js';
+import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 
@@ -18,10 +19,8 @@ const LM_STUDIO_API_BASE = () => normalizeOpenAiBaseUrl(process.env.LM_STUDIO_UR
 // Ollama's OpenAI-compatible surface. `OLLAMA_HOST` is conventionally a BARE
 // `host:port` with no scheme (that is how .env.example documents it), so this
 // must go through the shared normalizer rather than string-concatenating
-// `/v1` onto it — `localhost:11434/v1` is not a fetchable URL.
-const OLLAMA_API_BASE = () => normalizeOpenAiBaseUrl(
-  process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434'
-);
+// `/v1` onto it — a bare host:port plus /v1 is not a fetchable URL.
+const OLLAMA_API_BASE = () => normalizeOpenAiBaseUrl(managedOllamaBaseUrl());
 
 // Last-resort endpoints when the configured provider resolves to nothing
 // usable. Keyed by the built-in local backends so the fallback follows
