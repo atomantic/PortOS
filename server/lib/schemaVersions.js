@@ -696,7 +696,23 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would collapse the mode to footage and discard the authored scene.
   // v21 adds compressed lyric timing warnings (`lyricCues[].suspect`). Older
   // normalizers drop the warning on edits. Absent remains legacy; no backfill.
-  musicVideoProjects: 21,
+  // v22 = stored shape added since v21 that a v21 build rebuilds as an explicit
+  // object (or copies by an explicit field list) and so drops on its next save;
+  // the whole-record LWW merge then returns that loss to the upgraded peer as
+  // the newer record. Covered: the title card's end-credits showing
+  // (`titleCard.outro`/`outroStartSec`/`outroEndSec`); `statsOutro`'s custom
+  // `title`/`subtitle`/`hidden` lines; catalog links on creative-setup subjects
+  // (`concept.subjects[].ingredientId`/`localOnly`, which a v21 strict subject
+  // schema also rejects with a 400); the `video:runway` automation tool id
+  // (`normalizeMusicVideoAutomation` filters unknown ids); and the per-shot
+  // fields a v21 re-plan (`replaceScenes`) or split (`splitScene`) discards:
+  // `endImageId`/`endFramePrompt` (style-break end frame, take kind `endImage`,
+  // which a v21 take selection files under a bogus slot), `frameFit`, `speedFps`,
+  // `offsetFrames`, `reverse`, `holdLastFrame`, `filmLook`, `transitionIn`/
+  // `transitionOut`, `glitches`, `cutEffect`, `imageEffect`/`imageEffectSec`,
+  // `stillMove` and `performanceStyle`. Optional fields on the same layout; no
+  // migration or backfill. A field added to these normalizers later needs v23.
+  musicVideoProjects: 22,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
