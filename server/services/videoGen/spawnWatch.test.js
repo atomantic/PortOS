@@ -85,8 +85,8 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     mocks.rm.mockResolvedValue();
     mocks.optimize.mockResolvedValue();
     mocks.thumbnail.mockResolvedValue('render-thumb.jpg');
-    mocks.watch.mockReturnValue({ close: mocks.closeWatcher });
-    child = Object.assign(new EventEmitter(), {
+    mocks.watch.mockReturnValue(Object.assign(new EventEmitter(), { close: mocks.closeWatcher }));
+    child =Object.assign(new EventEmitter(), {
       pid: 101,
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
@@ -195,6 +195,18 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.watch).not.toHaveBeenCalled();
     expect(mocks.release).not.toHaveBeenCalled();
+  });
+
+  it('survives a preview watcher error such as the Windows EPERM raised when the preview dir is removed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await spawnAndWatchVideo(params);
+
+    // An EventEmitter with no 'error' listener throws on emit — the uncaught
+    // exception that took the server down.
+    const error = Object.assign(new Error('EPERM: operation not permitted, watch'), { code: 'EPERM' });
+    expect(() => mocks.watch.mock.results[0].value.emit('error', error)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Video preview watcher error'));
+    warn.mockRestore();
   });
 
   it('awaits claim release before completing so a completion subscriber can start the next render', async () => {

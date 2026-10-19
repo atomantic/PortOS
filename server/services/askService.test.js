@@ -697,7 +697,9 @@ describe('runAsk', () => {
     }
 
     const [, args] = spawn.mock.calls.at(-1);
-    expect(args[0]).toBe('run');
+    // On Windows a `.cmd` shim on PATH is wrapped as `cmd.exe /c <shim> …`, so
+    // the provider's own argv starts after that two-token prefix.
+    expect(args.at(args[0] === '/c' ? 2 : 0)).toBe('run');
     expect(args[args.indexOf('--model') + 1]).toBe('ollama/qwen2.5:7b');
   });
 

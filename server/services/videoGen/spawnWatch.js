@@ -166,6 +166,11 @@ export async function spawnAndWatchVideo({
     previewWatcher = fsWatch(stepwiseDir, (event) => {
       if (event === 'rename' || event === 'change') void processLatestPreview();
     });
+    // Windows raises EPERM here when the watched dir is deleted (job teardown);
+    // with no listener that is an uncaught exception and the server exits.
+    previewWatcher.on?.('error', (err) => {
+      console.warn(`⚠️ Video preview watcher error [${jobId.slice(0, 8)}]: ${err?.message}`);
+    });
   } catch { /* preview is best-effort; the final video remains authoritative */ }
 
   // Every file this render was asked to write, in the order the runner emits
