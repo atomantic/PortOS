@@ -1396,6 +1396,15 @@ async function reconcileLiveFileRestore(subdirFilter) {
         const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
         await reconcileMediaAssets({ rebuild: true });
       } }] : []),
+    // Migration 359 converts this plan once, at boot, so a plan restored from a
+    // pre-359 snapshot would otherwise stay legacy and unrunnable: a folder
+    // restore keeps the live ledger (359 never re-runs), and a full restore's
+    // ledger only re-runs it on the next boot.
+    ...(!subdirFilter || subdirFilter === 'cos' || subdirFilter === 'cos/quota-burn.json'
+      ? [{ label: 'quota-burn plan conversion', run: async () => {
+        const { reconcileRestoredQuotaBurnPlan } = await import('./quotaBurnConversion.js');
+        await reconcileRestoredQuotaBurnPlan();
+      } }] : []),
   ];
   const results = await Promise.allSettled(
     refreshes.map(({ run }) => Promise.resolve().then(run)),
@@ -1693,6 +1702,10 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
   const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter);
+  // A full restore installs the snapshot's ledger too, so the next boot re-runs
+  // whatever it lacks; only a folder restore can leave restored files behind
+  // migrations the live ledger already records.
+  const ledgerGap = subdirFilter ? await migrationLedgerGap(srcDir) : undefined;
 
   // Restore must compare destination bytes even when size and mtime match.
   // Rsync's default quick-check would otherwise report a successful no-op for
@@ -1745,7 +1758,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
-    return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+    return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
   }
 
   const scope = subdirFilter;
@@ -1753,7 +1766,29 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
     subdirFilter,
     transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
   }));
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
+}
+
+const MIGRATION_LEDGER_FILE = 'migrations.applied.json';
+
+async function readMigrationLedger(path) {
+  const { ok, value } = await readJSONFileStrict(path, null, { logError: false });
+  return ok && Array.isArray(value) ? value.filter(name => typeof name === 'string') : null;
+}
+
+/**
+ * Migrations the live install has applied that the snapshot's ledger lacks:
+ * files a folder restore installs from that snapshot may predate them, and no
+ * runner revisits a migration the live ledger already records. `null` means
+ * unknown — the snapshot (or the live install) has no readable ledger.
+ */
+async function migrationLedgerGap(srcDir) {
+  const snapshotLedger = await readMigrationLedger(join(srcDir, MIGRATION_LEDGER_FILE));
+  const liveLedger = snapshotLedger && await readMigrationLedger(join(PATHS.data, MIGRATION_LEDGER_FILE));
+  if (!snapshotLedger || !liveLedger) return null;
+  const recorded = new Set(snapshotLedger);
+  const names = liveLedger.filter(name => !recorded.has(name));
+  return { count: names.length, names };
 }
 
 const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'];

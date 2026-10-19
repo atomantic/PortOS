@@ -208,6 +208,14 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
               Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.
             </p>
           )}
+          {preview.ledgerGap?.count > 0 && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                This snapshot predates {pluralize(preview.ledgerGap.count, 'data migration')} this install has applied ({preview.ledgerGap.names.join(', ')}). A folder restore keeps this install&apos;s migration record, so restored files may stay in their older format. A full restore (leave the folder blank) re-runs the missing migrations on the next start.
+              </span>
+            </p>
+          )}
           <p className="text-xs text-gray-500 mb-1">
             {preview.changedFiles?.length ?? 0} file(s) would change:
           </p>
