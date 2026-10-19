@@ -15,6 +15,7 @@
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
+import { isCredentialEnvVarName, isNonCredentialEnvVarName } from '../../../server/lib/credentialEnvVars.js';
 import { isPrivateNetworkEndpoint } from './providerEndpoints.js';
 import { gatewayForProvider, isGatewayBackedProvider } from './providerGateways.js';
 import { isApiProvider, isCodexSubscriptionProvider, isProcessProvider } from './providerTypes.js';
@@ -144,17 +145,9 @@ export const providerRuntimeKey = (provider) => {
   return runnerCommandBaseName(command.trim());
 };
 
-// Environment variables whose names are conventionally credentials. The
-// explicit secretEnvVars list remains the primary source, but it is a masking
-// list rather than a credential schema — providers may mark optional values
-// such as AWS_PROFILE secret too. Filter both sources so only actual credential
-// names participate in readiness. The explicit list can still name a custom
-// credential that does not follow this convention (for example MY_LLM_KEY).
-const CREDENTIAL_ENV_VAR_RE = /(?:^|_)(?:API_KEY|APIKEY|AUTH|ACCESS_KEY|ACCESS_TOKEN|BEARER|CLIENT_SECRET|CREDENTIALS?|KEY|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:_|$)/i;
-
-const NON_CREDENTIAL_ENV_VAR_RE = /(?:^|_)(?:BASE_URL|CONFIG|CONFIG_CONTENT|ENDPOINT|HOST|MODEL|MODE|PATH|PORT|PROFILE|REGION)(?:_|$)/i;
-
-const NON_CREDENTIAL_ENV_VAR_NAMES = new Set(['CLAUDE_CODE_USE_BEDROCK']);
+// The name classifier lives in server/lib (it also drives response masking).
+// The explicit secretEnvVars list can still name a custom credential that does
+// not follow the convention (for example MY_LLM_KEY).
 
 const providerHasStoredKey = (provider) =>
   provider?.hasApiKey === true || Boolean(provider?.apiKey);
@@ -166,9 +159,8 @@ const credentialEnvVars = (provider) => {
   const explicit = new Set(secretEnvVars.filter((name) => typeof name === 'string' && name !== ''));
   const names = [...secretEnvVars, ...Object.keys(envVars)];
   return [...new Set(names.filter((name) => typeof name === 'string'
-    && !NON_CREDENTIAL_ENV_VAR_NAMES.has(name)
-    && !NON_CREDENTIAL_ENV_VAR_RE.test(name)
-    && (explicit.has(name) || CREDENTIAL_ENV_VAR_RE.test(name))))];
+    && !isNonCredentialEnvVarName(name)
+    && (explicit.has(name) || isCredentialEnvVarName(name))))];
 };
 
 /**
