@@ -415,6 +415,27 @@ describe('live CoS restore boundary', () => {
     expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Partial restore');
   });
 
+  // A pre-#6182 snapshot keeps its config in state.json and ships no
+  // config.json, so the live config.json is newer than the restore point.
+  it.each([
+    { snapshotCarriesConfig: false, restoredConfig: null, expected: 7, parked: true },
+    { snapshotCarriesConfig: true, restoredConfig: { maxConcurrentAgents: 5 }, expected: 5, parked: false },
+  ])('restores the snapshot config over a newer config.json: %j', async ({ snapshotCarriesConfig, restoredConfig, expected, parked }) => {
+    writeConfig({ maxConcurrentAgents: 3 });
+    writeState({ agents: {} });
+    const store = await freshModule();
+    await store.loadState();
+    await store.withLiveCosRestore(async () => {
+      if (restoredConfig) writeConfig(restoredConfig);
+      writeState({ agents: {}, config: { maxConcurrentAgents: 7 } });
+    }, { snapshotCarriesConfig });
+    expect((await store.getConfig()).maxConcurrentAgents).toBe(expected);
+    expect(readJson(CONFIG_PATH).maxConcurrentAgents).toBe(expected);
+    const aside = readdirSync(COS_DIR).filter(f => f.startsWith('config.pre-restore-'));
+    expect(aside).toHaveLength(parked ? 1 : 0);
+    if (parked) expect(readJson(join(COS_DIR, aside[0]))).toEqual({ maxConcurrentAgents: 3 });
+  });
+
   it.each([
     { running: true, agents: {} },
     { agents: { example: { status: 'running' } } },

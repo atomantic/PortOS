@@ -3428,6 +3428,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json', 'cos/agents', 'cos/agents/', 'cos/agents/index.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
       expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
+      // This snapshot has no cos/config.json, like one taken before the #6182 split.
+      expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotCarriesConfig: false });
     });
     it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: true, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
       await runRestore('/dest', 'snap-1', options);

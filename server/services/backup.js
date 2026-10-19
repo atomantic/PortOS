@@ -1748,7 +1748,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   }
 
   const scope = subdirFilter;
-  const changedFiles = await withLiveFileRestoreOwners(scope, () => transferAndReconcileLiveFiles({
+  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
     subdirFilter,
     transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
   }));
@@ -1762,7 +1762,8 @@ const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/age
  * acquisition order, and each owner is released in reverse after everything
  * inside it (transfer plus partial-failure reconciliation) has settled.
  * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
- * `hold` acquires the owner, runs `inner`, and releases on every exit. Domain
+ * `hold(inner, { srcDir })` acquires the owner, runs `inner`, and releases on
+ * every exit; `srcDir` is the verified snapshot's data directory. Domain
  * modules are imported only once every outer owner is held.
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
@@ -1806,9 +1807,14 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
     name: 'CoS config and runtime',
     appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
-    hold: async (inner) => {
+    hold: async (inner, { srcDir }) => {
+      // A pre-split snapshot (#6182) has no config.json; its config is in state.json.
+      const snapshotCarriesConfig = await stat(join(srcDir, 'cos', 'config.json')).then(
+        info => info.isFile(),
+        error => { if (error.code === 'ENOENT') return false; throw error; },
+      );
       const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(inner);
+      return withLiveCosRestore(inner, { snapshotCarriesConfig });
     },
   },
   {
@@ -1830,9 +1836,9 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
 ]);
 
 /** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
-function withLiveFileRestoreOwners(scope, operation) {
+function withLiveFileRestoreOwners(scope, srcDir, operation) {
   const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
-    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner) : inner),
+    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir }) : inner),
     operation,
   );
   return nested();
