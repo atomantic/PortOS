@@ -67,12 +67,13 @@ async function ensureItemsSorted() {
 // ─── RSS/Atom Parser ────────────────────────────────────────────────────────
 
 /**
- * Extract text content from an XML tag (non-greedy, handles CDATA).
+ * Extract text content from an XML tag (first occurrence, handles CDATA).
+ *
+ * Index scanning rather than a regex: the old `\s*(?:CDATA)?([\s\S]*?)\s*</tag>`
+ * pattern backtracked catastrophically when a fetched feed opened a tag and
+ * never closed it (a 2 KB `<title>` plus spaces took 13 s), and feeds refresh
+ * on a schedule from servers PortOS does not control.
  */
-// Index scanning rather than a regex: the old `\s*(?:CDATA)?([\s\S]*?)\s*</tag>`
-// pattern backtracked catastrophically when a fetched feed opened a tag and
-// never closed it (a 2 KB `<title>` plus spaces took 13 s), and feeds refresh
-// on a schedule from servers PortOS does not control.
 const extractTag = (xml, tag) => {
   const lower = xml.toLowerCase();
   const open = `<${tag.toLowerCase()}`;
