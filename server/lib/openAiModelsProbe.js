@@ -71,7 +71,14 @@ function shortFailureReason(err) {
 export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '', headers = {} } = {}) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/models`;
   const merged = { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), ...headers };
-  const init = { method: 'GET', ...(Object.keys(merged).length > 0 ? { headers: merged } : {}) };
+  // A redirect would forward custom credential headers (undici only strips
+  // `Authorization` cross-origin), so a keyed probe fails instead of following one.
+  const carriesKey = Object.keys(merged).some((name) => /^(authorization|x-api-key)$/i.test(name));
+  const init = {
+    method: 'GET',
+    ...(Object.keys(merged).length > 0 ? { headers: merged } : {}),
+    ...(carriesKey ? { redirect: 'error' } : {}),
+  };
   const res = await fetchWithTimeout(url, init, timeoutMs)
     // undici reports every network failure as a bare `TypeError: fetch failed`;
     // the real reason (ECONNREFUSED vs. ETIMEDOUT — "nothing is listening" vs.

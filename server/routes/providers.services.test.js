@@ -287,6 +287,18 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     expect(store.saveConnectionSettings.mock.calls[0][0].catalog.error).not.toContain(ZEN_KEY);
   });
 
+  it('sends no request carrying the key to a base URL the endpoint guard refuses', async () => {
+    const blocked = graphFixture();
+    blocked.connections[0].transports.openai.baseUrl = 'https://untrusted.example.com/v1';
+    store.readGraph.mockResolvedValue(blocked);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app()).post('/api/providers/services/opencode-zen/refresh-catalog');
+    expect(res.status).toBe(200);
+    expect(probe).not.toHaveBeenCalled();
+    expect(res.body.service.catalog).toMatchObject({ state: 'failed', models: ['old-free'] });
+    expect(res.body.service.catalog.error).toContain('Endpoint blocked');
+  });
+
   it('records a successful empty answer as known-and-empty', async () => {
     probe.mockResolvedValue({ reachable: true, models: [], contextWindows: {}, error: null });
     const res = await request(app()).post('/api/providers/services/opencode-zen/refresh-catalog');

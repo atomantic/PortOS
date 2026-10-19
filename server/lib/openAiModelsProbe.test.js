@@ -22,6 +22,14 @@ describe('probeOpenAiModels', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8080/v1/models', { method: 'GET' }, 1234);
   });
 
+  it('refuses to follow redirects whenever a credential header is attached, and only then', async () => {
+    const fetchMock = mockFetch(async () => jsonResponse({ data: [] }));
+    await probeOpenAiModels('https://api.example.com/v1', { apiKey: 'example-key' });
+    await probeOpenAiModels('https://api.example.com/v1', { headers: { 'x-api-key': 'example-key' } });
+    await probeOpenAiModels('http://127.0.0.1:8080/v1');
+    expect(fetchMock.mock.calls.map(([, init]) => init.redirect)).toEqual(['error', 'error', undefined]);
+  });
+
   it('reads both the OpenAI `data` shape and a bare `models` array', async () => {
     mockFetch(async () => jsonResponse({ data: [{ id: 'dflash' }, { name: 'qwen' }, 'bare-string', { id: '' }] }));
     await expect(probeOpenAiModels('http://x/v1')).resolves.toMatchObject({
@@ -131,7 +139,7 @@ it('attaches a Bearer header only when a key is supplied', async () => {
     await probeOpenAiModels('http://127.0.0.1:18020/v1', { timeoutMs: 500, apiKey: 'vllm-key' });
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:18020/v1/models',
-      { method: 'GET', headers: { Authorization: 'Bearer vllm-key' } },
+      { method: 'GET', headers: { Authorization: 'Bearer vllm-key' }, redirect: 'error' },
       500,
     );
 
