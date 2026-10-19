@@ -19,9 +19,11 @@ const presets = RESOLUTIONS.filter((r) => !r.compatible);
 const fieldClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white';
 
 /** The parent keys this panel by board id, keeping pending requests scoped. */
-export default function MoodBoardGeneratePanel({ board, disabled = false }) {
+export default function MoodBoardGeneratePanel({ board, disabled = false, embedded = false }) {
   const mounted = useMounted();
-  const [open, setOpen] = useState(false);
+  const [expanded, setOpen] = useState(false);
+  // Embedded in the board tool rail, the tool tab already names it.
+  const open = embedded || expanded;
   const [direction, setDirection] = useState('');
   const [count, setCount] = useState(1);
   const [size, setSize] = useState({ width: 1024, height: 576 });
@@ -108,13 +110,13 @@ export default function MoodBoardGeneratePanel({ board, disabled = false }) {
 
   return (
     <section className="min-w-0 bg-port-card border border-port-border rounded-md p-3 space-y-3">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+      {!embedded && <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
         className="flex w-full min-h-[44px] items-center gap-2 text-left text-sm font-medium text-white">
         <Sparkles className="w-4 h-4 shrink-0 text-port-accent" aria-hidden="true" />
         Generate more
-      </button>
+      </button>}
       {open && <div className="min-w-0 space-y-3">
-        <p className="text-xs text-gray-400">Create new images from this board’s saved analyses, prompts, captions and notes. The prompt writer receives text, not image pixels. Use Analyze board above for references that need visual descriptions. Existing references stay in place.</p>
+        <p className="text-xs text-gray-400">Create new images from this board’s saved analyses, prompts, captions and notes. The prompt writer receives text, not image pixels. Use Analyze in the Style tool for references that need visual descriptions. Existing references stay in place.</p>
         <div>
           <p className="text-xs text-gray-400 mb-1">Prompt-writing LLM</p>
           <ProviderModelSelector providers={providers.providers}

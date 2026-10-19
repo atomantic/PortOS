@@ -97,7 +97,7 @@ describe('MoodBoardStylePanel', () => {
   it('composes from saved analyses without running prompt-from-media again', async () => {
     const onBoardChange = vi.fn();
     render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={onBoardChange} />);
-    expect(screen.queryByRole('button', { name: 'Analyze board' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Analyze/ })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Compose board style' }));
     await waitFor(() => expect(mockCompose).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true }));
     expect(mockStart).not.toHaveBeenCalled();
@@ -110,7 +110,7 @@ describe('MoodBoardStylePanel', () => {
     const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
     render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Compose board style' })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Analyze board' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Analyze 1 new' }));
     expect(mockStart).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true });
     await act(async () => {
       socketHandlers.get('mood-board:analyze')({ boardId: 'mb-1', status: 'running', phase: 'analyzing', total: 4, done: 1 });

@@ -17,7 +17,9 @@ export default function MoodBoardCollagePanel({ board, onBoardChange }) {
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState(null);
 
-  if (!hasVisual) return null;
+  if (!hasVisual) {
+    return <p className="text-sm text-gray-400 bg-port-card border border-port-border rounded-md p-3">Pin an image or video to build a collage.</p>;
+  }
   const shownSrc = result?.url || moodBoardCollageSrc(board);
 
   const handleBuild = async () => {
