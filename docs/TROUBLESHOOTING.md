@@ -518,7 +518,9 @@ The split never overwrites a record directory that already exists. If a later Po
 
 **Symptom**: `npm run migrations` or server boot exits with `Another migration run (pid N) holds …/data/migrations.lock`.
 
-Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `pm2 stop portos`) and retry. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it on its own once the recorded pid is gone or the lock is over 30 minutes old, so only remove `data/migrations.lock` by hand when you are certain no migration runner is still alive.
+Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `pm2 stop portos`) and retry. A live holder never expires, even during a long upgrade. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it once the recorded pid is gone. An acquisition with a missing or malformed owner can be reclaimed after 30 minutes; other owner-read errors refuse recovery.
+
+Release and stale recovery serialize through `data/migrations.lock/.transition`. If a process dies during that brief transition, the lock stays closed rather than risking duplicate migrations. Stop all migration runners before removing `data/migrations.lock` by hand, then retry. A crash after atomic retirement can also leave a `data/migrations.lock.retired-*` directory; it is no longer an active lock and can be removed once runners have stopped.
 
 ### Lost App Registrations
 
