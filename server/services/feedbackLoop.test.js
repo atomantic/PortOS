@@ -11,6 +11,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 vi.mock('./digital-twin.js', () => ({ digitalTwinEvents: { emit: vi.fn() } }));
+vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 
 const FILE = join(tempRoot, 'digital-twin', 'feedback.json');
 const entry = (id, createdAt, validation = 'sounds_like_me') => ({ id, validation, createdAt, contentType: 'enrichment', documentsUsed: [] });
@@ -32,7 +33,7 @@ beforeEach(async () => {
 });
 afterAll(cleanup);
 
-const merge = (remote) => feedback.applyFeedbackMerge((local) => sync.mergeFeedback(local, remote));
+const merge = async (remote) => (await sync.applyDigitalTwinRemote({ feedback: remote })).count > 0;
 
 describe('feedback peer merge vs local submit', () => {
   it('keeps synced entries when a local submit follows a peer merge (stale cache)', async () => {
@@ -54,7 +55,9 @@ describe('feedback peer merge vs local submit', () => {
 
     await merge(b);
     const onA = (await readDisk()).entries.map((e) => e.id).sort();
-    const onB = sync.mergeFeedback(b, a).merged.entries.map((e) => e.id).sort();
+    await writeFile(FILE, JSON.stringify(b));
+    await merge(a);
+    const onB = (await readDisk()).entries.map((e) => e.id).sort();
     expect(onA).toEqual(['a-only', 'b-only', 'shared']);
     expect(onB).toEqual(onA);
   });

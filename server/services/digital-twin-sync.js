@@ -254,7 +254,7 @@ function pickStatus(a, b) {
  * survives on both. Counters never drop below what either side recorded; the
  * weight adjustments follow whichever side recalculated last.
  */
-export function mergeFeedback(local, remote) {
+function mergeFeedback(local, remote) {
   if (!isPlainObject(remote) || !Array.isArray(remote.entries)) return { merged: local, changed: false };
   if (!isPlainObject(local)) return { merged: remote, changed: true };
 
