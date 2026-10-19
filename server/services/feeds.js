@@ -69,11 +69,32 @@ async function ensureItemsSorted() {
 /**
  * Extract text content from an XML tag (non-greedy, handles CDATA).
  */
+// Index scanning rather than a regex: the old `\s*(?:CDATA)?([\s\S]*?)\s*</tag>`
+// pattern backtracked catastrophically when a fetched feed opened a tag and
+// never closed it (a 2 KB `<title>` plus spaces took 13 s), and feeds refresh
+// on a schedule from servers PortOS does not control.
 const extractTag = (xml, tag) => {
-  const re = new RegExp(`<${tag}[^>]*>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</${tag}>`, 'i');
-  const match = xml.match(re);
-  return match ? match[1].trim() : '';
+  const lower = xml.toLowerCase();
+  const open = `<${tag.toLowerCase()}`;
+  const close = `</${tag.toLowerCase()}>`;
+  for (let from = 0; ; ) {
+    const start = lower.indexOf(open, from);
+    if (start === -1) return '';
+    const after = start + open.length;
+    const boundary = xml[after];
+    if (boundary !== undefined && boundary !== '>' && boundary !== '/' && !/\s/.test(boundary)) { from = after; continue; }
+    const gt = xml.indexOf('>', after);
+    if (gt === -1) return '';
+    const end = lower.indexOf(close, gt + 1);
+    if (end === -1) return '';
+    let inner = xml.slice(gt + 1, end).trim();
+    if (inner.startsWith('<![CDATA[')) inner = inner.slice('<![CDATA['.length);
+    if (inner.endsWith(']]>')) inner = inner.slice(0, -']]>'.length);
+    return inner.trim();
+  }
 };
+
+export const __testing = { extractTag };
 
 /**
  * Extract href from an Atom <link> tag.
