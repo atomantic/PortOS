@@ -14,7 +14,8 @@ import { join } from 'node:path';
 import databaseSettings from './databaseSettings.cjs';
 import { parseEnvFile } from './envFile.js';
 import { findFfmpeg } from '../../server/lib/ffmpeg.js';
-import { browserSuiteBlockReason, chromeWithH264, resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
+import { browserSuiteBlockReason, chromeWithH264 } from '../../server/lib/browserSuiteGate.js';
+import { resolveTestChrome } from './testChrome.js';
 
 /** The only database the DB stage may target; `server/lib/db.js` refuses the rest. */
 export const TEST_DATABASE = 'portos_test';

@@ -6,7 +6,7 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { chromium } from 'playwright-core';
-import { resolveTestChrome } from '../../../server/lib/browserSuiteGate.js';
+import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
 
 const chrome = resolveTestChrome();
 

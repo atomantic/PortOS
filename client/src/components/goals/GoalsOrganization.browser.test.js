@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../test/browserFixture.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from '../../test/timeouts.js';
-import { resolveTestChrome } from '../../../../server/lib/browserSuiteGate.js';
+import { resolveTestChrome } from '../../../../scripts/lib/testChrome.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
