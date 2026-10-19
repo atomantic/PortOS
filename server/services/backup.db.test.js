@@ -53,6 +53,7 @@ const { restorePostgres } = await import('./backup.js');
 const owned = ownTestBodies(vitestIt);
 const it = owned.it;
 let fixtureSetup;
+const FIXTURE_SETUP_BUDGET_MS = 60000;
 
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
@@ -130,7 +131,31 @@ describe.skipIf(!ready)('restore older database schema', () => {
   // Prepare the shared snapshot in a hook so setup failures stop dependent
   // cases and the first test's budget measures restore and its assertions.
   // Teardown drains it too: a timed-out hook keeps running like a case does.
-  beforeAll(() => (fixtureSetup = prepareFixture()));
+  // The DB config leaves hookTimeout at Vitest's 10 s default, which the schema
+  // rebuild, two migration runs and pg_dump do not fit on a loaded host.
+  // fixtureSetup stays the real work so teardown drains it even after the
+  // hook has been failed for running over budget.
+  beforeAll(() => {
+    fixtureSetup = prepareFixture();
+    return failWithinBudget(fixtureSetup);
+  }, FIXTURE_SETUP_BUDGET_MS);
+
+  // Fail a little before the hook's own timeout so the message names how long
+  // the fixture actually ran, not only the budget it exceeded.
+  async function failWithinBudget(work) {
+    const started = Date.now();
+    let timer;
+    const overBudget = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(
+        `restore fixture setup still running after ${Date.now() - started}ms (budget ${FIXTURE_SETUP_BUDGET_MS}ms)`,
+      )), FIXTURE_SETUP_BUDGET_MS - 5000);
+    });
+    try {
+      await Promise.race([work, overBudget]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function prepareFixture() {
     await ensureSchema({ force: true });
