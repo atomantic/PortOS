@@ -984,242 +984,272 @@ const validateArguments = (tool, args) => {
   return parsed.data;
 };
 
-const executeAdapter = async (tool, args, context, authority) => {
-  if (tool.adapter.kind.startsWith('sandbox.')) {
-    const delegation = await import('./sandboxDelegation.js');
-    return tool.adapter.kind === 'sandbox.models'
-      ? delegation.describeSandboxDelegation()
-      : delegation.delegateSandbox(args, context);
+// Each handler is `(tool, args, context, authority) => result`. Keep every
+// lazy `import()` inside the handler that needs it: a static import would put
+// that module's subtree in every closure that touches the catalog.
+const runOperation = (operations, operation, fallback, ...params) =>
+  (Object.hasOwn(operations, operation) ? operations[operation] : fallback)(...params);
+
+const runSandboxTool = async (tool, args, context) => {
+  const delegation = await import('./sandboxDelegation.js');
+  return tool.adapter.kind === 'sandbox.models'
+    ? delegation.describeSandboxDelegation()
+    : delegation.delegateSandbox(args, context);
+};
+
+const runReportsTool = async (tool, args, context) => {
+  const audit = await import('./persistentMindProcessAudit.js');
+  const handler = { 'reports.fix': audit.recordProcessAuditFix, 'reports.next': audit.nextProcessAuditBatch, 'reports.read': audit.readProcessAuditExcerpt, 'reports.record': audit.recordProcessAuditOutcome }[tool.adapter.kind];
+  return handler(args, context);
+};
+
+const resolveTargetFamilies = async (targeted, args, authority) => {
+  const recipes = targeted.some((name) => name.startsWith('recipe.'))
+    ? await readPersistentMindRecipeCatalog(authority?.capabilities) : [];
+  const reportAccess = targeted.some(name => name.startsWith('reports.'))
+    ? await import('./persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
+  const catalog = getCosToolCatalog({ scope: 'mind', capabilities: authority?.capabilities, recipes, reportAccess });
+  if (targeted.some((name) => !catalog.tools.some((entry) => entry.name === name
+    && entry.granted && args.families.includes(entry.family)))) {
+    throw new ServerError('Requested tool names must belong to the selected granted families', { status: 403, code: 'TOOL_CAPABILITY_DENIED' });
   }
-  if (tool.adapter.kind.startsWith('reports.')) {
-    const audit = await import('./persistentMindProcessAudit.js');
-    const handler = { 'reports.fix': audit.recordProcessAuditFix, 'reports.next': audit.nextProcessAuditBatch, 'reports.read': audit.readProcessAuditExcerpt, 'reports.record': audit.recordProcessAuditOutcome }[tool.adapter.kind];
-    return handler(args, context);
-  }
-  if (tool.adapter.kind === 'recipe-management') return executeRecipeManagement(tool, args, context);
-  if (tool.adapter.kind === 'recipe') return executeRecipe(tool, args, context, authority);
-  if (tool.adapter.kind === 'tools-activate' || tool.adapter.kind === 'tools-deactivate') {
-    const { loadState, saveState, withStateLock } = await import('./cosState.js');
-    const grants = normalizePersistentMindCapabilities(authority?.capabilities);
-    const targeted = tool.adapter.kind === 'tools-activate' && args.toolNames
-      ? [...new Set(args.toolNames)] : [];
-    let targetFamilies;
-    if (targeted.length) {
-      const recipes = targeted.some((name) => name.startsWith('recipe.'))
-        ? await readPersistentMindRecipeCatalog(authority?.capabilities) : [];
-      const reportAccess = targeted.some(name => name.startsWith('reports.'))
-        ? await import('./persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
-      const catalog = getCosToolCatalog({ scope: 'mind', capabilities: authority?.capabilities, recipes, reportAccess });
-      targetFamilies = Object.fromEntries(catalog.tools.filter((entry) => targeted.includes(entry.name)).map((entry) => [entry.name, entry.family]));
-      if (targeted.some((name) => !catalog.tools.some((entry) => entry.name === name
-        && entry.granted && args.families.includes(entry.family)))) {
-        throw new ServerError('Requested tool names must belong to the selected granted families', { status: 403, code: 'TOOL_CAPABILITY_DENIED' });
-      }
+  return Object.fromEntries(catalog.tools.filter((entry) => targeted.includes(entry.name)).map((entry) => [entry.name, entry.family]));
+};
+
+// tools.activate and tools.deactivate share one lease write, parameterised by kind.
+const toggleToolFamilies = async (tool, args, context, authority) => {
+  const { loadState, saveState, withStateLock } = await import('./cosState.js');
+  const activate = tool.adapter.kind === 'tools-activate';
+  const grants = normalizePersistentMindCapabilities(authority?.capabilities);
+  const targeted = activate && args.toolNames ? [...new Set(args.toolNames)] : [];
+  const targetFamilies = targeted.length ? await resolveTargetFamilies(targeted, args, authority) : undefined;
+  return withStateLock(async () => {
+    const root = await loadState();
+    const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+    const leases = activate
+      ? activatePersistentMindToolActivationFamilies(current.leases, args.families, grants.toolExposureRetentionTurns)
+      : deactivatePersistentMindToolActivationFamilies(current.leases, args.families);
+    root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
+    await saveState(root);
+    return activate
+      ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases),
+        ...(targeted.length ? { requestedToolNames: targeted, targetFamilies } : {}),
+        schemaNote: 'Family activation is budget-limited. Target exact toolNames for the next action; identical reactivation does not change the schema budget.' }
+      : { ok: true, deactivated: args.families || TOOL_ACTIVATION_FAMILIES, families: Object.keys(leases) };
+  });
+};
+
+const runThinkingTool = async (tool, args, context) => {
+  const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
+  return tool.adapter.kind === 'thinking-catalog'
+    ? getPersistentMindThinkingRequestCatalog()
+    : requestPersistentMindThinkingPreset(args, context);
+};
+
+const runLocalContextTool = async (tool, args, context) => {
+  const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('./persistentMindLocalContext.js');
+  return tool.adapter.kind === 'local-context-catalog'
+    ? getPersistentMindLocalContextCatalog()
+    : adjustPersistentMindLocalContext(args, context);
+};
+
+const runVoiceTool = (tool, args, context, authority) => dispatchTool(tool.adapter.legacyName, args, {
+  sideEffects: [], signal: context.signal,
+  // executeCosToolCall already validated this server-owned principal and
+  // the tool's capability. Never promote arguments or voice scope to host authority.
+  hasHostControl: () => ['agent', 'mind'].includes(authority?.scope)
+    || (authority?.scope === 'ui' && authority.authenticated === true),
+});
+
+const runMindIssueTool = async (tool, args) => {
+  const { filePersistentMindIssue, listPersistentMindIssues } = await import('./persistentMindIssueCapability.js');
+  return tool.adapter.kind === 'persistent-mind-issue-list'
+    ? listPersistentMindIssues(args)
+    : filePersistentMindIssue(args);
+};
+
+const chooseMindName = async (tool, args) => {
+  const { choosePersistentMindName } = await import('./persistentMindContext.js');
+  return choosePersistentMindName(args);
+};
+
+const protectMindMemory = async (tool, args) => {
+  const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
+  return protectPersistentMindMemory(args);
+};
+
+const runMindMaintenance = (tool, args, context) => cleanupPersistentMind({
+  ...args,
+  requestedBy: 'mind',
+  preserveTurnId: context.turnId || null,
+  preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
+});
+
+const readDevelopmentMaintenance = async () => {
+  const { readPersistentMindMaintenanceContext } = await import('./persistentMindMaintenanceContext.js');
+  return readPersistentMindMaintenanceContext();
+};
+
+const listUserActionEvents = async (tool, args) => {
+  const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([
+    import('./userActions.js'),
+    import('../lib/secretText.js'),
+  ]);
+  // Refinements do not survive the input schema's JSON-Schema round trip, so
+  // date parseability is enforced here — with field attribution, since the
+  // failure surfaces to the model as this error string.
+  for (const field of ['from', 'to']) {
+    if (args[field] !== undefined && Number.isNaN(new Date(args[field]).getTime())) {
+      throw new ServerError(`Invalid '${field}' for '${tool.name}': must be a parseable date/timestamp`, { status: 400, code: 'TOOL_VALIDATION_ERROR' });
     }
-    return withStateLock(async () => {
-      const root = await loadState();
-      const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
-      const leases = tool.adapter.kind === 'tools-activate'
-        ? activatePersistentMindToolActivationFamilies(current.leases, args.families, grants.toolExposureRetentionTurns)
-        : deactivatePersistentMindToolActivationFamilies(current.leases, args.families);
-      root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
-      await saveState(root);
-      return tool.adapter.kind === 'tools-activate'
-        ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases),
-          ...(targeted.length ? { requestedToolNames: targeted, targetFamilies } : {}),
-          schemaNote: 'Family activation is budget-limited. Target exact toolNames for the next action; identical reactivation does not change the schema budget.' }
-        : { ok: true, deactivated: args.families || TOOL_ACTIVATION_FAMILIES, families: Object.keys(leases) };
-    });
   }
-  if (tool.adapter.kind.startsWith('thinking-')) {
-    const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
-    return tool.adapter.kind === 'thinking-catalog'
-      ? getPersistentMindThinkingRequestCatalog()
-      : requestPersistentMindThinkingPreset(args, context);
-  }
-  if (tool.adapter.kind.startsWith('local-context-')) {
-    const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('./persistentMindLocalContext.js');
-    return tool.adapter.kind === 'local-context-catalog'
-      ? getPersistentMindLocalContextCatalog()
-      : adjustPersistentMindLocalContext(args, context);
-  }
-  if (tool.adapter.kind === 'voice-tool') {
-    return dispatchTool(tool.adapter.legacyName, args, {
-      sideEffects: [], signal: context.signal,
-      // executeCosToolCall already validated this server-owned principal and
-      // the tool's capability. Never promote arguments or voice scope to host authority.
-      hasHostControl: () => ['agent', 'mind'].includes(authority?.scope)
-        || (authority?.scope === 'ui' && authority.authenticated === true),
-    });
-  }
-  if (tool.adapter.kind.startsWith('persistent-mind-issue-')) {
-    const { filePersistentMindIssue, listPersistentMindIssues } = await import('./persistentMindIssueCapability.js');
-    return tool.adapter.kind === 'persistent-mind-issue-list'
-      ? listPersistentMindIssues(args)
-      : filePersistentMindIssue(args);
-  }
-  if (tool.adapter.kind === 'persistent-mind-name') {
-    const { choosePersistentMindName } = await import('./persistentMindContext.js');
-    return choosePersistentMindName(args);
-  }
-  if (tool.adapter.kind === 'persistent-mind-memory-protection') {
-    const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
-    return protectPersistentMindMemory(args);
-  }
-  if (tool.adapter.kind === 'persistent-mind-maintenance') {
-    return cleanupPersistentMind({
-      ...args,
-      requestedBy: 'mind',
-      preserveTurnId: context.turnId || null,
-      preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
-    });
-  }
-  if (tool.adapter.kind === 'development-maintenance') {
-    const { readPersistentMindMaintenanceContext } = await import('./persistentMindMaintenanceContext.js');
-    return readPersistentMindMaintenanceContext();
-  }
-  if (tool.adapter.kind === 'user-actions') {
-    const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([
-      import('./userActions.js'),
-      import('../lib/secretText.js'),
-    ]);
-    // Refinements do not survive the input schema's JSON-Schema round trip, so
-    // date parseability is enforced here — with field attribution, since the
-    // failure surfaces to the model as this error string.
-    for (const field of ['from', 'to']) {
-      if (args[field] !== undefined && Number.isNaN(new Date(args[field]).getTime())) {
-        throw new ServerError(`Invalid '${field}' for '${tool.name}': must be a parseable date/timestamp`, { status: 400, code: 'TOOL_VALIDATION_ERROR' });
-      }
-    }
-    const limit = Math.min(args.limit ?? USER_ACTIONS_QUERY_MAX_RESULTS, USER_ACTIONS_QUERY_MAX_RESULTS);
-    // Fetch one extra row so a full page can honestly report `truncated`.
-    const rows = await listUserActions({ ...args, limit: limit + 1 });
-    return {
-      events: rows.slice(0, limit).map((event) => ({
-        happenedAt: event.happenedAt,
-        type: event.type,
-        actor: event.actor,
-        // Every text projection gets the value-side token scrub — the ledger's
-        // record-time redaction is key-based and cannot catch a credential
-        // pasted into a task description or a settings value.
-        summary: scrubSecretTokens(event.summary),
-        target: event.target ?? null,
-        targetName: event.targetName != null ? scrubSecretTokens(event.targetName) : null,
-        payload: scrubSecretTokensDeep(event.payload ?? {}),
-        // Only the route identity crosses into a prompt — a `{ service, fn }`
-        // source or any filesystem path stays behind.
-        source: {
-          ...(event.source?.route ? { route: event.source.route } : {}),
-          ...(event.source?.method ? { method: event.source.method } : {}),
-        },
-      })),
-      truncated: rows.length > limit,
-    };
-  }
-  if (tool.adapter.kind === 'eidoverse-travel') {
-    if (tool.adapter.operation === 'chat') return (await import('./eidoverseWorld.js')).readEidoverseWorldChat(args.after);
-    const travel = await import('./eidoverseTravel.js');
-    if (tool.adapter.operation === 'destinations') return travel.listEidoverseDestinations();
-    if (tool.adapter.operation === 'visit') return travel.visitEidoversePeer(args);
-    if (tool.adapter.operation === 'visit-chat') return travel.eidoverseVisitChat(args);
-    return travel.leaveEidoversePeer(args);
-  }
-  if (tool.adapter.kind === 'eidoverse-foundations') {
-    // Lazy: the ledger drags the resilience-assay harness and the file store,
-    // and only this one tool pair reaches them — a static import would put that
-    // subtree in every closure that touches the catalog. (The pure lib beside
-    // it is already static, for the tool's input schema.)
-    const ledger = await import('./eidoverseFoundationLedger.js');
-    if (tool.adapter.operation === 'foundations') {
-      const listed = await ledger.listEidoverseFoundations();
-      return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
-    }
-    if (tool.adapter.operation === 'foundation') {
-      // `detailFoundation`, not the list projection: the body is exactly what
-      // a mind needs once it has chosen which foundation to look at, and
-      // exactly what must not ride into every turn that lists them.
-      const record = await ledger.getEidoverseFoundationByRef(args);
-      return { foundation: detailFoundation(record) };
-    }
-    if (tool.adapter.operation === 'adopt') {
-      const { summarizeControllerInstall } = await import('./eidoverseControllerRuntime.js');
-      const result = await ledger.adoptEidoverseFoundation(args, { installedBy: 'mind' });
-      return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
-    }
-    if (tool.adapter.operation === 'record') {
-      const { ensureInstanceId } = await import('./instanceIdentity.js');
-      // `authorKind` is stamped 'mind' server-side rather than trusted from
-      // the call, the same reason `layer` is never caller-supplied: a mind's
-      // own authoring tool must not be able to claim a human's byline.
-      const record = await ledger.recordEidoverseFoundation({ ...args, authorKind: 'mind' }, { originInstanceId: await ensureInstanceId() });
-      return { foundation: summarizeFoundation(record) };
-    }
-    const result = await ledger.promoteEidoverseFoundation(args.id);
-    // Summarized for the same reason the list is, and because the candidate
-    // envelope on a success is a duplicate of the body the mind already wrote.
-    return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
-  }
-  if (tool.adapter.kind === 'eidoverse-observe') {
-    // Lazy for the same reason the foundations and controllers groups are: the
-    // observation shell reaches the world-source collector, the foundation
-    // ledger, and the controller runtime, and only this tool wants all three.
-    const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');
-    return observeEidoverseWorld({ signal: context.signal });
-  }
-  if (tool.adapter.kind === 'eidoverse-creative') {
-    if (tool.adapter.operation === 'place-layout') return { operations: buildDistrictTemplateAugmentOperations(args) };
-    if (tool.adapter.operation === 'draft-foundation') return { foundation: buildDistrictTemplateFoundationDraft(args) };
-    return describeCreativeCatalog();
-  }
-  if (tool.adapter.kind === 'eidoverse-controllers') {
-    // Lazy for the same reason the foundations pair is: the runtime drags the
-    // controller registry, the file store and the event scheduler, and only
-    // this tool group reaches them.
-    const runtime = await import('./eidoverseControllerRuntime.js');
-    if (tool.adapter.operation === 'controllers') {
-      const [{ describeControllerDefinitions }, listed] = await Promise.all([
-        import('./eidoverseControllerRegistry.js'),
-        runtime.listEidoverseControllers(),
-      ]);
-      return {
-        available: await describeControllerDefinitions(),
-        counts: listed.counts,
-        installs: listed.installs.map((install) => summarizeControllerInstall(install)),
-      };
-    }
-    if (tool.adapter.operation === 'inspect-controller') {
-      // The INSPECT `summarizeControllerInstall`'s own header promises
-      // (#7629) — the `controllers` list above stays state-free by design.
-      const install = await runtime.getEidoverseControllerInstall(args.id);
-      if (!install) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${args.id}"`] };
-      return { outcome: 'found', install: summarizeControllerInstall(install, { includeState: true }), reasons: [] };
-    }
-    if (tool.adapter.operation === 'arm-controller') {
-      const armed = await runtime.setEidoverseControllerArmed(args.id, args.armed);
-      return { ...armed, install: armed.install ? summarizeControllerInstall(armed.install) : null };
-    }
-    if (tool.adapter.operation === 'install-controller') {
-      const result = await runtime.installEidoverseController(args, { installedBy: 'mind' });
-      // State included here too, and on inspect-controller: the mind just
-      // authored this config and the initial state is what tells it the
-      // controller understood it. The list projection stays state-free.
-      return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
-    }
-    if (tool.adapter.operation === 'riddle') {
-      const result = await runtime.interactEidoverseRiddleLedger(args, { signal: context.signal });
-      return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
-    }
-    const result = await runtime.retireEidoverseController(args.id);
+  const limit = Math.min(args.limit ?? USER_ACTIONS_QUERY_MAX_RESULTS, USER_ACTIONS_QUERY_MAX_RESULTS);
+  // Fetch one extra row so a full page can honestly report `truncated`.
+  const rows = await listUserActions({ ...args, limit: limit + 1 });
+  return {
+    events: rows.slice(0, limit).map((event) => ({
+      happenedAt: event.happenedAt,
+      type: event.type,
+      actor: event.actor,
+      // Every text projection gets the value-side token scrub — the ledger's
+      // record-time redaction is key-based and cannot catch a credential
+      // pasted into a task description or a settings value.
+      summary: scrubSecretTokens(event.summary),
+      target: event.target ?? null,
+      targetName: event.targetName != null ? scrubSecretTokens(event.targetName) : null,
+      payload: scrubSecretTokensDeep(event.payload ?? {}),
+      // Only the route identity crosses into a prompt — a `{ service, fn }`
+      // source or any filesystem path stays behind.
+      source: {
+        ...(event.source?.route ? { route: event.source.route } : {}),
+        ...(event.source?.method ? { method: event.source.method } : {}),
+      },
+    })),
+    truncated: rows.length > limit,
+  };
+};
+
+const EIDOVERSE_TRAVEL_OPERATIONS = {
+  chat: async (args) => (await import('./eidoverseWorld.js')).readEidoverseWorldChat(args.after),
+  destinations: async () => (await import('./eidoverseTravel.js')).listEidoverseDestinations(),
+  visit: async (args) => (await import('./eidoverseTravel.js')).visitEidoversePeer(args),
+  'visit-chat': async (args) => (await import('./eidoverseTravel.js')).eidoverseVisitChat(args),
+};
+const leaveEidoversePeer = async (args) => (await import('./eidoverseTravel.js')).leaveEidoversePeer(args);
+
+const runEidoverseTravelTool = (tool, args) =>
+  runOperation(EIDOVERSE_TRAVEL_OPERATIONS, tool.adapter.operation, leaveEidoversePeer, args);
+
+const EIDOVERSE_FOUNDATION_OPERATIONS = {
+  foundations: async (ledger) => {
+    const listed = await ledger.listEidoverseFoundations();
+    return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
+  },
+  // `detailFoundation`, not the list projection: the body is exactly what
+  // a mind needs once it has chosen which foundation to look at, and
+  // exactly what must not ride into every turn that lists them.
+  foundation: async (ledger, args) => ({ foundation: detailFoundation(await ledger.getEidoverseFoundationByRef(args)) }),
+  adopt: async (ledger, args) => {
+    const { summarizeControllerInstall } = await import('./eidoverseControllerRuntime.js');
+    const result = await ledger.adoptEidoverseFoundation(args, { installedBy: 'mind' });
     return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
-  }
-  if (tool.adapter.kind === 'eidoverse-world') {
-    const world = await import('./eidoverseWorld.js');
-    if (tool.adapter.operation === 'status') return world.getEidoverseWorldStatus({ compact: true });
-    if (tool.adapter.operation === 'inspect-scene') return world.inspectEidoverseScene(args, { signal: context.signal });
-    if (tool.adapter.operation === 'project') return world.projectEidoverseWorld({ signal: context.signal, compact: true });
-    if (tool.adapter.operation === 'augment') return world.augmentEidoverseWorld(args.operations, { signal: context.signal });
-    return world.sayInEidoverseWorld(args.text, { signal: context.signal });
-  }
+  },
+  record: async (ledger, args) => {
+    const { ensureInstanceId } = await import('./instanceIdentity.js');
+    // `authorKind` is stamped 'mind' server-side rather than trusted from
+    // the call, the same reason `layer` is never caller-supplied: a mind's
+    // own authoring tool must not be able to claim a human's byline.
+    const record = await ledger.recordEidoverseFoundation({ ...args, authorKind: 'mind' }, { originInstanceId: await ensureInstanceId() });
+    return { foundation: summarizeFoundation(record) };
+  },
+};
+const promoteFoundation = async (ledger, args) => {
+  const result = await ledger.promoteEidoverseFoundation(args.id);
+  // Summarized for the same reason the list is, and because the candidate
+  // envelope on a success is a duplicate of the body the mind already wrote.
+  return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
+};
+
+const runEidoverseFoundationsTool = async (tool, args) => {
+  // Lazy: the ledger drags the resilience-assay harness and the file store,
+  // and only this one tool pair reaches them — a static import would put that
+  // subtree in every closure that touches the catalog. (The pure lib beside
+  // it is already static, for the tool's input schema.)
+  const ledger = await import('./eidoverseFoundationLedger.js');
+  return runOperation(EIDOVERSE_FOUNDATION_OPERATIONS, tool.adapter.operation, promoteFoundation, ledger, args);
+};
+
+const observeEidoverse = async (tool, args, context) => {
+  // Lazy for the same reason the foundations and controllers groups are: the
+  // observation shell reaches the world-source collector, the foundation
+  // ledger, and the controller runtime, and only this tool wants all three.
+  const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');
+  return observeEidoverseWorld({ signal: context.signal });
+};
+
+const EIDOVERSE_CREATIVE_OPERATIONS = {
+  'place-layout': (args) => ({ operations: buildDistrictTemplateAugmentOperations(args) }),
+  'draft-foundation': (args) => ({ foundation: buildDistrictTemplateFoundationDraft(args) }),
+};
+
+const runEidoverseCreativeTool = async (tool, args) =>
+  runOperation(EIDOVERSE_CREATIVE_OPERATIONS, tool.adapter.operation, describeCreativeCatalog, args);
+
+const withSummarizedInstall = (result, options) =>
+  ({ ...result, install: result.install ? summarizeControllerInstall(result.install, options) : null });
+
+const EIDOVERSE_CONTROLLER_OPERATIONS = {
+  controllers: async (runtime) => {
+    const [{ describeControllerDefinitions }, listed] = await Promise.all([
+      import('./eidoverseControllerRegistry.js'),
+      runtime.listEidoverseControllers(),
+    ]);
+    return {
+      available: await describeControllerDefinitions(),
+      counts: listed.counts,
+      installs: listed.installs.map((install) => summarizeControllerInstall(install)),
+    };
+  },
+  'inspect-controller': async (runtime, args) => {
+    // The INSPECT `summarizeControllerInstall`'s own header promises
+    // (#7629) — the `controllers` list above stays state-free by design.
+    const install = await runtime.getEidoverseControllerInstall(args.id);
+    if (!install) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${args.id}"`] };
+    return { outcome: 'found', install: summarizeControllerInstall(install, { includeState: true }), reasons: [] };
+  },
+  'arm-controller': async (runtime, args) => withSummarizedInstall(await runtime.setEidoverseControllerArmed(args.id, args.armed)),
+  // State included here too, and on inspect-controller: the mind just
+  // authored this config and the initial state is what tells it the
+  // controller understood it. The list projection stays state-free.
+  'install-controller': async (runtime, args) =>
+    withSummarizedInstall(await runtime.installEidoverseController(args, { installedBy: 'mind' }), { includeState: true }),
+  riddle: async (runtime, args, context) =>
+    withSummarizedInstall(await runtime.interactEidoverseRiddleLedger(args, { signal: context.signal }), { includeState: true }),
+};
+const retireController = async (runtime, args) => withSummarizedInstall(await runtime.retireEidoverseController(args.id));
+
+const runEidoverseControllersTool = async (tool, args, context) => {
+  // Lazy for the same reason the foundations pair is: the runtime drags the
+  // controller registry, the file store and the event scheduler, and only
+  // this tool group reaches them.
+  const runtime = await import('./eidoverseControllerRuntime.js');
+  return runOperation(EIDOVERSE_CONTROLLER_OPERATIONS, tool.adapter.operation, retireController, runtime, args, context);
+};
+
+const EIDOVERSE_WORLD_OPERATIONS = {
+  status: (world) => world.getEidoverseWorldStatus({ compact: true }),
+  'inspect-scene': (world, args, context) => world.inspectEidoverseScene(args, { signal: context.signal }),
+  project: (world, args, context) => world.projectEidoverseWorld({ signal: context.signal, compact: true }),
+  augment: (world, args, context) => world.augmentEidoverseWorld(args.operations, { signal: context.signal }),
+};
+const sayInWorld = (world, args, context) => world.sayInEidoverseWorld(args.text, { signal: context.signal });
+
+const runEidoverseWorldTool = async (tool, args, context) => {
+  const world = await import('./eidoverseWorld.js');
+  return runOperation(EIDOVERSE_WORLD_OPERATIONS, tool.adapter.operation, sayInWorld, world, args, context);
+};
+
+const queueMindTaskRequest = async (tool, args, context) => {
   const [outcome] = await executePersistentMindTaskRequests({
     taskRequests: [args],
     turnId: context.turnId,
@@ -1235,6 +1265,40 @@ const executeAdapter = async (tool, args, context, authority) => {
     ...(outcome?.error ? { error: String(outcome.error).slice(0, 300) } : {}),
   };
 };
+
+const ADAPTER_HANDLERS = {
+  'recipe-management': (tool, args, context) => executeRecipeManagement(tool, args, context),
+  recipe: executeRecipe,
+  'tools-activate': toggleToolFamilies,
+  'tools-deactivate': toggleToolFamilies,
+  'voice-tool': runVoiceTool,
+  'persistent-mind-name': chooseMindName,
+  'persistent-mind-memory-protection': protectMindMemory,
+  'persistent-mind-maintenance': runMindMaintenance,
+  'development-maintenance': readDevelopmentMaintenance,
+  'user-actions': listUserActionEvents,
+  'eidoverse-travel': runEidoverseTravelTool,
+  'eidoverse-foundations': runEidoverseFoundationsTool,
+  'eidoverse-observe': observeEidoverse,
+  'eidoverse-creative': runEidoverseCreativeTool,
+  'eidoverse-controllers': runEidoverseControllersTool,
+  'eidoverse-world': runEidoverseWorldTool,
+};
+
+const ADAPTER_PREFIX_HANDLERS = [
+  ['sandbox.', runSandboxTool],
+  ['reports.', runReportsTool],
+  ['thinking-', runThinkingTool],
+  ['local-context-', runLocalContextTool],
+  ['persistent-mind-issue-', runMindIssueTool],
+];
+
+// Anything unmatched (`persistent-mind-task`) queues a CoS task request.
+const resolveAdapterHandler = (kind) => (Object.hasOwn(ADAPTER_HANDLERS, kind) ? ADAPTER_HANDLERS[kind]
+  : ADAPTER_PREFIX_HANDLERS.find(([prefix]) => kind.startsWith(prefix))?.[1] ?? queueMindTaskRequest);
+
+const executeAdapter = async (tool, args, context, authority) =>
+  resolveAdapterHandler(tool.adapter.kind)(tool, args, context, authority);
 
 const trimCallResults = () => {
   while (toolCalls.size > MAX_CALL_RESULTS) toolCalls.delete(toolCalls.keys().next().value);
