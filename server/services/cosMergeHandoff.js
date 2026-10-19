@@ -73,10 +73,15 @@ async function readReviewEvidence(workspace) {
 }
 
 // A clean verdict counts only for the head it reviewed; merge-on-green runs no
-// reviewers, so there only a recorded block or unreadable status refuses.
-function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy) {
+// reviewers, so there only a recorded block or unreadable status refuses. When
+// every local reviewer is optional the in-session merge treats them as
+// non-blocking, so a clean status needs no head: capped rounds that all returned
+// (fixed) findings never record one.
+function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy, { reviewers = [], optionalReviewers = [] } = {}) {
   if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return status === null || status === 'clean';
-  return status === 'clean' && reviewedHead === head;
+  if (status !== 'clean') return false;
+  const allOptional = reviewers.length > 0 && reviewers.every((reviewer) => optionalReviewers.includes(reviewer));
+  return allOptional || reviewedHead === head;
 }
 
 async function followUpRoster(task, policy) {
@@ -138,7 +143,8 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     return refuse('checkout-head-unverified');
   }
   const review = await readReviewEvidence(workspace);
-  if (!reviewEvidenceAccepted(review, head, policy)) return refuse('review-evidence-incomplete');
+  const roster = await followUpRoster(task, policy);
+  if (!reviewEvidenceAccepted(review, head, policy, roster)) return refuse('review-evidence-incomplete');
 
   const receipt = {
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
@@ -161,7 +167,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
       receiptId: receipt.id, agentId, startedAt: agent.startedAt, taskId: agent.taskId, repository,
       headSha: head, worktreePath: workspace, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
     },
-    followUp: await followUpRoster(task, policy),
+    followUp: roster,
   }).catch((err) => {
     console.error(`❌ Pending-merge handoff for PR #${pr.number} could not be persisted: ${err.message}`);
     return false;

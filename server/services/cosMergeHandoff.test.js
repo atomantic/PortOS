@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // Agent → server pending-merge handoff (#12247), end to end through the real
 // admission service and the real pr-watcher coordinator over synthetic stores.
 const f = vi.hoisted(() => ({
-  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(),
+  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), optionalReviewers: [],
 }));
 vi.mock('./cosState.js', async () => {
   const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
@@ -44,7 +44,7 @@ vi.mock('./apps.js', () => ({
 }));
 vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: async () => ({ ok: true, screening: { safe: true } }) }));
 vi.mock('./codeReview.js', () => ({
-  resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], usernames: [], optionalReviewers: [], reviewerMaxRounds: {} }),
+  resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
@@ -95,6 +95,7 @@ beforeEach(async () => {
   f.apps = new Map([['app1', { id: 'app1', repoPath: '/repos/source', forgeAccount: null }]]);
   f.checkouts = { [workspace]: { branch: 'claim/issue-1', head: HEAD } };
   f.foreign = new Set();
+  f.optionalReviewers = [];
   f.pr = {
     number: 7, title: 'Example change', body: 'Closes #101', author: { login: 'example-user' },
     commits: [{ messageHeadline: 'fix: example', messageBody: '' }], state: 'OPEN', isDraft: false,
@@ -159,6 +160,19 @@ describe('pending-merge handoff', () => {
     const overrides = await arrange();
     expect(await handoff(overrides || {})).toMatchObject({ queued: false, reason, retryable: false });
     expect(pending()).toEqual([]);
+  });
+
+  it('queues an all-optional roster on a clean status without a REVIEW_HEAD, but not blocked or a required reviewer', async () => {
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
+    expect(await handoff()).toMatchObject({ queued: true });
+
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=review-blocked\n');
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+
+    f.optionalReviewers = [];
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
   });
 
   it('merges at once when CI already settled before the receipt, without waiting for the timer', async () => {
