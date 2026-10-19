@@ -54,6 +54,11 @@ const owned = ownTestBodies(vitestIt);
 const it = owned.it;
 let fixtureSetup;
 const FIXTURE_SETUP_BUDGET_MS = 60000;
+// Every case replays a real pg_dump into a schema reset plus ordered migrations
+// (about 11 s each when idle; 101 s for the file), so the DB config default of
+// 15 s has under 2x headroom and times out when pregate runs share the host
+// (#12453). Matches the fixture hook budget; a real hang still fails.
+const RESTORE_CASE_TIMEOUT_MS = 60000;
 
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
@@ -126,7 +131,7 @@ function expectRestoreOk(result, dryRun) {
   expect(result.dryRun).toBe(dryRun);
 }
 
-describe.skipIf(!ready)('restore older database schema', () => {
+describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE_TIMEOUT_MS }, () => {
   let appliedBefore;
   let feedBefore;
   const folder = { id: folderId, name: 'Recovered folder' };
