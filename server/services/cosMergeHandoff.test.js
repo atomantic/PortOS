@@ -77,7 +77,7 @@ const pending = () => readPendingMergePrs(f.apps.get('app1'));
 // ordered. Imported at call time: the restart case resets the module registry.
 const handedOff = async (overrides) => {
   const result = await handoff(overrides);
-  await (await import('./prWatcher.js')).sweepPendingMergeApp('app1');
+  await (await import('./prWatcher.js'))._sweepPendingMergeApp('app1');
   return result;
 };
 const greenChecks = () => { f.pr.statusCheckRollup = [{ conclusion: 'SUCCESS' }]; };

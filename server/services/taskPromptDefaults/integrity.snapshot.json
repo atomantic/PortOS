@@ -24,7 +24,7 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "25e79bc34cfadeab3cc3969a6c3421c2",
     "dependency-updates": "2d94021c979a86a349e125f5c15665d8",
-    "do-release": "0ee9c504bad68f4a73be15f0b955a796",
+    "do-release": "dcb1b0c84712f7824afd9c44cb4208da",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
@@ -89,7 +89,7 @@
     "data-integrity": 1,
     "data-safety": 3,
     "dependency-updates": 7,
-    "do-release": 17,
+    "do-release": 18,
     "do-replan": 2,
     "documentation": 9,
     "error-handling": 4,
@@ -328,7 +328,8 @@
       "5a82eec9f86ad05185ed77a42dbfd9d4",
       "cd936b9a4fb76273b36ec54c3ed6d5ba",
       "b185da91e17d796514d841378fc7be6b",
-      "e2fb83ae74cc759d1fface857169badc"
+      "e2fb83ae74cc759d1fface857169badc",
+      "0ee9c504bad68f4a73be15f0b955a796"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
