@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fsPromises from 'fs/promises';
 import { mkdir, writeFile, rm, utimes, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -8,6 +9,11 @@ import {
   collectReferencedRefBasenames,
   ORPHAN_REF_MAX_AGE_MS,
 } from './imageRefsGc.js';
+
+vi.mock('fs/promises', async importOriginal => {
+  const fs = await importOriginal();
+  return { ...fs, readFile: vi.fn(fs.readFile), readdir: vi.fn(fs.readdir) };
+});
 
 // Pin a clock so age math is deterministic.
 const NOW = Date.parse('2026-06-12T00:00:00Z');
@@ -43,6 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.resetAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -57,7 +64,6 @@ describe('collectReferencedRefBasenames', () => {
   it('normalizes any path to a basename and tolerates absent/empty fields', async () => {
     await sidecar('job1', { init: '/abs/path/init-ddd.png', refs: [] });
     await sidecar('job2', {}); // both fields null/empty
-    await writeFile(join(imagesDir, 'job3.metadata.json'), '{ not json'); // tolerated
     const set = await collectReferencedRefBasenames(imagesDir);
     expect([...set]).toEqual(['init-ddd.png']);
   });
@@ -76,6 +82,71 @@ describe('sweepOrphanRefImages', () => {
   const KEPT_INIT = 'init-cccccccc-3333-4333-8333-cccccccccccc.png';
   const KEPT_REF = 'ref-dddddddd-4444-4444-8444-dddddddddddd.png';
   const YOUNG_INIT = 'init-eeeeeeee-5555-4555-8555-eeeeeeeeeeee.png';
+
+  it('preserves requested peer inputs and omitted local inputs through repeated sweeps', async () => {
+    await stageRef(KEPT_INIT);
+    await stageRef(KEPT_REF);
+    await stageRef(ORPHAN_A);
+    await writeFile(join(imagesDir, 'peer.metadata.json'), JSON.stringify({
+      federatedPeerId: 'example-peer',
+      requestedInputImages: [{ role: 'initImage', filename: KEPT_INIT }],
+    }));
+    await writeFile(join(imagesDir, 'local.metadata.json'), JSON.stringify({
+      omittedInputImages: [{ role: 'referenceImages', filename: KEPT_REF, reason: 'unsupported-render-path' }],
+    }));
+    expect(await sweepOrphanRefImages({ now: NOW, refsDir, imagesDir }))
+      .toEqual({ deleted: 1, keptReferenced: 2, keptYoung: 0 });
+    expect(await sweepOrphanRefImages({ now: NOW, refsDir, imagesDir }))
+      .toEqual({ deleted: 0, keptReferenced: 2, keptYoung: 0 });
+    expect((await readdir(refsDir)).sort()).toEqual([KEPT_INIT, KEPT_REF].sort());
+  });
+
+  it.each([
+    ['truncated JSON', '{ not json'],
+    ['null', 'null'],
+    ['array', '[]'],
+    ['scalar', '42'],
+    ['invalid legacy references', JSON.stringify({ referenceImageFilenames: 'ref-aaa.png' })],
+    ['invalid requested reference', JSON.stringify({ requestedInputImages: [{ filename: 42 }] })],
+    ['invalid omitted references', JSON.stringify({ omittedInputImages: {} })],
+  ])('does not delete any upload on %s metadata, and retries after repair', async (_label, raw) => {
+    await stageRef(ORPHAN_A);
+    await stageRef(KEPT_INIT);
+    await sidecar('valid', { init: KEPT_INIT });
+    const brokenPath = join(imagesDir, 'broken.metadata.json');
+    await writeFile(brokenPath, raw);
+    await expect(sweepOrphanRefImages({ now: NOW, refsDir, imagesDir })).rejects.toThrow();
+    expect((await readdir(refsDir)).sort()).toEqual([ORPHAN_A, KEPT_INIT].sort());
+    await writeFile(brokenPath, '{}');
+    expect(await sweepOrphanRefImages({ now: NOW, refsDir, imagesDir }))
+      .toEqual({ deleted: 1, keptReferenced: 1, keptYoung: 0 });
+  });
+
+  it.each(['gallery listing', 'sidecar read', 'sidecar vanished'])('stops on failed %s and succeeds on retry', async (failure) => {
+    await stageRef(ORPHAN_A);
+    await stageRef(KEPT_INIT);
+    await sidecar('valid', { init: KEPT_INIT });
+    const method = failure === 'gallery listing' ? 'readdir' : 'readFile';
+    const original = (await vi.importActual('fs/promises'))[method];
+    const target = failure === 'gallery listing' ? imagesDir : join(imagesDir, 'valid.metadata.json');
+    const spy = fsPromises[method].mockImplementation((path, ...args) => {
+      if (path === target) return Promise.reject(Object.assign(new Error('Fixture read failure'), {
+        code: failure === 'sidecar vanished' ? 'ENOENT' : 'EACCES',
+      }));
+      return original(path, ...args);
+    });
+    await expect(sweepOrphanRefImages({ now: NOW, refsDir, imagesDir })).rejects.toThrow();
+    expect((await readdir(refsDir)).sort()).toEqual([ORPHAN_A, KEPT_INIT].sort());
+    spy.mockReset();
+    expect(await sweepOrphanRefImages({ now: NOW, refsDir, imagesDir }))
+      .toEqual({ deleted: 1, keptReferenced: 1, keptYoung: 0 });
+  });
+
+  it('cleans proven orphans when the gallery directory has never been created', async () => {
+    await stageRef(ORPHAN_A);
+    expect(await sweepOrphanRefImages({ now: NOW, refsDir, imagesDir: join(root, 'absent-gallery') }))
+      .toEqual({ deleted: 1, keptReferenced: 0, keptYoung: 0 });
+  });
 
   it('deletes old, unreferenced staged uploads', async () => {
     await stageRef(ORPHAN_A, OLD);
