@@ -84,11 +84,27 @@ export async function spawnAndWatchVideo({
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
   };
-  const heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
-  if (!heavyClaim.ok) {
+  // No child and no claim exist yet, so this startup owner releases what the
+  // caller handed over. A refusal (busy holder) and a claim I/O rejection both
+  // end here, and neither touches another owner's claim.
+  const releaseUnclaimedStartup = async () => {
     videoJobState.jobs.delete(jobId);
-    await cleanupTempFiles({ includeUploads: true });
-    await rmGuarded(stepwiseDir, { recursive: true, force: true });
+    const results = await Promise.allSettled([
+      cleanupTempFiles({ includeUploads: true }),
+      rmGuarded(stepwiseDir, { recursive: true, force: true }),
+    ]);
+    if (results.some(result => result.status === 'rejected')) retainOwnership();
+  };
+  let heavyClaim;
+  try {
+    heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
+  } catch (err) {
+    console.error(`❌ Video generation claim acquisition [${jobId.slice(0, 8)}]: ${err.message}`);
+    await releaseUnclaimedStartup();
+    throw err;
+  }
+  if (!heavyClaim.ok) {
+    await releaseUnclaimedStartup();
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
   const releaseHeavyClaim = () => heavyClaim.release().catch((err) => {

@@ -656,22 +656,14 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     ...sentRecord,
     ...(hidden ? { hidden: true } : {}),
   };
-  // Each render gets one private preview directory. Runners overwrite the
-  // fixed `preview.png` path atomically, so a long render cannot accumulate
-  // one PNG per step and a stale preview can never cross job boundaries.
-  const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-video-stepwise-'));
-  const job = { ...meta, clients: [], status: 'running' };
-  videoJobState.jobs.set(jobId, job);
-
-  // buildArgs now throws synchronously on multi-keyframe pixel-budget
-  // overflow and a few other validation paths — without this guard the
-  // job would stay "running" forever in the shared jobs map and the resized
-  // temp files would leak (the spawn close-handler that normally cleans
-  // them up never runs because we never spawned). Mirror the cleanup
-  // logic of the spawn-error handler so failure modes converge.
-  let bin, args;
-  try {
-    ({ bin, args } = buildArgs({
+  await startPreparedLocalVideo({
+    preparation,
+    jobId,
+    meta,
+    batch,
+    cleanupTempFiles,
+    displaySleep,
+    buildParams: {
       pythonPath,
       modelId,
       model: loraCapableModel,
@@ -704,7 +696,6 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       textEncoderRepo: actualTextEncoderRepo,
       textEncoder: resolvedTextEncoder,
       outputPath,
-      previewDir: stepwiseDir,
       loras: resolvedLoras,
       icReferencePaths: resolvedIcReferencePaths,
       icLoraWeightPath,
@@ -716,74 +707,96 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       streamingMode,
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
-    }));
+    },
+    watchParams: {
+      // Keeps this render's ETA samples in its own cost bucket — a speed profile
+      // changes the slope, not just the step count.
+      speedProfileId: speedProfile?.id ?? null,
+      outputPath,
+      filename,
+      actualSeed,
+      model,
+      modelId,
+      width: w,
+      height: h,
+      numFrames: parsedNumFrames,
+      steps: actualSteps,
+      // A native Extend delivers the original source, not the model's re-decode of
+      // it. Chain chunks (`hidden`) are skipped — the chain trims the echoed context
+      // itself and a window hop's "source" is a temp tail clip — except a chain's
+      // FIRST chunk (`keepExtendSource`), whose source is the user's own clip. That
+      // chunk is spliced in place at its rendered length, so the chain's trim math
+      // and the tail window it cuts for chunk 1 are unaffected. Only a visible
+      // render keeps an audio master: a hidden chunk is never extended again.
+      extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
+        ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames), keepMaster: !hidden }
+        : null,
+    },
+  });
+
+  return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
+}
+
+// Owns everything between "conditioning media exists" and "the watcher owns the
+// render": the preview directory, the running job record, argument construction
+// and the watcher handoff. A failure before `spawnAndWatchVideo` is entered
+// unwinds all of it here; once entered, the watcher is the single cleanup owner
+// (its busy-claim, setup-error and child-terminal paths each release the same
+// resources), so a throw out of it is rethrown untouched.
+async function startPreparedLocalVideo({
+  preparation, jobId, meta, batch, cleanupTempFiles, displaySleep, buildParams, watchParams,
+}) {
+  const job = { ...meta, clients: [], status: 'running' };
+  let stepwiseDir = null;
+  let handedOff = false;
+  try {
+    // Each render gets one private preview directory. Runners overwrite the
+    // fixed `preview.png` path atomically, so a long render cannot accumulate
+    // one PNG per step and a stale preview can never cross job boundaries.
+    stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-video-stepwise-'));
+    videoJobState.jobs.set(jobId, job);
+
+    // buildArgs throws synchronously on multi-keyframe pixel-budget overflow and
+    // a few other validation paths; those failures converge with the allocation
+    // and weight-download failures in the catch below.
+    const { bin, args } = buildArgs({ ...buildParams, previewDir: stepwiseDir });
     if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
-    if (model.runtime === 'minimax_h3') {
+    if (buildParams.model.runtime === 'minimax_h3') {
       const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
-      await ensureMiniMaxH3Weights(model);
+      await ensureMiniMaxH3Weights(buildParams.model);
     }
     // Weights can take a long first-run download; honor a cancel that landed during it.
     preparation.throwIfCanceled();
+    // This render's own choice (the `displaySleep` request field) wins over
+    // the install-wide settings default so a page reload/resume replays the
+    // choice the user actually made, not whatever Settings holds now.
+    const videoGenSettings = {
+      ...(await getSettings())?.videoGen,
+      ...(displaySleep != null ? { displaySleep } : {}),
+    };
+
+    handedOff = true;
+    await spawnAndWatchVideo({
+      jobId, preparation, batch, cleanupTempFiles, stepwiseDir, job, bin, args, meta, videoGenSettings, ...watchParams,
+    });
   } catch (err) {
+    if (handedOff) throw err;
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
     const cleanup = await Promise.allSettled([
       cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
-      rmGuarded(stepwiseDir, { recursive: true, force: true }),
+      stepwiseDir ? rmGuarded(stepwiseDir, { recursive: true, force: true }) : undefined,
     ]);
     if (cleanup.some(result => result.status === 'rejected')) {
       maintenance.markCurrentUnsettled();
       maintenance.markResourceUnsettled('media', jobId);
     }
     broadcastSse(job, { type: 'error', error: reason });
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
+    videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta.prompt, meta.negativePrompt] }) });
     closeJobAfterDelay(videoJobState.jobs, jobId);
     throw err;
   }
-
-  await spawnAndWatchVideo({
-    jobId,
-    preparation,
-    batch,
-    // Keeps this render's ETA samples in its own cost bucket — a speed profile
-    // changes the slope, not just the step count.
-    speedProfileId: speedProfile?.id ?? null,
-    cleanupTempFiles,
-    stepwiseDir,
-    job,
-    bin,
-    args,
-    outputPath,
-    filename,
-    meta,
-    actualSeed,
-    model,
-    modelId,
-    width: w,
-    height: h,
-    numFrames: parsedNumFrames,
-    steps: actualSteps,
-    // This render's own choice (the `displaySleep` request field) wins over
-    // the install-wide settings default so a page reload/resume replays the
-    // choice the user actually made, not whatever Settings holds now.
-    videoGenSettings: {
-      ...(await getSettings())?.videoGen,
-      ...(displaySleep != null ? { displaySleep } : {}),
-    },
-    // A native Extend delivers the original source, not the model's re-decode of
-    // it. Chain chunks (`hidden`) are skipped — the chain trims the echoed context
-    // itself and a window hop's "source" is a temp tail clip — except a chain's
-    // FIRST chunk (`keepExtendSource`), whose source is the user's own clip. That
-    // chunk is spliced in place at its rendered length, so the chain's trim math
-    // and the tail window it cuts for chunk 1 are unaffected. Only a visible
-    // render keeps an audio master: a hidden chunk is never extended again.
-    extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
-      ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames), keepMaster: !hidden }
-      : null,
-  });
-
-  return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
 }
 
 // Pre-spawn work (weight download, memory preparation) runs with no child to

@@ -2924,6 +2924,89 @@ describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
   });
 });
 
+// Failures after conditioning returned but before the watcher owns the render:
+// the derived (resized) conditioning files, the preview directory and the
+// running job record must all unwind, and the original error must survive.
+describe.skipIf(process.platform === 'win32')('generateVideo — startup unwinds after conditioning', () => {
+  const jobIdFor = (name) => `startup-unwind-${name}`;
+  const render = (jobId) => generateVideo({
+    jobId,
+    pythonPath: '/usr/bin/python3',
+    modelId: 'ltx2_unified',
+    prompt: 'interpolate the two anchors',
+    width: 512, height: 512, numFrames: 25, fps: 24,
+    mode: 'fflf',
+    sourceImagePath: '/mock/uploads/start.png',
+    lastImagePath: '/mock/uploads/end.png',
+  });
+  const unlinkedPaths = async () => {
+    const { unlink } = await import('fs/promises');
+    return vi.mocked(unlink).mock.calls.map(([path]) => String(path));
+  };
+  const expectDerivedFilesReleased = async (jobId) => {
+    const unlinked = await unlinkedPaths();
+    expect(unlinked).toContain(join(tmpdir(), `resized-src-${jobId}.png`));
+    expect(unlinked).toContain(join(tmpdir(), `resized-last-${jobId}.png`));
+    expect(unlinked).not.toContain('/mock/uploads/start.png');
+    expect(unlinked).not.toContain('/mock/uploads/end.png');
+  };
+
+  it('releases derived conditioning files when preview-directory allocation rejects', async () => {
+    const { mkdtemp, unlink } = await import('fs/promises');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { claimHeavyLocalJob } = await import('../../lib/heavyJobClaim.js');
+    const { videoJobState } = await import('./jobState.js');
+    const jobId = jobIdFor('mkdtemp');
+    vi.mocked(unlink).mockClear();
+    vi.mocked(mkdtemp).mockRejectedValueOnce(new Error('EIO: preview directory'));
+
+    await expect(render(jobId)).rejects.toThrow('EIO: preview directory');
+
+    await expectDerivedFilesReleased(jobId);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(claimHeavyLocalJob).not.toHaveBeenCalled();
+    expect(videoJobState.jobs.get(jobId)?.status ?? 'absent').not.toBe('running');
+  });
+
+  it('releases files, preview directory and the running record when claim acquisition rejects', async () => {
+    const { rm, unlink } = await import('fs/promises');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { claimHeavyLocalJob } = await import('../../lib/heavyJobClaim.js');
+    const { videoJobState } = await import('./jobState.js');
+    const jobId = jobIdFor('claim');
+    vi.mocked(unlink).mockClear();
+    vi.mocked(rm).mockClear();
+    vi.mocked(claimHeavyLocalJob).mockRejectedValueOnce(new Error('EACCES: claim directory'));
+
+    await expect(render(jobId)).rejects.toThrow('EACCES: claim directory');
+
+    await expectDerivedFilesReleased(jobId);
+    expect(vi.mocked(rm).mock.calls.map(([path]) => String(path))).toContain(
+      join(tmpdir(), 'portos-video-stepwise-mock'),
+    );
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(videoJobState.jobs.has(jobId)).toBe(false);
+    expect(heavyClaimRelease).not.toHaveBeenCalled();
+  });
+
+  it('keeps the acquisition error visible and records unsettled ownership when cleanup also fails', async () => {
+    const { unlink } = await import('fs/promises');
+    const { claimHeavyLocalJob } = await import('../../lib/heavyJobClaim.js');
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const unsettled = vi.spyOn(maintenance, 'markResourceUnsettled');
+    vi.mocked(unlink).mockRejectedValue(new Error('EBUSY: temp file'));
+    vi.mocked(claimHeavyLocalJob).mockRejectedValueOnce(new Error('EACCES: claim directory'));
+
+    try {
+      await expect(render(jobIdFor('cleanup-fails'))).rejects.toThrow('EACCES: claim directory');
+      expect(unsettled).toHaveBeenCalledWith('media', jobIdFor('cleanup-fails'));
+    } finally {
+      unsettled.mockRestore();
+      vi.mocked(unlink).mockReset().mockImplementation(async () => {});
+    }
+  });
+});
+
 describe('generateVideo — close-handler resilience (issue #1334)', () => {
   // A throw from finalizeGeneratedVideo inside proc.on('close') must NOT leak as
   // an unhandled rejection (process-killing on Node ≥15) or strand the job
