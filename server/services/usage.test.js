@@ -261,6 +261,21 @@ describe('usage.js — summary', () => {
       expect(day.byProvider['claude-code'].byModel.opus.sessions).toBe(1);
     });
 
+    it('never bumps a counter through a prototype-named provider or model', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      await recordSession('example-provider', 'Example', '__proto__');
+      await recordSession('__proto__', undefined, 'constructor');
+      await recordMessages('example-provider', '__proto__', 1, 40, 10);
+
+      expect(Object.hasOwn(Object.prototype, 'sessions')).toBe(false);
+      expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
+      expect(Object.hasOwn(Object.prototype, 'tokensIn')).toBe(false);
+      const usage = getUsage();
+      expect(usage.byProvider.unknown.sessions).toBe(1);
+      expect(usage.byProvider['example-provider']).toMatchObject({ sessions: 1, messages: 1 });
+    });
+
     it('attributes missing provider ids to a named unknown bucket', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();

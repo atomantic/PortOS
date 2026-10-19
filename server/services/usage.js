@@ -3,6 +3,7 @@ import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, PRICING_AS_OF } from '../lib/modelPricing.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
+import { POLLUTING_KEYS } from '../lib/objects.js';
 
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
@@ -23,8 +24,15 @@ const UNKNOWN_PROVIDER_NAME = 'Unknown provider';
 const LEGACY_PROVIDER_ID = 'legacy';
 const LEGACY_PROVIDER_NAME = 'Pre-breakdown (legacy)';
 
+// Provider ids and model names index plain-object maps (`byProvider`,
+// `byModel`) and reach here from POST /api/usage/*. A name like `__proto__`
+// would resolve to Object.prototype and the counter bump would write onto
+// every object in the process, so such a name is never used as a key.
+const isUsageKey = (value) => typeof value === 'string' && value.trim() !== '' && !POLLUTING_KEYS.has(value.trim());
+const usageModelKey = (model) => (isUsageKey(model) ? model : null);
+
 const normalizeProvider = (providerId, providerName = null) => {
-  const id = typeof providerId === 'string' && providerId.trim() && providerId.trim() !== 'undefined'
+  const id = isUsageKey(providerId) && providerId.trim() !== 'undefined'
     ? providerId.trim()
     : UNKNOWN_PROVIDER_ID;
   return {
@@ -85,6 +93,7 @@ function getEmptyUsage() {
  */
 function deepSumInto(target, source) {
   for (const [key, value] of Object.entries(source)) {
+    if (POLLUTING_KEYS.has(key)) continue;
     if (typeof value === 'number') {
       target[key] = (typeof target[key] === 'number' ? target[key] : 0) + value;
     } else if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -568,9 +577,10 @@ function todayBucket() {
 /**
  * Record a new session
  */
-export async function recordSession(providerId, providerName, model) {
+export async function recordSession(providerId, providerName, rawModel) {
   if (!usageData) await loadUsage();
   const provider = normalizeProvider(providerId, providerName);
+  const model = usageModelKey(rawModel);
 
   usageData.totalSessions++;
 
@@ -613,8 +623,9 @@ export async function recordSession(providerId, providerName, model) {
  * tokens, estimated" so every existing caller — and the
  * `POST /api/usage/messages` route — keeps its current behavior.
  */
-function applyMessageUsage(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
+function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
   const provider = normalizeProvider(providerId);
+  const model = usageModelKey(rawModel);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
   const cacheWriteTokens = Math.max(0, extra?.cacheWriteTokens || 0);
   const source = extra?.source === 'measured' ? 'measured' : 'estimate';
