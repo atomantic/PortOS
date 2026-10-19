@@ -14,6 +14,11 @@ import { isStandardizable } from './streamingDetect.js';
 import { getListeningPorts } from '../lib/platform.js';
 import { isBrowserUnsafePort } from '../lib/browserUnsafePorts.js';
 import { DEFAULT_PORT_RANGE_START } from './ports.js';
+import { isPathInsideDir } from '../lib/pathSafety.js';
+
+// Mirrors standardizePlanStrayPortSchema (lib/validation.js): the sink re-checks
+// because the socket flow applies the model's plan without the HTTP route's schema.
+const STRAY_VARIABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const execAsync = promisify(exec);
 const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
@@ -428,7 +433,7 @@ function parseAnalysisResponse(response, promptToStrip = '') {
 /**
  * Generate ecosystem.config.cjs content from processes
  */
-function generateEcosystemContent(processes, appName) {
+export function generateEcosystemContent(processes, appName) {
   const apps = processes.map(proc => {
     const config = {
       name: proc.name,
@@ -458,15 +463,13 @@ function generateEcosystemContent(processes, appName) {
     return config;
   });
 
-  // Generate formatted JavaScript
-  const configStr = JSON.stringify({ apps }, null, 2)
-    .replace(/"([^"]+)":/g, '$1:')  // Remove quotes from keys
-    .replace(/"/g, "'");             // Use single quotes for strings
-
+  // Plain JSON is a valid JS object literal and PM2 `require()`s this file.
+  // Every process field is model output steered by the scanned repository, so
+  // the old quote rewrite (which left `'` unescaped) could turn a value into code.
   return `// PM2 Ecosystem Configuration
 // ${PORTOS_ECOSYSTEM_MARKER}
 
-module.exports = ${configStr};
+module.exports = ${JSON.stringify({ apps }, null, 2)};
 `;
 }
 
@@ -648,7 +651,14 @@ export async function applyStandardization(
   for (const stray of preserveEcosystem ? [] : plan.proposedChanges.strayPorts || []) {
     if (stray.action !== 'remove') continue;
 
-    const filePath = join(repoPath, stray.file);
+    // Contain both model-chosen fields at the sink: the file must resolve
+    // inside the repository and the variable must be a bare identifier before
+    // it becomes a RegExp.
+    const filePath = join(repoPath, String(stray.file ?? ''));
+    if (!isPathInsideDir(repoPath, filePath) || !STRAY_VARIABLE_RE.test(String(stray.variable ?? ''))) {
+      console.warn(`⚠️ PM2 standardizer skipped a stray-port edit outside the plan contract: ${stray.file} / ${stray.variable}`);
+      continue;
+    }
     if (!existsSync(filePath)) continue;
 
     const content = await tryReadFile(filePath);

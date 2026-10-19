@@ -1,3 +1,7 @@
+import { generateEcosystemContent as buildEcosystemContent } from './pm2Standardizer.js';
+import { mkdtempSync as makeTempDir, writeFileSync as writeFixture, readFileSync as readFixture, rmSync as removeFixture } from 'fs';
+import { join as joinPath, relative as relativePath } from 'path';
+import { tmpdir as osTmpDir } from 'os';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -389,5 +393,47 @@ describe('applyStandardization — preserve existing ecosystem.config.cjs', () =
     );
 
     expect(readFileSync(join(dir, '.env'), 'utf-8')).not.toContain('PORT=5261');
+  });
+});
+
+describe('model-authored plan fields at the apply sink', () => {
+  it('emits an ecosystem file PM2 can load even when a model string carries quotes', () => {
+    const hostile = "x' + require('child_process').execSync('id') + '";
+    const content = buildEcosystemContent([{ name: "it's", cwd: '.', script: 'x.js', env: { HOSTILE: hostile, 'key"name': 1 } }], 'app');
+    expect(content).toContain(PORTOS_ECOSYSTEM_MARKER);
+    const module = { exports: {} };
+    new Function('module', content)(module);
+    expect(module.exports.apps[0].env.HOSTILE).toBe(hostile);
+    expect(module.exports.apps[0].env['key"name']).toBe(1);
+    expect(module.exports.apps[0].name).toBe("it's");
+  });
+
+  it('refuses stray-port edits that leave the repository or carry a non-identifier variable', async () => {
+    const repo = makeTempDir(joinPath(osTmpDir(), 'stray-repo-'));
+    const outside = makeTempDir(joinPath(osTmpDir(), 'stray-outside-'));
+    try {
+      writeFixture(joinPath(repo, '.env'), 'PORT=3000\nKEEP=1\n');
+      writeFixture(joinPath(outside, '.env'), 'PORT=3000\nSECRET=1\n');
+      const escape = relativePath(repo, joinPath(outside, '.env'));
+      const plan = {
+        currentState: { hasGit: false },
+        proposedChanges: {
+          ecosystemContent: `// ${PORTOS_ECOSYSTEM_MARKER}\nmodule.exports = { apps: [] };\n`,
+          createEcosystem: true,
+          strayPorts: [
+            { file: escape, variable: 'PORT', action: 'remove' },
+            { file: '.env', variable: '|', action: 'remove' },
+            { file: '.env', variable: 'PORT', action: 'remove' },
+          ],
+        },
+      };
+      const result = await applyStandardization(repo, plan, { skipBackup: true });
+      expect(readFixture(joinPath(outside, '.env'), 'utf-8')).toBe('PORT=3000\nSECRET=1\n');
+      expect(readFixture(joinPath(repo, '.env'), 'utf-8')).toBe('KEEP=1\n');
+      expect(result.filesModified).toEqual(['ecosystem.config.cjs', '.env (removed PORT)']);
+    } finally {
+      removeFixture(repo, { recursive: true, force: true });
+      removeFixture(outside, { recursive: true, force: true });
+    }
   });
 });
