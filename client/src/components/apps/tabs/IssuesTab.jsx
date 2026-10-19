@@ -493,7 +493,7 @@ export default function IssuesTab({ appId, appName }) {
       },
       ...picker.pin,
       ...(action === 'claim' ? {
-        prCompletion,
+        ...(prCompletionTouched ? { prCompletion } : {}),
         ...(prCompletion === 'review-then-merge' ? reviewOverrides : {}),
       } : {}),
       ...(trimmedOverrideContext ? { overrideContext: trimmedOverrideContext } : {}),

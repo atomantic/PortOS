@@ -154,11 +154,12 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
       metadata: {
         app: app.id, provider: task.metadata?.provider, providerId: task.metadata?.providerId,
         model: task.metadata?.model, effort: task.metadata?.effort,
+        reviewLoopFollowUp: isTruthyMeta(task.metadata?.reviewLoopFollowUp),
       },
     },
     handoff: {
       receiptId: receipt.id, agentId, startedAt: agent.startedAt, taskId: agent.taskId, repository,
-      headSha: head, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
+      headSha: head, worktreePath: workspace, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
     },
     followUp: await followUpRoster(task, policy),
   }).catch((err) => {
@@ -171,7 +172,10 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   // merges a head whose CI already settled; a still-pending entry gets the
   // bounded follow-up poll, and the 30-minute timer owns it after that.
   followUpHandoffReceipt(app.id, receipt.id);
-  return { queued: true, receipt };
+  return { queued: true, receipt, coordination: {
+    ownerTaskId: task.id, status: 'queued-for-merge',
+    wake: 'immediate, then 1 minute for five polls, then 2 minutes for up to 45 minutes; 30-minute recovery sweep',
+  } };
 }
 
 /**

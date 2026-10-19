@@ -156,6 +156,19 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     applicability.inapplicable = {};
   });
 
+  it.each([
+    [undefined, 'review-then-merge', 'codex'],
+    ['merge-on-green', 'merge-on-green', 'none'],
+    ['leave-open', 'leave-open', 'codex'],
+  ])('resolves app completion %s before rendering scheduled reviewers', async (appPolicy, expectedPolicy, reviewers) => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: false, openPR: true, useWorktree: true } });
+    promptTemplate.body = 'Reviewers: {reviewers}';
+    const task = await generateManagedAppImprovementTaskForType('security', makeApp({ defaultPrCompletion: appPolicy }), STATE, { skipPreconditions: true });
+    expect(task.metadata.prCompletion).toBe(expectedPolicy);
+    expect(task.description).toContain(`Reviewers: ${reviewers}`);
+  });
+
   it.each([true, false])('cognitive-load comment policy survives dispatch with fileIssues=%s', async (fileIssues) => {
     const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
     const { getTaskInterval } = await import('./taskSchedule.js');

@@ -394,6 +394,38 @@ describe('merge-only PR watcher', () => {
     expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retains the receipt while its owner is active and records a blocked retry once across sweeps', async () => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValue(JSON.stringify({ state: 'OPEN', mergeStateStatus: 'DIRTY' }));
+    spawnReviewLoopFollowUpMock.mockResolvedValueOnce({ id: 'sys-rl-owner', deferred: true });
+    expect(await processPendingMergePrs(app)).toMatchObject({ escalated: 0, waiting: 1 });
+    expect(readPendingMergePrs(mockApps.get(app.id))).toHaveLength(1);
+    spawnReviewLoopFollowUpMock.mockResolvedValueOnce({ id: 'sys-rl-owner', blocked: 'retry budget exhausted' });
+    await processPendingMergePrs(mockApps.get(app.id));
+    expect(readPendingMergePrs(mockApps.get(app.id))[0].recoveryBlocked).toBe('retry budget exhausted');
+    execGhMock.mockResolvedValue(JSON.stringify({ state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }] }));
+    await processPendingMergePrs(mockApps.get(app.id));
+    expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledTimes(2);
+    expect(addNotificationMock).toHaveBeenCalledTimes(1);
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('does not erase a newer receipt when an older recovery settles', async () => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValue(JSON.stringify({ state: 'OPEN', mergeStateStatus: 'DIRTY' }));
+    spawnReviewLoopFollowUpMock.mockImplementationOnce(async () => {
+      await queuePendingMerge(app.id, { ...app.pendingMergePrs[0], handoff: {
+        receiptId: 'new-receipt', headSha: 'b'.repeat(40), repository: 'github.com/o/r',
+        agentId: 'new-run', prCompletion: 'review-then-merge',
+      } });
+      return { id: 'sys-rl-owner', resumed: true };
+    });
+    await processPendingMergePrs(app);
+    expect(readPendingMergePrs(mockApps.get(app.id))[0].handoff.receiptId).toBe('new-receipt');
+  });
+
   it('stops polling and notifies after the bounded pending-merge budget', async () => {
     const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
     mockApps.set(app.id, app);

@@ -520,7 +520,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // All three claim paths layer claim-work metadata over the defaults via
     // claimReviewersFrom — including the JIRA play button (#6210). No path may
     // resolve the defaults alone with a bare `{}`.
-    expect(CLAIM_SRC).toContain('claimReviewersFrom(metadata, codeReviewDefaults)');
+    expect(CLAIM_SRC).toContain('claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion: effectivePrCompletion })');
     expect(LAYER_SRC).not.toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
     // No path may resolve one map without the other — or reach past the shared
     // claim resolver, which wraps `resolveReviewerPins` for all three sites.
@@ -2034,6 +2034,19 @@ describe('buildClaimWorkTask reviewer pin', () => {
 
     expect(prompt).not.toContain('--swarm=6');
     expect(taskMetadata.swarmCount).toBeUndefined();
+  });
+
+  it('pins the missing app default and retains it after the app setting changes', async () => {
+    const { taskMetadata } = await buildClaimWorkTask(app);
+    expect(taskMetadata.prCompletion).toBe('review-then-merge');
+    const changedApp = { ...app, defaultPrCompletion: 'leave-open' };
+    expect((await buildClaimWorkTask(changedApp)).taskMetadata.prCompletion).toBe('leave-open');
+    expect(taskMetadata.prCompletion).toBe('review-then-merge');
+  });
+
+  it.each(['draft', 'leave-open'])('keeps an explicit %s run choice over app auto-merge', async policy => {
+    const { taskMetadata } = await buildClaimWorkTask({ ...app, defaultPrCompletion: 'review-then-merge' }, { prCompletion: policy });
+    expect(taskMetadata.prCompletion).toBe(policy);
   });
 
   it('persists prCompletion: merge-on-green, replaces reviewers with none, and clears reviewers list', async () => {

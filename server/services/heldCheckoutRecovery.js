@@ -74,8 +74,10 @@ async function snapshotAdministration(path) {
 }
 
 async function retirementPolicy(repoPath, branch, opts) {
-  const { readBranchCompletionPolicies, reviewedRetirementPolicy } = await import('./branchCompletionPolicy.js');
+  const { readBranchCompletionPolicies, reviewedRetirementPolicy, mergedReceiptRetirementPolicy } = await import('./branchCompletionPolicy.js');
   const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
+  if (opts.mergedReceipt) return mergedReceiptRetirementPolicy({ repoPath, branch, agents: policies,
+    tip: opts.mergedReceipt.expectedHeadSha });
   return reviewedRetirementPolicy({ repoPath, branch, agents: policies });
 }
 
@@ -369,6 +371,66 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 const sameRelease = (entry, release) => entry.path === release.path && entry.head === release.head
   && (entry.branch ?? null) === (release.branch ?? null) && Boolean(entry.locked) === release.locked
   && (entry.lockReason ?? null) === (release.lockReason ?? null);
+
+// Only the automatic receipt path may acquire missing proof objects. Fetch
+// exact server-verified commits into the object store, never a branch or index.
+async function fetchReceiptProofObjects(repoPath, release, prUrl, expectedHeadSha, opts) {
+  const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
+    import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
+  ]);
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, opts).catch(() => null);
+  const origin = await getOriginInfo(repoPath).catch(() => null);
+  if (!origin || !forge || forge.repository !== `${origin.host}/${origin.fullName}` || forge.prUrl !== prUrl) {
+    return { ok: false, reason: 'retirement-pr-repository-mismatch' };
+  }
+  if (forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
+  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])];
+  if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
+    return { ok: false, reason: 'retirement-forge-unreadable' };
+  }
+  const missing = [];
+  for (const head of heads) {
+    if (!await execGit(['cat-file', '-e', `${head}^{commit}`], repoPath).then(() => true, () => false)) missing.push(head);
+  }
+  if (!missing.length) return { ok: true };
+  const { env } = await resolveForgeExecOptions(repoPath, { forgeAccount: opts.forgeAccount });
+  const fetched = await execGit(['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+    '-c', 'core.askPass=', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules',
+    '--no-auto-maintenance', '--refmap=', '--', `https://${origin.host}/${origin.fullName}.git`, ...missing], repoPath, {
+    timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
+    env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', GH_PROMPT_DISABLED: '1' },
+  }).then(() => true, () => false);
+  return fetched ? { ok: true } : { ok: false, reason: 'retirement-proof-fetch-failed' };
+}
+
+/** Finish only the checkout named by a trusted pending-merge receipt. Unlike an
+ * operator release, this never unlocks a checkout or accepts supersession. Fresh
+ * forge evidence must independently prove the exact handed-off head merged and
+ * remains integrated. Initialized submodules stay held for explicit recovery.
+ */
+export async function retirePendingMergeCheckout({ repoPath, release, prUrl, expectedHeadSha }, opts = {}) {
+  if (!release || release.locked !== false || release.lockReason !== null) return { ok: false, reason: 'receipt-checkout-locked' };
+  if (!release.path || !release.branch || typeof expectedHeadSha !== 'string'
+    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHeadSha) || release.head !== expectedHeadSha) {
+    return { ok: false, reason: 'receipt-checkout-head-unverified' };
+  }
+  const receiptOptions = { ...opts, mergedReceipt: { expectedHeadSha } };
+  let prepared = await reviewCurrentCheckout({ repoPath, release, prUrl }, receiptOptions);
+  // The read-only preview has already passed identity, ownership, manual policy
+  // and archival feasibility gates. Missing remote merge objects are recoverable
+  // here without requiring an unrelated repo-sync to advance local branches.
+  if (prepared.reason === 'retirement-local-objects-missing') {
+    const fetched = await fetchReceiptProofObjects(repoPath, release, prUrl, expectedHeadSha, receiptOptions);
+    if (!fetched.ok) return fetched;
+    prepared = await reviewCurrentCheckout({ repoPath, release, prUrl }, receiptOptions);
+  }
+  if (!prepared.ok) return prepared;
+  if (prepared.review.forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
+  if (prepared.review.comparison.disposition !== 'integrated') return { ok: false, reason: 'retirement-supersession-not-accepted' };
+  return retireHeldCheckout({ repoPath, release,
+    review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false },
+  }, receiptOptions);
+}
 
 /**
  * The Schedule view's entry point: the release must name a row of the app's

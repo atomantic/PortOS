@@ -294,6 +294,11 @@ async function createAppUnlocked(appData) {
     // concrete tracker (PLAN.md / GitHub / GitLab / JIRA) from the git origin
     // host at dispatch time — see server/lib/workTracker.js.
     workTracker: appData.workTracker || 'auto',
+    // Preserve explicit workflow choices at creation as well as update. Missing
+    // fields inherit the current defaults when a new task is queued.
+    ...(typeof appData.defaultUseWorktree === 'boolean' ? { defaultUseWorktree: appData.defaultUseWorktree } : {}),
+    ...(typeof appData.defaultOpenPR === 'boolean' ? { defaultOpenPR: appData.defaultOpenPR } : {}),
+    ...(appData.defaultPrCompletion !== undefined ? { defaultPrCompletion: appData.defaultPrCompletion } : {}),
     // The gh account this app's repo is driven under. Absent (the default) means
     // "infer from the repo owner" — see services/forgeAuth.js.
     ...(appData.forgeAccount?.trim() ? { forgeAccount: appData.forgeAccount.trim() } : {}),

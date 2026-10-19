@@ -14,6 +14,7 @@ import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.j
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
+import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cosSpawnWindow.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
@@ -111,10 +112,11 @@ async function assertAssignableInstance(instanceId) {
 async function assertWorktreeCapableApp(taskData) {
   if (!taskData.app || !(taskData.useWorktree || taskData.openPR)) return;
   const app = await getAppById(taskData.app);
-  if (!app?.repoPath || !existsSync(app.repoPath)) return;
+  if (!app?.repoPath || !existsSync(app.repoPath)) return app;
   if (!(await isRepo(app.repoPath))) {
     throw new ServerError(notGitRepoMessage(app.name || taskData.app), { status: 400, code: 'NOT_A_GIT_REPO' });
   }
+  return app;
 }
 
 const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
@@ -498,7 +500,14 @@ router.post('/tasks', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const { type, isInvestigation, ...taskData } = parsed.data;
   if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
-  await assertWorktreeCapableApp(taskData);
+  const app = await assertWorktreeCapableApp(taskData);
+  // API callers can omit the UI's previewed value. Resolve against the app at
+  // creation, then persist the choice so later configuration changes cannot
+  // turn an in-flight draft/human handoff into an automatic merge.
+  const opensPr = taskData.openPR === true || (taskData.useWorktree === true && taskData.openPR !== false);
+  if (type === 'user' && !taskData.planOnly && !isInvestigation && opensPr && taskData.prCompletion === undefined) {
+    taskData.prCompletion = resolveAppPrCompletion(app, taskData);
+  }
   const preparedTask = await preparePlanOnlyTask(taskData);
   // A UI-queued investigation (#6043) goes through the SAME producer as an
   // auto-filed one, so it lands with the markers the shared machinery reads —

@@ -103,10 +103,19 @@ carries a receipt.
 The pr-watcher pending-merge sweep then merges only the recorded head, under
 its own admission lease, once the PR is `CLEAN` with every reported check
 green; GitHub auto-merge is never enabled. A head that moved invalidates the
-binding and dispatches a follow-up with the recorded review roster; a failed
-check or conflict does the same; an unreadable binding never merges and is
+binding and dispatches recovery with the recorded review roster; a failed
+check or conflict does the same. Once a review task exists, recovery resumes
+that same task, retaining its lifetime spawn budget and target instead of
+creating nested `[Review Loop]` descendants. A live owner keeps its receipt
+until it releases the branch. Unreadable ownership defers; a changed target,
+manual hold or exhausted retry budget remains blocked even if CI later turns
+green. A new verified handoff is needed to replace that binding. An unreadable binding never merges and is
 handed to the operator by notification; a PR that never settles times out to a
 notification as before.
+
+Immediately before merging under admission, the coordinator re-reads its owning
+task. A new manual hold or changed completion policy blocks the old receipt;
+an unreadable owner or queued recovery defers without consuming a worker slot.
 
 The merge-admission prompt section offers this handoff to every participant
 before its CI wait. When a local review round returns clean, the run records
@@ -142,6 +151,22 @@ sweep owns the entry exactly as before. Polls spend no tick budget, so
 poll passes the timer's own gate — daemon running, not paused, CoS auto-run set
 to `execute` — and is skipped otherwise; stopping the daemon cancels every
 poller, and a receipt accepted while the daemon is stopped arms none.
+
+New managed-app PR tasks default to **PortOS auto-merge after review**. The app's
+PR completion setting can select automatic merge after checks, leave-open or
+draft instead; an explicit per-run choice wins. This does not enable GitHub's
+native auto-merge, which cannot acquire PortOS's local merge admission. Existing
+explicit app and task policies remain unchanged.
+
+New receipts also retain the verified checkout path. After a confirmed merge,
+and after releasing merge admission, the coordinator archives unique contents
+and Git metadata before retiring that exact checkout and local branch. A
+cleanup refusal remains on the receipt as `cleanup.status`, `reason` and any
+`archiveDir`; transient failures retry every 30 minutes, at most 12 times.
+Locks, initialized submodules, changed checkout identity and supersession need
+explicit recovery and remain held. No worker waits for this cleanup, no lock is
+silently released, and no initialized submodule is discarded. Older receipts
+without a checkout binding retain the existing branch-reconciliation fallback.
 
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
