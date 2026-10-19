@@ -196,6 +196,14 @@ describe('IssuesTab', () => {
     await waitFor(() => expect(screen.queryByText(/Repro: open the editor/)).not.toBeInTheDocument());
   });
 
+  it('does not override an unresolved app completion policy when claiming', async () => {
+    api.getAppClaimReviewers.mockReturnValue(new Promise(() => {}));
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls.at(-1)[2]).not.toHaveProperty('prCompletion');
+  });
+
   it('claims an issue with its prefetched content pinned to the /do:next task', async () => {
     await renderTab();
 
@@ -209,8 +217,7 @@ describe('IssuesTab', () => {
           title: 'Crash on save',
           body: 'Repro: open the editor and hit save.',
           url: 'https://github.com/acme/widget/issues/42'
-        },
-        prCompletion: 'review-then-merge'
+        }
       }, { silent: true }
     ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
@@ -390,8 +397,7 @@ describe('IssuesTab', () => {
         },
         provider: 'claude',
         model: 'claude-opus-5',
-        effort: undefined,
-        prCompletion: 'review-then-merge'
+        effort: undefined
       },
       { silent: true }
     ));

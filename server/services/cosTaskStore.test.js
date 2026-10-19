@@ -92,9 +92,9 @@ vi.mock('../lib/taskParser.js', async (importOriginal) => {
   };
 });
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cosState.js', async () => ({
   loadState: vi.fn(async () => mock.state),
-  withStateLock: async (fn) => fn(),
+  withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
   ROOT_DIR: '/root'
 }));
 
@@ -1392,6 +1392,21 @@ describe('cosTaskStore.addTask', () => {
     mock.events.length = 0;
     await updateTask(task.id, { priority: 'HIGH' }, 'internal');
     expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
+  });
+
+  it('atomically resumes one completed coordinator and preserves its lifetime spawn budget', async () => {
+    const task = await addTask({ id: 'sys-rl-owner', description: 'Review existing PR', metadata: {
+      app: 'example', reviewLoopFollowUp: true, reviewLoopPRBranch: 'feature', totalSpawnCount: '2',
+    } }, 'internal', { raw: true });
+    await updateTask(task.id, { status: 'completed' }, 'internal');
+    const current = await getTaskById(task.id);
+    const resume = () => updateTask(task.id, { status: 'pending' }, 'internal', {
+      expectedStatus: 'completed', expectedMetadata: { totalSpawnCount: current.metadata.totalSpawnCount },
+    });
+    const results = await Promise.all([resume(), resume()]);
+    expect(results.filter(result => result.statusChanged)).toHaveLength(1);
+    const resumed = await getTaskById(task.id);
+    expect(resumed).toMatchObject({ status: 'pending', metadata: { totalSpawnCount: '2', reviewLoopPRBranch: 'feature' } });
   });
 
   it('emits tasks:changed action "requeued" on an in_progress → pending flip (#3373)', async () => {

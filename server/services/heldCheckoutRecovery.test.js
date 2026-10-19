@@ -13,7 +13,19 @@ import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [] }));
+
+vi.mock('../lib/execGit.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, execGit: (args, cwd, options) => {
+    if (args.includes('credential.helper=!gh auth git-credential') && args.includes('fetch')) {
+      injected.fetches.push({ args, options });
+      if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
+    }
+    return actual.execGit(args, cwd, options);
+  } };
+});
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
 
 vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -28,7 +40,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, heldCheckoutArchiveRoot } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
@@ -39,7 +51,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null } });
+    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -268,6 +280,119 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       review: { prUrl: forge.prUrl, digest: review.digest, acceptSuperseded: superseded } }, { ...opts, ...more });
     return { path, release, admin, opts, forge, prepare, confirm };
   }
+
+  async function receiptCheckout(name, options) {
+    const checkout = await reviewedCheckout(name, options);
+    await execGit(['worktree', 'unlock', checkout.path], repo);
+    checkout.release = { ...checkout.release, locked: false, lockReason: null };
+    // A modern completed owner has a PR policy; no operator inventory grant.
+    injected.policies[0].metadata.branchCompletionPolicy = {
+      branch: checkout.release.branch, completion: 'review-then-merge',
+      prUrl: checkout.forge.prUrl, tip: checkout.release.head,
+    };
+    injected.schedule.executions = {};
+    checkout.retireReceipt = (opts = {}) => retirePendingMergeCheckout({
+      repoPath: repo, release: checkout.release, prUrl: checkout.forge.prUrl,
+      expectedHeadSha: checkout.release.head,
+    }, { ...checkout.opts, ...opts });
+    return checkout;
+  }
+
+  it('retires a merged receipt checkout without an inventory grant, preserving ignored bytes and original commits', async () => {
+    const c = await receiptCheckout('receipt', { gitlink: true });
+    const result = await c.retireReceipt();
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await registered(c.path)).toBe(false);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
+    expect(manifest.review.policy.receiptHead).toBe(c.release.head);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/receipt-restored'], repo);
+    expect((await execGit(['rev-parse', 'receipt-restored'], repo)).stdout.trim()).toBe(c.release.head);
+  });
+
+  it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
+    const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    const c = await heldCheckout('remote-merge', { branch: 'feature/remote-merge', beforeLock: async tree => {
+      await writeFile(join(tree, 'feature.txt'), 'remote feature\n');
+      await execGit(['add', 'feature.txt'], tree);
+      await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
+    } });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    const release = { ...c.release, locked: false, lockReason: null };
+    const remote = join(scratch, 'remote');
+    await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+    await execGit(['config', 'user.email', 'test@example.com'], remote);
+    await execGit(['config', 'user.name', 'Test'], remote);
+    await execGit(['merge', '--squash', 'origin/feature/remote-merge'], remote);
+    await execGit(['commit', '-m', 'remote squash merge'], remote);
+    const merged = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+    expect((await execGit(['cat-file', '-e', `${merged}^{commit}`], repo, { ignoreExitCode: true })).exitCode)
+      .not.toBe(0);
+    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    injected.fetchRemote = remote;
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    const forge = { repository: 'github.com/example/repo', prUrl, prHead: release.head,
+      mergeCommit: merged, defaultHead: merged, defaultBranch: 'main', remoteHead: null,
+      changedPaths: ['feature.txt'], changeBase: base, firstCommit: release.head };
+    const result = await retirePendingMergeCheckout({ repoPath: repo, release, prUrl, expectedHeadSha: release.head }, {
+      cosDir, readAgents: noOwners, readForge: async () => forge, forgeAccount: 'synthetic-account',
+    });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(base);
+    expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    expect(injected.fetches).toHaveLength(1);
+    expect(injected.fetches[0].args).toEqual(expect.arrayContaining([
+      '--no-write-fetch-head', '--no-recurse-submodules', '--refmap=', 'https://github.com/example/repo.git', merged,
+    ]));
+    expect(injected.fetches[0].options).toMatchObject({ timeout: 30_000,
+      env: { GH_TOKEN: 'synthetic-account-token', GIT_TERMINAL_PROMPT: '0' } });
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
+
+  it.each(['head', 'supersession'])('preserves a receipt checkout when merged evidence has changed: %s', async change => {
+    const c = await receiptCheckout('receipt-evidence', {
+      superseded: change === 'supersession', multipleCommits: change === 'head',
+    });
+    // A different head with valid original ancestry reaches the receipt's
+    // exact-head guard; the squash commit has no such ancestry and fails earlier.
+    if (change === 'head') {
+      c.forge.prHead = c.forge.firstCommit;
+      c.forge.changedPaths = ['feature.txt'];
+    }
+    expect(await c.retireReceipt()).toMatchObject({ ok: false,
+      reason: change === 'head' ? 'receipt-pr-head-changed' : 'retirement-supersession-not-accepted' });
+    expect(await registered(c.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('retains manual, locked, unreadable and initialized-submodule receipt checkouts', async () => {
+    const c = await receiptCheckout('receipt-holds', { gitlink: true });
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'leave-open';
+    expect(await c.retireReceipt()).toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'review-then-merge';
+    expect(await c.retireReceipt({ readAgents: async () => null })).toMatchObject({ ok: false, reason: 'claim-ownership-unreadable' });
+    expect(await c.retireReceipt({ readPolicies: async () => null })).toMatchObject({ ok: false, reason: 'pr-completion-policy-unavailable' });
+    await execGit(['worktree', 'lock', '--reason', 'new owner', c.path], repo);
+    expect(await c.retireReceipt()).toMatchObject({ ok: false, reason: 'checkout-lock-changed' });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
+    expect(await c.retireReceipt()).toMatchObject({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+    expect(await readFile(join(c.path, 'vendor', 'unique.txt'), 'utf8')).toBe('submodule work');
+    expect(await registered(c.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('preserves a receipt checkout when an owner appears during its archive', async () => {
+    const c = await receiptCheckout('receipt-new-owner');
+    let reads = 0;
+    const result = await c.retireReceipt({ readAgents: async () => (++reads < 4 ? [] : [{
+      id: 'agent-live', status: 'running', workspacePath: c.release.path,
+    }]) });
+    expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active', archiveDir: expect.any(String) });
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
 
   it('reviews original changes after an ancestral merged tip is later changed', async () => {
     const c = await reviewedCheckout('ancestral', { normalMerge: true, superseded: true });

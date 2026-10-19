@@ -332,6 +332,8 @@ export const appSchema = z.object({
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
+  // Omitted inherits reviewed PortOS auto-merge for new tasks; PATCH must not
+  // inject a default over an existing explicit draft/leave-open preference.
   defaultPrCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
   // After a CoS agent completes against this app, audit the repo for the state the
   // task asked for (worktree removed, branch deleted, PR merged) and file a recovery

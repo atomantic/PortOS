@@ -309,6 +309,29 @@ describe('portless / desktop apps (#2991)', () => {
 
 });
 
+describe('managed app PR completion settings', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
+  });
+
+  it.each(['draft', 'leave-open', 'merge-on-green', 'review-then-merge'])('round-trips explicit %s without an unrelated update changing it', async policy => {
+    const created = await createApp({ name: 'Example', repoPath: '/repo', defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: policy });
+    expect(created).toMatchObject({ defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: policy });
+    const updated = await updateApp(created.id, { description: 'Updated description' });
+    expect(updated.defaultPrCompletion).toBe(policy);
+    expect((await getAllApps()).find(app => app.id === created.id).defaultPrCompletion).toBe(policy);
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[created.id].defaultPrCompletion).toBe(policy);
+  });
+
+  it('keeps an omitted preference absent and preserves explicit PR/worktree opt-outs', async () => {
+    const created = await createApp({ name: 'Example', repoPath: '/repo', defaultUseWorktree: false, defaultOpenPR: false });
+    expect(created).not.toHaveProperty('defaultPrCompletion');
+    expect(created).toMatchObject({ defaultUseWorktree: false, defaultOpenPR: false });
+  });
+});
+
 describe('managed app feature overrides', () => {
   beforeEach(() => {
     invalidateCache();

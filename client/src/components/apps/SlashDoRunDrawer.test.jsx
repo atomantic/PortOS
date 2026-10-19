@@ -285,6 +285,14 @@ describe('SlashDoRunDrawer', () => {
     expect(settings.reviewers).toBeUndefined();
   });
 
+  it('inherits server policy when queued before the app completion preview resolves', async () => {
+    api.getAppClaimReviewers.mockReturnValue(new Promise(() => {}));
+    renderDrawer();
+    await userEvent.click(screen.getByRole('button', { name: /Queue \/do:next/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls.at(-1)[2]).not.toHaveProperty('prCompletion');
+  });
+
   it('seeds prCompletion from claimReviewers when available', async () => {
     api.getAppClaimReviewers.mockResolvedValue({
       source: 'task-override', prCompletion: 'merge-on-green', reviewers: [], usernames: [], optionalReviewers: [],

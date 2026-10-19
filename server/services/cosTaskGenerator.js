@@ -62,7 +62,7 @@ import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {
   isAuditTaskType,
@@ -1757,11 +1757,10 @@ export function applyAppWorktreeDefault(metadata, app) {
     metadata.openPR = false;
   }
 
-  // Legacy apps without this field keep resolving their persisted reviewLoop
-  // metadata. Once an app explicitly configures a default, stamp it onto new
-  // PR tasks so the policy survives later app-default changes.
-  if (finalOpenPR && metadata.prCompletion === undefined && PR_COMPLETION_VALUES.includes(app.defaultPrCompletion)) {
-    metadata.prCompletion = app.defaultPrCompletion;
+  // Pin the policy on new PR tasks so later app-default changes cannot change
+  // a running task's authority. Stored legacy tasks are resolved separately.
+  if ((finalOpenPR || isTruthyMeta(metadata.claimFlow)) && metadata.prCompletion === undefined) {
+    metadata.prCompletion = resolveAppPrCompletion(app, metadata);
   }
 }
 
@@ -2731,6 +2730,9 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const modeInstructions = isAuditTaskType(taskType)
     ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
     : '';
+  // Resolve completion before rendering reviewers, including claim flows that
+  // own their PR while intentionally disabling CoS worktree provisioning.
+  applyAppWorktreeDefault(metadata, app);
   const baseDescription = await buildImprovementTaskDescription({
     promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
     app, promptTaskType, metadata,
@@ -2756,7 +2758,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     metadata
   );
 
-  applyAppWorktreeDefault(metadata, app);
   // File-issues posture wins over app worktree/PR defaults — the deliverable
   // is tracker items, so a managed worktree or an implied PR is the wrong shape.
   if (fileIssues) {

@@ -162,18 +162,33 @@ describe('Worktree & metadata flag helpers', () => {
       expect(metadata).toMatchObject({ useWorktree: true, openPR: true, prCompletion: 'leave-open' });
     });
 
-    it('keeps a task-level PR completion pin over the app default', () => {
+    it.each(['merge-on-green', 'leave-open', 'draft'])('keeps a task-level %s pin over the app default', policy => {
       // The Schedule tab's "After opening PR" select writes this pin into the
       // interval's taskMetadata — the more specific choice must win.
-      const metadata = { prCompletion: 'merge-on-green' };
+      const metadata = { prCompletion: policy };
       applyAppWorktreeDefault(metadata, { defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' });
-      expect(metadata.prCompletion).toBe('merge-on-green');
+      expect(metadata.prCompletion).toBe(policy);
     });
 
-    it('does not invent a disposition for a legacy app default', () => {
+    it('pins reviewed auto-merge on a new PR task when the app has no completion setting', () => {
       const metadata = {};
       applyAppWorktreeDefault(metadata, { defaultOpenPR: true });
-      expect(metadata.prCompletion).toBeUndefined();
+      expect(metadata.prCompletion).toBe('review-then-merge');
+    });
+
+    it.each([true, false, 'true', 'false'])('preserves an explicit legacy reviewLoop=%s unless the app pins a policy', reviewLoop => {
+      const metadata = { openPR: true, reviewLoop };
+      applyAppWorktreeDefault(metadata, {});
+      expect(metadata.prCompletion).toBe(reviewLoop === true || reviewLoop === 'true' ? 'review-then-merge' : 'merge-on-green');
+      const overridden = { openPR: true, reviewLoop };
+      applyAppWorktreeDefault(overridden, { defaultPrCompletion: 'draft' });
+      expect(overridden.prCompletion).toBe('draft');
+    });
+
+    it('applies app leave-open to self-managed claim PRs without provisioning another worktree', () => {
+      const metadata = { claimFlow: true, useWorktree: false, openPR: false };
+      applyAppWorktreeDefault(metadata, { defaultPrCompletion: 'leave-open' });
+      expect(metadata).toMatchObject({ prCompletion: 'leave-open', useWorktree: false, openPR: false });
     });
 
     it('should not let defaultUseWorktree:false override explicit openPR:true', () => {

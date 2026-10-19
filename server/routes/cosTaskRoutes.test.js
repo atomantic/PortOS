@@ -195,6 +195,29 @@ describe('CoS task responses after action-ledger failures', () => {
   });
 });
 
+describe('POST /api/cos/tasks — managed app completion defaults', () => {
+  it.each([undefined, 'draft', 'leave-open', 'merge-on-green'])('inherits %s for a newly queued PR task', async policy => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: policy });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', useWorktree: true });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0].prCompletion).toBe(policy ?? 'review-then-merge');
+  });
+
+  it.each(['draft', 'leave-open'])('preserves explicit %s over app automatic merge', async policy => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: 'review-then-merge' });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', openPR: true, prCompletion: policy });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0].prCompletion).toBe(policy);
+  });
+
+  it('does not add a PR completion policy when the caller explicitly disables PR creation', async () => {
+    getAppById.mockResolvedValue({ id: 'example-app', defaultPrCompletion: 'review-then-merge' });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Example fix', app: 'example-app', useWorktree: true, openPR: false });
+    expect(res.status).toBe(200);
+    expect(cos.addTask.mock.calls[0][0]).not.toHaveProperty('prCompletion');
+  });
+});
+
 describe('POST /api/cos/tasks — targetInstanceId (#4520)', () => {
   it('passes a registry-known pin through to addTask', async () => {
     const res = await request(buildApp())

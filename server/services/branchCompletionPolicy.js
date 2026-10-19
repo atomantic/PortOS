@@ -142,6 +142,22 @@ export function reviewedRetirementPolicy(input) {
   })).sort((a, b) => String(a.id).localeCompare(String(b.id))) };
 }
 
+/** A verified merged receipt may settle automatic completion obligations, but
+ * never a human handoff or an owner that has not finished. The caller separately
+ * proves the exact merged head and archives the checkout before retirement.
+ */
+export function mergedReceiptRetirementPolicy(input) {
+  const decision = completionDecision(input);
+  if (decision.reason === unavailable || decision.reason === held) return { reason: decision.reason };
+  const policies = decision.policies || [];
+  if (policies.some(policy => policy.agent.status !== 'completed')) return { reason: 'retirement-policy-owner-active' };
+  return { reason: null, receiptHead: input.tip, policies: policies.map(policy => ({
+    id: policy.agent.id || policy.agent.agentId, startedAt: policy.agent.startedAt,
+    status: policy.agent.status, branch: policy.branch, completion: policy.completion,
+    prUrl: policy.prUrl ?? null, tip: policy.tip ?? null,
+  })).sort((a, b) => String(a.id).localeCompare(String(b.id))) };
+}
+
 export async function readBranchCompletionHold(input, deps = {}) {
   const readPolicies = deps.readPolicies || readBranchCompletionPolicies;
   const agents = input.agents ?? await readPolicies().catch(() => null);
