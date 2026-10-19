@@ -44,6 +44,7 @@ import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
 import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { parseShotCamera, planShotCameras, shotCameraPromptSection } from './shotCamera.js';
 import { getCameraMovement } from '../../lib/cameraMovements.js';
@@ -354,8 +355,7 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
  *   keeps it under `automation.routes.plan`.
  */
 export async function planProject(id, { seedPrompts = true, providerId, model, effort, directive, mode = 'append' } = {}) {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(id);
   const existingCount = (project.scenes || []).length;
   if (mode === 'require' && existingCount > 0) {
     throw new ServerError(

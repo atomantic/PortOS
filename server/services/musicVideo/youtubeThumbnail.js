@@ -42,6 +42,7 @@ import { promptAddition } from '../../lib/modelInput.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
 
 export const MAX_THUMBNAIL_TESTS = 3;
@@ -89,8 +90,7 @@ const unitOr = (value, fallback) => (Number.isFinite(value) ? value : (Number.is
  * cover's title, else the song's name). `lettering: false` uses the image bare.
  */
 export async function composeProjectYoutubeThumbnail(projectId, { source = null, title, focusX, focusY, lettering } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw thumbError(404, 'NOT_FOUND', 'Project not found');
+  const project = await requireProject(projectId);
   const thumb = projectYoutubeThumbnail(project);
   const art = projectCoverArt(project);
   const from = source || thumb.source;
@@ -130,8 +130,7 @@ export async function recomposeYoutubeThumbnail(projectId) {
 
 /** Stop using the made thumbnail: the YouTube post goes back to the best video frame. */
 export async function clearProjectYoutubeThumbnail(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw thumbError(404, 'NOT_FOUND', 'Project not found');
+  const project = await requireProject(projectId);
   const old = projectYoutubeThumbnail(project).filename;
   const out = await mutateProjectRecord(projectId, (current) => {
     const { youtubeThumbnail, ...kit } = projectPublishKit(current);
@@ -151,8 +150,7 @@ const testsOf = (project) => {
 
 /** Keep the made thumbnail, as it is now, as one of the Test & Compare variants. */
 export async function addYoutubeThumbnailTest(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw thumbError(404, 'NOT_FOUND', 'Project not found');
+  await requireProject(projectId);
   const out = await mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     const thumb = projectYoutubeThumbnail(current);
@@ -168,8 +166,7 @@ export async function addYoutubeThumbnailTest(projectId) {
 
 /** Drop a variant from the test set (its file goes once nothing names it). */
 export async function removeYoutubeThumbnailTest(projectId, filename) {
-  const project = await getProject(projectId);
-  if (!project) throw thumbError(404, 'NOT_FOUND', 'Project not found');
+  await requireProject(projectId);
   let held = false;
   const out = await mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
@@ -221,8 +218,7 @@ const writeThumb = (projectId, update) => mutateProjectRecord(projectId, (curren
  * thumbnail when it lands.
  */
 export async function paintYoutubeThumbnail(projectId, { source, title, notes = '' } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw thumbError(404, 'NOT_FOUND', 'Project not found');
+  const project = await requireProject(projectId);
   const previous = projectYoutubeThumbnail(project).pending;
   if (await pendingIsLive(previous)) throw thumbError(409, 'THUMBNAIL_IN_PROGRESS', 'A thumbnail is already being painted');
   const name = String(title || '').trim();

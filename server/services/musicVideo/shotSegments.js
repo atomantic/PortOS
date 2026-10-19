@@ -39,7 +39,7 @@ import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
 import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
-import { getProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -568,8 +568,7 @@ const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);
 
 async function loadProjectScene(projectId, sceneId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   if (!(project.scenes || []).some((scene) => scene.sceneId === sceneId)) throw new ServerError('Shot not found', { status: 404, code: 'NOT_FOUND' });
   return project;
 }
@@ -580,8 +579,7 @@ async function loadProjectScene(projectId, sceneId) {
  * fix) instead of shot states, since no segment can be placed until it plans.
  */
 export async function getShotRenderStatus(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   if (project.composition?.mode !== 'composed') return { available: false, shots: [], outro: null, ready: 0, total: 0 };
   const plan = await planShotSegments(project).catch((err) => {
     if (!err?.status || err.status >= 500) throw err;
@@ -712,8 +710,7 @@ const rememberFilmLook = (dir, look) => updateFilmLooks(dir, (looks) => {
 const videoLookSegments = (plan) => [...plan.segments.filter((s) => !s.ownLook), ...(plan.outro ? [plan.outro] : [])];
 
 async function planForLooks(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   if (project.composition?.mode !== 'composed') return { project, plan: null };
   const plan = await planShotSegments(project).catch((err) => {
     if (!err?.status || err.status >= 500) throw err;

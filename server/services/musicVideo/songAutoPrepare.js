@@ -15,9 +15,8 @@
  * and a project an autonomous run is driving are left alone.
  */
 
-import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
-import { getProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { analyzeProjectSong } from './projectAudio.js';
 import { startLyricAlign } from './lyricAlignJob.js';
 
@@ -46,8 +45,7 @@ function needsAutoAlignment(project) {
  * (null when none was needed).
  */
 export async function autoPrepareSong(projectId, { analyze = analyzeProjectSong, align = startLyricAlign } = {}) {
-  let project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  let project = await requireProject(projectId);
   if (!hasAudio(project) || autonomousRunActive(project)) return { project, analyzed: false, alignJobId: null };
   let analyzed = false;
   if (!project.audioAnalysis) {

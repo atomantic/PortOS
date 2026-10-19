@@ -8,6 +8,7 @@ import { canonicalSnapshotChecksum as checksum } from '../../lib/snapshotChecksu
 import { presentMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 
 const refuse = (message, status = 409) => new ServerError(message, { status, code: 'AUDIO_TIMING_INVALID' });
@@ -110,8 +111,7 @@ export async function previewAudioTiming(id, input) {
 }
 
 export async function applyAudioTiming(id, { basis, ...input }) {
-  const before = await getProject(id);
-  if (!before) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const before = await requireProject(id);
   const receipt = (before.audioTimingRevisions || []).find((revision) => revision.basis === basis);
   if (receipt) {
     if (checksum(receipt.input) !== checksum(input)) throw refuse('The applied preview belongs to another mapping.');

@@ -21,6 +21,7 @@ import { isLocalInstanceEndpoint } from '../../lib/localEndpoint.js';
 import { castAndSetsCodeContext, runModel, styleLinesFor } from './codeGeneration.js';
 import { resolveMusicVideoLlm } from './llmRoute.js';
 import { getProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { buildDocumentData, documentAspect, documentRenderClock, documentSongDuration, DOCUMENT_FRAME_SIZES, resolveSceneMedia } from './documentRender.js';
 import { acceptGeneratedDocument, readDocumentFiles, stageGeneratedDocument } from './compositionDocument.js';
 
@@ -283,8 +284,7 @@ async function priorManifest(project) {
 }
 
 async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = LOCAL_PROMPT_BUDGET_CHARS } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
+  const project = await requireProject(projectId);
   assertProductionApproval(project, 'storyboard');
   const context = await authoringContext(project);
   let prior = null;
@@ -470,8 +470,7 @@ export async function acceptMixedMediaDocument(projectId, directory, { verifyCur
 }
 
 export async function readMixedMediaCandidate(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
+  const project = await requireProject(projectId);
   if (!project.composition?.documentDraft && project.composition?.document?.source?.kind !== 'generated') return { candidate: null, source: null, sections: [] };
   const { pointer, manifest } = await priorManifest(project);
   const currentSong = buildSongDocument(project);

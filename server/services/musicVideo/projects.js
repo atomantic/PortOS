@@ -71,6 +71,7 @@ export async function listProjects(options = {}) {
   return (await selectBackend()).listProjects(options);
 }
 
+/** Null when missing; a caller that answers 404 for that uses requireProject.js. */
 export async function getProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
 }

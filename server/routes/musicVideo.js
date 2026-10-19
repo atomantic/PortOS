@@ -129,6 +129,7 @@ import {
   swapProjectSceneFrames,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
+import { requireProject } from '../services/musicVideo/requireProject.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
 import {
@@ -297,8 +298,7 @@ router.get('/midi-sources', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const p = await getProject(req.params.id);
-  if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const p = await requireProject(req.params.id);
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
   const presented = presentProjectForRead(p);
@@ -448,8 +448,7 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
 // falls back to decoding when no usable prior analysis exists.
 router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   const { bpm, offsetSec } = validateRequest(musicVideoManualAnalysisSchema, req.body);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const cached = project.audioAnalysis;
   const analysis = cached && Array.isArray(cached.sections) && typeof cached.durationSec === 'number'
     ? buildManualAnalysisFromCached(cached, { bpm, offsetSec })
@@ -516,8 +515,7 @@ router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, re
 // markers anchored to the imported lines (lyricMarkers.js).
 router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   const { format = 'auto', text, mode = 'replace' } = validateRequest(musicVideoLyricsImportSchema, req.body);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { format: detected, cues, markers } = parseLyricCues(text, format);
   if (cues.length === 0) {
     throw new ServerError(`No lyric lines found in the ${detected} text`, { status: 422, code: 'NO_LYRICS' });
@@ -615,8 +613,7 @@ router.get('/:id/active-jobs', asyncHandler(async (req, res) => {
 // includes it for the client to merge.
 router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
   const { model } = validateRequest(musicVideoTranscribeMidiRequestSchema, req.body || {});
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const audioPath = await resolveProjectAudioPath(project);
   const projectId = project.id;
   // Audio-source identity at kickoff — the completion callback re-checks it so
@@ -866,8 +863,7 @@ router.post('/render/:jobId/cancel', (req, res) => {
 // section functions and never call a provider. Generate / regenerate are the
 // only provider calls, and both require this click.
 router.get('/:id/code/document', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   if (project.composition?.mode !== 'code') {
     throw new ServerError('Switch the render style to Code-rendered first', { status: 409, code: 'NOT_CODE_MODE' });
   }
@@ -889,12 +885,6 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // compositionDocument.js): import a zip, a folder inside data/, or the shipped
 // template; export it; read its manifest; preview it. Files stay on this
 // install; the record keeps a pointer to the current immutable version.
-const requireProject = async (id) => {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
-};
-
 // A new document gets its overlay text checked in the background, so the
 // findings are waiting at the storyboard approval (local browser work, no provider).
 const checkOverlayTextAfterImport = (projectId) => {
@@ -1656,8 +1646,7 @@ router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (r
 
 // Every still and clip generated for this video, each naming the shots using it now (the shot card's Swap picker).
 router.get('/:id/media-pool', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await getMusicVideoMediaPool(project));
 }));
@@ -1665,16 +1654,14 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
 // Swap's search: the pool items whose prompts (the shot's text and the prompt each file was made from) hold the words.
 router.get('/:id/media-pool/search', asyncHandler(async (req, res) => {
   const { q } = validateRequest(musicVideoPoolSearchQuerySchema, req.query);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { searchMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json({ items: await searchMusicVideoMediaPool(project, q) });
 }));
 
 // The cutting room floor outro's tally: what was made, kept and turned down for this video.
 router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
   res.json({ stats: await getMusicVideoOutroStats(project) });
 }));
@@ -1699,16 +1686,14 @@ router.post('/:id/media-pool/import', asyncHandler(async (req, res) => {
 // Media made for this video but never filed: search the whole library by prompt, then add picks.
 router.get('/:id/media-pool/library', asyncHandler(async (req, res) => {
   const { q } = validateRequest(musicVideoLibrarySearchQuerySchema, req.query);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { searchMediaLibraryForPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await searchMediaLibraryForPool(project, q));
 }));
 
 router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
   const { items } = validateRequest(musicVideoPoolAddSchema, req.body);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { addLibraryMediaToPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   const result = await addLibraryMediaToPool(project, items);
   res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
@@ -1716,8 +1701,7 @@ router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
 
 router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {
   const { items } = validateRequest(musicVideoPoolDeleteSchema, req.body);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { deleteMusicVideoPoolAssets } = await import('../services/musicVideo/mediaPool.js');
   res.json(await deleteMusicVideoPoolAssets(project, items));
 }));
@@ -1757,8 +1741,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res)
 // (e.g. Midjourney), and import what the director generated there. Nothing
 // here contacts the external service.
 router.get('/:id/handoff', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   res.json(buildHandoffManifest(project));
 }));
 
@@ -1766,8 +1749,7 @@ router.get('/:id/handoff', asyncHandler(async (req, res) => {
 // image and each scene's selected frame, so nothing has to be saved out of
 // the gallery by hand before attaching it in the external tool.
 router.get('/:id/handoff/bundle', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const { zip } = await buildHandoffBundle(project);
   res.set('Content-Type', 'application/zip');
   res.set('Content-Disposition', `attachment; filename="music-video-${project.id}-handoff.zip"`);
@@ -1781,8 +1763,7 @@ router.get('/:id/handoff/bundle', asyncHandler(async (req, res) => {
 // record write with `imported` source + provider provenance.
 router.post('/:id/handoff/import', asyncHandler(async (req, res) => {
   const { provider, items } = validateRequest(musicVideoHandoffImportSchema, req.body);
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(req.params.id);
   const sceneIds = new Set((project.scenes || []).map((scene) => scene.sceneId));
   const accepted = [];
   const skipped = [];

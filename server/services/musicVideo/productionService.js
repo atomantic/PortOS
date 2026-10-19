@@ -29,6 +29,7 @@ import { ensureSceneTakes, selectSceneTake } from './takes.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
@@ -130,12 +131,6 @@ export function __advanceProductionForTests(projectId, runId) { return advancePr
 /** Resolves once no background work is in flight, including work started while it ran. */
 export async function __settleProductionForTests() {
   while (background.size) await Promise.allSettled([...background]);
-}
-
-async function requireProject(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
 }
 
 /** Read the newest record at the queue boundary, after provider preparation. */

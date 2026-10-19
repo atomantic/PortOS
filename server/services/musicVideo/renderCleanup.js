@@ -6,7 +6,8 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { getProject, listProjects, withProjectMediaMutation } from './projects.js';
+import { listProjects, withProjectMediaMutation } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { withRenderCleanupReservation } from './renderCleanupActivity.js';
 export { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
@@ -51,8 +52,7 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
 ].filter(Boolean);
 
 async function finalInventory(projectId, history, pending = []) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const [{ listCollections }, timeline, director, { isPublishKitBuildActive }, { listJobs }] = await Promise.all([
     import('../mediaCollections.js'), import('../videoTimeline/local.js'), import('../creativeDirector/local.js'),
     import('./publishKit.js'), import('../mediaJobQueue/index.js'),

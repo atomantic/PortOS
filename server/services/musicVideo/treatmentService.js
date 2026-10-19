@@ -12,10 +12,10 @@
  * draft and says why.
  */
 
-import { ServerError } from '../../lib/errorHandler.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import {
   applyTreatmentPatch,
   applyTreatmentToProject,
@@ -31,12 +31,6 @@ import {
   mergeAiTreatment,
   parseTreatmentResponse,
 } from './treatmentDraft.js';
-
-async function requireProject(id) {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
-}
 
 /** Edit the brief / arc / shot directions, or rebase onto the current inputs. */
 export async function updateTreatment(id, patch) {
