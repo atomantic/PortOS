@@ -338,6 +338,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
 const SELECTION_CUTS = [
+  ['services/cosClaimOwnershipState.js', 'services/cosClaimOwnership.js',
+    'owns the shared state fence without importing its reconciliation consumers'],
+  ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
+    'never re-exports boot observers into notification producers'],
+  ['services/memoryConfig.js', 'services/cos.js',
+    'updates memory approval counts through the declaring agent lifecycle module'],
+  ['services/worktreeManager.js', 'services/cosClaimOwnership.js',
+    'shares the ownership fence and trusted reader without reconciliation dependencies'],
+  ['services/promptRunner.js', 'services/compositeProviders.js',
+    'uses the toolkit resolver already registered before runners start'],
+  ['services/systemActivityNotify.js', 'services/mediaJobQueue/index.js',
+    'keeps boot subscriptions in systemActivityWatchers.js'],
   ['services/pm2.js', 'services/readinessNotify.js',
     'notifies readiness subscribers through the readinessSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
