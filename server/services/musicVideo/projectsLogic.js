@@ -1032,6 +1032,10 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
   if (Object.hasOwn(local, 'renderError')) remote.renderError = local.renderError;
+  // Song revisions hold this install's paid-generation recovery checkpoint,
+  // candidate files and provenance; an unrelated peer edit must not erase them.
+  if (Object.hasOwn(local, 'songRevision')) remote.songRevision = local.songRevision;
+  if (Object.hasOwn(local, 'songRevisionHistory')) remote.songRevisionHistory = local.songRevisionHistory;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {
