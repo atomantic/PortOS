@@ -2,6 +2,7 @@
 import { readFile, readdir, mkdir, rm, stat, writeFile, rename } from 'fs/promises';
 import { basename, join, dirname } from 'path';
 import { pathToFileURL } from 'url';
+import { randomUUID } from 'crypto';
 import { isWorktreeRoot } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
@@ -69,7 +70,10 @@ const readLockOwner = (lockDir) => readFile(join(lockDir, LOCK_OWNER_FILE), 'utf
     // A reader can land between the holder's mkdir and a complete owner write;
     // an unparseable file means "owner unknown", same as a missing one.
     try { return JSON.parse(raw); } catch { return null; }
-  }, () => null)
+  }, (err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  })
   .then((owner) => (owner && typeof owner === 'object' ? owner : null));
 
 /**
@@ -79,15 +83,59 @@ const readLockOwner = (lockDir) => readFile(join(lockDir, LOCK_OWNER_FILE), 'utf
  * window between the holder's mkdir and its owner.json write — is judged by
  * the directory's age alone.
  */
-async function lockStaleReason(lockDir) {
+async function lockStaleReason(lockDir, unknownStartedAt) {
   const owner = await readLockOwner(lockDir);
-  const pid = Number.isInteger(owner?.pid) ? owner.pid : null;
-  if (pid !== null && pid !== process.pid && !pidAlive(pid)) return `holder pid ${pid} is no longer running`;
+  const pid = Number.isInteger(owner?.pid) && owner.pid > 0 ? owner.pid : null;
+  // Age cannot revoke a live runner: large upgrades can outlast the timeout.
+  if (pid !== null) return pidAlive(pid) ? null : `holder pid ${pid} is no longer running`;
   const startedAt = Number.isFinite(owner?.startedAt)
     ? owner.startedAt
-    : (await stat(lockDir).then((s) => s.mtimeMs, () => null));
+    : (unknownStartedAt ?? await stat(lockDir).then((s) => s.mtimeMs, () => null));
   if (startedAt !== null && Date.now() - startedAt > LOCK_STALE_MS) return `held for over ${LOCK_STALE_MS / 60000} minutes`;
   return null;
+}
+
+/** Serialize release and stale recovery, including their ownership recheck. */
+async function removeMigrationLock(lockDir, token) {
+  const observed = await stat(lockDir).catch(err => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!observed) return false;
+  const transition = join(lockDir, '.transition');
+  const taken = await mkdir(transition).then(() => true, err => {
+    if (err.code === 'EEXIST' || err.code === 'ENOENT') return false;
+    throw err;
+  });
+  if (!taken) return false;
+  let removed = false;
+  try {
+    const current = await stat(lockDir);
+    if (current.dev !== observed.dev || current.ino !== observed.ino) return false;
+    if (token) {
+      if ((await readLockOwner(lockDir))?.token !== token) {
+        throw new Error('Migration lock ownership changed; refusing to release another runner');
+      }
+    } else {
+      // mkdir(.transition) changed the directory mtime. Use its age BEFORE
+      // that mkdir when an interrupted acquisition left no readable owner.
+      const stale = await lockStaleReason(lockDir, observed.mtimeMs);
+      if (!stale) return false;
+      console.warn(`⚠️ Reclaiming stale migration lock ${lockDir}: ${stale}`);
+    }
+    // Keep the transition present until the shared path disappears atomically:
+    // recursive rm would remove it first and let another waiter enter mid-rm.
+    const retired = `${lockDir}.retired-${randomUUID()}`;
+    await rename(lockDir, retired);
+    removed = true;
+    await rm(retired, { recursive: true, force: true });
+    return true;
+  } finally {
+    // After deletion a new runner may already own this path. Never clean a
+    // transition in that replacement directory. An interrupted transition
+    // stays fail-closed and uses the runner's explicit manual-recovery error.
+    if (!removed) await rm(transition, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -107,21 +155,28 @@ async function acquireMigrationLock(lockDir, { waitMs = LOCK_WAIT_MS, pollMs = L
     if (taken) {
       // temp + rename so a concurrent runner sees no owner file or a whole one.
       const ownerPath = join(lockDir, LOCK_OWNER_FILE);
-      await writeFile(`${ownerPath}.tmp`, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      const token = randomUUID();
+      await writeFile(`${ownerPath}.tmp`, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token }));
       await rename(`${ownerPath}.tmp`, ownerPath);
-      return () => rm(lockDir, { recursive: true, force: true });
+      return async () => {
+        const releaseDeadline = Date.now() + waitMs;
+        while (!await removeMigrationLock(lockDir, token)) {
+          if (Date.now() >= releaseDeadline) {
+            throw new Error('Migration lock release blocked by an unfinished transition; stop all migration runners before recovering the lock');
+          }
+          await sleep(pollMs);
+        }
+      };
     }
     const stale = await lockStaleReason(lockDir);
-    if (stale) {
-      console.warn(`⚠️ Reclaiming stale migration lock ${lockDir}: ${stale}`);
-      await rm(lockDir, { recursive: true, force: true });
+    if (stale && await removeMigrationLock(lockDir)) {
       continue;
     }
     if (Date.now() >= deadline) {
       const owner = await readLockOwner(lockDir);
       throw new Error(
         `Another migration run (pid ${owner?.pid ?? 'unknown'}) holds ${lockDir} — wait for it to finish (or stop the PortOS server) and retry; `
-        + `remove the directory by hand only if no migration runner is still alive`,
+        + `an interrupted .transition also keeps the lock closed; remove the directory by hand only if no migration runner is still alive`,
       );
     }
     if (!announced) {

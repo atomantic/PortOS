@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync, utimesSync } from 'fs';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 
 import { runMigrations, listPendingMigrations, sourceDeclaresPurge } from './run-migrations.js';
 
@@ -491,6 +492,95 @@ export default {
     expect(existsSync(lockDir)).toBe(true); // never steals a live holder's lock
   });
 
+  it('never expires a live holder, even after the stale timeout', async () => {
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: Date.now() - 31 * 60 * 1000 }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+      .rejects.toThrow(/Another migration run/);
+
+    expect(appliedCount()).toBe(0);
+    expect(existsSync(lockDir)).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an owner read failure instead of reclaiming an aged live lock', async () => {
+    mkdirSync(lockDir);
+    const ownerPath = join(lockDir, 'owner.json');
+    const old = new Date(Date.now() - 31 * 60 * 1000);
+    writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, startedAt: old.getTime() }));
+    utimesSync(lockDir, old, old);
+    fsMocks.readFailures.set(ownerPath, Object.assign(new Error('owner read failed'), { code: 'EIO' }));
+    try {
+      await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+        .rejects.toMatchObject({ code: 'EIO' });
+      expect(appliedCount()).toBe(0);
+      expect(existsSync(lockDir)).toBe(true);
+    } finally {
+      fsMocks.readFailures.clear();
+    }
+  });
+
+  it('rechecks stale evidence before removing a replacement holder', async () => {
+    mkdirSync(lockDir);
+    const ownerPath = join(lockDir, 'owner.json');
+    writeFileSync(ownerPath, JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+    const fixturePath = join(migrationsDir, '001-count.js');
+    writeFileSync(fixturePath, `
+import { appendFileSync } from 'fs';
+import { join } from 'path';
+let announceStart, announceDuplicate, release;
+export const started = new Promise(resolve => { announceStart = resolve; });
+export const duplicate = new Promise(resolve => { announceDuplicate = resolve; });
+const finish = new Promise(resolve => { release = resolve; });
+export { release };
+export let entries = 0;
+export default { async up({ rootDir }) {
+  entries++;
+  announceStart();
+  if (entries > 1) announceDuplicate();
+  await finish;
+  appendFileSync(join(rootDir, 'data', 'applied-count.txt'), 'x');
+} };
+`);
+    const fixture = await import(pathToFileURL(fixturePath).href);
+    const readFile = vi.mocked(fsPromises.readFile);
+    const originalRead = readFile.getMockImplementation();
+    let announceRead, resumeRead;
+    const readStarted = new Promise(resolve => { announceRead = resolve; });
+    const resume = new Promise(resolve => { resumeRead = resolve; });
+    let paused = false;
+    readFile.mockImplementation(async (path, ...args) => {
+      const raw = await originalRead(path, ...args);
+      if (String(path) === ownerPath && !paused) {
+        paused = true;
+        announceRead();
+        await resume;
+      }
+      return raw;
+    });
+    const staleRun = runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 });
+    const staleResult = staleRun.then(value => ({ value }), error => ({ error }));
+    let holder;
+    try {
+      await readStarted;
+      holder = runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 });
+      await fixture.started;
+      resumeRead();
+      await Promise.race([staleResult, fixture.duplicate]);
+    } finally {
+      resumeRead();
+      fixture.release();
+      await Promise.allSettled([staleRun, holder]);
+      readFile.mockImplementation(originalRead);
+    }
+
+    expect(fixture.entries).toBe(1);
+    expect((await staleResult).error?.message).toMatch(/Another migration run/);
+    expect(appliedCount()).toBe(1);
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
   it('reclaims a lock whose holder process is gone', async () => {
     mkdirSync(lockDir);
     // Above every platform's pid ceiling, so the liveness probe reports ESRCH.
@@ -519,6 +609,26 @@ export default {
 
     expect(ran).toBe(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('held for over 30 minutes'));
+  });
+
+  it('recovers an old ownerless acquisition using its age before the transition mkdir', async () => {
+    mkdirSync(lockDir);
+    const old = new Date(Date.now() - 31 * 60 * 1000);
+    utimesSync(lockDir, old, old);
+
+    expect(await runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 })).toBe(1);
+    expect(appliedCount()).toBe(1);
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  it('keeps an interrupted transition closed instead of racing its recovery', async () => {
+    mkdirSync(join(lockDir, '.transition'), { recursive: true });
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483646, startedAt: Date.now() }));
+
+    await expect(runMigrations({ rootDir, migrationsDir, lockWaitMs: 0 }))
+      .rejects.toThrow(/interrupted .transition/);
+    expect(appliedCount()).toBe(0);
+    expect(existsSync(join(lockDir, '.transition'))).toBe(true);
   });
 });
 
