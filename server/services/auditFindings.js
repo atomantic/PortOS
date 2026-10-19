@@ -31,7 +31,10 @@ async function verifyFinding(finding, { workspacePath, task }, deps) {
     const { execGh } = await import('./github.js');
     const raw = await execGh(['api', '--hostname', target.apiHost, `repos/${target.fullName}/issues/${number}`], 15_000, options);
     const issue = safeJSONParse(raw, null);
-    return issue?.html_url === url && issue.state === 'open' && !issue.pull_request;
+    // A concurrent CoS claim can fix and close a freshly filed issue before this
+    // check runs; closed-as-completed is still a tracked, resolved disposition.
+    const tracked = issue?.state === 'open' || (issue?.state === 'closed' && issue.state_reason === 'completed');
+    return issue?.html_url === url && tracked && !issue.pull_request;
   }
   if (target.forge === 'gitlab') {
     const { execGlab } = await import('./gitlab.js');
