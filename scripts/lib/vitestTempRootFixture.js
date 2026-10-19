@@ -109,8 +109,11 @@ it('controlled sibling failure', async ({ signal }) => {
 const WATCH_READY_MS = 60000;
 const FIXTURE_RUN_CEILING_MS = 120000;
 
-function killProcessTree(child) {
-  if (!child.pid || child.exitCode !== null) return;
+// `sweepGroup` also signals after the leader exited: its detached group can
+// outlive it (a worker holding the output pipes), and the pgid stays valid
+// while any member lives.
+function killProcessTree(child, { sweepGroup = false } = {}) {
+  if (!child.pid || (child.exitCode !== null && !sweepGroup)) return;
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     return;
@@ -142,15 +145,27 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     let error;
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    let done = false;
+    const finish = (status) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      killProcessTree(child, { sweepGroup: true }); // reap any worker the run left behind
+      resolve({ status, stdout, stderr, error });
+    };
     const timer = setTimeout(() => {
       error = new Error(`fixture run exceeded ${ceilingMs}ms`);
-      killProcessTree(child);
+      killProcessTree(child, { sweepGroup: true });
+      // A survivor holding the pipes would defer 'close'; settle regardless.
+      setTimeout(() => finish(null), 2000);
     }, ceilingMs);
-    child.once('error', (spawnError) => { error = spawnError; });
-    child.once('close', (status) => {
-      clearTimeout(timer);
-      killProcessTree(child); // reap any worker the run left in its group
-      resolve({ status, stdout, stderr, error });
+    child.once('error', (spawnError) => { error = spawnError; finish(null); });
+    child.once('close', finish);
+    // Output ends at 'close', which a surviving worker holding the pipes defers:
+    // sweep the group as soon as the leader exits, with a bounded wait for the pipes.
+    child.once('exit', () => {
+      killProcessTree(child, { sweepGroup: true });
+      setTimeout(() => finish(child.exitCode), 2000);
     });
   });
 }
