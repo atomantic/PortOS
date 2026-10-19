@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import migration from './429-eye-exam-legacy-row-ids.js';
-import { legacyRowId } from '../../server/lib/meatspaceRowIdentity.js';
+import { rowIdentityKeys } from '../../server/lib/meatspaceRowIdentity.js';
+
+// The content key every machine derives for a row without createdAt.
+const legacyRowId = (row) => rowIdentityKeys(row).at(-1);
 
 let rootDir;
 beforeEach(async () => { rootDir = await mkdtemp(join(tmpdir(), 'portos-eye-legacy-ids-')); });

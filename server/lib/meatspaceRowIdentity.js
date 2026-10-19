@@ -21,7 +21,7 @@ import { createHash } from 'crypto';
 import { canonicalStringify, isPlainObject } from './objects.js';
 import { parseTsMs } from './lwwTimestamp.js';
 
-export const LEGACY_ROW_ID_PREFIX = 'legacy-';
+const LEGACY_ROW_ID_PREFIX = 'legacy-';
 
 // Per-row deletion markers (`{ id, deletedAt }`) kept at the top level of a
 // row-union file, unioned in both directions by the snapshot merge.
@@ -30,7 +30,7 @@ export const ROW_TOMBSTONES_KEY = 'rowTombstones';
 const hasStringId = (row) => typeof row?.id === 'string' && row.id !== '';
 
 /** Deterministic id for a legacy row: a hash of its content without identity or clock fields. */
-export function legacyRowId(row) {
+function legacyRowId(row) {
   const { id: _id, aliasIds: _aliasIds, createdAt: _createdAt, updatedAt: _updatedAt, ...content } = row;
   const digest = createHash('sha256').update(canonicalStringify(content)).digest('hex');
   return `${LEGACY_ROW_ID_PREFIX}${digest.slice(0, 24)}`;
@@ -80,7 +80,7 @@ export const rowLiveStamp = (row) => {
  * larger canonical text. The order is total, so every machine converges on the
  * same copy whichever side is local.
  */
-export function preferRowCopy(a, b) {
+function preferRowCopy(a, b) {
   const am = parseTsMs(rowLiveStamp(a)) ?? -Infinity;
   const bm = parseTsMs(rowLiveStamp(b)) ?? -Infinity;
   if (am !== bm) return am > bm ? a : b;
