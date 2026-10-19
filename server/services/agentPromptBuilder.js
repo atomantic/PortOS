@@ -24,6 +24,8 @@ import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { injectReconcileAgentId } from '../lib/claimContinuation.js';
 import { PR_COMPLETIONS, leavesPrForHuman, prStaysOpen, resolvePrCompletion } from '../lib/prDisposition.js';
 import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
+import { localApiBaseUrl } from '../lib/networkExposure.js';
+import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -93,6 +95,29 @@ export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle
 export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
+
+/**
+ * Expand the portosApiUrl token (PORTOS_API_URL_TOKEN) in a finished agent
+ * prompt, a string or the split { userPrompt, systemPrompt } shape, to this
+ * machine's loopback API origin. Producers emit the token instead of resolving
+ * a URL because a task can be forwarded to another instance (targetInstanceId)
+ * and only the machine that spawns the agent knows whether its :5555 is
+ * TLS-only (#12405). The replacement is function-form so the URL is inserted
+ * literally.
+ */
+function expandPortosApiUrl(prompt) {
+  const parts = typeof prompt === 'string' ? [prompt] : [prompt?.userPrompt, prompt?.systemPrompt];
+  if (!parts.some(part => typeof part === 'string' && part.includes(PORTOS_API_URL_TOKEN))) return prompt;
+  const apiBase = localApiBaseUrl();
+  const expand = text => (typeof text === 'string' ? text.replaceAll(PORTOS_API_URL_TOKEN, () => apiBase) : text);
+  if (typeof prompt === 'string') return expand(prompt);
+  return {
+    ...prompt,
+    ...('userPrompt' in prompt && { userPrompt: expand(prompt.userPrompt) }),
+    ...('systemPrompt' in prompt && { systemPrompt: expand(prompt.systemPrompt) }),
+  };
+}
+
 // Completion modes whose generic section can hand the agent its own PR's merge.
 const AGENT_PR_DELIVERY_MODES = new Set([COMPLETION_MODES.TUI, COMPLETION_MODES.TUI_SLASHDO_FREE, COMPLETION_MODES.WORKTREE_NO_PUSH]);
 
@@ -391,6 +416,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
+  const finalizePrompt = prompt => expandPortosApiUrl(withDeepAudit(prompt));
 
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
@@ -437,7 +463,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
     const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli, promptTrace: options.promptTrace || null };
-    return withDeepAudit(options.split === true
+    return finalizePrompt(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
   }
@@ -624,7 +650,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
 
-  return withDeepAudit(buildFullAgentPrompt({
+  return finalizePrompt(buildFullAgentPrompt({
     task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
