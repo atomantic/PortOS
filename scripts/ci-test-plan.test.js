@@ -2111,6 +2111,14 @@ describe('pregate attestation', () => {
     expect(refusedBy(null)).toHaveLength(8);
   });
 
+  it('treats every runner-owned test as selected when the plan runs a runner in full mode', () => {
+    const plan = fullPlan();
+    expect(plan.server).toMatchObject({ mode: 'full', files: [] });
+    const refusedBy = (drift) => Object.keys(attestationDrift(plan, drift)).sort();
+    expect(refusedBy(['server/lib/anything.test.js'])).toEqual(['lint', 'server']);
+    expect(refusedBy(['client/src/anything.test.jsx'])).toEqual(['client', 'lint']);
+  });
+
   it('skips the attested stages, reports full=false, and leaves the CI-only jobs alone', () => {
     const plan = fullPlan();
     expect(plan).toMatchObject({ full: true, windows: true, linuxContainment: true, promptHistory: true, db: true, build: true, smoke: true });

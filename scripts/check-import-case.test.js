@@ -31,6 +31,60 @@ describe('relativeSpecifiers', () => {
   });
 });
 
+describe('relativeSpecifiers ignores non-executable text', () => {
+  it('skips specifier-shaped text inside strings, template literals and regex literals but keeps template expressions', () => {
+    const source = [
+      'const a = "import(\x27./InString.js\x27)";',
+      "const b = 'new URL(\"./InUrl.js\", import.meta.url)';",
+      "const c = `import('./InTemplate.js')\nimport x from './TemplateStatic.js';`;",
+      "const d = /import\\('.\\/InRegex.js'\\)/;",
+      "const e = `${await import('./InExpression.js')}`;",
+      "const f = 4 / 2; const g = await import('./Real.js');",
+      "const h = '/* not a comment'; const i = await import('./AfterString.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./InExpression.js', './Real.js', './AfterString.js']);
+  });
+
+  it('reads a leading regex in a template interpolation as a regex, and a closed template as an operand', () => {
+    const source = [
+      "const t = `${/x'/.test(s) ? import('./LeadingRegex.js') : null}`;",
+      "const u = `a` / 2; await import('./AfterTemplate.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./LeadingRegex.js', './AfterTemplate.js']);
+  });
+
+  it("treats division after postfix ++/-- and closing tokens as division, so later imports stay checked", () => {
+    const source = [
+      "const r1 = count++ / divisor; await import('./AfterInc.js');",
+      "const r2 = count-- / divisor; await import('./AfterDec.js');",
+      "const r3 = (a + b) / 2; await import('./AfterParen.js');",
+      "const r4 = list[0] / 2; await import('./AfterBracket.js');",
+      "const r5 = a + /x/.source.length; await import('./AfterRegex.js');",
+    ].join("\n");
+    expect(relativeSpecifiers(source)).toEqual(['./AfterInc.js', './AfterDec.js', './AfterParen.js', './AfterBracket.js', './AfterRegex.js']);
+  });
+
+  it('treats division after an object literal or function expression as division', () => {
+    const source = [
+      "const ratio = {} / divisor; await import('./AfterObject.js');",
+      "const half = function () {} / 2; await import('./AfterFunction.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./AfterObject.js', './AfterFunction.js']);
+  });
+
+  it('treats a slash after return/typeof/case-style keywords or a control header as a regex literal', () => {
+    const source = [
+      "function f() { return /\\//; } await import('./AfterReturn.js');",
+      "const t = typeof /x'/; await import('./AfterTypeof.js');",
+      "if (ok) /[/]'/.test(s); await import('./AfterIf.js');",
+      "const q = obj.return / 2; await import('./AfterProp.js');",
+      "const w = (a) / 2; await import('./AfterGroup.js');",
+      "const of = 4; const r = of / 2; await import('./AfterOf.js');",
+    ].join('\n');
+    expect(relativeSpecifiers(source)).toEqual(['./AfterReturn.js', './AfterTypeof.js', './AfterIf.js', './AfterProp.js', './AfterGroup.js', './AfterOf.js']);
+  });
+});
+
 describe('importCaseMismatches', () => {
   it('flags a case-only mismatch in each import shape and resolves extension and index completions', () => {
     const source = "import a from './foo.js';\nconst b = import('./util/helpers');\nconst c = new URL('./DATA.json', import.meta.url);\nimport d from './lib';";
