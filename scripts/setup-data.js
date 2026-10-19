@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync, renameSync, rmdirSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, rmdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -7,6 +7,7 @@ import { md5, buildPromptDriftTables } from './migrations/_lib.js';
 import { seedDataDir } from './lib/seedDataDir.js';
 import { mergeJsonStarterTargets } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
+import { adoptLegacyAppliedList } from './lib/migrationLedger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -16,16 +17,13 @@ const referenceDir = join(rootDir, 'data.reference');
 console.log('📁 Setting up data directory...');
 
 // One-shot cleanup for installs that predate the migrations-out-of-data move:
-// (1) relocate data/migrations/.applied.json → data/migrations.applied.json so
-//     run-migrations.js finds the prior applied-list and doesn't re-run anything;
+// (1) relocate data/migrations/.applied.json → data/migrations.applied.json
+//     (the migration runner adopts it too, for a boot that skips setup-data);
 // (2) drop the now-orphan data/migrations/ directory if empty. Guarded so we
 //     never clobber a fresh-layout applied file and never blow away a non-empty
 //     dir (in case a user has uncommitted local migration files).
 const legacyMigrationsDir = join(dataDir, 'migrations');
-const legacyAppliedFile = join(legacyMigrationsDir, '.applied.json');
-const newAppliedFile = join(dataDir, 'migrations.applied.json');
-if (existsSync(legacyAppliedFile) && !existsSync(newAppliedFile)) {
-  renameSync(legacyAppliedFile, newAppliedFile);
+if (await adoptLegacyAppliedList(rootDir)) {
   console.log('🧹 Moved data/migrations/.applied.json → data/migrations.applied.json');
 }
 if (existsSync(legacyMigrationsDir) && readdirSync(legacyMigrationsDir).length === 0) {
