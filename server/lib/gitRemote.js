@@ -6,6 +6,13 @@ export const UPSTREAM_OWNER = 'atomantic';
 export const UPSTREAM_REPO = 'PortOS';
 export const UPSTREAM_FULL_NAME = `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`;
 
+/** Return whether an owner or owner/repository name identifies PortOS upstream. */
+export function isUpstreamOwner(fullNameOrOwner) {
+  if (typeof fullNameOrOwner !== 'string') return false;
+  const owner = fullNameOrOwner.trim().split('/')[0];
+  return owner.toLowerCase() === UPSTREAM_OWNER.toLowerCase();
+}
+
 /**
  * Strip any `://user:token@` credentials from a URL so a PAT embedded in an
  * https remote can't leak into API responses, logs, or telemetry. SCP-style
