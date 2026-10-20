@@ -507,8 +507,11 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
       await ensureOwner(ctx, state.release, false);
       // A completed quarantine released its cut. An interrupted one retains it.
+      let newReservation = false;
       const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(async error => {
         if (error.code !== 'ENOENT') throw error;
+        if (['intent', 'reserved', 'preserved'].includes(state.phase) && state.reservation) fail('retirement-reservation-missing');
+        newReservation = true;
         return gate.reserveCheckoutRetirement(ctx.repoPath, state.id);
       });
       return await gate.withCheckoutReservation(reservation, async () => {
@@ -517,10 +520,26 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         // may cancel the cut after a fresh unchanged-source inspection.
         if (['intent', 'reserved', 'preserved'].includes(state.phase)
           || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)) {
+          if (state.phase !== 'restored' && !newReservation && state.reservation
+            && JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
           const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
-          if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) fail('retirement-source-changed');
+          let cancellationProof;
+          if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) {
+            // A failed, unbound copy has never authorized a move. A concurrent
+            // fetch can freshen shared object mtimes without changing any bytes.
+            // Verify that narrow difference, retaining every partial copy; this
+            // cancels only the reservation and never approves an archive.
+            if (state.proof?.manifestSha256 || state.phase === 'preserved') fail('retirement-source-changed');
+            cancellationProof = await native({ command: 'verify-unmoved-preservation',
+              repoPath: ctx.repoPath, release: state.release, transactionDir: directory,
+              expected: state.review.snapshot });
+            if (cancellationProof.verified !== true || cancellationProof.originalsUnmoved !== true) fail('retirement-source-changed');
+          }
+          await ensureOwner(ctx, state.release, true);
+          executor.assertHeld();
           state = await appendStep(directory, state, 'restored', { reservation,
-            cancelledUnboundPreservation: !state.proof?.manifestSha256 });
+            cancelledUnboundPreservation: !state.proof?.manifestSha256,
+            ...(cancellationProof ? { cancellationProof } : {}) });
           await gate.releaseCheckoutReservation(reservation);
           return { ok: true, transactionId: state.id, restored: true, archivesRetained: true };
         }

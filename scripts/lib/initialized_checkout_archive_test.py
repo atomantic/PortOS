@@ -128,6 +128,46 @@ class NativeArchive(unittest.TestCase):
         (admission / 'writer.lock').write_text('owned service bookkeeping')
         self.assertEqual(archive.inspect(self.request), before)
 
+    def test_unbound_cancellation_accepts_only_shared_mtime_drift_without_touching_evidence(self):
+        before = archive.inspect(self.request, full=True)
+        self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}
+        archive.private_json(self.txn / 'source.json', before)
+        (self.txn / 'quarantine').mkdir(mode=0o700)
+        (self.txn / 'partial-copy').write_bytes(b'incomplete evidence')
+        objects = Path(before['commonGitDir']) / 'objects'
+        info = objects.stat()
+        os.utime(objects, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000000))
+        observed = archive.inspect(self.request, full=True)
+        proof = archive.verify_unmoved_preservation(self.request)
+        self.assertTrue(proof['verified'])
+        self.assertTrue(proof['originalsUnmoved'])
+        self.assertEqual(proof['sharedMtimeChanges'], 1)
+        self.assertEqual(archive.inspect(self.request, full=True), observed)
+        self.assertEqual((self.txn / 'partial-copy').read_bytes(), b'incomplete evidence')
+        self.assertFalse((self.txn / 'manifest.json').exists())
+        # No byte or placement difference may borrow the timestamp exception.
+        for target, content, refusal in (
+            (self.work / 'new-data', b'new work', 'preservation-original-content-changed'),
+            (objects / 'unrecognized-data', b'new object', 'preservation-shared-content-changed'),
+            (self.txn / 'quarantine' / 'working', b'move evidence', 'preservation-originals-may-have-moved'),
+            (self.txn / 'manifest.json', b'bound proof', 'preservation-already-bound'),
+        ):
+            with self.subTest(refusal=refusal):
+                parent_time = target.parent.stat()
+                target.write_bytes(content)
+                with self.assertRaisesRegex(RuntimeError, refusal):
+                    archive.verify_unmoved_preservation(self.request)
+                target.unlink()
+                os.utime(target.parent, ns=(parent_time.st_atime_ns, parent_time.st_mtime_ns))
+        saved = (self.txn / 'source.json').read_bytes()
+        tampered = copy.deepcopy(before)
+        tampered['sources']['working'][0]['mode'] ^= 1
+        (self.txn / 'source.json').write_text(json.dumps(tampered))
+        with self.assertRaisesRegex(RuntimeError, 'preservation-source-proof-changed'):
+            archive.verify_unmoved_preservation(self.request)
+        (self.txn / 'source.json').write_bytes(saved)
+        self.assertTrue(archive.verify_unmoved_preservation(self.request)['verified'])
+
     def test_common_runtime_sockets_are_outside_capture_but_private_and_captured_sockets_hold(self):
         facts = archive.inspect(self.request)
         common = Path(facts['commonGitDir'])
