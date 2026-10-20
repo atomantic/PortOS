@@ -594,9 +594,10 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  * @param {string} sourceWorkspace - the parent git repository
  * @param {unknown} forkHead - `{ remoteUrl, ownerLogin }` from the PR read
  * @param {string} branchName - the PR's head branch, as named in the fork
+ * @param {{requireRef?: boolean}} options - existing local recovery needs only the remote configuration
  * @returns {Promise<string|null>} the fork remote's name, or null
  */
-async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
+async function ensureForkRemote(sourceWorkspace, forkHead, branchName, { requireRef = true } = {}) {
   const coordinates = normalizeForkHead(forkHead);
   if (!coordinates) return null;
   const remoteName = forkRemoteName(coordinates.ownerLogin);
@@ -628,7 +629,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
   const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
     .then(r => r.exitCode === 0)
     .catch(() => false);
-  return refExists ? remoteName : null;
+  return refExists || !requireRef ? remoteName : null;
 }
 
 /**
@@ -654,6 +655,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
  * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
+ * @param {string} options.resumeBranch - Exact preserved local branch from a retry, including pre-namespace fork branches
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives for a fork PR; checked out as fork/<owner>/<branch>.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
  * @param {boolean} options.linkDependencies - Link source dependencies unless explicitly false
@@ -699,11 +701,13 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     const remoteBranch = options.existingBranch;
     const forkHead = normalizeForkHead(options.forkHead);
     if (options.forkHead && !forkHead) throw new Error('Invalid fork head coordinates');
-    const branchName = forkLocalBranch(remoteBranch, forkHead);
-    // Fork identity takes precedence even when local main/origin/main exists.
-    const forkRemote = forkHead ? await ensureForkRemote(sourceWorkspace, forkHead, remoteBranch) : null;
-    if (forkHead && !forkRemote) throw new Error(`Cannot attach worktree to fork branch ${remoteBranch}: fork ref unavailable`);
+    const branchName = options.resumeBranch || forkLocalBranch(remoteBranch, forkHead);
     const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
+    if (options.resumeBranch && !localExists) throw new Error(`Cannot resume missing local branch ${branchName}`);
+    // Fork identity takes precedence over local main/origin/main, but a preserved
+    // namespaced branch can recover even after its contributor deletes the remote ref.
+    const forkRemote = forkHead ? await ensureForkRemote(sourceWorkspace, forkHead, remoteBranch, { requireRef: !localExists }) : null;
+    if (forkHead && !forkRemote) throw new Error(`Cannot attach worktree to fork branch ${remoteBranch}: fork ref unavailable`);
     if (localExists) {
       // Preserve unpublished local work. Never reset an existing checkout branch.
       await addWorktreeWithRetry(['worktree', 'add', worktreePath, branchName], sourceWorkspace);

@@ -160,6 +160,16 @@ describe('fork follow-up creation through workspace, registration and admission'
     expect(execGh).toHaveBeenCalledWith(expect.arrayContaining(['--repo', 'github.com/example/repo']), 10000, expect.objectContaining({ cwd: '/repos/source' }));
   });
 
+  it('admits an explicitly resumed pre-namespace fork branch after verifying its original push target', async () => {
+    const task = await launch({ forkHead });
+    task.metadata.existingBranch = 'feature/fix';
+    task.metadata.resumedFromAgentId = 'prior-agent';
+    f.branch = 'feature/fix';
+    f.state.agents['review-agent'].metadata.worktreeBranch = f.branch;
+    persist();
+    expect(await admission('acquire')).toMatchObject({ admitted: true });
+  });
+
   it('accepts the alternate GitHub SSH endpoint for both source and worktree origins', async () => {
     f.originHost = 'ssh.github.com';
     f.remote = f.pushRemote = 'ssh://git@ssh.github.com:443/contributor/repo.git';

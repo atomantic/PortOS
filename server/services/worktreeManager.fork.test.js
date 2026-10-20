@@ -61,5 +61,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('fork checkout and publication', () => {
     expect(await git(retry.worktreePath, 'rev-parse', 'HEAD')).toBe(unpublished);
     expect(await git(fork, 'rev-parse', 'main')).toBe(published);
     expect(await git(origin, 'rev-parse', 'main')).toBe(primaryHead);
+    await removeWorktree('agent-retry', repo, retry.branchName, { merge: false, preserveBranchWithCommits: true });
+    await git(fork, 'update-ref', '-d', 'refs/heads/main');
+    await git(repo, 'fetch', '--prune', 'fork-contributor');
+    const orphaned = await createWorktree('agent-local-recovery', repo, 'task-fork', options);
+    expect(await git(orphaned.worktreePath, 'rev-parse', 'HEAD')).toBe(unpublished);
+    // Retry pointers written by older installs must recover their exact local commits.
+    await git(repo, 'branch', 'legacy/fix', unpublished);
+    const legacy = await createWorktree('agent-legacy', repo, 'task-legacy', {
+      ...options, existingBranch: 'legacy/fix', resumeBranch: 'legacy/fix',
+    });
+    expect(legacy.branchName).toBe('legacy/fix');
+    expect(await git(legacy.worktreePath, 'rev-parse', 'HEAD')).toBe(unpublished);
+    expect(await git(repo, 'rev-parse', 'main')).toBe(primaryHead);
+    expect(await git(origin, 'rev-parse', 'main')).toBe(primaryHead);
   });
 });

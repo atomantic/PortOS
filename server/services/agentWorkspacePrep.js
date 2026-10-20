@@ -240,6 +240,7 @@ async function prepareRequestedWorktree({
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
     existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
+    ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
     // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
     planId: task.metadata?.planId || undefined,

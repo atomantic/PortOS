@@ -57,13 +57,13 @@ export async function captureForkReviewMergeTarget({ prUrl, prBranch, forkHead, 
 }
 
 /** Returns the live exact head only when task, registration, checkout and forge agree. */
-export async function verifyForkReviewMergeTarget({ target, taskTarget, forkHead, sourceWorkspace, workspacePath, branch }) {
+export async function verifyForkReviewMergeTarget({ target, taskTarget, forkHead, sourceWorkspace, workspacePath, branch, localBranch = forkLocalBranch(branch, forkHead) }) {
   if (!target || target.version !== 1 || JSON.stringify(target) !== JSON.stringify(taskTarget)
     || target.branch !== branch || !coordinatesMatch(target.forkHead, forkHead)) return null;
   const live = await readTarget(target.url, sourceWorkspace);
   if (!live || live.branch !== branch || live.baseBranch !== target.baseBranch
     || live.headRepositoryId !== target.headRepositoryId || !coordinatesMatch(live.forkHead, target.forkHead)) return null;
-  const upstream = await readBranchUpstream(workspacePath, forkLocalBranch(branch, forkHead));
+  const upstream = await readBranchUpstream(workspacePath, localBranch);
   const remote = forkRemoteName(target.forkHead.ownerLogin);
   if (!remote || upstream.remote !== remote || upstream.merge !== `refs/heads/${branch}`) return null;
   const read = args => execGit(args, workspacePath, { timeout: 10000 }).then(r => r.stdout.trim()).catch(() => null);
