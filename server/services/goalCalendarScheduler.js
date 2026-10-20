@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient, needsScopeUpgrade, getTokens, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
+import { getUserTimezone } from './userTimezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
 
 const TIME_SLOT_HOURS = {
   morning: 9,
@@ -13,6 +15,38 @@ const TIME_SLOT_HOURS = {
 const DAY_MAP = {
   sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6
 };
+
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (y < 100) dt.setUTCFullYear(y);
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const year = String(dt.getUTCFullYear()).padStart(4, '0');
+  const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(dt.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getDayOfWeek(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (y < 100) dt.setUTCFullYear(y);
+  return dt.getUTCDay();
+}
+
+function toWallClockString(dateStr, hour, minute, addMinutes = 0) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, hour, minute));
+  if (y < 100) dt.setUTCFullYear(y);
+  if (addMinutes) dt.setUTCMinutes(dt.getUTCMinutes() + addMinutes);
+  const year = String(dt.getUTCFullYear()).padStart(4, '0');
+  const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(dt.getUTCDate()).padStart(2, '0');
+  const h = String(dt.getUTCHours()).padStart(2, '0');
+  const min = String(dt.getUTCMinutes()).padStart(2, '0');
+  const sec = String(dt.getUTCSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}T${h}:${min}:${sec}`;
+}
 
 function resolveTimeSlotHour(timeSlot) {
   if (TIME_SLOT_HOURS[timeSlot] !== undefined) return TIME_SLOT_HOURS[timeSlot];
@@ -78,40 +112,38 @@ export async function scheduleTimeBlocks(goalId) {
   const preferredDayNums = new Set(preferredDays.map(d => DAY_MAP[d]));
   const hour = resolveTimeSlotHour(timeSlot);
   const minute = resolveTimeSlotMinute(timeSlot);
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const tz = await getUserTimezone();
+  const today = todayInTimezone(tz);
 
   // Collect all events to create
   const eventDefs = [];
+  let prevRangeStart = today;
   for (let i = 0; i < milestones.length; i++) {
     const ms = milestones[i];
+    const rangeStart = i === 0
+      ? today
+      : (milestones[i - 1]?.targetDate ? addDays(milestones[i - 1].targetDate, 1) : prevRangeStart);
+    prevRangeStart = rangeStart;
+
     if (ms.completedAt) continue;
 
-    const rangeStart = i === 0 ? today : new Date(milestones[i - 1].targetDate + 'T00:00:00');
-    const rangeEnd = ms.targetDate ? new Date(ms.targetDate + 'T00:00:00') : new Date(goal.targetDate + 'T00:00:00');
+    const rangeEnd = ms.targetDate || goal.targetDate;
 
-    const cursor = new Date(Math.max(rangeStart.getTime(), today.getTime()));
+    let cursor = rangeStart < today ? today : rangeStart;
     while (cursor <= rangeEnd) {
-      if (preferredDayNums.has(cursor.getDay())) {
-        const startTime = new Date(cursor);
-        startTime.setHours(hour, minute, 0, 0);
-        const endTime = new Date(startTime);
-        endTime.setMinutes(endTime.getMinutes() + sessionDurationMinutes);
-
+      if (preferredDayNums.has(getDayOfWeek(cursor))) {
         eventDefs.push({
           milestoneId: ms.id,
-          date: cursor.toISOString().slice(0, 10),
+          date: cursor,
           requestBody: {
             summary: `${goal.title} - ${ms.title}`,
             description: `${ms.description || ''}\n\nGoal: ${goal.title}`.trim(),
-            start: { dateTime: startTime.toISOString(), timeZone: tz },
-            end: { dateTime: endTime.toISOString(), timeZone: tz }
+            start: { dateTime: toWallClockString(cursor, hour, minute), timeZone: tz },
+            end: { dateTime: toWallClockString(cursor, hour, minute, sessionDurationMinutes), timeZone: tz }
           }
         });
       }
-      cursor.setDate(cursor.getDate() + 1);
+      cursor = addDays(cursor, 1);
     }
   }
 
