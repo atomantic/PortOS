@@ -211,9 +211,8 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
 }
 
 /**
- * Give a PR back to its opener when workspace prep refuses the pinned attach —
- * the head moved after review, or the task carries no reviewed head. The text
- * is fixed: it names the reviewed commit and nothing a contributor wrote.
+ * Give a PR back to its opener when remediation is blocked. The text is fixed:
+ * it names the reviewed commit and nothing a contributor wrote.
  *
  * @returns {Promise<boolean>} whether the comment was posted
  */
@@ -230,7 +229,8 @@ export async function handBackPrRemediation({ task, workspacePath } = {}) {
   const [{ execGh }, { resolveForgeForRepo }, { getAppById }] = await Promise.all([
     import('./github.js'), import('./forgeAuth.js'), import('./apps.js'),
   ]);
-  const app = meta.app ? await getAppById(meta.app).catch(() => null) : null;
+  const appId = task.app || meta.app;
+  const app = appId ? await getAppById(appId).catch(() => null) : null;
   const forge = await resolveForgeForRepo(workspacePath, { forgeAccount: app?.forgeAccount || null });
   if (forge?.cli !== 'gh') return false;
   const options = { cwd: workspacePath, env: forge.env };
@@ -238,13 +238,27 @@ export async function handBackPrRemediation({ task, workspacePath } = {}) {
     ? `commit ${meta.prRemediationHeadSha.slice(0, 12)}`
     : 'an earlier revision';
   const login = typeof meta.prRemediationAuthorLogin === 'string' ? meta.prRemediationAuthorLogin.trim() : '';
+  const terminalBlock = meta.blockedCategory && meta.blockedCategory !== 'pr-head-moved';
+  const marker = `<!-- portos-pr-remediation-handback:${task.id} -->`;
+  const viewer = (await execGh(['api', 'user', '--jq', '.login'], undefined, options)).trim();
+  if (!viewer) throw new Error('Could not resolve the authenticated hand-back account');
+  const existing = await execGh(['pr', 'view', ...prRef, '--json', 'comments', '--jq',
+    `any(.comments[]; .author.login == ${JSON.stringify(viewer)} and (.body | contains(${JSON.stringify(marker)})))`], undefined, options);
+  if (!['true', 'false'].includes(existing.trim())) throw new Error('Could not check prior remediation hand-back');
   const body = [
-    `PortOS reviewed this pull request at ${reviewed} and queued an agent to finish it, but could not confirm the head branch was still at that revision when the agent started.`,
-    'The agent only works on the revision PortOS reviewed, so it did not run.',
+    ...(terminalBlock ? [
+      `PortOS reviewed this pull request at ${reviewed} and queued an agent to finish it, but the remediation task is now blocked.`,
+      'PortOS is no longer working on this pull request.',
+    ] : [
+      `PortOS reviewed this pull request at ${reviewed} and queued an agent to finish it, but could not confirm the head branch was still at that revision when the agent started.`,
+      'The agent only works on the revision PortOS reviewed, so it did not run.',
+    ]),
     `${login ? `@${login}, this` : 'This'} pull request is back with its author; the next push gets a fresh review.`,
   ].join(' ');
-  await execGh(['pr', 'comment', ...prRef, '--body', body], undefined, options);
+  // Forge-side dedupe survives a failed assignment or local stamp write. Only
+  // this authenticated account's marker counts; contributor prose cannot claim it.
+  if (existing.trim() !== 'true') await execGh(['pr', 'comment', ...prRef, '--body', `${body}\n\n${marker}`], undefined, options);
   if (login) await execGh(['pr', 'edit', ...prRef, '--add-assignee', login], undefined, options);
-  emitLog('info', `↩️ Handed PR #${number} in ${repoFullName} back after its remediation attach was refused`, { taskId: task.id, prNumber: number });
+  emitLog('info', `↩️ Handed PR #${number} in ${repoFullName} back after its remediation was blocked`, { taskId: task.id, prNumber: number });
   return true;
 }
