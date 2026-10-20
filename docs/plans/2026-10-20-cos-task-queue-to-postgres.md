@@ -61,8 +61,10 @@ Data standards are updated by migration, not carried as runtime fallbacks:
   `<name>.imported` (the recovery copy) and drops the retired config keys.
 - `data.reference/` no longer ships the two files.
 
-Rolling back to a release that reads the Markdown files finds no files; restore
-them from `*.imported` first.
+There is no reverse migration. `*.imported` is only the pre-migration snapshot:
+tasks written afterwards, and the history folded in from `cos_task_archive`, live
+only in `cos_tasks`. To return to a release that reads the Markdown files, take a
+`pg_dump` of `cos_tasks`/`cos_task_lists` first and regenerate the files from it.
 
 ## Follow-ups (not in this change)
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   POSITION_STEP, WORKING_SET_COMPLETED_WINDOW_MS, WORKING_SET_KEEP_COMPLETED,
-  assignPositions, compareRows, completionStamp, planListSave, rowColumns, selectWorkingSet, storedForm,
+  assignPositions, completionStamp, planListSave, rowColumns, selectWorkingSet, storedForm,
 } from './cosTaskRows.js';
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -50,7 +50,7 @@ describe('queue order', () => {
       { task: task('d', { priorityValue: 3 }), position: 1 },
       { task: task('e', { status: 'in_progress' }), position: 0 },
     ];
-    expect(rows.sort(compareRows).map((row) => row.task.id)).toEqual(['d', 'a', 'b', 'e', 'c']);
+    expect(selectWorkingSet(rows).map((row) => row.task.id)).toEqual(['d', 'a', 'b', 'e', 'c']);
   });
 });
 

@@ -2907,6 +2907,16 @@ describe('cosTaskStore completed history older than the working set', () => {
     expect(await getTaskById(id(999))).toBeNull();
   });
 
+  it('keeps the cached working set bounded when a write completes another task', async () => {
+    await seedHistory();
+    await getUserTasks();
+    await updateTask(id(900), { status: 'completed' }, 'user', { now: CLOCK });
+    const completed = (await getUserTasks()).tasks.filter((task) => task.status === 'completed');
+    expect(completed).toHaveLength(100);
+    expect(await inWorkingSet(id(6))).toBe(false);
+    expect(await getTaskById(id(6))).toMatchObject({ id: id(6), status: 'completed' });
+  });
+
   it('reopens an old completed task in place: the edit applies, it joins the working set, no second row appears', async () => {
     await seedHistory();
     const result = await updateTask(id(1), { status: 'pending', description: 'Reopened task' }, 'user', { now: CLOCK });

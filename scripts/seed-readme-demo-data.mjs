@@ -8,6 +8,10 @@
  * empty directory, then overlays fake records that make the public UI pages
  * useful to inspect without exposing a real install.
  *
+ * The demo's tasks are Markdown files that db-migration 018 imports, so the demo
+ * server must start against a database that has not yet run it (a fresh,
+ * disposable one). An already-migrated database ignores them.
+ *
  * Usage:
  *   node scripts/seed-readme-demo-data.mjs --root /tmp/portos-readme-demo
  */

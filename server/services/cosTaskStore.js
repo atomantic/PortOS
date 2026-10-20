@@ -36,7 +36,7 @@ import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
 import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
-import { compareRows, planListSave } from '../lib/cosTaskRows.js';
+import { planListSave, selectWorkingSet } from '../lib/cosTaskRows.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
@@ -225,7 +225,8 @@ async function writeTaskList(source, tasks) {
   const positions = new Map(snapshot.rows.map((row) => [row.task.id, row.position]));
   for (const { task, position } of plan.upserts) positions.set(task.id, position);
   if (cached?.snapshot === snapshot && version === cached.version + 1) {
-    const rows = plan.saved.map((task) => ({ task, position: positions.get(task.id) })).sort(compareRows);
+    // Same bound as a reload, so completions never accumulate in the cache.
+    const rows = selectWorkingSet(plan.saved.map((task) => ({ task, position: positions.get(task.id) })));
     snapshotCache.set(source, { version, snapshot: { rows, tasks: rows.map((row) => row.task) } });
   } else {
     snapshotCache.delete(source);

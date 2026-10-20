@@ -64,7 +64,7 @@ export function rowColumns(task) {
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** Queue order for `{ task, position }` rows. */
-export function compareRows(a, b) {
+function compareRows(a, b) {
   return statusRank(a.task.status) - statusRank(b.task.status)
     || (b.task.priorityValue ?? 2) - (a.task.priorityValue ?? 2)
     || a.position - b.position
