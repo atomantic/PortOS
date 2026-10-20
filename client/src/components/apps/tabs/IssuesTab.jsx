@@ -308,6 +308,11 @@ export default function IssuesTab({ appId, appName }) {
     && Array.isArray(reviewOverrides.reviewers)
     && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot');
   const [showReviewOverride, setShowReviewOverride] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const runSettingsId = useId();
+  // An invalid or active review override must never hide behind the collapsed summary.
+  const settingsForcedOpen = invalidReviewOverride || Object.keys(reviewOverrides).length > 0;
+  const settingsOpen = showSettings || settingsForcedOpen;
   useEffect(() => {
     setReviewOverrides({});
     setShowReviewOverride(false);
@@ -541,6 +546,25 @@ export default function IssuesTab({ appId, appName }) {
   // authenticated user got told to authenticate.
   const unavailable = data?.transient === true;
 
+  const reviewerCsv = !claimReviewers || prCompletion !== 'review-then-merge' || invalidReviewOverride ? null
+    : Object.keys(reviewOverrides).length
+      ? [
+        ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
+        ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
+      ].join(', ')
+      : claimReviewers.csv;
+  const pickedProvider = picker.providers?.find(p => p.id === picker.selectedProviderId);
+  const runSettingsSummary = [
+    `Run with: ${[
+      pickedProvider?.name || picker.selectedProviderId || 'Auto (default)',
+      picker.selectedModel || 'default model',
+      picker.effort || 'default effort',
+    ].join(' · ')}`,
+    `After PR: ${prCompletionOption(prCompletion)?.label ?? prCompletion}`,
+    reviewerCsv ? `Reviewers: ${reviewerCsv}` : null,
+    overrideContext.trim() ? 'extra context set' : null,
+  ].filter(Boolean).join(' · ');
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -603,6 +627,19 @@ export default function IssuesTab({ appId, appName }) {
         </button>
       </div>
 
+      {error && (
+        <Banner tone="error" size="md" icon={AlertTriangle}>
+          Couldn&apos;t load issues — {error}
+        </Banner>
+      )}
+
+      {!error && unavailable && (
+        <Banner tone="warning" size="md" icon={AlertTriangle}>
+          {data.headline || `Couldn't reach ${forgeLabel}`} ({data.reason})
+          {data.remedy ? ` — ${data.remedy}.` : ''}
+        </Banner>
+      )}
+
       {data?.forge === 'github' && (
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <button
@@ -659,117 +696,123 @@ export default function IssuesTab({ appId, appName }) {
         </div>
       )}
 
-      <div className="space-y-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-            <Bot size={14} /> Run with
-          </span>
-          <div className="flex-1">
-            <ProviderModelSelector
-              {...picker.selectorProps}
-              compact
-            />
-          </div>
-        </div>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <label htmlFor={prCompletionId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-            <GitPullRequest size={14} /> After opening PR
-          </label>
-          <div className="flex-1 flex flex-wrap items-center gap-2">
-            <select
-              id={prCompletionId}
-              aria-label="After opening PR"
-              value={prCompletion}
-              onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
-              className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
-            >
-              {PR_COMPLETION_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <span className="text-xs text-gray-500">
-              {prCompletionOption(prCompletion)?.description}
-            </span>
-          </div>
-        </div>
-        {claimReviewers && prCompletion === 'review-then-merge' && !invalidReviewOverride && (
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-              <ClipboardCheck size={14} /> Reviewed by
-            </span>
-            <p className="flex-1 text-xs text-gray-400">
-              {Object.keys(reviewOverrides).length ? (
-                <>
-                  <code className="text-gray-300">{[
-                    ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
-                    ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
-                  ].join(', ')}</code>
-                  {' — run override; expand below for model, effort, and round limits.'}
-                </>
-              ) : (
-                <>
-                  <code className="text-gray-300">{claimReviewers.csv}</code>
-                  <ClaimReviewerSource source={claimReviewers.source} />
-                </>
-              )}
-            </p>
-          </div>
-        )}
-        {claimReviewers && prCompletion === 'review-then-merge' && (
-          <div className="space-y-2">
+      <div className="px-3 py-2 bg-port-card border border-port-border rounded-lg space-y-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Bot size={14} className="text-gray-500 shrink-0" />
+          <span data-testid="run-settings-summary" className="flex-1 min-w-0 text-xs text-gray-300 break-words">{runSettingsSummary}</span>
+          {!settingsForcedOpen && (
             <button
               type="button"
-              aria-expanded={showReviewOverride}
-              onClick={() => setShowReviewOverride(value => !value)}
-              className="text-sm text-port-accent hover:underline"
+              aria-expanded={settingsOpen}
+              aria-controls={runSettingsId}
+              onClick={() => setShowSettings(value => !value)}
+              className="text-xs text-port-accent hover:underline shrink-0"
             >
-              Code-review override{Object.keys(reviewOverrides).length > 0 ? ' (active)' : ''}
+              {settingsOpen ? 'Hide' : 'Change'}
             </button>
-            {invalidReviewOverride && (
-              <p className="text-xs text-port-warning" role="alert">Claims require at least one non-Copilot reviewer. Add one or use configured reviewers.</p>
-            )}
-            {showReviewOverride && (
-              <>
-                <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} modelOptions={reviewerModelOptions} />
-                <p className="text-xs text-gray-500">Applies to Claims launched below. Replan only reviews the issue plan.</p>
-                <button type="button" onClick={() => setReviewOverrides({})} className="text-xs text-port-accent hover:underline">
-                  Use configured reviewers
-                </button>
-              </>
-            )}
-          </div>
-        )}
-        <div className="space-y-1">
-          <label htmlFor={overrideContextId} className="block text-xs text-gray-400">
-            Extra context <span className="text-gray-600">(optional)</span>
-          </label>
-          <textarea
-            id={overrideContextId}
-            value={overrideContext}
-            onChange={e => setOverrideContext(e.target.value)}
-            maxLength={4000}
-            rows={2}
-            placeholder="Add guidance for the run you launch below, such as a preferred implementation focus…"
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm placeholder:text-gray-600 focus:border-port-accent focus:outline-hidden resize-y"
-          />
-          <p className="text-xs text-gray-600">
-            Applies to every Claim and Replan you launch below — appended to that run&apos;s instructions; blank leaves its prompt unchanged.
-          </p>
+          )}
         </div>
+        {settingsOpen && (
+        <div id={runSettingsId} className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+              <Bot size={14} /> Run with
+            </span>
+            <div className="flex-1">
+              <ProviderModelSelector
+                {...picker.selectorProps}
+                compact
+              />
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <label htmlFor={prCompletionId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+              <GitPullRequest size={14} /> After opening PR
+            </label>
+            <div className="flex-1 flex flex-wrap items-center gap-2">
+              <select
+                id={prCompletionId}
+                aria-label="After opening PR"
+                value={prCompletion}
+                onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
+                className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+              >
+                {PR_COMPLETION_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500">
+                {prCompletionOption(prCompletion)?.description}
+              </span>
+            </div>
+          </div>
+          {claimReviewers && prCompletion === 'review-then-merge' && !invalidReviewOverride && (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+                <ClipboardCheck size={14} /> Reviewed by
+              </span>
+              <p className="flex-1 text-xs text-gray-400">
+                {Object.keys(reviewOverrides).length ? (
+                  <>
+                    <code className="text-gray-300">{[
+                      ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
+                      ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
+                    ].join(', ')}</code>
+                    {' — run override; expand below for model, effort, and round limits.'}
+                  </>
+                ) : (
+                  <>
+                    <code className="text-gray-300">{claimReviewers.csv}</code>
+                    <ClaimReviewerSource source={claimReviewers.source} />
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+          {claimReviewers && prCompletion === 'review-then-merge' && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                aria-expanded={showReviewOverride}
+                onClick={() => setShowReviewOverride(value => !value)}
+                className="text-sm text-port-accent hover:underline"
+              >
+                Code-review override{Object.keys(reviewOverrides).length > 0 ? ' (active)' : ''}
+              </button>
+              {invalidReviewOverride && (
+                <p className="text-xs text-port-warning" role="alert">Claims require at least one non-Copilot reviewer. Add one or use configured reviewers.</p>
+              )}
+              {showReviewOverride && (
+                <>
+                  <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} modelOptions={reviewerModelOptions} />
+                  <p className="text-xs text-gray-500">Applies to Claims launched below. Replan only reviews the issue plan.</p>
+                  <button type="button" onClick={() => setReviewOverrides({})} className="text-xs text-port-accent hover:underline">
+                    Use configured reviewers
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <div className="space-y-1">
+            <label htmlFor={overrideContextId} className="block text-xs text-gray-400">
+              Extra context <span className="text-gray-600">(optional)</span>
+            </label>
+            <textarea
+              id={overrideContextId}
+              value={overrideContext}
+              onChange={e => setOverrideContext(e.target.value)}
+              maxLength={4000}
+              rows={2}
+              placeholder="Add guidance for the run you launch below, such as a preferred implementation focus…"
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm placeholder:text-gray-600 focus:border-port-accent focus:outline-hidden resize-y"
+            />
+            <p className="text-xs text-gray-600">
+              Applies to every Claim and Replan you launch below — appended to that run&apos;s instructions; blank leaves its prompt unchanged.
+            </p>
+          </div>
+        </div>
+        )}
       </div>
-
-      {error && (
-        <Banner tone="error" size="md" icon={AlertTriangle}>
-          Couldn&apos;t load issues — {error}
-        </Banner>
-      )}
-
-      {!error && unavailable && (
-        <Banner tone="warning" size="md" icon={AlertTriangle}>
-          {data.headline || `Couldn't reach ${forgeLabel}`} ({data.reason})
-          {data.remedy ? ` — ${data.remedy}.` : ''}
-        </Banner>
-      )}
 
       {!error && !unavailable && total === 0 && (
         <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
