@@ -117,6 +117,36 @@ describe('PM2 command launch interpreters', () => {
     });
   });
 
+  describe('server secrets in the environment', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('filters them from the Node API start while keeping the app-configured env', async () => {
+      vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+      vi.stubEnv('PGPASSWORD', 'db');
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts', { port: 8940 });
+      await startApp('tooling-app', { script: 'npm', env: { PGPASSWORD: 'app-own' } });
+
+      const [command] = mockPm2.start.mock.calls[0];
+      expect(command.filter_env).toEqual(expect.arrayContaining(['PRIVACY_VAULT_KEY', 'PGPASSWORD']));
+      const [configured] = mockPm2.start.mock.calls[1];
+      expect(configured.filter_env).toContain('PGPASSWORD');
+      expect(configured.env).toEqual({ PGPASSWORD: 'app-own' });
+    });
+
+    it('omits them from the CLI start environment', async () => {
+      vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+      vi.stubEnv('PGPASSWORD', 'db');
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts', { pm2Home: '/tmp/example-pm2' });
+
+      const [, , spawnOpts] = mockSpawn.mock.calls[0];
+      expect(spawnOpts.env).not.toHaveProperty('PRIVACY_VAULT_KEY');
+      expect(spawnOpts.env).not.toHaveProperty('PGPASSWORD');
+      expect(spawnOpts.env.PM2_HOME).toBe('/tmp/example-pm2');
+    });
+  });
+
   // Sibling of the leak above, on the app-facing side: PM2 copies the launching
   // process's environment into the child, so portos-server's own PORT reached
   // every managed app it started. An app's env file cannot undo that — neither

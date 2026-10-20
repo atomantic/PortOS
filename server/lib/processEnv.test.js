@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, dirname, join } from 'path';
-import { adoptPathDirs, buildSafeCliBaseEnv, findCommandOnPath, safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
+import { adoptPathDirs, buildSafeCliBaseEnv, serverSecretEnvKeys, withoutServerSecretsEnv, findCommandOnPath, safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
 
 describe('stripDebugMallocEnv', () => {
   it('drops every key that starts with "Malloc"', () => {
@@ -202,5 +202,32 @@ describe('adoptPathDirs', () => {
 
     expect(adoptPathDirs([root])).toEqual([]);
     expect(process.env.PATH).toBe(before);
+  });
+});
+
+describe('withoutServerSecretsEnv', () => {
+  const env = {
+    PATH: '/usr/bin', HOME: '/home/example', NODE_ENV: 'production', PORT: '5555',
+    PRIVACY_VAULT_KEY: 'k', PGPASSWORD: 'p', PGHOST: 'h', PGDATABASE: 'd',
+    PORTOS_API_TOKEN: 't', ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o', GEMINI_API_KEY: 'g',
+    CLAUDE_CODE_OAUTH_TOKEN: 'claude-session', Claude_Code_OAuth_Token: 'mixed-case-session',
+    GEMINI_CLI_AUTH_TOKEN: 'gemini-session',
+    FAL_KEY: 'fal', RUNWAYML_API_SECRET: 'runway', REACTOR_API_KEY: 'reactor', ARTIFICIAL_ANALYSIS_API_KEY: 'catalog',
+    HUGGINGFACE_TOKEN: 'hf', HUGGINGFACE_HUB_TOKEN: 'hf', HUGGINGFACEHUB_API_TOKEN: 'hf', HUGGING_FACE_HUB_TOKEN: 'hf',
+    PgPassword: 'mixed-case', DATABASE_URL: 'app-owned', STRIPE_KEY: 'app-owned', PGP_NOTE: 'not a libpq var',
+  };
+
+  it('drops the vault key, PG*, PortOS tokens and provider keys but keeps ordinary variables', () => {
+    expect(withoutServerSecretsEnv(env)).toEqual({
+      PATH: '/usr/bin', HOME: '/home/example', NODE_ENV: 'production', PORT: '5555',
+      DATABASE_URL: 'app-owned', STRIPE_KEY: 'app-owned', PGP_NOTE: 'not a libpq var',
+    });
+  });
+
+  it('lets a child keep the credentials it needs by design', () => {
+    const out = withoutServerSecretsEnv(env, { keep: ['OPENAI_API_KEY'] });
+    expect(out.OPENAI_API_KEY).toBe('o');
+    expect(out).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(serverSecretEnvKeys(env, { keep: ['OPENAI_API_KEY'] })).not.toContain('OPENAI_API_KEY');
   });
 });

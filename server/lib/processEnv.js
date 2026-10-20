@@ -131,6 +131,46 @@ export function buildSafeCliBaseEnv(env = process.env, provider = null) {
   );
 }
 
+// Server-held secrets a non-agent child (managed app, deploy.sh, third-party
+// install script) must not inherit: the vault key, database credentials, PortOS
+// session tokens and AI provider credentials. Managed apps receive their own
+// configured variables through explicit env overlays, not through ambient
+// server state.
+const SERVER_SECRET_ENV_KEYS = new Set([
+  'PRIVACY_VAULT_KEY',
+  'FAL_KEY', 'RUNWAYML_API_SECRET', 'REACTOR_API_KEY', 'ARTIFICIAL_ANALYSIS_API_KEY',
+  'HUGGINGFACE_TOKEN', 'HUGGINGFACE_HUB_TOKEN', 'HUGGINGFACEHUB_API_TOKEN', 'HUGGING_FACE_HUB_TOKEN',
+  ...Object.values(CLI_PROVIDER_AUTH_RULES).flatMap((rule) => rule.keys),
+]);
+const SERVER_SECRET_ENV_PATTERNS = [
+  /^PG[A-Z]+$/,
+  /^PORTOS_[A-Z_]*(TOKEN|KEY|PASSWORD|SECRET)$/,
+  /^(ANTHROPIC|CLAUDE|OPENAI|GEMINI|XAI|GROK|KIMI|MOONSHOT|CURSOR|NVIDIA|OPENROUTER|CIVITAI|HF)_[A-Z_]*(API_KEY|AUTH_TOKEN|TOKEN)$/,
+];
+
+// Matched case-insensitively: Windows treats `PgPassword` as `PGPASSWORD`.
+const isServerSecretEnvKey = (key, keep) => {
+  const name = key.toUpperCase();
+  return !keep.some((kept) => kept.toUpperCase() === name)
+    && (SERVER_SECRET_ENV_KEYS.has(name) || SERVER_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(name)));
+};
+
+/** Names present in `env` that `withoutServerSecretsEnv` would remove. */
+export function serverSecretEnvKeys(env = process.env, { keep = [] } = {}) {
+  return Object.keys(env || {}).filter((key) => isServerSecretEnvKey(key, keep));
+}
+
+/**
+ * Copy of `env` minus server-held secrets, for children that are not AI CLIs
+ * (those use `buildSafeCliBaseEnv`). `keep` exempts names the child needs by
+ * design, such as the Codex image agent's own provider key.
+ */
+export function withoutServerSecretsEnv(env = process.env, { keep = [] } = {}) {
+  return Object.fromEntries(
+    Object.entries(env || {}).filter(([key]) => !isServerSecretEnvKey(key, keep)),
+  );
+}
+
 // Resolve the first PATH hit for a binary via `which` (POSIX) / `where`
 // (Windows) — the "is this system tool installed, and where?" probe copied
 // inline across ytdlp/ffmpeg/pythonSetup/voice discovery. Returns the absolute

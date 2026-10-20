@@ -1,6 +1,38 @@
+import { EventEmitter } from 'events';
 import { describe, it, expect, vi } from 'vitest';
 import { DEPLOY_FLAGS as sharedDeployFlags } from '../lib/appDeployFlags.js';
-import { DEPLOY_FLAGS, runDeployFlow } from './appDeployer.js';
+
+const mockSpawn = vi.hoisted(() => vi.fn());
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawn: mockSpawn,
+}));
+
+import { DEPLOY_FLAGS, deployApp, runDeployFlow } from './appDeployer.js';
+
+describe('deployApp environment', () => {
+  it('does not hand server secrets to deploy.sh', async () => {
+    vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+    vi.stubEnv('PGPASSWORD', 'db');
+    vi.stubEnv('PORTOS_DEPLOY_PROBE', 'kept');
+    mockSpawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    });
+
+    await deployApp({ repoPath: '/repo/example-ios' }, [], () => {});
+
+    const { env } = mockSpawn.mock.calls[0][2];
+    expect(env).not.toHaveProperty('PRIVACY_VAULT_KEY');
+    expect(env).not.toHaveProperty('PGPASSWORD');
+    expect(env.PORTOS_DEPLOY_PROBE).toBe('kept');
+    expect(env.FORCE_COLOR).toBe('0');
+    vi.unstubAllEnvs();
+  });
+});
 
 describe('deploy flag contract', () => {
   it('preserves the service export as the shared lib allowlist', () => {
