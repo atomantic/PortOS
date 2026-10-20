@@ -157,6 +157,8 @@ export default function UniverseBuilder() {
     removeCategory,
     removeStyleReference,
     runs,
+    runsStatus,
+    retryRuns,
     saving,
     setRenderPin,
     setCanonDirty,
@@ -699,6 +701,8 @@ export default function UniverseBuilder() {
             handleRender={handleRender}
             rendering={rendering}
             runs={runs}
+            runsStatus={runsStatus}
+            onRetryRuns={retryRuns}
           />
         )}
 
