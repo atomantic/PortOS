@@ -173,8 +173,10 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
  *                 ingredientId equals it is skipped (loop break).
  *
  * LWW: writes the catalog row only when the embedded entry's `updatedAt` is
- * newer-or-equal to the stored row's. Best-effort per entry (logged on
- * failure); returns `{ written, skipped }`.
+ * newer-or-equal to the stored row's, re-checked under the row lock at write
+ * time. Best-effort per entry (logged on failure); a write refused because the
+ * row changed after the batched lookup counts as skipped. Returns
+ * `{ written, skipped }`.
  */
 export async function projectToCatalog(universeId, canonArrays, { guardToken = null } = {}) {
   const stats = { written: 0, skipped: 0 };
@@ -220,30 +222,38 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
   }
 
   // Pass 2 — write only the rows the LWW comparison says are stale. Sequential
-  // by design: each updateIngredient is a multi-statement write (sanitize +
+  // by design: each write is a multi-statement transaction (lock + sanitize +
   // update + revision), and firing N of them at once would trade the read
   // stampede this fix removed for a write one.
   //
-  // Track writes applied within this call in `appliedTimestamps` so if multiple
-  // candidates reference the same ingredientId in one batch, an older entry
-  // cannot overwrite a newer entry written earlier in the same pass (#4006).
-  const appliedTimestamps = new Map(timestamps);
+  // The batched snapshot only prunes obvious losers. A catalog PATCH or another
+  // universe save can commit while an earlier candidate's write is pending, so
+  // updateIngredientIfFresh re-checks the clock under the row lock and reports
+  // `stale` instead of overwriting the newer row (#12503).
+  //
+  // `ownWrites` keeps the row version and source clock of each write made in
+  // this call, so a duplicate ingredientId compares against the entry written
+  // earlier in the pass rather than the NOW() the trigger stamped (#4006).
+  const ownWrites = new Map();
   for (const { ingredientId, entry } of candidates) {
-    const rowUpdatedAt = appliedTimestamps.get(ingredientId);
+    const rowUpdatedAt = timestamps.get(ingredientId);
     if (rowUpdatedAt === undefined) { stats.skipped++; continue; }   // no live row
+    const priorWrite = ownWrites.get(ingredientId) || null;
     // LWW on updatedAt — only overwrite the catalog row when the embedded entry
     // is at-least-as-fresh. An older embedded snapshot (e.g. a concurrent
     // catalog edit won) is left alone.
     const entryAt = Date.parse(entry.updatedAt || '') || 0;
-    const rowAt = Date.parse(rowUpdatedAt || '') || 0;
+    const rowAt = Date.parse(priorWrite?.sourceUpdatedAt || rowUpdatedAt || '') || 0;
     if (entryAt < rowAt) { stats.skipped++; continue; }
     try {
-      await catalogDB.updateIngredient(
+      const sourceUpdatedAt = entry.updatedAt;
+      const result = await catalogDB.updateIngredientIfFresh(
         ingredientId,
         { name: entry.name, payload: entryToPayload(entry) },
-        { source: 'sync', actor: 'canon-projection' },
+        { sourceUpdatedAt, priorWrite, source: 'sync', actor: 'canon-projection' },
       );
-      appliedTimestamps.set(ingredientId, entry.updatedAt || rowUpdatedAt);
+      if (result?.status !== 'written') { stats.skipped++; continue; }
+      ownWrites.set(ingredientId, { syncSequence: result.ingredient.syncSequence, sourceUpdatedAt });
       stats.written++;
     } catch (err) {
       console.error(`🔁 projectToCatalog: ingredient ${ingredientId} update failed: ${err.message}`);

@@ -17,7 +17,7 @@ vi.mock('./catalogDB.js', () => ({
   getIngredientIdentityIds: vi.fn(async (id) => [id]),
   listRefsForIngredient: vi.fn(),
   getIngredientTimestamps: vi.fn(),
-  updateIngredient: vi.fn(),
+  updateIngredientIfFresh: vi.fn(),
 }));
 
 const catalog = await import('./catalogDB.js');
@@ -66,9 +66,9 @@ beforeEach(async () => {
   commit('Initial', BASE);
   catalog.getIngredient.mockImplementation(async () => structuredClone(row));
   catalog.getIngredientTimestamps.mockImplementation(async () => new Map([[ingredientId, row.updatedAt]]));
-  catalog.updateIngredient.mockImplementation(async (_id, patch) => {
+  catalog.updateIngredientIfFresh.mockImplementation(async (_id, patch) => {
     row = { ...row, ...structuredClone(patch), updatedAt: new Date().toISOString() };
-    return structuredClone(row);
+    return { status: 'written', ingredient: structuredClone(row) };
   });
   catalog.listRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: universeId }]);
   await store().writeRecord(universeId, sanitizeTemplate({
@@ -92,7 +92,7 @@ describe('catalog projection ordering through persisted universe writes', () => 
     }
     expect(row.name).toBe('New');
     expect(await persistedEntry()).toMatchObject({ name: 'New', updatedAt: newAt });
-    expect(catalog.updateIngredient).not.toHaveBeenCalled();
+    expect(catalog.updateIngredientIfFresh).not.toHaveBeenCalled();
   });
 
   it('rechecks the catalog after entering the universe queue', async () => {
@@ -150,7 +150,7 @@ describe('catalog projection ordering through persisted universe writes', () => 
     const entry = await persistedEntry();
     expect(entry).toMatchObject({ id: 'example-character', ingredientId, createdAt: BASE,
       updatedAt: OLD, name: 'Catalog edit', role: 'Hero', physicalDescription: '' });
-    expect(catalog.updateIngredient).not.toHaveBeenCalled();
+    expect(catalog.updateIngredientIfFresh).not.toHaveBeenCalled();
     commit('Later catalog edit', NEW);
     await updateUniverse(universeId, (cur) => ({
       characters: [...cur.characters, { id: 'example-other', name: 'Other character', updatedAt: BASE }],
@@ -158,6 +158,6 @@ describe('catalog projection ordering through persisted universe writes', () => 
     expect((await getUniverse(universeId)).characters[1].updatedAt > BASE).toBe(true);
     expect(await persistedEntry()).toMatchObject({ updatedAt: OLD, name: 'Catalog edit' });
     expect(row.name).toBe('Later catalog edit');
-    expect(catalog.updateIngredient).not.toHaveBeenCalled();
+    expect(catalog.updateIngredientIfFresh).not.toHaveBeenCalled();
   });
 });

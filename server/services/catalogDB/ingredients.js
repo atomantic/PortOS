@@ -218,6 +218,40 @@ export async function updateIngredient(id, patch = {}, { client, source = 'user'
 }
 
 /**
+ * Conditional content write for a source that carries its own clock (the
+ * canon→catalog projection and the boot reconciler, #12503). A batched
+ * freshness snapshot read earlier is only an optimization: this re-reads the
+ * target row's clock under `FOR UPDATE` inside the write transaction, so the
+ * sanitize read, the UPDATE and the revision all see the locked row and a
+ * catalog edit committed after the snapshot can no longer be overwritten.
+ *
+ * Writes only when `sourceUpdatedAt` is at least as fresh as the live row
+ * (millisecond precision, matching the ISO clocks callers compare). `priorWrite`
+ * — `{ syncSequence, sourceUpdatedAt }` from this caller's own earlier result —
+ * lets a multi-step pass supersede the row it wrote itself: the trigger stamps
+ * NOW() on that write, so the live clock alone would reject a newer sibling.
+ * The trigger also bumps `sync_sequence` on every content change, so a match
+ * proves nobody else wrote since.
+ *
+ * Returns `{ status: 'written' | 'stale' | 'missing', ingredient }`.
+ */
+export async function updateIngredientIfFresh(id, patch, { sourceUpdatedAt, priorWrite = null, source = 'user', actor = null } = {}) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT updated_at, sync_sequence FROM catalog_ingredients
+        WHERE id = catalog_resolve_ingredient_id($1) AND deleted = false FOR UPDATE`,
+      [id],
+    );
+    if (rows.length === 0) return { status: 'missing', ingredient: null };
+    const ownRow = priorWrite?.syncSequence != null && String(rows[0].sync_sequence) === String(priorWrite.syncSequence);
+    const rowAt = ownRow ? Date.parse(priorWrite.sourceUpdatedAt || '') || 0 : Date.parse(rows[0].updated_at.toISOString());
+    if ((Date.parse(sourceUpdatedAt || '') || 0) < rowAt) return { status: 'stale', ingredient: null };
+    const ingredient = await updateIngredient(id, patch, { client, source, actor });
+    return ingredient ? { status: 'written', ingredient } : { status: 'missing', ingredient: null };
+  });
+}
+
+/**
  * Insert one revision row capturing the committed state of an ingredient, then
  * prune the ingredient's history to the most-recent CATALOG_REVISION_RETENTION
  * rows. Called from updateIngredient (content changes) and createIngredient's
