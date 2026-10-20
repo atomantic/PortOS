@@ -117,6 +117,25 @@ repair the exact existing backlink rather than minting another merge authority.
 Missing tasks, unreadable state, active owners and explicit leave-open policy
 never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
+When cleanup is enabled, completed local review obligations become bounded
+`REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
+checkout identity and ownership. The task records the exact release and review
+digest, reads the complete original/current code comparison, and uses the live
+retirement endpoint only after review. That endpoint rechecks the digest and
+archives content before removal. A successful agent report without the matching
+archive receipt remains incomplete across restarts and later empty inventory scans.
+Repository-cleanup recovery uses the same scoped API review and additive obligation;
+its completion checks the persisted task identity and exact archive receipt without
+starting another repository sweep. Intentional human handoffs, live owners,
+locks, unmanaged trees and refused previews stay visible with their own reasons.
+A missing remote proof commit can be fetched during preview without advancing
+local refs; changed default-branch evidence requires a new review.
+
+Reconciliation also wakes existing merge receipts for local unlocked branches.
+It joins the pending-merge coordinator, does not spend its periodic tick budget,
+and leaves remote-only receipts and concurrent replacement receipts untouched.
+A single locked checkout no longer labels unrelated review holds as live owners.
+
 Routine reconciliation retains superseded but unmerged branches. Their separate
 backup-and-retire workflow requires explicit `reapSuperseded: true`; merged cleanup
 does not enable it.

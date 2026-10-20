@@ -100,14 +100,24 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
-/** Read-only, host-control-gated review of exactly one current inventory row. */
+/** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
 export async function prepareInventoriedCheckoutRetirement({ appId, release, prUrl }, opts = {}) {
   const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
   if (!outcome?.remaining?.some(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
-  return withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl }, { ...opts, forgeAccount: app.forgeAccount ?? null }));
+  const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
+  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl }, reviewOptions));
+  let prepared = await review();
+  if (prepared.reason === 'retirement-local-objects-missing') {
+    // A remote default may advance while local refs stay put. Acquire only its
+    // validated proof objects; then repeat every owner/policy/content check.
+    const fetched = await fetchRetirementProofObjects(app.repoPath, release, prUrl, null, reviewOptions);
+    if (!fetched.ok) return fetched;
+    prepared = await review();
+  }
+  return prepared;
 }
 
 /** Git's object id for raw bytes, with no clean filter or line-ending conversion. */
@@ -498,9 +508,9 @@ const sameRelease = (entry, release) => entry.path === release.path && entry.hea
   && (entry.branch ?? null) === (release.branch ?? null) && Boolean(entry.locked) === release.locked
   && (entry.lockReason ?? null) === (release.lockReason ?? null);
 
-// Only the automatic receipt path may acquire missing proof objects. Fetch
-// exact server-verified commits into the object store, never a branch or index.
-async function fetchReceiptProofObjects(repoPath, release, prUrl, expectedHeadSha, opts) {
+// Preview and receipt paths may acquire exact server-verified proof commits
+// into the object store, never a branch, index or implicit approval.
+async function fetchRetirementProofObjects(repoPath, release, prUrl, expectedHeadSha, opts) {
   const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
     import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
   ]);
@@ -509,7 +519,7 @@ async function fetchReceiptProofObjects(repoPath, release, prUrl, expectedHeadSh
   if (!origin || !forge || forge.repository !== `${origin.host}/${origin.fullName}` || forge.prUrl !== prUrl) {
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
-  if (forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
+  if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
   const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
@@ -546,7 +556,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
   // and archival feasibility gates. Missing remote merge objects are recoverable
   // here without requiring an unrelated repo-sync to advance local branches.
   if (prepared.reason === 'retirement-local-objects-missing') {
-    const fetched = await fetchReceiptProofObjects(repoPath, release, prUrl, expectedHeadSha, receiptOptions);
+    const fetched = await fetchRetirementProofObjects(repoPath, release, prUrl, expectedHeadSha, receiptOptions);
     if (!fetched.ok) return fetched;
     prepared = await reviewCurrentCheckout({ repoPath, release, prUrl }, receiptOptions);
   }

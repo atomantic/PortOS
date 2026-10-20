@@ -24,6 +24,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]) }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn().mockResolvedValue(null) }));
+vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
+vi.mock('./heldCheckoutRecovery.js', () => ({
+  prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
+}));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cos.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-recovery-1' }),
@@ -62,6 +66,8 @@ import { updateAgent, recordRepoStateRecovery, recordRepoStateVerification } fro
 import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { getTaskById } from './cosTaskStore.js';
+import { recordBranchReconcileOutcome } from './taskSchedule.js';
+import { prepareInventoriedCheckoutRetirement } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cos.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
@@ -78,6 +84,9 @@ import { REPO_STATE_ISSUES, REPO_STATE_SKIPS } from '../lib/repoStateExpectation
 
 const BRANCH = 'cos/task-x/agent-1';
 const WORKTREE = '/repo/data/cos/worktrees/agent-1';
+const HEAD = '1'.repeat(40);
+const RELEASE = { branch: BRANCH, path: WORKTREE, head: HEAD, locked: false, lockReason: null };
+const CREATED_AT = '2026-01-01T00:00:00.000Z';
 
 const agentState = (overrides = {}) => ({
   metadata: {
@@ -114,13 +123,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   readBranchCompletionPolicies.mockResolvedValue([]);
   getTaskById.mockResolvedValue(null);
+  recordBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [{ ...RELEASE, createdAt: CREATED_AT }] });
+  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } });
   listWorktrees.mockResolvedValue([]);
   listRemoteHeads.mockResolvedValue(new Map());
   cleanupMerged.mockResolvedValue({ cleaned: [] });
   existsSync.mockReturnValue(false);
   hasBranchMergeEvidence.mockResolvedValue(true);
   queuedTasks([]);
-  getAppById.mockResolvedValue({ id: 'demo-app', name: 'Demo App' });
+  getAppById.mockResolvedValue({ id: 'demo-app', name: 'Demo App', repoPath: '/repo' });
   readPendingMergePrs.mockReturnValue([]);
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: null });
   findPullRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
@@ -170,6 +181,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     // forge) but its local branch and worktree survived cleanup silently.
     existsSync.mockReturnValue(true);
     localBranch(true);
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
 
     const result = await run();
@@ -192,14 +204,51 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.useWorktree).toBe(false);
     // Remediation must be actionable without re-diagnosing, and must forbid
     // deleting unmerged work or touching a sibling agent's branch.
-    expect(payload.context).toContain(`Inspect the retained worktree ${WORKTREE}`);
-    expect(payload.context).toContain('Preserve every unique tracked, untracked and ignored byte');
-    expect(payload.context).toContain(`Retire local branch ${BRANCH} only after fresh merge evidence`);
-    expect(payload.context).not.toContain('git branch -D');
+    expect(payload.context).toContain(`Keep the retained worktree ${WORKTREE}`);
+    expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+    expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
+    expect(payload.context).toContain('FULL returned review.comparison.localPatch and difference');
+    expect(payload.context).toContain('"digest":"<review.digest>"');
+    expect(payload.context).toContain('archiveDir and branchDeleted:true');
+    expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
+    expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE, createdAt: CREATED_AT });
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({
+      retirementObligations: [{ ...RELEASE, reason: 'retirement-review-pending' }],
+    }));
+    expect(recordBranchReconcileOutcome.mock.invocationCallOrder[0]).toBeLessThan(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]);
+    expect(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
     expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-recovery-1', priority: 'high',
     }));
+  });
+
+  it('retains a refused preview obligation and retries fresh evidence without dispatching unsafe cleanup', async () => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'active-agent-owner' });
+    expect(await run()).toMatchObject({ verified: false, skipReason: 'active-agent-owner', recoveryTaskId: null });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({ reason: 'active-agent-owner' }));
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect(await run()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
+    expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['locked', 'persistence-failed', 'obligation-missing', 'inventory-missing'])('preserves %s cleanup without shell fallback', async cause => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    listWorktrees.mockResolvedValue(cause === 'inventory-missing' ? [] : [{ ...RELEASE, locked: cause === 'locked', branch: `refs/heads/${BRANCH}` }]);
+    if (cause === 'persistence-failed') recordBranchReconcileOutcome.mockRejectedValue(new Error('write refused'));
+    if (cause === 'obligation-missing') recordBranchReconcileOutcome.mockResolvedValue({});
+    const result = await run();
+    expect(result.verified).toBe(false);
+    expect(result.skipReason).toMatch(/^retirement-/);
+    expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('finds a worktree git still tracks even when the directory is gone', async () => {
@@ -420,7 +469,8 @@ describe('verifyAgentRepoState — never fires', () => {
     expect(result.issues.map(i => i.code)).toEqual([REPO_STATE_ISSUES.PR_UNMERGED]);
     // The remediation must speak glab — a `gh pr merge` line is unrunnable there.
     // The real IID, not a `<iid>` placeholder the recovery agent cannot run.
-    expect(addTask.mock.calls[0][0].context).toContain('glab mr merge 4 --yes --remove-source-branch');
+    expect(addTask.mock.calls[0][0].context).toContain('glab mr merge 4 --yes');
+    expect(addTask.mock.calls[0][0].context).not.toContain('--remove-source-branch');
     expect(addTask.mock.calls[0][0].context).not.toContain('gh pr merge');
   });
 

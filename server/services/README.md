@@ -6,6 +6,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `branchReconcileRetirement.js` | Prepares exact, owner-checked historical review obligations and API-only review/retirement instructions; no inferred approval or deletion. |
 | `branchReconcileCompletion.js` | Runs ownership-checked merged and superseded cleanup on coordinator completion, independent of perpetual scheduling. |
 | `heldCheckoutReview.js` | Computes fresh forge identity, merged PR/default refs and exact code comparisons for a digest-bound operator retirement; no saved consent or policy rewrites. |
 | `heldCheckoutRecovery.js` | Prepares scoped retirement reviews and preserves checkout content, empty gitlinks and private Git administration before ownership-checked removal and expected-head local ref deletion. Pending-merge receipts use `retirePendingMergeCheckout`, which independently verifies the merged head and refuses locks, supersession and initialized submodules. |

@@ -460,8 +460,27 @@ async function finishMergedReceipt(app, entry, binding) {
  * agent handoff (cosMergeHandoff.js) merges only its recorded head; a moved
  * head drops the binding and dispatches the recorded review/validation policy.
  */
-export function processPendingMergePrs(app, { spendTicks = true } = {}) {
-  return joinPendingMergeSweep(app?.id, () => runPendingMergePrs(app, { spendTicks }));
+export function processPendingMergePrs(app, { spendTicks = true, receipts = null } = {}) {
+  return joinPendingMergeSweep(app?.id, () => runPendingMergePrs(app, { spendTicks, receipts }));
+}
+
+/** A reconciliation click wakes only existing, bound receipts on local unlocked
+ * branches. It never imports remote-only PRs or creates a second coordinator.
+ */
+export async function nudgeLocalPendingMergePrs(appId, deps = {}) {
+  const blocked = await mergeHandoffSuccessorBlocked();
+  if (blocked) return { ok: false, reason: blocked };
+  const app = await getAppById(appId);
+  if (!readPendingMergePrs(app).length) return { ok: true, checked: 0 };
+  const readBranches = deps.getBranches || (await import('./git.js')).getBranches;
+  const readWorktrees = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+  const [branches, trees] = await Promise.all([readBranches(app.repoPath), readWorktrees(app.repoPath)]);
+  const locked = new Set(trees.filter(tree => tree.locked).map(tree => tree.branch?.replace(/^refs\/heads\//, '')));
+  const local = new Set(branches.map(branch => branch.name).filter(branch => !locked.has(branch)));
+  const receipts = readPendingMergePrs(app).filter(entry => entry.handoff?.receiptId && local.has(entry.prBranch))
+    .map(entry => JSON.stringify(entry.handoff));
+  if (!receipts.length) return { ok: true, checked: 0 };
+  return processPendingMergePrs(app, { spendTicks: false, receipts });
 }
 
 // The timer sweep, the task-generator sweep and a receipt sweep can overlap:
@@ -477,9 +496,10 @@ function joinPendingMergeSweep(appId, start) {
   return settled;
 }
 
-async function runPendingMergePrs(app, { spendTicks }) {
+async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
   const charge = spendTicks ? 1 : 0;
-  const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean);
+  const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean)
+    .filter(entry => receipts === null || receipts.includes(JSON.stringify(entry.handoff)));
   if (pending.length === 0) return { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0 };
 
   const origin = await getOriginInfo(app?.repoPath).catch(() => null);
