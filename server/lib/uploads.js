@@ -6,8 +6,8 @@ import { MIRRORED_MIME_TYPES } from './beeperAttachmentPaths.js';
 import { ServerError } from './errorHandler.js';
 import { copyFileGuarded, ensureDir, pathExists, renameGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
 import {
-  detectImageFormat, detectMediaManifest, getFileExtension, getMimeType, MEDIA_MANIFEST_PROBE_BYTES,
-  RISKY_MIME_TYPES, sanitizeFilename,
+  detectImageFormat, detectMediaManifest, getFileExtension, getMimeType, id3v2TagLength,
+  MEDIA_MANIFEST_PROBE_BYTES, RISKY_MIME_TYPES, sanitizeFilename,
 } from './mimeTypes.js';
 import { PATHS } from './paths.js';
 import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
@@ -27,12 +27,23 @@ function assertNotMediaManifest(buffer) {
   }
 }
 
-/** `assertNotMediaManifest` over the leading bytes of a file on disk. */
+/**
+ * `assertNotMediaManifest` over a file on disk: its leading window, plus the
+ * window after an ID3v2 tag too long to fit in it.
+ */
 export async function assertFileNotMediaManifest(path) {
   const handle = await open(path, 'r');
-  const head = Buffer.alloc(MEDIA_MANIFEST_PROBE_BYTES);
-  const { bytesRead } = await handle.read(head, 0, head.length, 0).finally(() => handle.close());
-  assertNotMediaManifest(head.subarray(0, bytesRead));
+  const readWindow = async (position) => {
+    const window = Buffer.alloc(MEDIA_MANIFEST_PROBE_BYTES);
+    const { bytesRead } = await handle.read(window, 0, window.length, position);
+    return window.subarray(0, bytesRead);
+  };
+  const windows = await (async () => {
+    const head = await readWindow(0);
+    const tagLength = id3v2TagLength(head);
+    return tagLength >= head.length && head.length === MEDIA_MANIFEST_PROBE_BYTES ? [head, await readWindow(tagLength)] : [head];
+  })().finally(() => handle.close());
+  for (const window of windows) assertNotMediaManifest(window);
 }
 
 /**

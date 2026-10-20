@@ -187,7 +187,7 @@ export function detectVideoFormat(buf) {
 export const MEDIA_MANIFEST_PROBE_BYTES = 1 << 20;
 
 // Length of a leading ID3v2 tag, which ffmpeg strips before probing.
-function id3v2TagLength(buf) {
+export function id3v2TagLength(buf) {
   if (buf.length < 10 || buf.toString('latin1', 0, 3) !== 'ID3' || buf[3] === 0xff || buf[4] === 0xff) return 0;
   if ((buf[6] | buf[7] | buf[8] | buf[9]) & 0x80) return 0;
   const length = 10 + ((buf[6] << 21) | (buf[7] << 14) | (buf[8] << 7) | buf[9]);
@@ -200,17 +200,19 @@ function id3v2TagLength(buf) {
  * whose bytes are an HLS playlist, DASH manifest, IMF composition, concat
  * script or SDP session makes a later probe or render read the local media
  * files (or network endpoints) it names; ffmpeg before 6.1 opens an HLS
- * playlist under any extension. Mirrors the demuxer probes: the bytes after
- * one optional ID3v2 tag, with substring probes stopping at the first NUL.
+ * playlist under any extension. Mirrors the demuxer probes: a probe window
+ * at the start and one after an optional ID3v2 tag, with substring probes
+ * stopping at the first NUL. The post-tag window is checked even past
+ * ffmpeg's own 1 MiB limit, so a larger probe size cannot reopen the gap.
  *
- * @param {Buffer} buf - Leading bytes of the file
+ * @param {Buffer} buf - The file's bytes, or at least its leading window
  * @returns {'hls'|'concat'|'dash'|'imf'|'sdp'|null}
  */
 export function detectMediaManifest(buf) {
   if (!Buffer.isBuffer(buf)) return null;
-  const head = buf.subarray(0, MEDIA_MANIFEST_PROBE_BYTES);
-  const tagLength = id3v2TagLength(head);
-  const views = tagLength > 0 && tagLength < head.length ? [head, head.subarray(tagLength)] : [head];
+  const tagLength = id3v2TagLength(buf);
+  const views = [buf.subarray(0, MEDIA_MANIFEST_PROBE_BYTES)];
+  if (tagLength > 0 && tagLength < buf.length) views.push(buf.subarray(tagLength, tagLength + MEDIA_MANIFEST_PROBE_BYTES));
   for (const view of views) {
     const nul = view.indexOf(0);
     const text = view.toString('latin1', 0, nul === -1 ? view.length : nul);
