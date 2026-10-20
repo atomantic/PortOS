@@ -2,11 +2,6 @@
 // module + normalized first argument, never source positions. See JSON_WRITEBACK.md.
 export const JSON_WRITEBACK_EXCEPTIONS = [
   {
-    "key": "agentDrafts.js :: filePath",
-    "reason": "Tolerant read feeds saveDrafts: an unreadable drafts file reads as [] and the next save replaces it; conversion tracked in #12463.",
-    "issue": "#12463"
-  },
-  {
     "key": "agentRunReconciler.js :: path",
     "reason": "No failed-read write-back: repair planning and its final re-read skip null run metadata."
   },
@@ -25,11 +20,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "backup.js :: manifestPath",
     "reason": "No write-back cycle: snapshot generation builds manifests from snapshot files; listing and restore only consume them."
-  },
-  {
-    "key": "browserService.js :: CONFIG_FILE",
-    "reason": "Tolerant read feeds saveConfig: a malformed config reads as defaults and the next save persists them; conversion tracked in #12463.",
-    "issue": "#12463"
   },
   {
     "key": "claudeChangelog.js :: STATE_FILE",
@@ -60,18 +50,8 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No write-back cycle: reports are generated from agent records and written whole; getReport only projects a stored report."
   },
   {
-    "key": "feedbackLoop.js :: FEEDBACK_FILE",
-    "reason": "Tolerant read feeds saveFeedback: a malformed file reads as the empty default and the next entry overwrites it; conversion tracked in #12463.",
-    "issue": "#12463"
-  },
-  {
     "key": "imageTo3d/sourceKeying.js :: preparedCacheMetadataPath ( targetPath )",
     "reason": "Cache-only: source bytes and the explicit keying/framing request rebuild the prepared image metadata."
-  },
-  {
-    "key": "imessageManage.js :: blocklistPath ( )",
-    "reason": "Tolerant read feeds writeBlocklist: an unreadable blocklist reads as empty and the next edit drops every other handle; conversion tracked in #12463.",
-    "issue": "#12463"
   },
   {
     "key": "imessageSync.js :: stateFilePath ( )",
@@ -101,16 +81,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "mediaSketches.js :: jsonPathFor ( key )",
     "reason": "No write-back cycle: the read projects the canvas; explicit save replaces the complete canvas supplied by the user."
-  },
-  {
-    "key": "memoryClassifier.js :: MEMORY_CONFIG_FILE",
-    "reason": "Tolerant read feeds updateConfig: a malformed config reads as defaults and the next update persists them; conversion tracked in #12463.",
-    "issue": "#12463"
-  },
-  {
-    "key": "messagePlaywrightSync.js :: SELECTORS_FILE",
-    "reason": "Tolerant read feeds updateSelectors: malformed selectors read as {} and one provider's update replaces all; conversion tracked in #12463.",
-    "issue": "#12463"
   },
   {
     "key": "messageSync.js :: filePath",
