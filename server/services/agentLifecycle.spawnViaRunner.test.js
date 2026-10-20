@@ -52,6 +52,7 @@ vi.mock('./agentFinalization.js', () => ({
   dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
+  retireDeadAgent: vi.fn().mockResolvedValue({ success: false }),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
 
@@ -65,6 +66,7 @@ vi.mock('./cos.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
+  getAgent: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
@@ -129,7 +131,9 @@ import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { finalizeAgent, releaseAgentLane, retireDeadAgent } from './agentFinalization.js';
+import { getAgent, getAgentRecord, getTaskById } from './cos.js';
+import { release } from './executionLanes.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { handleOrphanedTask } from './agentManagement.js';
@@ -137,23 +141,67 @@ import { runnerAgents } from './agentState.js';
 
 const REJECTION = 'Command not allowed: grok. Permitted commands: claude, codex';
 
-it('finalizes an interrupted TUI startup as retryable failure, without crediting a shared-checkout commit', async () => {
+it('settles an interrupted TUI startup as a restart interruption, charging the task nothing', async () => {
   vi.clearAllMocks();
   const startupErrorAnalysis = {
     category: 'startup-failure', origin: 'runner', actionable: false,
     message: 'Server restarted before the TUI task prompt was submitted',
   };
+  const task = { id: 'task-interrupted', taskType: 'user', status: 'in_progress', metadata: {} };
+  const record = { id: 'agent-interrupted', status: 'running', taskId: task.id, metadata: { runId: 'run-interrupted' }, startedAt: '2026-10-20T17:00:51.000Z' };
+  vi.mocked(getAgent).mockResolvedValueOnce(record);
+  vi.mocked(getAgentRecord).mockResolvedValueOnce(record);
+  vi.mocked(getTaskById).mockResolvedValue(task);
   runnerAgents.set('agent-interrupted', {
-    task: { id: 'task-interrupted', taskType: 'user', metadata: {} },
-    runId: 'run-interrupted', workspacePath: '/tmp/ws', startedAt: Date.now(),
-    startupErrorAnalysis, recoveredFromRunner: true,
+    task, runId: 'run-interrupted', workspacePath: '/tmp/ws', startedAt: Date.now(),
+    laneName: 'standard', startupErrorAnalysis, recoveredFromRunner: true,
   });
   await handleAgentCompletion('agent-interrupted', 143, false, 1000);
-  expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
-    agentId: 'agent-interrupted', success: false, errorAnalysis: startupErrorAnalysis,
+
+  // PortOS ended the run before the task began: the retry/ledger/cooldown charges
+  // all live behind finalizeAgent, and the restart-interruption path skips them.
+  expect(finalizeAgent).not.toHaveBeenCalled();
+  expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+    agent: record, success: false, exitCode: 143, category: 'interrupted',
+    errorMessage: startupErrorAnalysis.message,
+    agentResultExtra: { interruptedByRestart: true },
   }));
+  expect(handleOrphanedTask).toHaveBeenCalledWith('task-interrupted', 'agent-interrupted', getTaskById,
+    expect.objectContaining({ interrupted: true }));
+  expect(release).toHaveBeenCalledWith('agent-interrupted');
   expect(committedDuringRun).not.toHaveBeenCalled();
   expect(runnerAgents.has('agent-interrupted')).toBe(false);
+});
+
+describe('interrupted TUI startup — cases that must keep finalizing normally', () => {
+  const startupErrorAnalysis = {
+    category: 'startup-failure', origin: 'runner', actionable: false,
+    message: 'Server restarted before the TUI task prompt was submitted',
+  };
+  const track = () => runnerAgents.set('agent-race', {
+    task: { id: 'task-race', taskType: 'user', metadata: {} },
+    runId: 'run-race', workspacePath: '/tmp/ws', startedAt: Date.now(),
+    startupErrorAnalysis, recoveredFromRunner: true,
+  });
+  const record = { id: 'agent-race', status: 'running', taskId: 'task-race', metadata: {} };
+
+  beforeEach(() => { vi.clearAllMocks(); runnerAgents.clear(); });
+
+  it('finalizes a run that submitted and succeeded while the guarded stop was still in flight', async () => {
+    track();
+    vi.mocked(getAgentRecord).mockResolvedValueOnce(record);
+    await handleAgentCompletion('agent-race', 0, true, 1000);
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-race', success: true }));
+  });
+
+  it('finalizes with the in-memory entry when the persisted record cannot be read', async () => {
+    track();
+    vi.mocked(getAgentRecord).mockResolvedValueOnce(null);
+    await handleAgentCompletion('agent-race', 143, false, 1000);
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-race', errorAnalysis: startupErrorAnalysis }));
+  });
 });
 
 // The runner ANSWERED and declined. The shape mirrors what `spawnAgentViaRunner`
