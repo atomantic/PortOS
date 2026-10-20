@@ -145,17 +145,17 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, editing, setEditing
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white focus:outline-hidden focus:border-port-accent"
                 autoFocus
               />
-              <button onClick={saveName} aria-label="Save name" className="text-port-success hover:text-port-success/80">
+              <button onClick={saveName} aria-label="Save name" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-success hover:text-port-success/80">
                 <Check size={16} />
               </button>
-              <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white">
+              <button onClick={() => setEditing(false)} aria-label="Cancel" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-white">
                 <X size={16} />
               </button>
             </div>
           ) : (
             <>
               <span className="text-white font-semibold text-lg">{self.name}</span>
-              <button onClick={startEdit} aria-label="Edit" className="text-gray-500 hover:text-white">
+              <button onClick={startEdit} aria-label="Edit" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-white">
                 <Edit3 size={14} />
               </button>
             </>
@@ -1404,13 +1404,13 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
                 className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-sm text-white focus:outline-hidden focus:border-port-accent w-32"
                 autoFocus
               />
-              <button onClick={saveName} aria-label="Save name" className="text-port-success hover:text-port-success/80"><Check size={14} /></button>
-              <button onClick={() => setEditingName(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
+              <button onClick={saveName} aria-label="Save name" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-success hover:text-port-success/80"><Check size={14} /></button>
+              <button onClick={() => setEditingName(false)} aria-label="Cancel" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-white"><X size={14} /></button>
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
               <span className="text-white font-medium">{peer.name}</span>
-              <button onClick={() => { setName(peer.name); setEditingName(true); }} aria-label="Edit" className="text-gray-600 hover:text-white">
+              <button onClick={() => { setName(peer.name); setEditingName(true); }} aria-label="Edit" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-600 hover:text-white">
                 <Edit3 size={12} />
               </button>
             </div>
@@ -1437,8 +1437,9 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
           </button>
           <button
             onClick={handleToggle}
-            className={`p-1.5 transition-colors text-xs font-mono ${peer.enabled ? 'text-port-success hover:text-port-success/80' : 'text-gray-600 hover:text-white'}`}
+            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 transition-colors text-xs font-mono ${peer.enabled ? 'text-port-success hover:text-port-success/80' : 'text-gray-600 hover:text-white'}`}
             title={peer.enabled ? 'Disable polling' : 'Enable polling'}
+            aria-label={peer.enabled ? 'ON, disable polling' : 'OFF, enable polling'}
           >
             {peer.enabled ? 'ON' : 'OFF'}
           </button>
