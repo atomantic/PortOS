@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
 import { makePathsProxy, mockNoPeerSync, mockNoPeers, mockTestIdentity, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
@@ -20,7 +21,6 @@ const pngBytes = label => Buffer.concat([PNG, Buffer.from(label)]);
 
 const fileUtilsMock = vi.hoisted(() => ({
   atomicWrite: vi.fn(), realAtomicWrite: null,
-  writeFileGuarded: vi.fn(), realWriteFileGuarded: null,
 }));
 
 function sha256Hex(buf) {
@@ -56,13 +56,11 @@ async function cleanupBuckets() {
 vi.mock('../../lib/fileUtils.js', async () =>
   makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), {
     dataRoot: tempData,
-    overrides: { atomicWrite: fileUtilsMock.atomicWrite, writeFileGuarded: fileUtilsMock.writeFileGuarded },
+    overrides: { atomicWrite: fileUtilsMock.atomicWrite },
   }));
 
 const fileUtilsActual = await vi.importActual('../../lib/fileUtils.js');
 fileUtilsMock.realAtomicWrite = fileUtilsActual.atomicWrite;
-fileUtilsMock.realWriteFileGuarded = fileUtilsActual.writeFileGuarded;
-fileUtilsMock.writeFileGuarded.mockImplementation((...args) => fileUtilsMock.realWriteFileGuarded(...args));
 fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
 
 // Stub instanceIdentity.getInstanceId so the exporter doesn't try to read the
@@ -116,8 +114,6 @@ function simulateRemoteSender(bucketPath, filename, peerId = 'remote-peer-id') {
 
 describe('sharing round-trip', () => {
   beforeEach(() => {
-    fileUtilsMock.writeFileGuarded.mockReset();
-    fileUtilsMock.writeFileGuarded.mockImplementation((...args) => fileUtilsMock.realWriteFileGuarded(...args));
     fileUtilsMock.atomicWrite.mockClear();
     fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
     // Wipe and re-seed the temp data dir + a fake asset for each test.
@@ -232,7 +228,7 @@ describe('sharing round-trip', () => {
       } else if (scenario.startsWith('oversized')) {
         const oversized = scenario === 'oversized sidecar' ? `${source}.metadata.json` : source;
         writeFileSync(oversized, '');
-        truncateSync(oversized, 100 * 1024 * 1024 + 1);
+        truncateSync(oversized, (scenario === 'oversized sidecar' ? SIDECAR_MAX_BYTES : ASSET_PULL_MAX_BYTES) + 1);
       }
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
@@ -258,18 +254,56 @@ describe('sharing round-trip', () => {
     writeFileSync(source, PNG);
     const target = join(tempData, 'images', ref.ref);
     let replaced = false;
-    fileUtilsMock.writeFileGuarded.mockImplementation((path, ...args) => {
-      if (path === target) {
+    fileUtilsMock.atomicWrite.mockImplementation((path, ...args) => {
+      if (path.startsWith(join(tempData, 'images', '.sharing-'))) {
         replaced = true;
         rmSync(source);
         symlinkSync(join(tempData, 'outside.png'), source, 'file');
         writeFileSync(join(tempData, 'outside.png'), 'unverified replacement');
       }
-      return fileUtilsMock.realWriteFileGuarded(path, ...args);
+      return fileUtilsMock.realAtomicWrite(path, ...args);
     });
     expect(await importer.processManifest(bucket.id, writeAssetManifest([ref]))).toMatchObject({ processed: true });
     expect(replaced).toBe(true);
     expect(readFileSync(target)).toEqual(PNG);
+  });
+
+  it('leaves no final or temporary file after a failed publication, then imports on retry', async () => {
+    const bucket = await buckets.createBucket({ name: 'Publication failure', path: tempBucket, mode: 'auto-merge' });
+    const ref = { kind: 'image', ref: 'retry.png', hash: sha256Hex(PNG) };
+    mkdirSync(join(tempBucket, 'assets', 'blobs'), { recursive: true });
+    writeFileSync(buckets.bucketBlobPath(tempBucket, ref.hash), PNG);
+    const filename = writeAssetManifest([ref]);
+    const imageDir = join(tempData, 'images');
+    fileUtilsMock.atomicWrite.mockImplementation(async (path, ...args) => {
+      if (path.startsWith(join(imageDir, '.sharing-'))) {
+        await fileUtilsMock.realAtomicWrite(path, 'partial bytes');
+        throw Object.assign(new Error('simulated disk full'), { code: 'ENOSPC' });
+      }
+      return fileUtilsMock.realAtomicWrite(path, ...args);
+    });
+    await expect(importer.processManifest(bucket.id, filename)).rejects.toThrow('simulated disk full');
+    expect(existsSync(join(imageDir, ref.ref))).toBe(false);
+    const { readdirSync } = await import('fs');
+    expect(readdirSync(imageDir).filter(name => name.startsWith('.sharing-'))).toEqual([]);
+    fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
+    await importer.processManifest(bucket.id, filename);
+    expect(readFileSync(join(imageDir, ref.ref))).toEqual(PNG);
+  });
+
+  it('preserves a destination created while verified bytes are being staged', async () => {
+    const bucket = await buckets.createBucket({ name: 'Concurrent publication', path: tempBucket, mode: 'auto-merge' });
+    const ref = { kind: 'image', ref: 'existing.png', hash: sha256Hex(PNG) };
+    mkdirSync(join(tempBucket, 'assets', 'blobs'), { recursive: true });
+    writeFileSync(buckets.bucketBlobPath(tempBucket, ref.hash), PNG);
+    const target = join(tempData, 'images', ref.ref);
+    const existing = pngBytes('existing');
+    fileUtilsMock.atomicWrite.mockImplementation((path, ...args) => {
+      if (path.startsWith(join(tempData, 'images', '.sharing-'))) writeFileSync(target, existing);
+      return fileUtilsMock.realAtomicWrite(path, ...args);
+    });
+    await importer.processManifest(bucket.id, writeAssetManifest([ref]));
+    expect(readFileSync(target)).toEqual(existing);
   });
 
   it('revalidates bucket bytes during promotion even when a local file already exists', async () => {
