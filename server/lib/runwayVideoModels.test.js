@@ -58,10 +58,31 @@ describe('buildRunwayVideoRequest — per-family wire bodies', () => {
   });
 });
 
+describe('buildRunwayVideoRequest — text-to-video', () => {
+  it('Gen-4.5 with no start frame: /v1/text_to_video body, ratio matched to the shape, priced, Avoid folded in', () => {
+    const portrait = buildRunwayVideoRequest({
+      prompt: 'a lighthouse at dusk', negativePrompt: 'text', seconds: 3.2, width: 1080, height: 1920, seed: 7,
+    });
+    expect(portrait.endpoint).toBe('text_to_video');
+    expect(portrait.body).toEqual({
+      model: 'gen4.5', promptText: 'a lighthouse at dusk\nAvoid: text', duration: 4, ratio: '720:1280', seed: 7,
+    });
+    expect(portrait.estimatedCostUsd).toBe(0.48);
+    // No target shape: Runway's documented landscape canvas.
+    expect(buildRunwayVideoRequest({ prompt: 'a fox' }).body.ratio).toBe('1280:720');
+    expect(build('gen4.5').endpoint).toBe('image_to_video');
+  });
+
+  it('refuses an over-cap text prompt with its count and never shortens it', () => {
+    expect(() => buildRunwayVideoRequest({ prompt: 'x'.repeat(1001) })).toThrow(/1,001 characters/);
+  });
+});
+
 describe('buildRunwayVideoRequest — refusals before anything is paid for', () => {
   it.each([
     ['an uncurated model', { modelId: 'gen9' }, /not a Runway model/],
-    ['a missing start frame', { imageUri: null }, /start frame/],
+    ['a missing start frame on an image-only model', { modelId: 'gen4_turbo', imageUri: null }, /start frame/],
+    ['an end frame without a start frame', { imageUri: null, endImageUri: END }, /end frame needs a start frame/],
     ['an end frame on a start-frame-only model', { modelId: 'gen4.5', endImageUri: END }, /takes no end frame/],
     ['a missing required prompt', { modelId: 'gen4.5', prompt: '  ' }, /needs a prompt/],
   ])('refuses %s', (_label, extra, message) => {

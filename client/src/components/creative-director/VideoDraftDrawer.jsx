@@ -1,5 +1,6 @@
 import { VIDEO_REVIEW_CHECKPOINTS } from '../../../../server/lib/creativeDirectorPresets.js';
 import { VIDEO_RENDER_MODES, modeLabel } from '../../lib/imageGenBackends.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { useEffect, useState } from 'react';
 import Drawer from '../Drawer.jsx';
 import useDrawerTab from '../../hooks/useDrawerTab.js';
@@ -81,6 +82,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
         <label htmlFor="video-draft-videoMode" className="block text-sm">Media backend<select id="video-draft-videoMode" className={fieldClass} value={form.videoMode || 'local'} onChange={e => { change('videoMode', e.target.value); change('backendModelId', ''); }}>{!VIDEO_RENDER_MODES.includes(form.videoMode) && form.videoMode && <option value={form.videoMode}>{form.videoMode} (saved backend)</option>}{VIDEO_RENDER_MODES.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>
         {form.videoMode === 'local' ? select('modelId', 'Media model', [['', 'Choose before production'], ...(form.modelId && !models.some(m => m.id === form.modelId) ? [[form.modelId, `${form.modelId} (saved model unavailable)`]] : []), ...models.map(m => [m.id, m.name || m.id])])
           : form.videoMode === 'fal' ? input('backendModelId', 'fal.ai model (optional)', { placeholder: 'Use configured fal.ai default', maxLength: 64 })
+          : form.videoMode === 'runway' ? select('backendModelId', 'Runway model', [['', `${getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL).label} (backend default)`], ...(form.backendModelId && !getRunwayVideoModel(form.backendModelId) ? [[form.backendModelId, `${form.backendModelId} (saved model unavailable)`]] : []), ...RUNWAY_VIDEO_MODELS.map(m => [m.id, m.label])])
           : select('backendModelId', 'Media model', [['', form.videoMode === 'reactor' ? 'fast-h3 (backend default)' : 'Backend default'], ...(form.backendModelId ? [[form.backendModelId, `${form.backendModelId} (saved model)`]] : [])])}
         <p className="text-sm text-port-text-muted">Backend selections are saved without running providers. Cloud renders may incur charges when production is enabled.</p>
         {select('transition', 'Shot joins', [['cut', 'Straight cuts'], ['fade', 'Fade through black (no overlap)']])}

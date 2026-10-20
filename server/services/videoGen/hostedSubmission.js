@@ -7,7 +7,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
-import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../../lib/runwayVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 
@@ -59,7 +59,8 @@ async function stageEndFrame({ body, uploads, stageUploadDurable }) {
   return { path: resolved, owned: false };
 }
 
-// Runway renders from a start frame only, with an end frame on the models that take one.
+// Runway renders from a start frame (an end frame on the models that take one),
+// or from text alone on a model with a text-to-video rule.
 async function stageRunwayInputs(ctx) {
   const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
   const refuse = async (message) => {
@@ -67,9 +68,10 @@ async function stageRunwayInputs(ctx) {
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
   if (uploads.audioFile) await refuse('Runway renders cutaways only; it takes no source audio.');
-  if (!sourceImagePath) await refuse('Runway renders from a start frame — supply a source image.');
   const model = getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
   if (!model) await refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
+  if (!sourceImagePath && !runwayModelTakesText(model)) await refuse(`${model.label} renders from a start frame — supply a source image.`);
+  if (!sourceImagePath && (uploads.lastImage || body.lastImageFile)) await refuse('An end frame needs a start frame — supply a source image.');
   if (!uploads.lastImage && !body.lastImageFile) return {};
   if (!model.endImage) await refuse(`${model.label} takes no end frame`);
   const endFrame = await stageEndFrame(ctx);
