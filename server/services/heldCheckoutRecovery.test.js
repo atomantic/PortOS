@@ -4,13 +4,20 @@
  * mutation, and an ownership change or archive failure leaves the checkout,
  * its lock and its branch as found.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { PATHS } from '../lib/paths.js';
+
+// Local branch deletion archives the common reflog using PATHS.cos, independently
+// of the checkout archive's explicit cosDir option.
+vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
+afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [] }));
@@ -146,6 +153,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await expect(saved.verify(tree)).rejects.toThrow('missing-checkout-reappeared');
   });
 
+  it('refuses a missing checkout whose private registration points elsewhere', async () => {
+    const path = join(external, 'missing-mismatched');
+    await execGit(['worktree', 'add', '-b', 'feature/mismatched', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const tree = { path, branch: 'refs/heads/feature/mismatched', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await rm(path, { recursive: true, force: true });
+    await writeFile(join(admin, 'gitdir'), `${join(external, 'another-checkout', '.git')}\n`);
+    await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir }))
+      .rejects.toThrow('missing-checkout-administration-unverified');
+    expect(await archives()).toEqual([]);
+    expect(existsSync(join(admin, 'index'))).toBe(true);
+  });
+
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
     // No newline: Windows core.autocrlf must not make this stat-only fixture
@@ -198,9 +218,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       remaining: [{ ...release, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
     });
 
+    const branchArchiveRoot = join(PATHS.cos, 'branch-retirement-archives');
+    const priorArchives = new Set(await readdir(branchArchiveRoot).catch(() => []));
+    const originalReflog = await readFile(join(repo, '.git', 'logs', 'refs', 'heads', 'feature', 'held'));
     const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners });
 
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
+    const newArchives = (await readdir(branchArchiveRoot)).filter(name => !priorArchives.has(name));
+    expect(newArchives).toHaveLength(1);
+    const branchArchive = join(branchArchiveRoot, newArchives[0]);
+    expect(await readFile(join(branchArchive, 'reflog'))).toEqual(originalReflog);
+    const branchManifest = JSON.parse(await readFile(join(branchArchive, 'manifest.json'), 'utf8'));
+    expect(branchManifest).toMatchObject({ branch: release.branch, expectedHead: release.head });
+    await execGit(['bundle', 'verify', join(branchArchive, 'commits.bundle')], repo);
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
     // The original commit stays recoverable after its branch is gone.

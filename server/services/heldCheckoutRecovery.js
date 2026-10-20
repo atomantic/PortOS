@@ -214,7 +214,9 @@ async function missingCheckoutAdministration(repoPath, path) {
     const root = join(common, 'worktrees', name);
     if (!(await lstat(root)).isDirectory()) continue;
     const pointer = await readFile(join(root, 'gitdir'), 'utf8').catch(() => null);
-    if (pointer?.trim() === join(path, '.git')) roots.push(root);
+    // Git writes forward slashes on Windows; normalize both spellings with
+    // native path semantics without changing POSIX backslashes or case.
+    if (pointer?.trim() && resolve(root, pointer.trim()) === resolve(path, '.git')) roots.push(root);
   }
   if (roots.length !== 1) throw new Error('missing-checkout-administration-unverified');
   return roots[0];

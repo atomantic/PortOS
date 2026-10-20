@@ -2,12 +2,12 @@
  * Worktree-private archives do not cover logs/refs/heads, which Git removes
  * with the branch. This leaf also covers branches that have no checkout.
  */
-import { lstat, readFile, mkdir, chmod } from 'node:fs/promises';
+import { lstat, readFile, chmod } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { execGit } from './execGit.js';
 import { PATHS } from './paths.js';
-import { sha256File, writeFileGuarded } from './fileCore.js';
+import { ensureDir, sha256File, writeFileGuarded } from './fileCore.js';
 
 const MAX_REFLOG_BYTES = 25 * 1024 * 1024;
 const MAX_RECOVERY_HEADS = 1024;
@@ -47,7 +47,7 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
   if (recoveryHeads.size > MAX_RECOVERY_HEADS) throw new Error('too many branch recovery objects');
   const id = randomUUID();
   const archiveDir = join(cosDir, 'branch-retirement-archives', id);
-  await mkdir(archiveDir, { recursive: true, mode: 0o700 });
+  await ensureDir(archiveDir);
   await chmod(archiveDir, 0o700);
   if (before.bytes) {
     const copy = join(archiveDir, 'reflog');

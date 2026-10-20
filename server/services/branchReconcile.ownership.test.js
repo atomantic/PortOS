@@ -315,7 +315,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   it('never uses an old manual claim age or empty snapshot as completion proof', async () => {
     const branch = 'claim/issue-55';
     const path = await addTree(join(repo, '.claude', 'worktrees', 'claim-issue-55'), branch, { ageMs: 30 * DAY });
-    const entry = { branch, worktreePath: path, worktreeAgeMs: 30 * DAY, upstreamGone: true };
+    // Match gatherBranchState's Git-reported spelling, including Windows
+    // separators and expanded short paths, so this reaches the policy gate.
+    const worktreePath = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+    const entry = { branch, worktreePath, worktreeAgeMs: 30 * DAY, upstreamGone: true };
     for (const claimOwners of [{ agents: [] }, { agents: null }, null]) {
       const result = await cleanupMerged(repo, 'main', [entry], { claimOwners });
       expect(result.cleaned).toEqual([]);
