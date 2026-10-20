@@ -266,6 +266,27 @@ describe('browser Chrome supervise loop', () => {
     expect(session.loopError).toBeNull();
   });
 
+  it('stops a still-running Chrome before the next launch attempt', async () => {
+    const session = start({
+      checkCdp: async () => null,
+      mkdir: async () => {},
+    });
+    await session.supervisor.ready;
+    expect(await advanceToSuperviseSleep(session.sleeper)).toBe(2000);
+    expect(session.spawn).toHaveBeenCalledTimes(1);
+    const first = session.spawn.mock.results[0].value;
+    expect(first.killed).toBe(false);
+
+    releasePending(session.sleeper);
+    expect(await waitForSleep(session.sleeper)).toBe(LAUNCH_POLL_MS);
+    expect(first.killed).toBe(true);
+    expect(session.spawn).toHaveBeenCalledTimes(2);
+    // Leave the loop on the supervise wait so shutdown can wake it. The
+    // launch-poll sleeps are the injected sleeper, and nothing else releases them.
+    expect(await advanceToSuperviseSleep(session.sleeper)).toBeGreaterThan(LAUNCH_POLL_MS);
+    expect(session.loopError).toBeNull();
+  });
+
   it('SIGTERM during a pending relaunch exits without starting Chrome', async () => {
     const session = start({
       bindSignals: true,

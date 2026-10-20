@@ -277,6 +277,12 @@ export function createBrowserSupervisor(options = {}) {
     // have the TCC-responsibility problem at all.
     let child;
     if (deps.platform === 'darwin' && !headlessMode) {
+      // `open` has usually already exited, so there is no Chrome PID to signal.
+      // When CDP still answers, close that instance before `open -na` starts
+      // another. A hung Chrome that no longer answers CDP cannot be reaped
+      // from here; the next attempt is the recovery.
+      await closeBrowserViaCdp().catch(() => {});
+      if (chromeProcess && !chromeProcess.killed) return;
       // windowsHide is a no-op on POSIX and this branch is darwin-only, but every
       // spawn in this package carries it: portos-browser is a PM2 fork, so the
       // guard holds the whole tree to one rule rather than reasoning about which
@@ -297,6 +303,13 @@ export function createBrowserSupervisor(options = {}) {
         if (chromeProcess === child) chromeProcess = null;
       });
     } else {
+      // A launch that never reached CDP, or a hung Chrome, is still our child.
+      // Spawn the replacement only after signaling that one, or shutdown can
+      // reap only the newest PID and the profile stays locked.
+      if (chromeProcess && !chromeProcess.killed) {
+        try { chromeProcess.kill('SIGTERM'); } catch { /* already gone */ }
+        chromeProcess = null;
+      }
       child = deps.spawn(chromePath, args, { stdio: 'ignore', windowsHide: true });
       child.on('exit', (code) => {
         console.log(`⚠️ Chrome exited with code ${code}`);
