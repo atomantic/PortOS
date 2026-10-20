@@ -681,6 +681,54 @@ def preserve(request):
             'administrationFingerprint': before['administrationFingerprint'], 'restoreProof': proof}
 
 
+def verify_unmoved_preservation(request):
+    """Cancel an unbound copy while shared Git evolves; never move any data."""
+    root = transaction(request['transactionDir'])
+    if os.path.lexists(root / 'manifest.json'):
+        fail('preservation-already-bound')
+    quarantine = root / 'quarantine'
+    if os.path.lexists(quarantine) and (not safe_path(str(quarantine)).is_dir()
+                                       or any(quarantine.iterdir())):
+        fail('preservation-originals-may-have-moved')
+    path = root / 'source.json'
+    limit = 256 * 1024 ** 2
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            fail('invalid-preservation-source')
+        encoded = source.read(limit + 1)
+    if len(encoded) > limit:
+        fail('invalid-preservation-source')
+    before = json.loads(encoded)
+    compact = {k: v for k, v in before.items() if k != 'sources'}
+    expected = {k: v for k, v in request['expected'].items() if k != 'ok'}
+    if compact != expected:
+        fail('preservation-source-not-reviewed')
+    unsigned = {k: v for k, v in compact.items() if k != 'fingerprint'}
+    if digest({'facts': unsigned, 'sources': before['sources']}) != before['fingerprint']:
+        fail('preservation-source-proof-changed')
+    after = inspect(request, full=True)
+    def stable_facts(value):
+        facts = {k: v for k, v in value.items() if k not in ('sources', 'fingerprint')}
+        # Other checkouts publish shared refs. Their history is not being
+        # retired here. inspect still resolves this exact released branch/head;
+        # private refs are also covered byte-for-byte by administration below.
+        facts['parent'] = {k: v for k, v in facts['parent'].items() if k != 'refs'}
+        return facts
+    if stable_facts(before) != stable_facts(after):
+        fail('preservation-original-identity-or-git-changed')
+    for part in ('working', 'administration'):
+        if before['sources'][part] != after['sources'][part]:
+            fail('preservation-original-content-changed')
+    # No shared data is restored, removed, or certified as archived. Preserve
+    # both observation hashes so cancellation cannot masquerade as retirement.
+    return {'verified': True, 'originalsUnmoved': True, 'archiveVerified': False,
+            'sharedBeforeSha256': digest(before['sources']['common']),
+            'sharedAfterSha256': digest(after['sources']['common']),
+            'sourceSha256': hashlib.sha256(encoded).hexdigest(),
+            'reviewedFingerprint': before['fingerprint'], 'observedFingerprint': after['fingerprint']}
+
+
 def load_transaction(request):
     root = transaction(request['transactionDir'])
     path = root / 'manifest.json'
@@ -1481,7 +1529,8 @@ def main():
     elif action in ('preserve', 'verify', 'move', 'review-metadata-recovery',
                     'review-restored-finalization', 'verify-restored-finalization',
                     'review-quarantine-resumption', 'verify-quarantine-resumption', 'resume-quarantine',
-                    'verify-completed-quarantine', 'verify-retired-quarantine', 'verify-deleted-branch'):
+                    'verify-completed-quarantine', 'verify-retired-quarantine', 'verify-deleted-branch',
+                    'verify-unmoved-preservation'):
         fd = lock_file(transaction(request['transactionDir']), 'backend.lock')
         try:
             result = {'preserve': preserve, 'verify': verify, 'move': move,
@@ -1493,7 +1542,8 @@ def main():
                       'resume-quarantine': resume_quarantine,
                       'verify-completed-quarantine': verify_completed_quarantine,
                       'verify-retired-quarantine': verify_retired_quarantine,
-                      'verify-deleted-branch': verify_deleted_branch}[action](request)
+                      'verify-deleted-branch': verify_deleted_branch,
+                      'verify-unmoved-preservation': verify_unmoved_preservation}[action](request)
         finally:
             os.close(fd)
     else:
