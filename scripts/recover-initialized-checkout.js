@@ -4,7 +4,7 @@
  * Run reviewed code from an independent checkout when its install's durable
  * retirement cut prevents the normal update. Never edits the install's code.
  *
- * node scripts/recover-initialized-checkout.js review|restore request.json \
+ * node scripts/recover-initialized-checkout.js review|restore|review-finalization|finalize request.json \
  *   --install-root /absolute/install --output /absolute/new-private-record.jsonl
  *
  * Output is an exclusive 0600 JSONL journal: a durable pending intent precedes
@@ -23,13 +23,19 @@ const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const ACTIONS = {
+  review: { method: 'reviewMetadataRestore', acceptedReview: false },
+  restore: { method: 'restoreMetadata', acceptedReview: true },
+  'review-finalization': { method: 'reviewRestoredFinalization', acceptedReview: false },
+  finalize: { method: 'finalizeRestored', acceptedReview: true },
+};
 const fail = code => { throw Object.assign(new Error(code), { recoveryCode: code }); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => object(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 
 export function parseRecoveryArgs(argv) {
   const [action, requestPath, ...options] = argv;
-  if (!['review', 'restore'].includes(action) || !requestPath || requestPath.startsWith('--')) fail('recovery-usage');
+  if (!Object.hasOwn(ACTIONS, action) || !requestPath || requestPath.startsWith('--')) fail('recovery-usage');
   const parsed = { action, requestPath };
   for (let i = 0; i < options.length; i += 2) {
     const key = { '--install-root': 'installRoot', '--output': 'outputPath' }[options[i]];
@@ -58,11 +64,12 @@ async function readJson(path, limit) {
 }
 
 function validateRequest(action, request) {
-  const keys = ['appId', 'transactionId', 'journalDigest', ...(action === 'restore' ? ['review'] : [])];
+  const acceptedReview = ACTIONS[action].acceptedReview;
+  const keys = ['appId', 'transactionId', 'journalDigest', ...(acceptedReview ? ['review'] : [])];
   if (!exactKeys(request, keys) || typeof request.appId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(request.appId)
     || typeof request.transactionId !== 'string' || !ID.test(request.transactionId)
     || typeof request.journalDigest !== 'string' || !HASH.test(request.journalDigest)
-    || (action === 'restore' && (!exactKeys(request.review, ['digest'])
+    || (acceptedReview && (!exactKeys(request.review, ['digest'])
       || typeof request.review.digest !== 'string' || !HASH.test(request.review.digest)))) fail('recovery-request-invalid');
   return request;
 }
@@ -121,7 +128,7 @@ export async function runRecovery(argv, { load = loadRecovery, stdout = value =>
     }
     process.env.PORTOS_DATA_ROOT = options.installRoot;
     const service = await load(deps, options.installRoot);
-    const response = await service[options.action === 'review' ? 'reviewMetadataRestore' : 'restoreMetadata'](request);
+    const response = await service[ACTIONS[options.action].method](request);
     const completion = { completedAt: new Date().toISOString(), outcome: 'response-recorded', response };
     const serialized = JSON.stringify(completion);
     if (Buffer.byteLength(serialized) > MAX_RESPONSE_BYTES) fail('recovery-response-exceeds-budget');

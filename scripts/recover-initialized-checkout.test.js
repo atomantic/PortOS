@@ -18,7 +18,7 @@ async function fixture(action = 'review') {
   const apps = { apps: { 'portos-default': { repoPath: root } } };
   await writeFile(join(root, 'data/apps.json'), JSON.stringify(apps));
   await writeFile(join(root, 'data/cos/state.json'), JSON.stringify({ agents: {} }));
-  const body = { ...request, ...(action === 'restore' ? { review: { digest: 'b'.repeat(64) } } : {}) };
+  const body = { ...request, ...(['restore', 'finalize'].includes(action) ? { review: { digest: 'b'.repeat(64) } } : {}) };
   const input = join(root, 'request.json');
   const output = join(root, 'result.jsonl');
   await writeFile(input, JSON.stringify(body));
@@ -26,11 +26,12 @@ async function fixture(action = 'review') {
 }
 
 describe('initialized checkout recovery CLI', () => {
-  it.each(['review', 'restore'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
+  it.each(['review', 'restore', 'review-finalization', 'finalize'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
     const f = await fixture(action);
     const before = process.env.PORTOS_DATA_ROOT;
     const stdout = vi.fn();
-    const method = action === 'review' ? 'reviewMetadataRestore' : 'restoreMetadata';
+    const method = { review: 'reviewMetadataRestore', restore: 'restoreMetadata',
+      'review-finalization': 'reviewRestoredFinalization', finalize: 'finalizeRestored' }[action];
     const load = vi.fn(async (deps, root) => {
       expect(root).toBe(f.root);
       expect(process.env.PORTOS_DATA_ROOT).toBe(f.root);
@@ -52,6 +53,15 @@ describe('initialized checkout recovery CLI', () => {
     expect(lines[1]).toMatchObject({ outcome: 'response-recorded', response: { ok: true } });
     expect(stdout.mock.calls[0][0]).not.toContain('never print this');
     expect(JSON.parse(stdout.mock.calls[0][0]).reviewDigest).toBe('c'.repeat(64));
+  });
+
+  it('requires a separate exact review for finalization and never falls back to restore', async () => {
+    const f = await fixture('finalize');
+    await writeFile(f.input, JSON.stringify(request));
+    const load = vi.fn();
+    expect(await runRecovery(f.args, { load, stdout: () => {} })).toBe(1);
+    expect(load).not.toHaveBeenCalled();
+    await expect(stat(f.output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each(['missing-install', 'missing-agents', 'invalid-state', 'wrong-app-root', 'conflicting-app-id', 'inherited-app-id', 'invalid-json', 'extra-request-key', 'missing-review', 'unknown-option', 'existing-output'])(
