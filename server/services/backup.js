@@ -1159,19 +1159,27 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || !SNAPSHOT_ID_PATTERN.test(entry.name)) continue;
     const id = entry.name;
     const snapshotDir = join(snapshotsRoot, id);
-    const { interrupted, failed } = await snapshotState(snapshotDir, id, true);
-    if (!interrupted || failed) continue;
+    const isCandidate = ({ interrupted, failed }) => interrupted && !failed;
+    // Lease only candidates, so a download starting now is not refused
+    // SNAPSHOT_DELETING by a healthy snapshot's sweep.
+    if (!isCandidate(await snapshotState(snapshotDir, id, true))) continue;
+    // Own the snapshot before the final state check, as deleteSnapshot does.
     const { release, refusal } = await claimSnapshotLease(snapshotDir, 'delete');
     if (refusal) continue;
-    const removeIfPresent = (path) => unlink(path).catch(err => { if (err.code !== 'ENOENT') throw err; });
-    await writeFile(failedMarkerPath(snapshotDir), INTERRUPTED_FAILURE_REASON)
-      .then(() => removeIfPresent(markerPath(snapshotDir)))
-      .then(() => removeIfPresent(parentMarkerPath(snapshotDir, id)))
-      .then(
-        () => { marked += 1; },
-        err => console.error(`❌ Backup: failed to mark interrupted snapshot ${id} failed: code=${err?.code ?? 'UNKNOWN'}`),
-      );
-    release();
+    try {
+      const exists = await stat(snapshotDir).then(info => info.isDirectory(), () => false);
+      if (!exists || !isCandidate(await snapshotState(snapshotDir, id, true))) continue;
+      const removeIfPresent = (path) => unlink(path).catch(err => { if (err.code !== 'ENOENT') throw err; });
+      await writeFile(failedMarkerPath(snapshotDir), INTERRUPTED_FAILURE_REASON)
+        .then(() => removeIfPresent(markerPath(snapshotDir)))
+        .then(() => removeIfPresent(parentMarkerPath(snapshotDir, id)))
+        .then(
+          () => { marked += 1; },
+          err => console.error(`❌ Backup: failed to mark interrupted snapshot ${id} failed: code=${err?.code ?? 'UNKNOWN'}`),
+        );
+    } finally {
+      release();
+    }
   }
   if (marked) console.log(`💾 Backup: marked ${marked} interrupted snapshot(s) failed`);
 }
