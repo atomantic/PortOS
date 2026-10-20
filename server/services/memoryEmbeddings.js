@@ -251,12 +251,17 @@ const clampToChars = (text, maxChars) => (text.length > maxChars ? text.slice(0,
  * and retry on a context-overflow rejection.
  */
 async function postEmbedding(config, input) {
+  // Refused connection / DNS failure / timeout resolves as a failed result so
+  // callers keep the documented "null when unavailable" contract.
   const response = await fetch(config.embeddingEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: config.embeddingModel, input }),
     signal: AbortSignal.timeout(30000)
-  });
+  }).catch(err => ({ transportError: err }));
+  if (response.transportError) {
+    return { ok: false, error: response.transportError.message, overflow: false };
+  }
   if (!response.ok) {
     const error = await response.text();
     return { ok: false, error, overflow: isContextOverflowError(error) };

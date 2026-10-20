@@ -208,6 +208,15 @@ describe('memoryEmbeddings — context-budget truncation + overflow retry', () =
     expect(embedCalls().length).toBe(1); // no retry on a non-context error
   });
 
+  it('resolves null (never rejects) when the backend is unreachable', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url) => {
+      if (String(url).includes('/api/v0/models')) return notLmStudio();
+      return Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }));
+    });
+    await expect(embeddings.generateEmbedding('short text')).resolves.toBeNull();
+    await expect(embeddings.generateQueryEmbedding('short text')).resolves.toBeNull();
+  });
+
   it('batch: falls back to per-item embedding when the batch overflows', async () => {
     // Batch POST overflows; then each of the 2 items embeds individually.
     wireFetch([contextOverflow, embedOk, embedOk]);
