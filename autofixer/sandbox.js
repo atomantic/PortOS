@@ -27,20 +27,20 @@
  * autofixer package — which installs only `express` — can import it.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from 'node:child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
-import { writeFile, rm, mkdir, mkdtemp, readdir, realpath, lstat, access } from 'fs/promises';
-import { constants as fsConstants } from 'fs';
-import { join, isAbsolute, normalize, resolve, dirname } from 'path';
-import { homedir, tmpdir } from 'os';
-import { randomBytes } from 'crypto';
+import { writeFile, rm, mkdir, mkdtemp, readdir, realpath, lstat, access } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { join, isAbsolute, normalize, resolve, dirname } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { pickCliProvider } from '../server/lib/cliProviderRun.js';
 import { restrictedRepairArgs } from '../server/lib/providerVendors.js';
 import {
-  CODE_ANIMATION_SEATBELT, CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism,
+  CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism,
 } from '../server/lib/codeAnimationContainment.js';
 import {
-  autofixVerifyBubblewrapArgs, autofixVerifyEnv, autofixVerifyProtectedPaths, autofixVerifySeatbeltProfile,
+  autofixVerifyBubblewrapArgs, autofixVerifyEnv, autofixVerifyProtectedPaths,
   autofixVerifySeccompFilter,
 } from '../server/lib/autofixVerifyContainment.js';
 
@@ -242,6 +242,25 @@ export function pickRepairProvider(providers, config = {}) {
   return { provider: { ...picked.provider, args }, model: picked.model, mode };
 }
 
+/** User-config suppression does not establish project-layer trust behavior.
+ * Both the source checkout and disposable linked checkout are project roots;
+ * refuse executable Codex configuration there before exposing crash-log input.
+ */
+export async function repairWorkspaceHold(mode, sourceWorkspace, worktreePath) {
+  if (mode !== 'codex-workspace-write') return null;
+  for (const root of new Set([sourceWorkspace, worktreePath])) {
+    for (const file of ['config.toml', 'hooks.json']) {
+      try {
+        await lstat(join(root, '.codex', file));
+        return 'Codex repair refused: project configuration or hooks could restore tools outside the repair sandbox';
+      } catch (error) {
+        if (error.code !== 'ENOENT') return 'Codex repair refused: project configuration could not be safely inspected';
+      }
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Diff validation (promotion gate)
 // ---------------------------------------------------------------------------
@@ -260,6 +279,8 @@ const FORBIDDEN_PATH_PATTERNS = [
   /\.pem$/,
   /(^|[\\/])\.github([\\/]|$)/,
   /(^|[\\/])\.claude([\\/]|$)/,
+  /(^|[\\/])\.(codex|agents)([\\/]|$)/,
+  /(^|[\\/])\.mcp\.json$/,
 ];
 
 /**
@@ -465,12 +486,13 @@ export async function sweepStaleWorktrees(parentDir) {
 const canExecute = (path) => access(path, fsConstants.X_OK).then(() => true, () => false);
 
 /**
- * The enforced mechanism available for the verify command: Seatbelt on macOS,
- * bubblewrap on Linux when it can create namespaces, otherwise a refusal.
+ * Verification needs filesystem/network AND descendant lifecycle containment.
+ * Linux bubblewrap supplies a PID namespace; a process-group kill on macOS
+ * cannot contain a verifier that creates a new session with setsid.
  */
 export async function probeVerifyContainment() {
   if (process.platform === 'darwin') {
-    return codeAnimationContainmentMechanism('darwin', await canExecute(CODE_ANIMATION_SEATBELT));
+    return { id: null, supported: false, reason: 'macOS verification is unavailable: Seatbelt cannot prevent detached verifier descendants from surviving completion or timeout' };
   }
   if (process.platform !== 'linux') return codeAnimationContainmentMechanism(process.platform, false);
   if (!['x64', 'arm64'].includes(process.arch)) {
@@ -547,7 +569,7 @@ function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
  */
 export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir = homedir(), timeoutMs = 300000, probe = probeVerifyContainment } = {}) {
   const mechanism = await probe();
-  if (!mechanism.supported) {
+  if (!mechanism.supported || mechanism.id !== 'linux-bubblewrap') {
     return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${mechanism.reason}` };
   }
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-autofix-verify-'));
@@ -560,29 +582,21 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
       dataDir: dataDir ? await realOrSelf(dataDir) : null,
       realHome: await realOrSelf(homeDir),
     });
-    // Seatbelt matches resolved paths: a symlinked store (~/.ssh → elsewhere)
-    // is protected only through its target, so list both.
+    // Protect a symlinked store (~/.ssh → elsewhere) through its target too.
     const protectedPaths = [...new Set([...listed, ...await Promise.all(listed.map(realOrSelf))])];
     const env = autofixVerifyEnv({ scratch, path: process.env.PATH });
     const shell = ['/bin/sh', '-c', command];
-    let launch;
-    let seccomp = null;
-    if (mechanism.id === 'macos-seatbelt') {
-      launch = [CODE_ANIMATION_SEATBELT, ['-p', autofixVerifySeatbeltProfile({ worktree, scratch, protectedPaths }), ...shell]];
-    } else {
-      seccomp = autofixVerifySeccompFilter(process.arch);
-      // bwrap mounts over each path, so a symlink is skipped: its resolved
-      // target is already listed and is what the mount must cover.
-      const present = (await Promise.all(protectedPaths.map(async (path) => [path, await lstat(path).catch(() => null)])))
-        .filter(([, info]) => info && !info.isSymbolicLink());
-      const bwrapArgs = autofixVerifyBubblewrapArgs({
-        worktree, scratch, env,
-        protectedDirs: present.filter(([, info]) => info?.isDirectory()).map(([path]) => path),
-        protectedFiles: present.filter(([, info]) => !info.isDirectory()).map(([path]) => path),
-      });
-      launch = [CODE_ANIMATION_BUBBLEWRAP, [...bwrapArgs, ...shell]];
-    }
-    const result = await runGroup(launch[0], launch[1], { cwd: worktree, env, timeoutMs, seccomp });
+    const seccomp = autofixVerifySeccompFilter(process.arch);
+    // bwrap mounts over each path, so a symlink is skipped: its resolved
+    // target is already listed and is what the mount must cover.
+    const present = (await Promise.all(protectedPaths.map(async (path) => [path, await lstat(path).catch(() => null)])))
+      .filter(([, info]) => info && !info.isSymbolicLink());
+    const bwrapArgs = autofixVerifyBubblewrapArgs({
+      worktree, scratch, env,
+      protectedDirs: present.filter(([, info]) => info?.isDirectory()).map(([path]) => path),
+      protectedFiles: present.filter(([, info]) => !info.isDirectory()).map(([path]) => path),
+    });
+    const result = await runGroup(CODE_ANIMATION_BUBBLEWRAP, [...bwrapArgs, ...shell], { cwd: worktree, env, timeoutMs, seccomp });
     return { ...result, contained: true, mechanism: mechanism.id };
   } finally {
     await rm(scratchDir, { recursive: true, force: true }).catch(() => {});

@@ -733,6 +733,7 @@ export const CODEX_WORKSPACE_NETWORK_KEY = 'sandbox_workspace_write.network_acce
 export const CODEX_WORKSPACE_WRITABLE_ROOTS_KEY = 'sandbox_workspace_write.writable_roots';
 export const CODEX_PLUGINS_FEATURE_KEY = 'features.plugins';
 export const CODEX_APPS_FEATURE_KEY = 'features.apps';
+export const CODEX_HOOKS_FEATURE_KEY = 'features.hooks';
 
 /**
  * Give a Codex swarm enough session threads for its root orchestrator plus
@@ -816,6 +817,7 @@ export const PORTOS_CLI_CONFIG_KEYS = Object.freeze([
   CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
   CODEX_PLUGINS_FEATURE_KEY,
   CODEX_APPS_FEATURE_KEY,
+  CODEX_HOOKS_FEATURE_KEY,
 ]);
 
 /**

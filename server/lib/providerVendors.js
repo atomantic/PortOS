@@ -83,6 +83,7 @@ import {
   CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
   CODEX_PLUGINS_FEATURE_KEY,
   CODEX_APPS_FEATURE_KEY,
+  CODEX_HOOKS_FEATURE_KEY,
 } from './providerModels.js';
 import {
   isCodexCommand,
@@ -1150,9 +1151,11 @@ export function toolFreeOneShotArgs(provider, args = []) {
 // acceptEdits auto-approves edits inside the working directory and nothing
 // else, and neither project MCP servers nor project settings (hooks) load.
 const CLAUDE_REPAIR_ARGS = [
+  '--restricted', '--safe-mode',
   '--permission-mode', 'acceptEdits',
+  '--tools', 'Read,Edit,Write,Grep,Glob',
   '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-  '--setting-sources', 'user',
+  '--no-chrome', '--disable-slash-commands',
   '--disallowedTools', 'Bash', 'WebFetch', 'WebSearch',
 ];
 // Codex's OS sandbox confines its shell commands to the working directory
@@ -1161,16 +1164,18 @@ const CLAUDE_REPAIR_ARGS = [
 // so the user's config.toml is not loaded at all (auth still is) and the
 // plugin/app surfaces are disabled.
 const CODEX_REPAIR_ARGS = [
-  '--sandbox', 'workspace-write', '--ignore-user-config',
+  '--sandbox', 'workspace-write', '--ignore-user-config', '--ignore-rules',
   '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`, '-c', `${CODEX_WORKSPACE_WRITABLE_ROOTS_KEY}=[]`,
   '-c', `${CODEX_PLUGINS_FEATURE_KEY}=false`, '-c', `${CODEX_APPS_FEATURE_KEY}=false`,
+  '-c', `${CODEX_HOOKS_FEATURE_KEY}=false`,
 ];
 
 /**
  * Saved provider argv for a file-editing repair driven by untrusted input
  * (autofixer crash logs), or null when the vendor has no enforced restricted
- * mode. Every approval bypass is removed and the vendor's own posture options
- * are replaced, so a saved bypass or wider grant cannot override the recipe.
+ * mode. Build from the fixed recipe: arbitrary saved options can restore MCP,
+ * plugins, hooks or writable roots even after a sandbox flag is overridden.
+ * Model and effort still come from the provider's fields in the vendor builder.
  * The result replaces `provider.args`; the vendor builder adds `-p -` / `-`.
  *
  * @param {object} provider - provider record (command, args)
@@ -1179,20 +1184,11 @@ const CODEX_REPAIR_ARGS = [
 export function restrictedRepairArgs(provider) {
   const command = provider?.command;
   if (!command) return null;
-  const saved = stripApprovalBypassArgs(Array.isArray(provider.args) ? provider.args : []).args;
   if (isClaudeCommand(command)) {
-    const cleared = dropOptions(
-      dropOptions(saved, ['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--mcp-config', '--add-dir'], { variadic: true }),
-      ['--permission-mode', '--setting-sources'],
-    ).filter((arg) => arg !== '--strict-mcp-config');
-    return { mode: 'claude-disallowed-tools', args: [...cleared, ...CLAUDE_REPAIR_ARGS] };
+    return { mode: 'claude-disallowed-tools', args: [...CLAUDE_REPAIR_ARGS] };
   }
   if (isCodexCommand(command)) {
-    // --add-dir widens the writable roots; --cd moves the workspace root itself.
-    const cleared = dropOptions(saved, ['--sandbox', '-s', '--add-dir', '--cd', '-C']);
-    // Options must follow the subcommand; the builder appends `exec` only when absent.
-    const withExec = cleared.includes('exec') ? cleared : ['exec', ...cleared];
-    return { mode: 'codex-workspace-write', args: [...withExec, ...CODEX_REPAIR_ARGS] };
+    return { mode: 'codex-workspace-write', args: ['exec', ...CODEX_REPAIR_ARGS] };
   }
   return null;
 }

@@ -103,4 +103,47 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     expect(unix.ok).toBe(false);
     expect(unix.output).not.toContain('reached');
   });
+
+  it.skipIf(process.platform !== 'linux')('cannot create an io_uring that bypasses socket syscall restrictions', async () => {
+    await writeFile(join(worktree, 'uring-probe.py'), [
+      'import ctypes, errno',
+      'libc = ctypes.CDLL(None, use_errno=True)',
+      'params = ctypes.create_string_buffer(256)',
+      'result = libc.syscall(425, 1, ctypes.byref(params))',
+      'assert result == -1 and ctypes.get_errno() == errno.EPERM',
+    ].join('\n'));
+    expect(await verify('python3 uring-probe.py')).toMatchObject({ ok: true, contained: true });
+  });
+
+  it('refuses datagram socketpairs that can reconnect to host pathname sockets', async () => {
+    await writeFile(join(worktree, 'socketpair-probe.py'), [
+      'import socket, errno',
+      'a, b = socket.socketpair(type=socket.SOCK_STREAM)',
+      'a.close(); b.close()',
+      'try:',
+      '    socket.socketpair(type=socket.SOCK_DGRAM)',
+      'except OSError as error:',
+      '    assert error.errno == errno.EPERM',
+      'else:',
+      '    raise AssertionError("datagram socketpair escaped")',
+    ].join('\n'));
+    expect(await verify('python3 socketpair-probe.py')).toMatchObject({ ok: true, contained: true });
+  });
+
+  it.each([false, true])('terminates detached descendants after verification (timeout=%s)', async timeout => {
+    const marker = timeout ? 'timeout-late.txt' : 'completed-late.txt';
+    await writeFile(join(worktree, 'descendant-probe.cjs'), [
+      "const { spawn } = require('node:child_process');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(`setTimeout(() => require('node:fs').writeFileSync('${marker}', 'late'), 1200)`)}], { detached: true, stdio: 'ignore' });`,
+      "child.on('error', error => { console.error(error); process.exitCode = 1; });",
+      "child.on('spawn', () => console.log('descendant-started')); child.unref();",
+      ...(timeout ? ['setTimeout(() => {}, 2500);'] : []),
+    ].join('\n'));
+    const result = await runVerifyCommand(`${JSON.stringify(process.execPath)} descendant-probe.cjs`, worktree,
+      { dataDir, homeDir: home, timeoutMs: timeout ? 600 : 30000 });
+    expect(result.output).toContain('descendant-started');
+    expect(result.ok).toBe(!timeout);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await expect(access(join(worktree, marker))).rejects.toThrow();
+  });
 });

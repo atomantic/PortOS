@@ -5,23 +5,21 @@
  * agent just edited, so a test file or `pretest` script it wrote executes
  * here. A test runner forks, so the single-process Code Animation profile
  * (`codeAnimationContainment.js`) cannot host it; this profile keeps the same
- * mechanisms (macOS Seatbelt, Linux bubblewrap, refusal elsewhere) with these
- * bounds instead:
+ * Linux bubblewrap mechanism, with refusal elsewhere, and these bounds:
  *   - no network, including loopback and pathname Unix sockets (PortOS's API,
- *     a Docker or database socket): Seatbelt denies them, and on Linux a
- *     network namespace plus a seccomp filter refusing AF_UNIX sockets;
+ *     a Docker or database socket): a network namespace plus a seccomp filter
+ *     refusing AF_UNIX sockets and io_uring;
  *   - writes only to the worktree and a private scratch home/tmp;
  *   - no reads of the PortOS data directory (providers, settings, keys) or the
  *     host user's credential stores; the rest of the host stays readable so
  *     toolchains resolve;
- *   - macOS: no Mach services beyond user/log lookups (no LaunchServices,
- *     keychain or pasteboard) and no signals outside the sandbox;
+ *   - a PID namespace so detached descendants cannot survive their supervisor;
  *   - an environment built from nothing — no provider key or PortOS token.
  *
  * Pure: no filesystem, process or settings access. Paths must be realpaths.
  */
 import { join, posix } from 'node:path';
-import { encodeSeccompProgram, seatbeltPathLiteral } from './codeAnimationContainment.js';
+import { encodeSeccompProgram } from './codeAnimationContainment.js';
 
 /** Host-user credential stores, relative to the real home directory. */
 export const AUTOFIX_VERIFY_PROTECTED_HOME_PATHS = Object.freeze([
@@ -30,15 +28,9 @@ export const AUTOFIX_VERIFY_PROTECTED_HOME_PATHS = Object.freeze([
   'Library/Keychains',
 ]);
 
-// Mach services a test runner needs for user/group lookups and logging.
-const SEATBELT_MACH_ALLOW = [
-  'com.apple.system.opendirectoryd.libinfo', 'com.apple.system.notification_center',
-  'com.apple.system.logger', 'com.apple.logd', 'com.apple.diagnosticd', 'com.apple.FSEvents',
-];
-
 /**
  * Read-protected paths for one run: the PortOS data directory plus the host
- * user's credential stores. The worktree is re-allowed by each profile even
+ * user's credential stores. The worktree is re-allowed by the profile even
  * when it sits under the data directory.
  */
 export function autofixVerifyProtectedPaths({ dataDir, realHome }) {
@@ -57,30 +49,16 @@ export function autofixVerifyEnv({ scratch, path }) {
   };
 }
 
-/** Seatbelt profile; later rules win, so the worktree re-allow follows the denials. */
-export function autofixVerifySeatbeltProfile({ worktree, scratch, protectedPaths = [] }) {
-  const lit = seatbeltPathLiteral;
-  const denied = protectedPaths.map((path) => `(subpath ${lit(path)})`).join(' ');
-  return `(version 1)
-(allow default)
-(deny network*)
-(deny mach-lookup)
-(allow mach-lookup ${SEATBELT_MACH_ALLOW.map((name) => `(global-name ${JSON.stringify(name)})`).join(' ')})
-(deny signal)
-(allow signal (target same-sandbox))
-(deny file-write*)
-(allow file-write* (literal "/dev/null") (subpath ${lit(worktree)}) (subpath ${lit(scratch)}))
-${denied ? `(deny file-read* ${denied})\n` : ''}(allow file-read* (subpath ${lit(worktree)}) (subpath ${lit(scratch)}))`;
-}
-
 /**
  * Linux seccomp program for the verify command: `socket(AF_UNIX, …)` fails
  * with EPERM, so a host pathname socket visible through the read-only root
- * cannot be connected to. `socketpair` (child-process stdio) stays allowed.
+ * cannot be connected to. io_uring is refused too: its socket operations bypass
+ * the socket syscall. Only stream `socketpair` (child-process stdio) is allowed:
+ * datagram endpoints can reconnect/send to a host pathname socket.
  * Unknown ABIs (including x32) are killed rather than bypassing the check.
  */
 export function autofixVerifySeccompFilter(arch) {
-  const abi = { x64: { audit: 0xc000003e, socket: 41 }, arm64: { audit: 0xc00000b7, socket: 198 } }[arch];
+  const abi = { x64: { audit: 0xc000003e, socket: 41, socketpair: 53 }, arm64: { audit: 0xc00000b7, socket: 198, socketpair: 199 } }[arch];
   if (!abi) throw new Error('Autofix verify seccomp supports only x64 and arm64.');
   const ALLOW = 0x7fff0000, KILL = 0x80000000, EPERM = 0x00050001, AF_UNIX = 1;
   return encodeSeccompProgram([
@@ -90,6 +68,16 @@ export function autofixVerifySeccompFilter(arch) {
     [0x20, 0, 0, 0],                    // seccomp_data.nr
     [0x35, 0, 1, 0x40000000],           // x32/invalid syscall range
     [0x06, 0, 0, KILL],
+    ...[425, 426, 427].flatMap(nr => [  // io_uring_setup/enter/register, both ABIs
+      [0x15, 0, 1, nr],
+      [0x06, 0, 0, EPERM],
+    ]),
+    [0x15, 0, 5, abi.socketpair],
+    [0x20, 0, 0, 24],                  // socketpair type, args[1] low word
+    [0x54, 0, 0, 0xf],                 // strip SOCK_CLOEXEC/SOCK_NONBLOCK
+    [0x15, 1, 0, 1],                   // SOCK_STREAM only
+    [0x06, 0, 0, EPERM],
+    [0x06, 0, 0, ALLOW],
     [0x15, 0, 3, abi.socket],
     [0x20, 0, 0, 16],                   // socket domain, args[0] low word
     [0x15, 0, 1, AF_UNIX],

@@ -1,5 +1,5 @@
-import { readFile, writeFile, mkdir, access, rename } from 'fs/promises';
-import { join } from 'path';
+import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
+import { join } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -12,6 +12,7 @@ import {
   collectSecretEnvValues,
   buildFixPrompt,
   pickRepairProvider,
+  repairWorkspaceHold,
   validateProposedDiff,
   isGitRepo,
   createDisposableWorktree,
@@ -307,6 +308,12 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   }
   const worktreePath = wt.path;
   activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
+  const workspaceHold = await repairWorkspaceHold(picked.mode, app.repoPath, worktreePath);
+  if (workspaceHold) {
+    console.warn(`🛑 [Autofixer] ${workspaceHold}`);
+    await removeWorktree(app.repoPath, worktreePath);
+    return finalize({ success: false, exitCode: -1, error: workspaceHold, extra: { isolated: true } });
+  }
   // Strip host credentials the agent has no business seeing — it keeps only
   // system + AI-provider auth. provider.envVars still overlays inside the runner.
   const childEnv = sanitizeChildEnv(process.env);
@@ -335,14 +342,14 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // spawn failure / timeout can leave a partial edit — don't promote or stage
   // work from an agent that didn't finish cleanly.
   const diff = await collectWorktreeDiff(worktreePath);
-  const agentOk = !result.error;
+  const agentOk = !result.error && result.partial === false && result.exitCode === 0;
   // The live env's provider-auth values (incl. runner-injected provider.envVars
   // keys) — reject any diff that tries to write one into the repo (agent
   // read-then-promote exfil backstop).
   const secretValues = collectSecretEnvValues(childEnv, picked.provider?.envVars);
   const validation = agentOk
     ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES, secretValues })
-    : { ok: false, reason: `agent did not complete: ${result.error}`, files: [] };
+    : { ok: false, reason: `agent did not complete: ${result.error || 'repair process returned incomplete output or an unsuccessful exit'}`, files: [] };
 
   // Optional verification against the user-configured test command, contained
   // over the isolated worktree — before anything reaches live.
@@ -353,7 +360,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     if (!verify.contained) console.warn(`🛑 [Autofixer] ${verify.output}`);
     outputBuffer.push(`\n[VERIFY exit ${verify.code}]\n${verify.output}`);
   }
-  const verifyOk = !verifyCommand || (verify && verify.ok);
+  const verifyOk = !verifyCommand || verify?.ok;
 
   // Promotion gate — only a validated (and, if configured, verified) diff may
   // touch the live checkout, and only when the user explicitly opted in.
