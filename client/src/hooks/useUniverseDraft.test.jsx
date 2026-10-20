@@ -157,6 +157,50 @@ describe('useUniverseDraft', () => {
     expect(result.current.isDraftDirty()).toBe(false);
   });
 
+  describe('run history load state', () => {
+    it('reports a failed history read as an error, not an empty history, and retries without touching the draft', async () => {
+      apiMocks.listWorldRuns.mockRejectedValueOnce(new Error('boom'));
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+      expect(result.current.runs).toEqual([]);
+
+      act(() => result.current.updateDraft({ premise: 'Unsaved premise' }));
+      const getCalls = apiMocks.getUniverse.mock.calls.length;
+      await act(async () => { result.current.retryRuns(); });
+      await waitFor(() => expect(result.current.runsStatus).toBe('ready'));
+      expect(result.current.runs).toEqual([{ id: 'run-1' }]);
+      expect(result.current.draft.premise).toBe('Unsaved premise');
+      expect(apiMocks.getUniverse.mock.calls.length).toBe(getCalls);
+    });
+
+    it('keeps same-record rows when a refresh fails', async () => {
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.runsStatus).toBe('ready'));
+      apiMocks.listWorldRuns.mockRejectedValueOnce(new Error('boom'));
+      await act(async () => { result.current.retryRuns(); });
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      expect(result.current.runs).toEqual([{ id: 'run-1' }]);
+    });
+
+    it('drops a late history response for a universe that is no longer selected', async () => {
+      let resolveOld;
+      apiMocks.listWorldRuns.mockImplementation((id) => (id === 'u1'
+        ? new Promise((resolve) => { resolveOld = resolve; })
+        : Promise.reject(new Error('boom'))));
+      const goToWorld = vi.fn();
+      const { result, rerender } = renderHook(
+        ({ selectedId }) => useUniverseDraft({ selectedId, goToWorld }),
+        { initialProps: { selectedId: 'u1' } },
+      );
+      rerender({ selectedId: 'u2' });
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      await act(async () => { resolveOld([{ id: 'stale-run' }]); });
+      expect(result.current.runs).toEqual([]);
+      expect(result.current.runsStatus).toBe('error');
+    });
+  });
+
   // A failed fetch and an empty response must not land in the same state. The refresh()
   // fan-out used to `.catch(() => [])` / `.catch(() => ({}))` every call, so a transient
   // failure was indistinguishable from a real empty answer — and for settings it was

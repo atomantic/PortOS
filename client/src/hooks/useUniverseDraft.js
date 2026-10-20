@@ -86,6 +86,8 @@ const emptyPendingCanon = () => ({ characters: [], places: [], objects: [] });
  * and create/update/delete flows. LLM expansion/refinement and rendering stay
  * separate consumers of this contract.
  */
+export const RUNS_STATUS = { LOADING: 'loading', READY: 'ready', ERROR: 'error' };
+
 export default function useUniverseDraft({ selectedId, goToWorld }) {
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   const [targetPin, setTargetPin] = useState(null);
   const [draft, setDraft] = useState(createEmptyUniverseDraft);
   const [runs, setRuns] = useState([]);
+  // History read state, bound to the universe it was requested for. A failed
+  // read must not look like an empty history, so it is tracked apart from `runs`.
+  const [runsStatus, setRunsStatus] = useState(RUNS_STATUS.READY);
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [canonDirty, setCanonDirty] = useState(false);
@@ -231,14 +236,10 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       const empty = createEmptyUniverseDraft();
       setDraft(empty);
       markDraftSaved(empty);
-      setRuns([]);
       return undefined;
     }
     let cancelled = false;
-    Promise.all([
-      getUniverse(selectedId).catch(() => null),
-      listWorldRuns(selectedId).catch(() => []),
-    ]).then(async ([fetched, nextRuns]) => {
+    getUniverse(selectedId).catch(() => null).then(async (fetched) => {
       if (cancelled) return;
       // This body predates a mutation we already have confirmed — re-read rather
       // than apply it. The second read is issued after that mutation's response,
@@ -272,10 +273,36 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
         setDraft(hydrated);
         markDraftSaved(hydrated);
       }
-      setRuns(nextRuns);
     });
     return () => { cancelled = true; };
   }, [selectedId, universeIsStale, noteUniverseUpdated]);
+
+  // Run history loads independently of the draft so Retry never re-hydrates
+  // (and so never clobbers) unsaved edits. Results are dropped unless they
+  // still belong to the current selection and the latest request.
+  const runsRequestRef = useRef(0);
+  const loadRuns = useCallback(async (id) => {
+    const request = ++runsRequestRef.current;
+    setRunsStatus(RUNS_STATUS.LOADING);
+    const fetched = await listWorldRuns(id).catch(() => null);
+    if (!mountedRef.current || request !== runsRequestRef.current || selectedIdRef.current !== id) return;
+    if (fetched) setRuns(fetched);
+    setRunsStatus(fetched ? RUNS_STATUS.READY : RUNS_STATUS.ERROR);
+  }, [mountedRef]);
+  const retryRuns = useCallback(() => {
+    if (selectedIdRef.current) loadRuns(selectedIdRef.current);
+  }, [loadRuns]);
+
+  useEffect(() => {
+    // Rows from the previous universe must never show under the new one.
+    setRuns([]);
+    if (!selectedId) {
+      runsRequestRef.current += 1;
+      setRunsStatus(RUNS_STATUS.READY);
+      return;
+    }
+    loadRuns(selectedId);
+  }, [selectedId, loadRuns]);
 
   const handleSave = async () => {
     if (!draft.name?.trim()) {
@@ -766,6 +793,8 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     removeCategory,
     removeStyleReference,
     runs,
+    runsStatus,
+    retryRuns,
     saving,
     setRenderPin,
     setCanonDirty,
