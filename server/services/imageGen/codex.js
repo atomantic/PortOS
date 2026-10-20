@@ -165,7 +165,9 @@ export async function checkConnection({ codexPath } = {}) {
   // "yes the binary exists and is reachable".
   const bin = codexPath || DEFAULT_BIN;
   const prepared = prepareCliSpawn(bin, ['--version']);
-  const result = await bufferedSpawn(prepared.command, prepared.args, { timeoutMs: 15_000, shell: false });
+  const result = await bufferedSpawn(prepared.command, prepared.args, {
+    timeoutMs: 15_000, shell: false, env: withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS }),
+  });
   if (result.error) {
     return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `Codex CLI not found (${result.error.message})` };
   }

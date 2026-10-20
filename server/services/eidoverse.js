@@ -157,7 +157,8 @@ const bunRuntimeEnv = (bunExecutable) => {
 };
 
 async function resolveBunRuntime() {
-  if (await commandExists('bun')) return { command: 'bun', env: withoutServerSecretsEnv(process.env) };
+  const ambientEnv = withoutServerSecretsEnv(process.env);
+  if (await commandExists('bun', ['--version'], { env: ambientEnv })) return { command: 'bun', env: ambientEnv };
 
   const command = getBunExecutable();
   const env = bunRuntimeEnv(command);

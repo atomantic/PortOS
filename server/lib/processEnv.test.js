@@ -210,6 +210,10 @@ describe('withoutServerSecretsEnv', () => {
     PATH: '/usr/bin', HOME: '/home/example', NODE_ENV: 'production', PORT: '5555',
     PRIVACY_VAULT_KEY: 'k', PGPASSWORD: 'p', PGHOST: 'h', PGDATABASE: 'd',
     PORTOS_API_TOKEN: 't', ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o', GEMINI_API_KEY: 'g',
+    CLAUDE_CODE_OAUTH_TOKEN: 'claude-session', Claude_Code_OAuth_Token: 'mixed-case-session',
+    GEMINI_CLI_AUTH_TOKEN: 'gemini-session',
+    FAL_KEY: 'fal', RUNWAYML_API_SECRET: 'runway', REACTOR_API_KEY: 'reactor', ARTIFICIAL_ANALYSIS_API_KEY: 'catalog',
+    HUGGINGFACE_TOKEN: 'hf', HUGGINGFACE_HUB_TOKEN: 'hf', HUGGINGFACEHUB_API_TOKEN: 'hf', HUGGING_FACE_HUB_TOKEN: 'hf',
     PgPassword: 'mixed-case', DATABASE_URL: 'app-owned', STRIPE_KEY: 'app-owned', PGP_NOTE: 'not a libpq var',
   };
 

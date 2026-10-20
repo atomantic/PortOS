@@ -123,6 +123,21 @@ afterEach(async () => {
 });
 
 describe('codex provider — checkConnection', () => {
+  it('uses the same credential boundary for the version probe as rendering', async () => {
+    vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude');
+    vi.stubEnv('FAL_KEY', 'fal');
+    vi.stubEnv('OPENAI_API_KEY', 'codex-own');
+    const result = codex.checkConnection();
+    await flush();
+    const call = spawnCalls[0];
+    expect(call.options.env).not.toHaveProperty('PRIVACY_VAULT_KEY');
+    expect(call.options.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(call.options.env).not.toHaveProperty('FAL_KEY');
+    expect(call.options.env.OPENAI_API_KEY).toBe('codex-own');
+    call.child.emit('close', 0);
+    expect((await result).connected).toBe(true);
+  });
   it.each([
     ['stdout', 'codex-cli 1.2.3', 'codex-cli 1.2.3'],
     ['stderr', 'Codex version 2.3.4', 'codex-cli 2.3.4'],
