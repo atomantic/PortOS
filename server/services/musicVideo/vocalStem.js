@@ -28,7 +28,7 @@ import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { assertFileNotMediaManifest, PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { importUploadedTrack } from '../pipeline/musicLibrary.js';
 import { getProject, updateProject } from './projects.js';
@@ -78,6 +78,8 @@ const audioSourceKey = (project) => `${project?.trackId ?? ''}\u0000${project?.u
 export async function attachVocalStem(projectId, { tempPath, originalName }) {
   try {
     const project = await requireProject(projectId);
+    // Before the probe: ffmpeg would follow a playlist posing as audio.
+    await assertFileNotMediaManifest(tempPath);
     // Lazy: render.js pulls the whole render pipeline.
     const { resolveMasterAudioPath } = await import('./render.js');
     const masterPath = await resolveMasterAudioPath(project);
