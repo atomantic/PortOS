@@ -120,6 +120,13 @@ vi.mock('../lib/hostShutdown.js', async (importOriginal) => ({
   readHostShutdownMarker: vi.fn().mockResolvedValue(null),
   clearHostShutdownMarker: vi.fn().mockResolvedValue(undefined),
 }));
+// Real admission with only the settlement release observable: the default instance
+// resolves the live data root, so a spy keeps this suite off real journal state.
+vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const finishResource = vi.fn().mockResolvedValue([]);
+  return { ...actual, maintenance: new Proxy(actual.maintenance, { get: (target, key) => key === 'finishResource' ? finishResource : target[key] }) };
+});
 vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
@@ -132,6 +139,7 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettle
 
 import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, terminateAgent, killAgent, getAgentProcessStats } from './agentManagement.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from './cosAgentLifecycle.js';
 import { updateRun, getProject } from './creativeDirector/local.js';
@@ -254,6 +262,36 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-old', startedAt: new Date(Date.now() - 120000).toISOString() }]);
     await cleanupOrphanedAgents();
     expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'agent-old' }) }));
+  });
+
+  it('releases the maintenance reservation of every agent the sweep retires, task or not', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+    const old = new Date(Date.now() - 120000).toISOString();
+    getAgents.mockResolvedValueOnce([
+      { id: 'agent-with-task', status: 'running', taskId: 'task-1', startedAt: old, metadata: {} },
+      { id: 'agent-no-task', status: 'running', startedAt: old, metadata: {} },
+    ]);
+    maintenance.finishResource.mockClear();
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).toHaveBeenCalledTimes(2);
+    expect(maintenance.finishResource.mock.calls).toEqual([['agent', 'agent-with-task'], ['agent', 'agent-no-task']]);
+    // Release follows the task settlement, as in a normal completion.
+    expect(cleanupAgentWorktree.mock.invocationCallOrder[0]).toBeLessThan(maintenance.finishResource.mock.invocationCallOrder[0]);
+  });
+
+  it('finishes the sweep when a maintenance release fails', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    const old = new Date(Date.now() - 120000).toISOString();
+    getAgents.mockResolvedValueOnce([
+      { id: 'agent-first', status: 'running', startedAt: old, metadata: {} },
+      { id: 'agent-second', status: 'running', startedAt: old, metadata: {} },
+    ]);
+    maintenance.finishResource.mockClear();
+    maintenance.finishResource.mockImplementationOnce(() => { throw new Error('Maintenance state needs recovery'); });
+    await expect(cleanupOrphanedAgents()).resolves.toBe(2);
+    // The failed release neither stops the next one nor the rest of the sweep.
+    expect(maintenance.finishResource.mock.calls).toEqual([['agent', 'agent-first'], ['agent', 'agent-second']]);
   });
 
   it('reaps a durable running record whose runner listing is stale', async () => {

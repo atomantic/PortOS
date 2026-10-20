@@ -1180,6 +1180,10 @@ async function runCleanupOrphanedAgents() {
   const agents = await getAgents();
   let cleanedCount = 0;
   const orphanedTaskIds = [];
+  // Agents retired by this sweep, with or without a task: each still holds the
+  // maintenance reservation its original spawn took, and retireDeadAgent does
+  // not release it.
+  const retiredAgentIds = [];
 
   // Agents the PREVIOUS process owned when it was signalled down (#3202). Their
   // processes died because PortOS restarted, not because they failed — so they
@@ -1356,6 +1360,7 @@ async function runCleanupOrphanedAgents() {
         agentResultExtra: { interruptedByRestart: interrupted },
       });
       cleanedCount++;
+      retiredAgentIds.push(agent.id);
 
       if (agent.taskId) {
         // Carry the agent's metadata forward rather than re-reading the record
@@ -1405,6 +1410,16 @@ async function runCleanupOrphanedAgents() {
       // check the breadcrumb"; `true` still short-circuits it.
       interrupted: interruptedByRestart.has(agentId) || null,
     });
+  }
+
+  // Same release order as a normal completion (agentLifecycle): only after the
+  // run is retired, its worktree cleaned and its task settled. Without it the
+  // reservation outlives the process and every later status read parses it.
+  // finishResource reads the journal synchronously and throws while it needs
+  // recovery; that must not abort the marker clear and stranded-agent sweep below.
+  for (const agentId of retiredAgentIds) {
+    try { await maintenance.finishResource('agent', agentId); }
+    catch (err) { emitLog('warn', `Maintenance reservation for ${agentId} was not released: ${err.message}`, { agentId }); }
   }
 
   // Consume the marker. Doing it AFTER the retry pass (not before) means a crash
