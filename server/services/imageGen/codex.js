@@ -35,6 +35,10 @@ import { basename, join, isAbsolute, resolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { codexHomeDir } from '../../lib/codexUserConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { withoutServerSecretsEnv } from '../../lib/processEnv.js';
+
+// Codex's own ambient credentials; everything else server-held is withheld.
+const CODEX_AUTH_ENV_KEYS = ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE'];
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { noFabricationClause } from './fabricationGuard.js';
 import { randomUUID } from 'crypto';
@@ -416,7 +420,8 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
   try {
     const resolvedBin = !isAbsolute(bin) && (bin.includes('/') || bin.includes(sep)) ? resolve(bin) : bin;
     const prepared = prepareCliSpawn(resolvedBin, args);
-    const env = process.env.CODEX_HOME ? { ...process.env, CODEX_HOME: resolve(process.env.CODEX_HOME) } : process.env;
+    const baseEnv = withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS });
+    const env = process.env.CODEX_HOME ? { ...baseEnv, CODEX_HOME: resolve(process.env.CODEX_HOME) } : baseEnv;
     proc = spawn(prepared.command, prepared.args, { cwd: scratchDir, env: withSpawnCwdEnv(env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     void removeScratch();

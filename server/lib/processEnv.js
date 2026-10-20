@@ -131,6 +131,40 @@ export function buildSafeCliBaseEnv(env = process.env, provider = null) {
   );
 }
 
+// Server-held secrets a non-agent child (managed app, deploy.sh, third-party
+// install script) must not inherit: the vault key, database credentials, PortOS
+// session tokens and AI provider credentials. Managed apps receive their own
+// configured variables through explicit env overlays, not through ambient
+// server state.
+const SERVER_SECRET_ENV_KEYS = new Set([
+  'PRIVACY_VAULT_KEY',
+  ...Object.values(CLI_PROVIDER_AUTH_RULES).flatMap((rule) => rule.keys),
+]);
+const SERVER_SECRET_ENV_PATTERNS = [
+  /^PG[A-Z]+$/,
+  /^PORTOS_[A-Z_]*(TOKEN|KEY|PASSWORD|SECRET)$/,
+  /^(ANTHROPIC|OPENAI|GEMINI|XAI|GROK|KIMI|MOONSHOT|CURSOR|NVIDIA|OPENROUTER|CIVITAI|HF)_[A-Z_]*(API_KEY|AUTH_TOKEN|TOKEN)$/,
+];
+
+const isServerSecretEnvKey = (key, keep) => !keep.includes(key)
+  && (SERVER_SECRET_ENV_KEYS.has(key) || SERVER_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(key)));
+
+/** Names present in `env` that `withoutServerSecretsEnv` would remove. */
+export function serverSecretEnvKeys(env = process.env, { keep = [] } = {}) {
+  return Object.keys(env || {}).filter((key) => isServerSecretEnvKey(key, keep));
+}
+
+/**
+ * Copy of `env` minus server-held secrets, for children that are not AI CLIs
+ * (those use `buildSafeCliBaseEnv`). `keep` exempts names the child needs by
+ * design, such as the Codex image agent's own provider key.
+ */
+export function withoutServerSecretsEnv(env = process.env, { keep = [] } = {}) {
+  return Object.fromEntries(
+    Object.entries(env || {}).filter(([key]) => !isServerSecretEnvKey(key, keep)),
+  );
+}
+
 // Resolve the first PATH hit for a binary via `which` (POSIX) / `where`
 // (Windows) — the "is this system tool installed, and where?" probe copied
 // inline across ytdlp/ffmpeg/pythonSetup/voice discovery. Returns the absolute

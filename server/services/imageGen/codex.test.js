@@ -1067,6 +1067,20 @@ describe('Codex cached defaults and isolated workspace', () => {
     await finish(call);
   });
 
+  it('withholds server secrets but keeps the Codex provider key', async () => {
+    vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+    vi.stubEnv('PGPASSWORD', 'db');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'other-provider');
+    vi.stubEnv('OPENAI_API_KEY', 'codex-key');
+    await codex.generateImage({ prompt: 'synthetic' });
+    const { env } = spawnCalls[0].options;
+    expect(env).not.toHaveProperty('PRIVACY_VAULT_KEY');
+    expect(env).not.toHaveProperty('PGPASSWORD');
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(env.OPENAI_API_KEY).toBe('codex-key');
+    await finish(spawnCalls[0]);
+  });
+
   it('cleans scratch after a spawn error with no physical child', async () => {
     await codex.generateImage({ prompt: 'synthetic' });
     const call = spawnCalls[0];

@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { ServerError } from '../lib/errorHandler.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { commandExists } from '../lib/commandExists.js';
+import { withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { execGit } from '../lib/execGit.js';
 import { atomicWrite, ensureDir, pathExists, PATHS } from '../lib/fileUtils.js';
 import { parseGitHubUrl } from '../lib/repoUrl.js';
@@ -143,7 +144,7 @@ async function registerManagedApp(paths, bunCommand) {
 
 const bunRuntimeEnv = (bunExecutable) => {
   const binDirectory = dirname(bunExecutable);
-  const env = { ...process.env };
+  const env = withoutServerSecretsEnv(process.env);
   const inheritedPath = env.PATH || env.Path || '';
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === 'path') delete env[key];
@@ -156,7 +157,7 @@ const bunRuntimeEnv = (bunExecutable) => {
 };
 
 async function resolveBunRuntime() {
-  if (await commandExists('bun')) return { command: 'bun', env: process.env };
+  if (await commandExists('bun')) return { command: 'bun', env: withoutServerSecretsEnv(process.env) };
 
   const command = getBunExecutable();
   const env = bunRuntimeEnv(command);

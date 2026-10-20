@@ -9,6 +9,7 @@ import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { PATHS } from '../lib/paths.js';
+import { serverSecretEnvKeys, withoutServerSecretsEnv } from '../lib/processEnv.js';
 // The leaf, not readinessNotify.js: its observer's lazy imports would join
 // pm2.js's ~280 suites to the CoS cluster's CI selection (#12285).
 import { noteReadinessChanged } from './readinessSignal.js';
@@ -253,6 +254,16 @@ export function buildEnv(pm2Home) {
   return env;
 }
 
+// Env for a CLI `pm2 start` of a managed app: buildEnv() minus server secrets.
+function buildStartEnv(pm2Home) {
+  return withoutServerSecretsEnv(buildEnv(pm2Home));
+}
+
+// The Node API merges process.env into the child; its `filter_env` option (an
+// array of names) is the only way to drop inherited keys. Explicit `env`
+// entries are applied after the filter, so configured variables still arrive.
+const serverSecretFilterEnv = () => serverSecretEnvKeys(process.env);
+
 /**
  * Spawn a PM2 CLI command with optional custom PM2_HOME
  * @param {string} action PM2 action (stop, restart, delete)
@@ -329,6 +340,7 @@ export async function startApp(name, options = {}) {
         args: options.args || 'run dev',
         cwd: options.cwd,
         env: options.env || {},
+        filter_env: serverSecretFilterEnv(),
         watch: false,
         autorestart: true,
         max_restarts: 10,
@@ -662,6 +674,7 @@ export async function startWithCommand(name, cwd, command, options = {}) {
         // also overrides the app's env file — they agree by construction, since
         // PortOS generates that file from the same port it records.
         ...(port ? { env: { PORT: String(port) } } : {}),
+        filter_env: serverSecretFilterEnv(),
         windowsHide: IS_WIN
       };
 
@@ -695,7 +708,7 @@ async function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxR
     cliArgs.push('--no-autorestart');
   }
   if (args.length > 0) cliArgs.push('--', ...args);
-  const env = buildEnv(pm2Home);
+  const env = buildStartEnv(pm2Home);
   if (port) env.PORT = String(port);
   await execPm2(cliArgs, { env });
   clearJlistCache(pm2Home);
