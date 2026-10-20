@@ -5,7 +5,9 @@
  * before deciding whether to write — N single-row SELECTs inside the
  * synchronous `updateUniverse` request. It now issues ONE
  * `getIngredientTimestamps` lookup for every candidate id and writes only the
- * rows the LWW comparison says are stale.
+ * rows the LWW comparison says are stale; each write re-checks freshness under
+ * the row lock (`updateIngredientIfFresh`, exercised against Postgres in
+ * catalogCanonProjection.test.js).
  *
  * `catalogDB` is mocked wholesale (no Postgres): the assertions are the query
  * COUNT + shape and that the skip/write accounting is byte-identical to the
@@ -18,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./catalogDB.js', () => ({
   getIngredient: vi.fn(),
   getIngredientTimestamps: vi.fn(),
-  updateIngredient: vi.fn(async () => ({})),
+  updateIngredientIfFresh: vi.fn(),
   listRefsForIngredient: vi.fn(async () => []),
 }));
 
@@ -41,10 +43,11 @@ const entry = (ingredientId, { name = 'Example Character', updatedAt = NEWER, ..
 });
 
 const timestampMap = (pairs) => new Map(pairs);
+const WRITTEN = { status: 'written', ingredient: { syncSequence: '7' } };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  catalogDB.updateIngredient.mockResolvedValue({});
+  catalogDB.updateIngredientIfFresh.mockResolvedValue(WRITTEN);
 });
 
 describe('projectToCatalog batching', () => {
@@ -62,7 +65,7 @@ describe('projectToCatalog batching', () => {
     expect(catalogDB.getIngredient).not.toHaveBeenCalled();
     expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledTimes(1);
     expect(catalogDB.getIngredientTimestamps).toHaveBeenCalledWith(['ing-c1', 'ing-c2', 'ing-p1', 'ing-o1'], { excludeAliases: true });
-    expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(4);
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledTimes(4);
     expect(stats).toEqual({ written: 4, skipped: 0 });
   });
 
@@ -73,11 +76,21 @@ describe('projectToCatalog batching', () => {
       characters: [entry('ing-c1', { name: 'Renamed', role: 'Hero', tagline: 'Fake tagline' })],
     });
 
-    expect(catalogDB.updateIngredient).toHaveBeenCalledWith(
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledWith(
       'ing-c1',
       { name: 'Renamed', payload: { role: 'Hero', tagline: 'Fake tagline' } },
-      { source: 'sync', actor: 'canon-projection' },
+      { sourceUpdatedAt: NEWER, priorWrite: null, source: 'sync', actor: 'canon-projection' },
     );
+  });
+
+  it('counts a write the locked freshness re-check refuses as skipped (#12503)', async () => {
+    catalogDB.getIngredientTimestamps.mockResolvedValue(timestampMap([['ing-a', ROW_AT], ['ing-b', ROW_AT]]));
+    catalogDB.updateIngredientIfFresh.mockImplementation(async (id) => (
+      id === 'ing-b' ? { status: 'stale', ingredient: null } : WRITTEN));
+
+    const stats = await projectToCatalog('universe-1', { characters: [entry('ing-a'), entry('ing-b')] });
+
+    expect(stats).toEqual({ written: 1, skipped: 1 });
   });
 
   it('keeps LWW: an embedded entry OLDER than its row is skipped, equal timestamps still write', async () => {
@@ -93,7 +106,7 @@ describe('projectToCatalog batching', () => {
       ],
     });
 
-    expect(catalogDB.updateIngredient.mock.calls.map(([id]) => id)).toEqual(['ing-equal', 'ing-fresh']);
+    expect(catalogDB.updateIngredientIfFresh.mock.calls.map(([id]) => id)).toEqual(['ing-equal', 'ing-fresh']);
     expect(stats).toEqual({ written: 2, skipped: 1 });
   });
 
@@ -104,8 +117,8 @@ describe('projectToCatalog batching', () => {
       characters: [entry('ing-live'), entry('ing-gone')],
     });
 
-    expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(1);
-    expect(catalogDB.updateIngredient).toHaveBeenCalledWith('ing-live', expect.anything(), expect.anything());
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledTimes(1);
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledWith('ing-live', expect.anything(), expect.anything());
     expect(stats).toEqual({ written: 1, skipped: 1 });
   });
 
@@ -127,7 +140,7 @@ describe('projectToCatalog batching', () => {
     });
 
     expect(catalogDB.getIngredientTimestamps).not.toHaveBeenCalled();
-    expect(catalogDB.updateIngredient).not.toHaveBeenCalled();
+    expect(catalogDB.updateIngredientIfFresh).not.toHaveBeenCalled();
     expect(stats).toEqual({ written: 0, skipped: 0 });
   });
 
@@ -139,7 +152,7 @@ describe('projectToCatalog batching', () => {
       characters: [entry('ing-c1'), entry('ing-c2')],
     });
 
-    expect(catalogDB.updateIngredient).not.toHaveBeenCalled();
+    expect(catalogDB.updateIngredientIfFresh).not.toHaveBeenCalled();
     expect(stats).toEqual({ written: 0, skipped: 2 });
     expect(errSpy).toHaveBeenCalledTimes(1);
     errSpy.mockRestore();
@@ -147,9 +160,9 @@ describe('projectToCatalog batching', () => {
 
   it('keeps a single failing write best-effort — the remaining entries still project', async () => {
     catalogDB.getIngredientTimestamps.mockResolvedValue(timestampMap([['ing-bad', ROW_AT], ['ing-ok', ROW_AT]]));
-    catalogDB.updateIngredient.mockImplementation(async (id) => {
+    catalogDB.updateIngredientIfFresh.mockImplementation(async (id) => {
       if (id === 'ing-bad') throw new Error('constraint violation');
-      return {};
+      return WRITTEN;
     });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -177,8 +190,8 @@ describe('projectToCatalog batching', () => {
     });
 
     // Newer entry writes first; older duplicate entry is evaluated against appliedTimestamps (NEWER) and skipped
-    expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(1);
-    expect(catalogDB.updateIngredient).toHaveBeenCalledWith(
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledTimes(1);
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledWith(
       'ing-dup',
       { name: 'Newer Entry', payload: expect.anything() },
       expect.anything(),
@@ -196,18 +209,20 @@ describe('projectToCatalog batching', () => {
       ],
     });
 
-    expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(2);
-    expect(catalogDB.updateIngredient).toHaveBeenNthCalledWith(
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledTimes(2);
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenNthCalledWith(
       1,
       'ing-dup',
       { name: 'Older First', payload: expect.anything() },
       expect.anything(),
     );
-    expect(catalogDB.updateIngredient).toHaveBeenNthCalledWith(
+    // The second write supersedes the first by its row version, not the
+    // NOW() clock the trigger stamped on it.
+    expect(catalogDB.updateIngredientIfFresh).toHaveBeenNthCalledWith(
       2,
       'ing-dup',
       { name: 'Newer Second', payload: expect.anything() },
-      expect.anything(),
+      expect.objectContaining({ sourceUpdatedAt: NEWER, priorWrite: { syncSequence: '7', sourceUpdatedAt: ROW_AT } }),
     );
     expect(stats).toEqual({ written: 2, skipped: 0 });
   });

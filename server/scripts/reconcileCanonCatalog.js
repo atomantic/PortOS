@@ -16,7 +16,7 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
  *   - universe side: `updateUniverse(..., { silent })` — silent suppresses the
  *     per-universe peer-sync fan-out (this is a local data repair, not a user
  *     edit; peers reconcile on their own boot).
- *   - catalog side: `updateIngredient(..., { source: 'sync' })` so the rewrite
+ *   - catalog side: `updateIngredientIfFresh(..., { source: 'sync' })` so the rewrite
  *     reads as a system reconciliation in the revision history, not a user edit.
  *
  * Idempotent + marker-gated (`data/catalog-canon-reconcile.applied.json`): once
@@ -71,19 +71,19 @@ export async function reconcileCanonCatalog({ force = false } = {}) {
   // fresh row and get clobbered. Comparing every universe against the pre-pass
   // clock keeps the winner determination stable across the whole reconcile.
   const rowClockAtStart = new Map();
-  // High-water mark of the canon-winner clock already written to each catalog
-  // row this pass. When the same ingredient is embedded in several universes
-  // and more than one copy beats the ORIGINAL row, only the NEWEST embedded
-  // copy may win — a later but older copy must not clobber the newer one we
-  // already wrote.
-  const canonWinnerClock = new Map();
+  // The canon-winner already written to each catalog row this pass: its source
+  // clock is the high-water mark (when the same ingredient is embedded in
+  // several universes and more than one copy beats the ORIGINAL row, only the
+  // NEWEST embedded copy may win), and its row version lets the next sibling
+  // supersede our own write without mistaking it for a concurrent edit.
+  const canonWinner = new Map();
 
   for (const universe of universes) {
     if (universe.deleted) continue;
     totals.universesScanned++;
     // Collect per-array, per-entry-id the winning payload to stamp back onto the
     // embedded entries in ONE silent updateUniverse below. The catalog side is
-    // written inline (one updateIngredient per catalog-loser).
+    // written inline (one updateIngredientIfFresh per catalog-loser).
     const canonPatches = {};                              // arrayKey -> { entryId -> winningEntryFields }
     for (const arrayKey of CANON_ARRAY_KEYS) {
       const list = Array.isArray(universe[arrayKey]) ? universe[arrayKey] : [];
@@ -113,17 +113,28 @@ export async function reconcileCanonCatalog({ force = false } = {}) {
               updatedAt: row.updatedAt,
             };
             totals.catalogWon++;
-          } else if (entryAt > rowAt && entryAt > (canonWinnerClock.get(ingredientId) || 0)) {
+          } else if (entryAt > rowAt && entryAt > (Date.parse(canonWinner.get(ingredientId)?.sourceUpdatedAt || '') || 0)) {
             // Embedded entry beats the original row AND any canon-winner already
             // written this pass → it wins. Write it into the catalog row and
             // raise the high-water mark so an older sibling copy can't clobber it.
-            await catalogDB.updateIngredient(
+            // The write re-checks the clock under the row lock, so a catalog
+            // edit committed since the scan read the row survives (#12503).
+            const result = await catalogDB.updateIngredientIfFresh(
               ingredientId,
               { name: entry.name, payload: entryToPayload(entry) },
-              { source: 'sync', actor: 'canon-catalog-reconcile' },
+              {
+                sourceUpdatedAt: entry.updatedAt,
+                priorWrite: canonWinner.get(ingredientId) || null,
+                source: 'sync',
+                actor: 'canon-catalog-reconcile',
+              },
             );
-            canonWinnerClock.set(ingredientId, entryAt);
-            totals.canonWon++;
+            if (result?.status === 'written') {
+              canonWinner.set(ingredientId, { syncSequence: result.ingredient.syncSequence, sourceUpdatedAt: entry.updatedAt });
+              totals.canonWon++;
+            } else {
+              console.warn(`🔁 reconcile skipped ${universe.id}/${arrayKey}/${ingredientId}: catalog row changed during the pass`);
+            }
           }
           // Equal timestamps → already converged; nothing to do.
         } catch (err) {
