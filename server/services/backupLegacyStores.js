@@ -70,6 +70,11 @@ export async function snapshotLegacySplitStores(srcDir, scope) {
     const readable = ok && value !== null && typeof value === 'object' && !Array.isArray(value) && entry.readable(value);
     found.push({ ...entry, readable });
   }
+  // Migrations take the install root and join `data/` themselves. Refuse before
+  // any transfer, so a store that cannot be converted is never restored over.
+  if (found.some(entry => entry.readable) && basename(PATHS.data) !== 'data') {
+    throw new Error(`Cannot convert restored legacy stores: data directory ${PATHS.data} is not <install>/data`);
+  }
   return found;
 }
 
@@ -85,10 +90,6 @@ export const describeLegacySplitStores = stores => stores.map(({ store, legacyFi
  */
 export async function convertRestoredLegacySplitStores(stores) {
   if (stores.length === 0) return [];
-  // Migrations take the install root and join `data/` themselves.
-  if (basename(PATHS.data) !== 'data') {
-    throw new Error(`Cannot convert restored legacy stores: data directory ${PATHS.data} is not <install>/data`);
-  }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const results = [];
   for (const entry of stores) {
