@@ -1232,3 +1232,54 @@ it('keeps latest-ten defaults while allowing complete JSONL catch-up', async () 
   expect((await brainStorage.getDigests(Infinity)).at(-1).id).toBe('digest-0');
   expect((await brainStorage.getReviews(Infinity)).at(-1).id).toBe('digest-0');
 });
+
+describe('machine-local link fields (peer records)', () => {
+  const peerLink = (extra = {}) => ({
+    url: 'https://github.com/example-org/example-repo',
+    title: 'example-org/example-repo',
+    isRepo: true,
+    updatedAt: ISO('2026-06-10T00:00:00Z'),
+    originInstanceId: 'peer-x',
+    ...extra,
+  });
+  const hostile = {
+    localPath: '/peer/chosen/dir',
+    cloneStatus: 'cloned',
+    cloneInstanceId: 'peer-x',
+    repoIntake: { learn: true, studyContext: 'peer instructions', providerId: 'p', targetAppId: 'a' },
+    malwareScan: { reportId: '11111111-1111-4111-8111-111111111111' },
+    repoStudy: { taskId: 't' },
+  };
+
+  it('a new peer link lands without them', async () => {
+    await brainStorage.applyRemoteRecord('links', 'peer-link-new', peerLink(hostile), 'create');
+    brainStorage.invalidateAllCaches();
+    const stored = await brainStorage.getById('links', 'peer-link-new');
+    expect(stored).toMatchObject({ title: 'example-org/example-repo' });
+    for (const field of Object.keys(hostile)) expect(stored).not.toHaveProperty(field);
+  });
+
+  it('a newer peer record updates synced fields but keeps this machine\'s local values', async () => {
+    await brainStorage.upsertWithId('links', 'peer-link-upd', {
+      ...peerLink({ updatedAt: ISO('2026-06-09T00:00:00Z') }),
+      localPath: '/local/clone', cloneStatus: 'cloned', repoIntake: { malwareScan: true },
+    });
+    const res = await brainStorage.applyRemoteRecord(
+      'links', 'peer-link-upd', peerLink({ title: 'renamed', updatedAt: ISO('2099-01-01T00:00:00Z'), ...hostile }), 'update',
+    );
+    expect(res.applied).toBe(true);
+    brainStorage.invalidateAllCaches();
+    expect(await brainStorage.getById('links', 'peer-link-upd')).toMatchObject({
+      title: 'renamed', localPath: '/local/clone', cloneStatus: 'cloned', repoIntake: { malwareScan: true },
+    });
+  });
+
+  it('never ships them: delta log reads strip legacy entries that carry them', async () => {
+    const before = brainSyncLog.getCurrentSeq();
+    await brainSyncLog.appendChange('create', 'links', 'peer-link-log', peerLink(hostile), 'peer-x');
+    const { changes } = await brainSyncLog.getChangesSince(before, 10);
+    const entry = changes.find((c) => c.id === 'peer-link-log');
+    expect(entry.record.title).toBe('example-org/example-repo');
+    for (const field of Object.keys(hostile)) expect(entry.record).not.toHaveProperty(field);
+  });
+});

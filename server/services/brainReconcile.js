@@ -29,6 +29,7 @@
  */
 
 import { createHash } from 'crypto';
+import { stripLinkMachineLocalFields } from '../lib/brainLinkLocalFields.js';
 import * as brainStorage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -70,7 +71,9 @@ async function buildRawMap() {
     const records = await brainStorage.getRawRecords(type);
     const sorted = {};
     for (const id of Object.keys(records).sort()) {
-      sorted[id] = records[id];
+      // Machine-local link fields are neither shipped nor hashed: each install
+      // holds its own values, so hashing them would never converge.
+      sorted[id] = type === 'links' ? stripLinkMachineLocalFields(records[id]) : records[id];
     }
     map[type] = sorted;
   }

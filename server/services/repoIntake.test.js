@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 
 const addTask = vi.fn();
 const getAppById = vi.fn();
@@ -16,7 +18,10 @@ vi.mock('./malwareScanReports.js', () => ({
   reportPathForId: (id) => `/scans/${id}.md`,
 }));
 vi.mock('fs', () => ({ existsSync: (...args) => existsSync(...args) }));
-vi.mock('./repoCloner.js', () => ({ pullRepo: (...args) => pullRepo(...args) }));
+vi.mock('./repoCloner.js', async () => ({
+  isDerivedClonePath: (await vi.importActual('./repoCloner.js')).isDerivedClonePath,
+  pullRepo: (...args) => pullRepo(...args),
+}));
 // The REAL workTracker resolution runs — the tracker instructions in the prompt
 // are what these tests assert. Only its one shell-out is stubbed; the tracker is
 // steered through the app's own `workTracker` setting, as a user would.
@@ -32,7 +37,7 @@ const LINK = {
   title: 'example-owner/example-repo',
   repoOwner: 'example-owner',
   repoName: 'example-repo',
-  localPath: '/repos/example-owner/example-repo',
+  localPath: join(PATHS.repos, 'example-owner', 'example-repo'),
 };
 
 const APP = { id: 'portos-default', name: 'PortOS', repoPath: '/srv/portos', workTracker: 'github' };
@@ -139,6 +144,17 @@ describe('queueRepoStudy', () => {
     existsSync.mockImplementation((path) => path === LINK.localPath);
     await queueRepoStudy(LINK);
     expect(addTask.mock.calls[1][0].context).toMatch(/keeps no single feature inventory; build one/);
+  });
+
+  it('refuses a clone path that is not the derived path for the link URL (scan and study)', async () => {
+    existsSync.mockReturnValue(true);
+    const foreign = { ...LINK, localPath: '/srv/elsewhere/example-repo' };
+
+    expect(await queueMalwareScan(foreign)).toEqual({ queued: false, reason: 'not-cloned' });
+    expect(await queueRepoStudy(foreign)).toEqual({ queued: false, reason: 'not-cloned' });
+    expect(await restudyRepoLink(foreign)).toEqual({ queued: false, reason: 'not-cloned' });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(pullRepo).not.toHaveBeenCalled();
   });
 
   it('does not masquerade as a scheduled task type', async () => {

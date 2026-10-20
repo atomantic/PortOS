@@ -44,6 +44,7 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';
 import { supersedingTimestamp } from '../lib/tombstones.js';
 import { parseTsMs, compareNewerWins } from '../lib/lwwTimestamp.js';
+import { mergeIncomingLinkRecord } from '../lib/brainLinkLocalFields.js';
 
 const DATA_DIR = PATHS.brain;
 
@@ -1420,7 +1421,7 @@ export async function applyRemoteRecord(type, id, record, op) {
       // tombstone, never as a malformed live record missing `deletedAt`.
       await store.saveOneNow(id, record._deleted
         ? makeTombstone(record.updatedAt, record.originInstanceId ?? existing?.originInstanceId)
-        : { ...record });
+        : (type === 'links' ? mergeIncomingLinkRecord(record, existing) : { ...record }));
     }
 
     // Still no per-record event (that would echo back to the peer, #1077) —

@@ -16,6 +16,7 @@ import { join } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
 import { appendFileGuarded, ensureDir, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { compareNewerWins } from '../lib/lwwTimestamp.js';
+import { stripLinkMachineLocalFields } from '../lib/brainLinkLocalFields.js';
 
 const DATA_DIR = PATHS.brain;
 const SYNC_LOG_FILE = join(DATA_DIR, 'sync_log.jsonl');
@@ -345,7 +346,11 @@ export async function getChangesSince(sinceSeq, limit = 100) {
       // A line without a numeric seq is unsequenceable — shipping it would set
       // the peer's cursor to undefined on the next maxSeq.
       if (typeof entry?.seq !== 'number' || entry.seq <= sinceSeq) continue;
-      changes.push(entry);
+      // Read-time, so entries logged before links had machine-local fields
+      // (or relayed verbatim from an older peer) never carry them out either.
+      changes.push(entry.type === 'links' && entry.record
+        ? { ...entry, record: stripLinkMachineLocalFields(entry.record) }
+        : entry);
       if (changes.length >= limit) break;
     }
 

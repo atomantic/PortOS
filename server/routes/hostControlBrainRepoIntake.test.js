@@ -35,7 +35,8 @@ vi.mock('../services/instanceIdentity.js', () => ({
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));
 vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn(async () => {}) }));
-vi.mock('../services/repoCloner.js', () => ({
+vi.mock('../services/repoCloner.js', async () => ({
+  isDerivedClonePath: (await vi.importActual('../services/repoCloner.js')).isDerivedClonePath,
   cloneRepo: clone.cloneRepo,
   pullRepo: vi.fn(),
   reapStaleCloneStaging: vi.fn(async () => 0),

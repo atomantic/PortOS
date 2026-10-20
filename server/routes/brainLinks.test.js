@@ -10,6 +10,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { join } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -32,9 +34,10 @@ vi.mock('../services/brain.js', () => ({
   deleteBucketAndUnlinkChildren: vi.fn(),
 }));
 
-vi.mock('../services/repoCloner.js', () => ({
-  pullRepo: vi.fn(),
-}));
+vi.mock('../services/repoCloner.js', async () => {
+  const actual = await vi.importActual('../services/repoCloner.js');
+  return { isDerivedClonePath: actual.isDerivedClonePath, pullRepo: vi.fn() };
+});
 
 vi.mock('../services/cos.js', () => ({ addTask: vi.fn() }));
 
@@ -217,7 +220,7 @@ describe('POST /api/brain/links/:id/study', () => {
     url: 'https://gitlab.com/example-group/example-repo',
     isRepo: true,
     cloneStatus: 'cloned',
-    localPath: '/repos/gitlab.com/example-group/example-repo',
+    localPath: join(PATHS.repos, 'gitlab.com', 'example-group', 'example-repo'),
   });
 
   beforeEach(() => {
@@ -245,6 +248,15 @@ describe('POST /api/brain/links/:id/study', () => {
     );
     expect(brainService.updateLink).toHaveBeenCalledWith('repo-link', { repoStudy: { taskId: 'task-1' } });
     expect(res.body).toMatchObject({ taskId: 'task-1', pulled: { ok: true } });
+  });
+
+  it('refuses a recorded localPath that is not the derived clone path for the link URL', async () => {
+    brainService.getLinkById.mockResolvedValue({ ...cloned(), localPath: '/srv/elsewhere/example-repo' });
+
+    const res = await request(app).post('/api/brain/links/repo-link/study').send({});
+
+    expect(res.status).toBe(400);
+    expect(restudyRepoLink).not.toHaveBeenCalled();
   });
 
   it('409s when a study for the repo is already in flight', async () => {

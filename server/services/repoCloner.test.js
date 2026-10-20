@@ -19,7 +19,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 import { existsSync } from 'fs';
 import { access, mkdtemp, readdir, rename, rm } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
-import { cloneRepo, reapStaleCloneStaging, pullRepo } from './repoCloner.js';
+import { cloneRepo, isDerivedClonePath, reapStaleCloneStaging, pullRepo, getCloneDir } from './repoCloner.js';
 
 const REPOS_DIR = '/repos';
 const OWNER_DIR = join(REPOS_DIR, 'acme');
@@ -290,6 +290,20 @@ describe('cloneRepo across hosts', () => {
     await expect(cloneRepo('https://bitbucket.org/acme/widgets'))
       .rejects.toThrow('Invalid repository URL');
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('isDerivedClonePath', () => {
+  const root = getCloneDir();
+
+  it('accepts only the path cloneRepo derives for the URL, on flat and namespaced hosts', () => {
+    expect(isDerivedClonePath('https://github.com/acme/widgets', join(root, 'acme', 'widgets'))).toBe(true);
+    expect(isDerivedClonePath('https://gitlab.com/acme/widgets', join(root, 'gitlab.com', 'acme', 'widgets'))).toBe(true);
+    expect(isDerivedClonePath('https://github.com/acme/widgets', join(root, 'acme', 'other'))).toBe(false);
+    expect(isDerivedClonePath('https://github.com/acme/widgets', join(root, 'acme', 'widgets', '..', '..', '..'))).toBe(false);
+    expect(isDerivedClonePath('https://github.com/acme/widgets', '/etc')).toBe(false);
+    expect(isDerivedClonePath('https://example.com/not-a-repo', join(root, 'acme', 'widgets'))).toBe(false);
+    expect(isDerivedClonePath('https://github.com/acme/widgets', null)).toBe(false);
   });
 });
 
