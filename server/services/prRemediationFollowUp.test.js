@@ -198,29 +198,28 @@ describe('handBackPrRemediation', () => {
     expect(comment.at(-1)).toContain('aaaaaaaaaaaa');
     expect(assign).toEqual(['pr', 'edit', 'https://github.com/o/r/pull/7', '--add-assignee', 'contributor']);
   });
-});
 
-
-it('retries assignment without duplicating a posted hand-back after an assignment failure', async () => {
-  const task = { id: 'sys-remediation-retry', app: 'app-1', metadata: {
-    prRemediationNumber: 7, prRemediationRepoFullName: 'o/r',
-    prRemediationUrl: 'https://github.com/o/r/pull/7', prRemediationAuthorLogin: 'contributor',
-  } };
-  let posted = false;
-  let assignmentAttempts = 0;
-  execGhMock.mockImplementation(async (args) => {
-    if (args[0] === 'api') return 'maintainer';
-    if (args[1] === 'view') {
-      expect(args.at(-1)).toContain('.author.login == "maintainer"');
-      expect(args.at(-1)).toContain('portos-pr-remediation-handback:sys-remediation-retry');
-      return String(posted);
-    }
-    if (args[1] === 'comment') posted = true;
-    if (args[1] === 'edit' && ++assignmentAttempts === 1) throw new Error('Assignment unavailable');
-    return '';
+  it('retries assignment without duplicating a posted hand-back after an assignment failure', async () => {
+    const task = { id: 'sys-remediation-retry', app: 'app-1', metadata: {
+      prRemediationNumber: 7, prRemediationRepoFullName: 'o/r',
+      prRemediationUrl: 'https://github.com/o/r/pull/7', prRemediationAuthorLogin: 'contributor',
+    } };
+    let posted = false;
+    let assignmentAttempts = 0;
+    execGhMock.mockImplementation(async (args) => {
+      if (args[0] === 'api') return 'maintainer';
+      if (args[1] === 'view') {
+        expect(args.at(-1)).toContain('.author.login == "maintainer"');
+        expect(args.at(-1)).toContain('portos-pr-remediation-handback:sys-remediation-retry');
+        return String(posted);
+      }
+      if (args[1] === 'comment') posted = true;
+      if (args[1] === 'edit' && ++assignmentAttempts === 1) throw new Error('Assignment unavailable');
+      return '';
+    });
+    await expect(handBackPrRemediation({ task, workspacePath: '/repos/example' })).rejects.toThrow('Assignment unavailable');
+    expect(await handBackPrRemediation({ task, workspacePath: '/repos/example' })).toBe(true);
+    expect(execGhMock.mock.calls.filter(([args]) => args[1] === 'comment')).toHaveLength(1);
+    expect(assignmentAttempts).toBe(2);
   });
-  await expect(handBackPrRemediation({ task, workspacePath: '/repos/example' })).rejects.toThrow('Assignment unavailable');
-  expect(await handBackPrRemediation({ task, workspacePath: '/repos/example' })).toBe(true);
-  expect(execGhMock.mock.calls.filter(([args]) => args[1] === 'comment')).toHaveLength(1);
-  expect(assignmentAttempts).toBe(2);
 });
