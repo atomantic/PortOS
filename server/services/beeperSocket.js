@@ -278,6 +278,11 @@ function dropSocket() {
   socket = null;
   if (!dying) return;
   dying.removeAllListeners?.();
+  // `ws` terminate() on a still-CONNECTING socket aborts the handshake and emits
+  // `error` on the next tick; with every listener stripped that is an unhandled
+  // 'error' event, which exits the process. The socket is superseded, so the
+  // late error carries nothing actionable.
+  dying.on?.('error', () => {});
   // `terminate()` is the `ws` escape hatch for a socket that may be half-open —
   // `close()` waits for a close handshake the dead peer will never send.
   if (typeof dying.terminate === 'function') dying.terminate();
