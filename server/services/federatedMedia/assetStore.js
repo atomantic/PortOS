@@ -159,34 +159,7 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body, jobs = [] 
 
   const assetId = federatedMediaAssetId(callerId, sha256);
   const path = join(PATHS.federatedMediaInbox, assetFilename(assetId, mimeType));
-  // Already staged? The bytes are identical by construction (the name IS the
-  // digest), so a replay only needs its TTL refreshed — one utimes rather than
-  // rewriting up to 32 MiB to change a timestamp.
-  //
-  // atomicWrite (temp + rename) on the miss, not a plain writeFile: this file's
-  // NAME asserts a digest that findFederatedMediaAsset trusts without re-hashing,
-  // so a torn write would leave a file claiming a hash its bytes do not have —
-  // and the runner would render from a truncated image. It ensures the directory
-  // itself, so no separate ensureDir.
-  const existing = await lstat(path).catch(() => null);
-  if (existing?.isFile() && existing.size === body.length) {
-    // A replay of staged bytes adds nothing, so it is exempt from the quota.
-    await utimes(path, new Date(), new Date());
-  } else {
-    // Expired files are removed first so they never count against the caller.
-    await sweepFederatedMediaAssets({ jobs, force: true }).catch((error) => {
-      maintenance.markCurrentUnsettled();
-      console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
-    });
-    await enforceAssetQuota(callerId, body.length);
-    await atomicWrite(path, body).catch((error) => {
-      // The shared writer may have left an unknown temporary sibling, or
-      // suppressed a cleanup error. Keep this admission unsettled rather than
-      // claiming the input boundary is drained after an uncertain write.
-      maintenance.markCurrentUnsettled();
-      throw error;
-    });
-  }
+  await admitAndStage(callerId, path, body, jobs);
   return {
     wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
     assetId,
@@ -195,6 +168,43 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body, jobs = [] 
     mimeType,
     expiresAt: expiresAtFor(Date.now()),
   };
+}
+
+// Quota scan + write must be one critical section: concurrent uploads would
+// otherwise each see free capacity and jointly overshoot the caps.
+let admissionQueue = Promise.resolve();
+const admitAndStage = (callerId, path, body, jobs) => {
+  const run = admissionQueue.then(() => stageAsset(callerId, path, body, jobs));
+  admissionQueue = run.catch(() => {});
+  return run;
+};
+
+// Already staged? The bytes are identical by construction (the name IS the
+// digest), so a replay only needs its TTL refreshed — one utimes rather than
+// rewriting up to 32 MiB, and it adds nothing so it is exempt from the quota.
+//
+// atomicWrite (temp + rename) on the miss, not a plain writeFile: this file's
+// NAME asserts a digest that findFederatedMediaAsset trusts without re-hashing,
+// so a torn write would leave a file claiming a hash its bytes do not have.
+async function stageAsset(callerId, path, body, jobs) {
+  const existing = await lstat(path).catch(() => null);
+  if (existing?.isFile() && existing.size === body.length) {
+    await utimes(path, new Date(), new Date());
+    return;
+  }
+  // Expired files are removed first so they never count against the caller.
+  await sweepFederatedMediaAssets({ jobs, force: true }).catch((error) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
+  });
+  await enforceAssetQuota(callerId, body.length);
+  await atomicWrite(path, body).catch((error) => {
+    // The shared writer may have left an unknown temporary sibling, or
+    // suppressed a cleanup error. Keep this admission unsettled rather than
+    // claiming the input boundary is drained after an uncertain write.
+    maintenance.markCurrentUnsettled();
+    throw error;
+  });
 }
 
 async function enforceAssetQuota(callerId, incomingBytes) {

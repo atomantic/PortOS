@@ -91,6 +91,14 @@ describe('federated media asset store', () => {
       await expect(upload('peer-b', distinctPng(9999))).resolves.toMatchObject({ assetId: expect.any(String) });
     });
 
+    it('does not let concurrent uploads jointly overshoot the per-caller count', async () => {
+      const results = await Promise.allSettled(
+        Array.from({ length: FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT + 8 }, (_, i) => upload('peer-a', distinctPng(i))),
+      );
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT);
+      expect(results.filter((r) => r.status === 'rejected' && r.reason.code === 'MEDIA_PROVIDER_ASSET_QUOTA')).toHaveLength(8);
+    });
+
     it('refuses a caller beyond the per-caller byte cap', async () => {
       plantSparse('peer-a', 'a', FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES - 10);
       await expect(upload('peer-a')).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
