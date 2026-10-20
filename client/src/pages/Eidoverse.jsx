@@ -453,7 +453,6 @@ export default function Eidoverse() {
             title="Eidoverse Worlds"
             className="absolute inset-0 h-full w-full border-0 bg-port-bg"
             allow="camera; microphone; fullscreen; gamepad; xr-spatial-tracking"
-            allowFullScreen
             onLoad={() => { setIframeReady(true); frame.onFrameLoad(); }}
           />
 
