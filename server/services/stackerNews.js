@@ -277,6 +277,11 @@ export async function listTerritories(accountId) {
   return result.rows.map(territoryView);
 }
 
+export async function getTerritory(id) {
+  const result = await query('SELECT * FROM stacker_news_territories WHERE id=$1', [id]);
+  return result.rows[0] ? territoryView(result.rows[0]) : null;
+}
+
 export async function createTerritory({ accountId, slug, label = '', isOwned = false, monitoringEnabled = null, inheritAccountRules = true, rules = {} }) {
   const result = await query(
     `INSERT INTO stacker_news_territories (id,account_id,slug,label,is_owned,monitoring_enabled,inherit_account_rules,rules)
