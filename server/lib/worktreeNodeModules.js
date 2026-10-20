@@ -70,7 +70,7 @@ function workspaceLinkTarget(sourceRoot, worktreeRoot, { target, resolved }) {
  * lexically (no realpath) so a workspace package the branch deleted still
  * passes while a link escaping to the source checkout does not.
  */
-export async function assertLinkWithinWorktree(worktreeRoot, linkPath) {
+async function assertLinkWithinWorktree(worktreeRoot, linkPath) {
   const resolved = await resolveLink(linkPath);
   if (!isInside(worktreeRoot, resolved)) {
     throw new Error(`Workspace link ${linkPath} resolves outside the worktree (${resolved})`);

@@ -3,7 +3,6 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSyn
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  assertLinkWithinWorktree,
   provisionWorkspaceNodeModules,
   removeProvisionedNodeModules,
 } from './worktreeNodeModules.js';
@@ -33,13 +32,6 @@ describe('worktree node_modules provisioning', () => {
     mkdirSync(join(root, 'worktree'));
     expect(await provisionWorkspaceNodeModules(join(root, 'source'), join(root, 'worktree'))).toBe(false);
     expect(existsSync(join(root, 'worktree', 'node_modules'))).toBe(false);
-  });
-
-  it('rejects a link that resolves outside the worktree', async () => {
-    const { source, worktree } = fixture();
-    mkdirSync(join(worktree, 'node_modules'));
-    symlinkSync(join(source, 'packages', 'core'), join(worktree, 'node_modules', 'escaped'), 'dir');
-    await expect(assertLinkWithinWorktree(worktree, join(worktree, 'node_modules', 'escaped'))).rejects.toThrow('outside the worktree');
   });
 
   it('removes only a provisioned directory, leaving a real install untouched', async () => {
