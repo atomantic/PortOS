@@ -249,7 +249,6 @@ export async function drainOnDemandRequests(ctx, adapter) {
           await markAppReviewCooldown(targetApp.id);
           reviewStartedApps.add(targetApp.id);
         }
-        await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
         const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
           skipPreconditions: true,
           onDemand: true,
@@ -272,6 +271,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
         pendingPerpetualDispatch = prepared.pendingPerpetualDispatch;
         skip = prepared.skip;
         if (task) {
+          await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
         }
       } else {
