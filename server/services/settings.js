@@ -172,7 +172,8 @@ export const __resetSettingsCache = () => {
 // since such a write bypasses the save()-emitted event the cache rides on and
 // would otherwise leave every settings consumer serving pre-restore values.
 const reloadSettingsFromDisk = async (signaturePromise = readSettingsSignature()) => {
-  const [signature, { corrupt, settings }] = await Promise.all([signaturePromise, readSettingsStrict()]);
+  const signature = await signaturePromise;
+  const { corrupt, settings } = await readSettingsStrict();
   if (corrupt) {
     // Do NOT broadcast a corrupt on-disk settings.json as `{}` (issue #2684). The
     // concrete path is a backup restore of a malformed snapshot: backup.js calls
@@ -205,7 +206,7 @@ const queueWrite = createFileWriteQueue();
 // in-process save. reloadSettings itself stays usable inside the restore lock.
 export const refreshSettingsIfChangedOnDisk = () => queueWrite(async () => {
   const signature = await readSettingsSignature();
-  if (settingsCache !== null && settingsSignature !== undefined
+  if (settingsCache !== null && settingsSignature !== undefined && signature !== undefined
     && signature?.mtimeMs === settingsSignature?.mtimeMs
     && signature?.size === settingsSignature?.size) return;
   await reloadSettingsFromDisk(signature);
@@ -393,7 +394,8 @@ export const getSettingsWithStatus = async () => {
     // defeating the no-restart self-heal the auth fail-closed path promises. This
     // covers BOTH failure modes (malformed content and an unreadable-but-present
     // file); only a genuinely ABSENT file (fresh install) caches `{}`.
-    const [signature, { corrupt, settings }] = await Promise.all([readSettingsSignature(), readSettingsStrict()]);
+    const signature = await readSettingsSignature();
+    const { corrupt, settings } = await readSettingsStrict();
     const loaded = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.

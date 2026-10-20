@@ -3,7 +3,21 @@ import { mkdtemp, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const context = vi.hoisted(() => ({ data: '', afterHydrate: null }));
+const context = vi.hoisted(() => ({ data: '', afterHydrate: null, beforeStat: null, strictReads: 0 }));
+vi.mock('node:fs/promises', async importActual => {
+  const actual = await importActual();
+  return { ...actual, stat: async (...args) => {
+    await context.beforeStat?.();
+    return actual.stat(...args);
+  } };
+});
+vi.mock('../lib/fileUtils.js', async importActual => {
+  const actual = await importActual();
+  return { ...actual, tryReadFileStrict: (...args) => {
+    context.strictReads++;
+    return actual.tryReadFileStrict(...args);
+  } };
+});
 vi.mock('../lib/paths.js', async importActual => {
   const actual = await importActual();
   return { ...actual, PATHS: { ...actual.PATHS, get data() { return context.data; } } };
@@ -22,6 +36,8 @@ let getCodeReviewDefaults;
 let file;
 beforeEach(async () => {
   context.afterHydrate = null;
+  context.beforeStat = null;
+  context.strictReads = 0;
   context.data = await mkdtemp(join(tmpdir(), 'review-settings-'));
   file = join(context.data, 'settings.json');
   vi.resetModules();
@@ -100,4 +116,33 @@ it('observes a bridge write landing after local persistence but before save comp
   };
   await settings.updateSettings({ localSave: true }, { skipUserAction: true });
   expect(await getCodeReviewDefaults()).toMatchObject({ reviewers: ['claude'], reviewerHealth: health });
+});
+
+it.each(['getSettings', 'reloadSettings'])('finishes metadata before reading a %s snapshot', async method => {
+  await writeFile(file, JSON.stringify({ codeReview: { reviewers: ['codex'] } }));
+  let release;
+  let entered;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  context.beforeStat = async () => { entered(); await barrier; };
+  const load = settings[method]();
+  await started;
+  try {
+    // A concurrent read could capture old bytes before stat captures a bridge
+    // replacement, permanently labelling the old cache with the new metadata.
+    expect(context.strictReads).toBe(0);
+  } finally {
+    context.beforeStat = null;
+    release();
+    await load;
+  }
+  await writeFile(file, JSON.stringify({ codeReview: { reviewers: ['claude'] } }));
+  expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+});
+
+it('does not confuse unavailable metadata with a previously absent settings file', async () => {
+  expect((await getCodeReviewDefaults()).reviewers).toEqual([]);
+  await writeFile(file, JSON.stringify({ codeReview: { reviewers: ['claude'] } }));
+  context.beforeStat = async () => { throw Object.assign(new Error('Unavailable metadata'), { code: 'EACCES' }); };
+  expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
 });
