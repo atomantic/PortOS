@@ -214,15 +214,19 @@ const GH_FIELD_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input']
 // value attached (`-XPOST`, `-Fbody=@file`) and clustered after booleans
 // (`-iXPOST`). Scanning a single-dash cluster: `-X` with anything but GET or
 // a field shorthand rejects; another value-taking shorthand ends the scan
-// (the rest is its value); an unknown letter fails closed.
+// (the rest is its value); an unknown letter fails closed. A cluster ending
+// in `-X` (`-iX GET`) takes the method from the next argument, as pflag does.
 const GH_API_VALUE_SHORTHANDS = new Set(['H', 'p', 'q', 't']);
 const GH_API_BOOLEAN_SHORTHANDS = new Set(['i']);
-const ghApiClusterWrites = (arg) => {
+const ghApiClusterWrites = (arg, next) => {
   const cluster = arg.slice(1);
   for (let i = 0; i < cluster.length; i += 1) {
     const flag = cluster[i];
     if (GH_API_BOOLEAN_SHORTHANDS.has(flag)) continue;
-    if (flag === 'X') return cluster.slice(i + 1).replace(/^=/, '').toUpperCase() !== 'GET';
+    if (flag === 'X') {
+      const attached = cluster.slice(i + 1).replace(/^=/, '');
+      return (attached || next || '').toUpperCase() !== 'GET';
+    }
     return !GH_API_VALUE_SHORTHANDS.has(flag);
   }
   return false;
@@ -294,7 +298,7 @@ function validateUnattendedGhLike(base, args) {
       if (GH_FIELD_FLAGS.has(arg) || /^--(?:field|raw-field|input)=/.test(arg)) {
         return deny(`'${base} api ${arg}' is not allowed on the unattended lane — a field flag makes the request a POST.`);
       }
-      if (method === null && /^-[^-]/.test(arg) && arg.length > 2 && ghApiClusterWrites(arg)) {
+      if (method === null && /^-[^-]/.test(arg) && arg.length > 2 && ghApiClusterWrites(arg, rest[i + 1])) {
         return deny(`'${base} api ${arg}' is not allowed on the unattended lane — a method or field shorthand with an attached value can make the request a write.`);
       }
     }
