@@ -5,7 +5,15 @@ import { execFile } from '../lib/childProcess.js';
 import { startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const fixture = vi.hoisted(() => ({ state: null, apiBase: '', unreadable: false, stateGate: null, onStateQueued: null }));
+const fixture = vi.hoisted(() => ({ state: null, apiBase: '', retirementReserved: false, unreadable: false, stateGate: null, onStateQueued: null }));
+// The HTTP contract uses synthetic repositories; real admission is covered by
+// checkoutRetirementAdmission's disposable Git fixtures.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({
+  withCheckoutPublication: async (_repo, work) => {
+    if (fixture.retirementReserved) throw Object.assign(new Error('checkout-retirement-reserved'), { code: 'CHECKOUT_RETIREMENT_RESERVED' });
+    return work();
+  },
+}));
 vi.mock('../services/cos.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
@@ -50,6 +58,7 @@ let server;
 
 beforeEach(async () => {
   fixture.unreadable = false;
+  fixture.retirementReserved = false;
   fixture.stateGate = fixture.onStateQueued = null;
   fixture.state = { agents: {
     [coordinator]: { id: coordinator, status: 'running', workspacePath: '/synthetic/repo', metadata: {} },
@@ -110,7 +119,8 @@ describe('generated ownership recheck raw HTTP response (#11348)', () => {
       .toEqual({ bound: false, reason: 'owner-active' });
   });
 
-  it.each(['claim-owner-active', 'ownership-unreadable', 'owner-unknown', 'pr-completion-human-handoff', 'pr-completion-review-required'])('preserves the %s refusal as complete JSON without reserving', async (reason) => {
+  it.each(['checkout-retirement-reserved', 'claim-owner-active', 'ownership-unreadable', 'owner-unknown', 'pr-completion-human-handoff', 'pr-completion-review-required'])('preserves the %s refusal as complete JSON without reserving', async (reason) => {
+    if (reason === 'checkout-retirement-reserved') fixture.retirementReserved = true;
     if (reason === 'claim-owner-active') {
       fixture.state.agents.owner = { id: 'owner', status: 'running', metadata: { claimBranches: [branch] } };
     }

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Drive updateSubmodule off a scripted git, so the test asserts the exact
 // command sequence (and the commit guard) rather than re-implementing it.
+// Synthetic Git contracts do not create a filesystem repository.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 vi.mock('../lib/execGit.js', () => {
   const execGit = vi.fn();
   return {

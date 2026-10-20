@@ -498,7 +498,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
     expect(await c.confirm(before.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await lockText(c.release.path)).toBe(c.release.lockReason);
     expect(await archives()).toEqual([]);
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
