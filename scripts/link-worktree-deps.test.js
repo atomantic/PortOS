@@ -61,7 +61,8 @@ describe('link-worktree-deps script', () => {
     expect(result.status).toBe(0);
     const linked = join(worktree, 'node_modules');
     expect(lstatSync(linked).isSymbolicLink()).toBe(false);
-    expect(readlinkSync(join(linked, '@acme', 'core'))).toBe('../../packages/core');
+    // Windows reports the recreated relative target with backslashes.
+    expect(readlinkSync(join(linked, '@acme', 'core')).replaceAll('\\', '/')).toBe('../../packages/core');
     expect(readFileSync(join(linked, '@acme', 'core', 'marker.txt'), 'utf8')).toBe('fresh');
     expect(realpathSync(join(linked, '@acme', 'core')).startsWith(worktree)).toBe(true);
     // Everything that is not a workspace link still shares the source's install.
