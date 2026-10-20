@@ -1384,6 +1384,17 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   return archive;
 }
 
+// pg rejects an unreachable database with an AggregateError whose own message
+// is empty; the useful text (e.g. ECONNREFUSED) lives on the nested errors.
+function describeReconcileFailure(reason) {
+  if (reason?.message) return reason.message;
+  if (Array.isArray(reason?.errors)) {
+    const parts = [...new Set(reason.errors.map(err => err?.code || err?.message).filter(Boolean))];
+    if (parts.length > 0) return parts.join(', ');
+  }
+  return reason?.code || String(reason);
+}
+
 async function reconcileLiveFileRestore(subdirFilter) {
   const refreshes = [
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
@@ -1411,7 +1422,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
     refreshes.map(({ run }) => Promise.resolve().then(run)),
   );
   const failures = results.flatMap((result, index) => result.status === 'rejected'
-    ? [`${refreshes[index].label}: ${result.reason?.message ?? String(result.reason)}`]
+    ? [`${refreshes[index].label}: ${describeReconcileFailure(result.reason)}`]
     : []);
 
   if (failures.length > 0) {
