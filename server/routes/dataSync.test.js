@@ -90,6 +90,16 @@ describe('GET /api/sync/tombstones/status', () => {
     expect(getSweepStatus).toHaveBeenCalledOnce();
   });
 
+  it('proxies paused-peer holds so the client can say to resume or remove that peer', async () => {
+    getSweepStatus.mockResolvedValue({
+      refused: ['universe'],
+      heldByPausedPeers: [{ instanceId: 'peer-paused', kinds: ['universe'] }],
+    });
+    const res = await request(buildApp()).get('/api/sync/tombstones/status');
+    expect(res.status).toBe(200);
+    expect(res.body.heldByPausedPeers).toEqual([{ instanceId: 'peer-paused', kinds: ['universe'] }]);
+  });
+
   it("wins the lookup against /:category/* (literal 'tombstones' is not a category)", async () => {
     // Regression: if the tombstone routes were declared AFTER `/:category/*`,
     // Express would try to parse "tombstones" as a category and the Zod
