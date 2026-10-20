@@ -764,9 +764,15 @@ export async function listManagedBackendModels(backend, forceRefresh = false) {
   if (!isBackend(backend)) return { models: null, error: `unknown backend '${backend}'` }
   const models = await listModels(backend, forceRefresh).catch((err) => ({ error: err?.message || 'model list failed' }))
   if (!Array.isArray(models)) return { models: null, error: models.error }
-  const error = backend === 'ollama'
+  let error = backend === 'ollama'
     ? ollamaManager.getLastInstalledModelsError()
     : lmStudioManager.getLastListError()
+  if (backend === 'lmstudio' && !error) {
+    const status = await lmStudioManager.getStatus().catch(() => null)
+    if (!status?.available) {
+      error = 'LM Studio is unavailable'
+    }
+  }
   return { models, error: error || null }
 }
 
@@ -1262,8 +1268,12 @@ export async function migrateBackend(to, { mode = 'link', onProgress = () => {} 
   const from = otherBackend(to)
 
   onProgress({ event: 'start', message: `Reading models installed on ${from}…` })
-  const sourceModels = await listModels(from, true) // fresh source list for an accurate migration
-  if (sourceModels.length === 0) {
+  const { models: sourceModels, error } = await listManagedBackendModels(from, true)
+  if (error) {
+    onProgress({ event: 'error', message: error })
+    return { success: false, error }
+  }
+  if (!sourceModels || sourceModels.length === 0) {
     const message = `No models installed on ${from} to move.`
     onProgress({ event: 'complete', message })
     return { success: true, from, to, mode, results: [] }
