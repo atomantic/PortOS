@@ -299,8 +299,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
-  // Snapshot for trusted lifecycle reconcilers; callers re-verify under releaseOperations.
-  const operations = () => read().operations.map(op => ({ ...op }));
+  // Cached read-only snapshot for trusted reconcilers (runs on every zombie sweep); releaseOperations re-verifies under the lock.
+  const operations = () => readForStatus().operations.map(op => ({ ...op }));
   // Removes only settled records still identical to what the caller inspected;
   // anything that changed (or settled elsewhere) since then is left alone.
   const releaseOperations = expected => transaction(state => {
