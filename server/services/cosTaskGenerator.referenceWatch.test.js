@@ -3,7 +3,7 @@
  *
  * `reference-watch` reaches an agent by two paths: the on-commit trigger
  * (`triggerReferenceAnalysis` in referenceRepos.js) and the WEEKLY scheduled
- * task (`generateManagedAppImprovementTaskForType` here). Only the former used
+ * task (`prepareManagedAppImprovementTask` here). Only the former used
  * to expand the v3 prompt's `{trackerInstructions}` block, so every scheduled
  * run shipped the literal string `{trackerInstructions}` under "## Where to
  * record proposals" — leaving the agent to guess where to file, and on a
@@ -91,7 +91,7 @@ vi.mock('../lib/gitRemote.js', async (importActual) => ({
   readOriginRemoteUrl: vi.fn(async () => null),
 }));
 
-import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
 
 const SNAPSHOT = {
   head: 'a'.repeat(40),
@@ -112,8 +112,10 @@ const makeApp = (overrides = {}) => ({
 
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
 
-const generate = (app, taskType = 'reference-watch') =>
-  generateManagedAppImprovementTaskForType(taskType, app, STATE, { skipPreconditions: true });
+const generate = async (app, taskType = 'reference-watch') => {
+  const prepared = await prepareManagedAppImprovementTask(taskType, app, STATE, { skipPreconditions: true });
+  return prepared.task;
+};
 
 describe('scheduled reference-watch prompt assembly (#3140)', () => {
   beforeEach(() => {

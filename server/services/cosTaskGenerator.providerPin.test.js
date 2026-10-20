@@ -67,7 +67,7 @@ vi.mock('./perpetualWork.js', async importOriginal => ({
 
 import { detectActionableWork } from './perpetualWork.js';
 import { recordPerpetualStall } from './taskSchedule.js';
-import { generateManagedAppImprovementTaskForType, prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
 import { resolveClaimWorkMetadata } from './cosTaskClaimWork.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
@@ -75,8 +75,10 @@ const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReview
 
 // `ux` has no buildTaskInput hook — exactly the class of task type the pin used to
 // be inert for.
-const generate = (taskType = 'ux') =>
-  generateManagedAppImprovementTaskForType(taskType, APP, STATE, { skipPreconditions: true });
+const generate = async (taskType = 'ux') => {
+  const prepared = await prepareManagedAppImprovementTask(taskType, APP, STATE, { skipPreconditions: true });
+  return prepared.task;
+};
 
 describe('per-app provider/model pin on a task type with no buildTaskInput hook', () => {
   beforeEach(() => {
@@ -155,7 +157,7 @@ describe('pipeline stage provider precedence', () => {
     getAppTaskTypeOverridesMock.mockResolvedValue({ ux: { providerId: 'opencode-tui', model: 'app-model' } });
     const task = await generate();
     expect(task.metadata).toMatchObject({ provider: 'claude-cli', providerId: 'claude-cli', model: 'local-model', effort: 'low' });
-    const overridden = await generateManagedAppImprovementTaskForType('ux', APP, STATE, {
+    const { task: overridden } = await prepareManagedAppImprovementTask('ux', APP, STATE, {
       skipPreconditions: true, providerOverride: { provider: 'opencode-tui', model: 'explicit-model', effort: 'high' },
     });
     expect(overridden.metadata).toMatchObject({ provider: 'opencode-tui', model: 'explicit-model', effort: 'high' });

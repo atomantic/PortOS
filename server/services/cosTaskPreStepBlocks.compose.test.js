@@ -1,5 +1,5 @@
 /**
- * Cross-module wiring guard: `generateManagedAppImprovementTaskForType`
+ * Cross-module wiring guard: `prepareManagedAppImprovementTask`
  * (cosTaskGenerator.js) still COMPOSES the pre-step resolvers that now live in
  * cosTaskPreStepBlocks.js.
  *
@@ -105,7 +105,7 @@ vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: {} })),
 }));
 
-import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } from './cosTaskGenerator.js';
 import { getTaskInterval, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
@@ -123,10 +123,15 @@ const scan = (over = {}) => ({
   ...over,
 });
 
-const generate = () =>
-  generateManagedAppImprovementTaskForType('branch-reconcile', APP, STATE, { skipPreconditions: true });
+const generate = async (options = {}) => {
+  const prepared = await prepareManagedAppImprovementTask('branch-reconcile', APP, STATE, { skipPreconditions: true, ...options });
+  // This suite's direct prepare call simulates a caller that has admitted the
+  // task; production records only after its own admission gate succeeds.
+  await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, await import('./taskSchedule.js'));
+  return prepared.task;
+};
 
-describe('generateManagedAppImprovementTaskForType composes the extracted pre-step layer', () => {
+describe('prepareManagedAppImprovementTask composes the extracted pre-step layer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getBranchReconcileOutcome.mockResolvedValue(null);
@@ -147,7 +152,7 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     })) }));
     mergedPrRead.mockImplementation(async (_app, name) => `https://github.com/example/repo/pull/${name.split('-').at(-1)}`);
     prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] } } });
-    const task = await generateManagedAppImprovementTaskForType('branch-reconcile', APP, STATE, { skipPreconditions: true, onDemand: true });
+    const task = await generate({ onDemand: true });
     expect(task).not.toBeNull();
     expect(task.metadata.reconcileRetirements).toHaveLength(3);
     expect(task.description).toContain('[REVIEW_RETIREMENT]');
