@@ -280,11 +280,13 @@ describe('TabPills — mobileCompact icon row', () => {
 describe('TabPills — desktop overflow chevrons', () => {
   function installResizeObserver() {
     const resize = [];
+    const observed = [];
     vi.stubGlobal('ResizeObserver', class {
       constructor(cb) { resize.push(cb); }
-      observe() {}
+      observe(node) { observed.push(node); }
       disconnect() {}
     });
+    resize.observed = observed;
     return resize;
   }
 
@@ -315,6 +317,35 @@ describe('TabPills — desktop overflow chevrons', () => {
     expect(strip).not.toHaveClass('mt-4');
     if (variant === 'underline') expect(bar).toHaveClass('border-b', 'border-port-border');
     else expect(strip).toHaveClass('bg-port-card');
+    vi.unstubAllGlobals();
+  });
+
+  it('observes each tab so a wider label can reveal the chevron without the strip box changing', () => {
+    const resize = installResizeObserver();
+    const shortTabs = [
+      { id: 'cast', label: 'Cast' },
+      { id: 'places', label: 'Places' },
+    ];
+    const { container, rerender } = render(
+      <TabPills tabs={shortTabs} activeTab="cast" onChange={() => {}} />
+    );
+    const strip = container.querySelector('[role="tablist"]');
+    expect(resize.observed.some((node) => node !== strip && strip.contains(node))).toBe(true);
+
+    publishOverflow(strip, { scrollWidth: 300, clientWidth: 300 });
+    act(() => { for (const cb of resize) cb(); });
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
+
+    rerender(
+      <TabPills
+        tabs={[{ id: 'cast', label: 'Cast and the rest of the row' }, shortTabs[1]]}
+        activeTab="cast"
+        onChange={() => {}}
+      />
+    );
+    publishOverflow(strip, { scrollWidth: 800, clientWidth: 300 });
+    act(() => { for (const cb of resize) cb(); });
+    expect(screen.getByRole('button', { name: 'Scroll tabs right' })).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 

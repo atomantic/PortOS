@@ -134,8 +134,12 @@ export default function TabPills({
     if (!scrollCue || !strip || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver(measure);
     observer.observe(strip);
+    // The strip's own box stays put when a label or count badge widens a tab.
+    // ResizeObserver only reports the elements it is given, so each tab has to
+    // be one of them or maxScrollRef stays stale and the chevron never appears.
+    for (const child of strip.children) observer.observe(child);
     return () => observer.disconnect();
-  }, [scrollCue, measure]);
+  }, [scrollCue, measure, visibleTabs.length]);
 
   const scrollStrip = (direction) => {
     const strip = stripRef.current;
