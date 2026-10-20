@@ -57,7 +57,10 @@ const workspaceAncestors = (path) => {
  * over in `claimsSeed` cannot carry that alone: it is empty after a restart
  * and prunes claims past its retention bound, while this scan reaches runs of
  * any age. Only settled runs that can overlap a pending one are re-read, and
- * only for the families each settled pass actually covered.
+ * only for the families each settled pass actually covered. Each re-read stops
+ * at the moment that pass was reconciled: a message written later (inside the
+ * trailing slack) was never seen, so it still belongs to whichever run owns it.
+ * A run marked only in usage.json carries no such moment and is re-read whole.
  */
 async function claimSettledUsage(runs, candidates, { home, providers }) {
   const below = new Map();
@@ -82,15 +85,24 @@ async function claimSettledUsage(runs, candidates, { home, providers }) {
     ];
     if (!pending.some((other) => other.from <= window.to && window.from <= other.to)) continue;
     const parentFamily = transcriptFamily(metadata);
-    const families = parentSettled && parentFamily ? [parentFamily] : [];
+    const reads = parentSettled && parentFamily
+      ? [{ family: parentFamily, seenUntil: metadata.usageReconciledAt }]
+      : [];
     if (siblingSettled && canScanSiblings) {
-      families.push(...TRANSCRIPT_FAMILIES.filter((family) => (
-        family !== parentFamily && resolveFamilyProvider(providers, family)
-      )));
+      const seenUntil = metadata.usageSiblingsReconciledAt ?? metadata.usageReconciledAt;
+      for (const family of TRANSCRIPT_FAMILIES) {
+        if (family !== parentFamily && resolveFamilyProvider(providers, family)) reads.push({ family, seenUntil });
+      }
     }
-    for (const family of families) {
-      await readMeasuredUsage({ workspacePath, startTime: metadata.startTime, endTime: metadata.endTime, family, home })
-        .catch(() => null);
+    for (const { family, seenUntil } of reads) {
+      await readMeasuredUsage({
+        workspacePath,
+        startTime: metadata.startTime,
+        endTime: metadata.endTime,
+        family,
+        home,
+        seenUntil: typeof seenUntil === 'string' ? seenUntil : null
+      }).catch(() => null);
     }
   }
 }
@@ -141,7 +153,7 @@ export async function scanHistoricalUsage({
   for (const runId of await listRunIds(runsDir)) {
     const metadataPath = join(runsDir, runId, 'metadata.json');
     const metadata = await readJSONFile(metadataPath, null);
-    if (!metadata || !metadata.providerId || !metadata.workspacePath
+    if (!metadata || !metadata.providerId || typeof metadata.workspacePath !== 'string' || !metadata.workspacePath
       || typeof metadata.startTime !== 'string' || typeof metadata.endTime !== 'string'
       || !Number.isFinite(Date.parse(metadata.startTime)) || !Number.isFinite(Date.parse(metadata.endTime))) continue;
     const parentPending = !reconciled.has(runId) && !metadata.usageReconciled

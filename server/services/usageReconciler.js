@@ -619,6 +619,8 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  * @param {string|null} run.endTime ISO
  * @param {'claude'|'codex'|'grok'|'agy'|'kimi'} run.family
  * @param {string} [run.home] override for tests
+ * @param {string|null} [run.seenUntil] ISO; caps the window end at the moment a
+ *   transcript could last have been read, for replaying a read made back then
  * @returns {Promise<null|{ source: 'measured'|'estimate'|'mixed', family: string,
  *   sessions: number, model: string|null, messages: number, tokensIn: number,
  *   tokensOut: number, cacheReadTokens: number, cacheWriteTokens: number,
@@ -627,13 +629,15 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  *   died mid-turn, and Antigravity is always an estimate (it writes no token
  *   counts anywhere).
  */
-export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir() } = {}) {
+export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null } = {}) {
   if (!workspacePath || !family) return null;
 
   const startMs = Date.parse(startTime || '');
   const endMs = Date.parse(endTime || '');
+  const seenMs = Date.parse(seenUntil || '');
   const from = Number.isNaN(startMs) ? null : startMs - WINDOW_SLACK_MS;
-  const to = Number.isNaN(endMs) ? null : endMs + WINDOW_SLACK_MS;
+  const slackTo = Number.isNaN(endMs) ? null : endMs + WINDOW_SLACK_MS;
+  const to = slackTo != null && Number.isFinite(seenMs) ? Math.min(slackTo, seenMs) : slackTo;
 
   const totals = {
     source: 'measured',

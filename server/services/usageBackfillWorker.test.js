@@ -16,17 +16,17 @@ const writeRun = async (id, metadata, output = 'estimated output') => {
   await writeFile(join(dir, 'output.txt'), output);
 };
 
-const writeTranscript = async () => {
+const writeTranscript = async ({ id = 'message-1', timestamp = '2026-07-01T10:05:00.000Z', file = 'session-example.jsonl' } = {}) => {
   const dir = join(home, '.claude', 'projects', '-work-example-repo');
   await mkdir(dir, { recursive: true });
   const line = {
     type: 'assistant',
-    uuid: 'uuid-message-1',
+    uuid: `uuid-${id}`,
     sessionId: 'session-example',
     cwd: workspace,
-    timestamp: '2026-07-01T10:05:00.000Z',
+    timestamp,
     message: {
-      id: 'message-1',
+      id,
       model: 'claude-opus-5',
       usage: {
         input_tokens: 100,
@@ -36,7 +36,7 @@ const writeTranscript = async () => {
       }
     }
   };
-  await writeFile(join(dir, 'session-example.jsonl'), JSON.stringify(line));
+  await writeFile(join(dir, file), JSON.stringify(line));
 };
 
 beforeEach(async () => {
@@ -140,6 +140,52 @@ describe('historical usage worker', () => {
     const result = await scanHistoricalUsage({ runsDir: root, home, claimsSeed: snapshotUsageClaims() });
     expect(result.total).toBe(1);
     expect(result.corrections).toEqual([]);
+  });
+
+  it('leaves a message written after the settled run reconciled to the run that owns it', async () => {
+    // Inside the settled run's trailing slack, but written after it was read.
+    await writeTranscript({ id: 'message-2', timestamp: '2026-07-01T10:10:30.000Z', file: 'session-later.jsonl' });
+    await writeRun('run-settled-live', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      usageReconciled: true,
+      usageReconciledAt: '2026-07-01T10:10:05.000Z'
+    });
+    await writeRun('run-next-history', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:10:10.000Z',
+      endTime: '2026-07-01T10:20:00.000Z'
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home });
+    expect(result.corrections).toHaveLength(1);
+    expect(result.corrections[0]).toMatchObject({ runId: 'run-next-history' });
+    expect(result.corrections[0].measured[0]).toMatchObject({ tokensOut: 200 });
+  });
+
+  it('skips a run whose workspace path is not a string instead of failing the scan', async () => {
+    await writeRun('run-malformed', {
+      providerId: 'claude-code-tui',
+      workspacePath: 42,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      usageReconciled: true
+    });
+    await writeRun('run-example-1', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z'
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home });
+    expect(result.corrections.map((correction) => correction.runId)).toEqual(['run-example-1']);
   });
 });
 
