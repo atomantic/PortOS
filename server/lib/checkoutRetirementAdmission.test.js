@@ -9,7 +9,7 @@ vi.mock('./childProcess.js', () => ({
   spawn: (command, args, options) => args[0] === 'fixture-delayed-mutation' ? delayed.child : realSpawn(command, args, options),
 }));
 import { execGit } from './execGit.js';
-import { checkoutAdmission, withCheckoutPublication, reserveCheckoutRetirement,
+import { _checkoutAdmission, withCheckoutPublication, reserveCheckoutRetirement,
   withCheckoutReservation, releaseCheckoutReservation } from './checkoutRetirementAdmission.js';
 let repo;
 beforeEach(async () => {
@@ -24,7 +24,7 @@ describe('durable checkout admission', () => {
       await withCheckoutPublication(repo, async () => {});
     });
     const cut = await reserveCheckoutRetirement(repo, 'test-cut');
-    expect((await checkoutAdmission(repo)).admission.tryPublication()).toBeNull();
+    expect((await _checkoutAdmission(repo)).admission.tryPublication()).toBeNull();
     await expect(withCheckoutPublication(repo, async () => {})).rejects.toThrow('checkout-retirement-reserved');
     await withCheckoutReservation(cut, () => withCheckoutPublication(repo, async () => {}));
     await releaseCheckoutReservation(cut);
@@ -85,7 +85,7 @@ describe('durable checkout admission', () => {
     await ready; await vi.advanceTimersByTimeAsync(20);
     expect(child.kill).toHaveBeenCalled(); expect(settled).toBe(false);
     child.emit('close', null, 'SIGTERM'); await rejected; vi.useRealTimers();
-    expect((await checkoutAdmission(repo)).admission.publications()).toMatchObject([{ uncertain: true }]);
+    expect((await _checkoutAdmission(repo)).admission.publications()).toMatchObject([{ uncertain: true }]);
     await expect(reserveCheckoutRetirement(repo, 'later-cut')).rejects.toThrow('checkout-retirement-reserved');
   });
 });

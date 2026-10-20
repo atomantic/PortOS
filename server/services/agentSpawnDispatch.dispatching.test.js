@@ -1,11 +1,14 @@
 /** An agent's worktree exists before anything records its owner (#11775): the id
-// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
  * must read as active for the whole dispatch and be released on every exit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ registerGate: null, prep: null }));
+const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false }));
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
+  if (f.refusePublication) throw new Error('checkout-retirement-reserved');
+  f.publicationActive = true;
+  try { return await work(); } finally { f.publicationActive = false; }
+}) }));
 vi.mock('./cos.js', () => ({ getConfig: async () => ({}), updateTask: async () => ({ ok: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn(() => f.registerGate),
@@ -35,7 +38,7 @@ vi.mock('./agentProviderResolution.js', () => ({
     ok: true, provider: { id: 'example-cli', type: 'cli', command: 'codex' }, selectedModel: 'example-model', modelSelection: {},
   }),
 }));
-vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: async () => f.prep }));
+vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async () => f.prep) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: () => ({ command: 'codex', args: [] }),
   isClaudeCliProvider: () => false,
@@ -48,6 +51,9 @@ vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: vi.fn(), spawnTui
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
+import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { registerAgent } from './cosAgentLifecycle.js';
+import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 
 const task = { id: 'task-example', taskType: 'user', description: 'example', metadata: {} };
 const newContext = () => ({
@@ -60,6 +66,7 @@ const isProtected = () => getActiveAgentIds().includes('agent-x') && protectedAg
 beforeEach(() => {
   vi.clearAllMocks();
   setUseRunner(false);
+  f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
 });
@@ -74,6 +81,36 @@ describe('dispatchAgentRun ownership window', () => {
     finishRegistration();
     await dispatched;
     expect(spawnDirectly).toHaveBeenCalled();
+    expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+
+  it('holds a resumed claim publication through pending ownership registration and spawn', async () => {
+    let finishRegistration;
+    f.registerGate = new Promise(resolve => { finishRegistration = resolve; });
+    const context = newContext();
+    context.task = { ...task, metadata: { claimResumeInPlace: true, app: 'example-app' } };
+    prepareAgentWorkspace.mockImplementationOnce(async () => {
+      expect(f.publicationActive).toBe(true);
+      return f.prep;
+    });
+    const dispatched = dispatchAgentRun(context);
+    await vi.waitFor(() => expect(registerAgent).toHaveBeenCalled());
+    expect(withCheckoutPublication).toHaveBeenCalledWith('/repos/example', expect.any(Function));
+    expect(f.publicationActive).toBe(true);
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    spawnDirectly.mockImplementationOnce(async () => { expect(f.publicationActive).toBe(true); return 'agent-x'; });
+    finishRegistration(); await dispatched;
+    expect(f.publicationActive).toBe(false);
+  });
+
+  it('refuses a resumed claim before workspace preparation when retirement owns the cut', async () => {
+    f.refusePublication = true;
+    const context = newContext();
+    context.task = { ...task, metadata: { claimResumeInPlace: 'true', app: 'example-app' } };
+    await expect(dispatchAgentRun(context)).rejects.toThrow('checkout-retirement-reserved');
+    expect(prepareAgentWorkspace).not.toHaveBeenCalled();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain('agent-x');
   });
 

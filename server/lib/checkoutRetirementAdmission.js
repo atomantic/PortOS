@@ -11,7 +11,7 @@ const refused = () => Object.assign(new Error('checkout-retirement-reserved'), {
   code: 'CHECKOUT_RETIREMENT_RESERVED',
 });
 
-export async function checkoutAdmission(repoPath) {
+export async function _checkoutAdmission(repoPath) {
   const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
   if (!isAbsolute(common)) throw refused();
   const directory = join(realpathSync(common), 'portos-checkout-admission');
@@ -28,7 +28,7 @@ export async function checkoutAdmission(repoPath) {
 
 /** Register before testing the cut; nested operations retain their parent's lease. */
 export async function withCheckoutPublication(repoPath, work) {
-  const { directory, admission } = await checkoutAdmission(repoPath);
+  const { directory, admission } = await _checkoutAdmission(repoPath);
   const parent = context.getStore();
   const joined = parent?.directory === directory
     ? parent.lease?.active ? parent.lease : parent.cutLifetime?.active
@@ -49,7 +49,7 @@ export async function withCheckoutPublication(repoPath, work) {
 
 /** Cut creation precedes the reader check. A busy repository is retained, not drained. */
 export async function reserveCheckoutRetirement(repoPath, transactionId) {
-  const { directory } = await checkoutAdmission(repoPath);
+  const { directory } = await _checkoutAdmission(repoPath);
   const admission = createBackupSharedAdmission(directory, { makeId: () => transactionId });
   const lease = admission.reserveCut();
   if (admission.publications().length) {
@@ -61,13 +61,13 @@ export async function reserveCheckoutRetirement(repoPath, transactionId) {
 
 /** Recover only the reservation already bound to this journal, never a PID/age guess. */
 export async function readCheckoutReservation(repoPath, transactionId) {
-  const { directory } = await checkoutAdmission(repoPath);
+  const { directory } = await _checkoutAdmission(repoPath);
   const owner = JSON.parse(await readFile(join(directory, 'cut', 'owner.json'), 'utf8'));
   if (owner.id !== transactionId || owner.generation !== transactionId || owner.kind !== 'snapshot') throw refused();
   return { directory, owner };
 }
 
-export async function verifyCheckoutReservation(reservation) {
+async function verifyCheckoutReservation(reservation) {
   const cut = join(reservation.directory, 'cut');
   const info = await lstat(cut);
   if (!info.isDirectory() || info.isSymbolicLink()) throw refused();

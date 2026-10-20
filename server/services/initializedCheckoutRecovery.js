@@ -20,7 +20,7 @@ const sameRelease = (a, b) => ['path', 'head', 'branch', 'locked', 'lockReason']
 const transactionRoot = () => join(PATHS.cos, 'initialized-checkout-retirements');
 
 /** Native helper holds its own flock until the actual child exits. */
-export function runInitializedCheckoutNative(input, { keepOpen = false } = {}) {
+function runInitializedCheckoutNative(input, { keepOpen = false } = {}) {
   if (process.platform !== 'darwin') return Promise.reject(new Error('retirement-platform-unsupported'));
   return new Promise((resolve, reject) => {
     const child = spawn('/usr/bin/python3', [helper], { stdio: ['pipe', 'pipe', 'pipe'], env: {
@@ -120,7 +120,7 @@ async function defaultContext(appId, release) {
 }
 
 /** Factory allows workflow tests to replace native IO and forge/network boundaries. */
-export function createInitializedCheckoutRecovery(deps = {}) {
+export function _createInitializedCheckoutRecovery(deps = {}) {
   const native = deps.native || runInitializedCheckoutNative;
   const root = deps.root || transactionRoot;
   const context = deps.context || defaultContext;
@@ -296,7 +296,7 @@ export function createInitializedCheckoutRecovery(deps = {}) {
   return { review, retire, status, restore, verifyArchive };
 }
 
-const recovery = createInitializedCheckoutRecovery();
+const recovery = _createInitializedCheckoutRecovery();
 export const reviewInitializedCheckout = recovery.review;
 export const retireInitializedCheckout = recovery.retire;
 export const initializedCheckoutStatus = recovery.status;

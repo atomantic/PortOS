@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work() }));
-import { createInitializedCheckoutRecovery } from './initializedCheckoutRecovery.js';
+import { _createInitializedCheckoutRecovery } from './initializedCheckoutRecovery.js';
 
 let root, fixture;
 const release = { path: '/fixture/checkout', branch: 'claim/42', head: 'a'.repeat(40), locked: false, lockReason: null };
@@ -50,7 +50,7 @@ beforeEach(async () => {
     listWorktrees: async () => fixture.newHolder ? [{ path: '/fixture/new', branch: release.branch }] : [],
     execGit: vi.fn(async () => ({ exitCode: 0, stdout: release.head })),
   };
-  fixture.deps = deps; fixture.service = createInitializedCheckoutRecovery(deps);
+  fixture.deps = deps; fixture.service = _createInitializedCheckoutRecovery(deps);
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 const reviewed = async () => {
@@ -77,7 +77,7 @@ describe('initialized checkout transaction', () => {
     const result = await fixture.service.retire(await reviewed());
     expect(result).toMatchObject({ ok: false, recoveryRequired: true, reason: 'move-refused' });
     expect(fixture.cut).not.toBeNull();
-    const restarted = createInitializedCheckoutRecovery(fixture.deps);
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
     const status = await restarted.status({ appId: 'app', transactionId: result.transactionId });
     const restored = await restarted.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest });
     expect(restored).toMatchObject({ ok: true, restored: true, archivesRetained: true });
