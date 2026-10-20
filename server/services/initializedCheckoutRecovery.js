@@ -240,11 +240,26 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
     return { directory, state, ctx };
   };
+  const quarantineProofInput = ({ directory, state, ctx }) => {
+    const accepted = state.quarantineResumptionReview;
+    const unsigned = { ...accepted };
+    delete unsigned.digest;
+    if (!accepted || accepted.digest !== hash(unsigned) || accepted.mode !== 'resume-initialized-quarantine'
+      || accepted.transactionId !== state.id || accepted.repoPath !== ctx.repoPath
+      || !sameRelease(accepted.release, state.release) || !state.proof?.manifestSha256
+      || !accepted.quarantineResumption) fail('quarantine-resumption-evidence-missing');
+    return { transactionDir: directory, manifestSha256: state.proof.manifestSha256,
+      quarantineResumption: accepted.quarantineResumption };
+  };
   const branchReview = async ({ directory, state, ctx }) => {
-    if (state.phase !== 'quarantined' || state.branchDeleted) fail('retirement-branch-phase-not-ready');
+    const transitioned = state.phase === 'quarantined-with-metadata-transitions';
+    if ((!transitioned && state.phase !== 'quarantined') || state.branchDeleted) fail('retirement-branch-phase-not-ready');
     const policy = await ensureOwner(ctx, state.release, false);
-    const proof = await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
-    if (['working', 'administration'].some(part => proof.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
+    const proof = await native(transitioned
+      ? { command: 'verify-completed-quarantine', ...quarantineProofInput({ directory, state, ctx }) }
+      : { command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
+    if ((transitioned && (proof.verified !== true || proof.quarantineResumptionAccepted !== true))
+      || ['working', 'administration'].some(part => proof.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
     const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
     if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
     const runGit = deps.execGit || execGit;
@@ -252,15 +267,24 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (head.exitCode !== 0 || head.stdout.trim() !== state.release.head) fail('branch-ref-changed');
     const facts = await forge(ctx, state.release, state.review.forge.prUrl);
     const base = await comparison(ctx, state.release, facts.prUrl, state.review.snapshot, policy, facts);
+    if (JSON.stringify(await ensureOwner(ctx, state.release, false)) !== JSON.stringify(policy)) fail('retirement-evidence-changed');
     const evidence = { ...base, mode: 'quarantined-branch', transactionId: state.id,
-      journalDigest: hash(state), archiveFingerprint: proof.fingerprint };
+      journalDigest: hash(state), archiveFingerprint: proof.fingerprint,
+      ...(transitioned ? { quarantineResumptionReview: state.quarantineResumptionReview,
+        quarantineResumptionObservation: state.quarantineResumptionObservation ?? null } : {}) };
     delete evidence.digest;
     return { digest: hash(evidence), ...evidence };
   };
   const reviewBranch = input => fenced(async () => {
-    const bound = await loadBoundTransaction(input);
-    return (await admission()).withCheckoutPublication(bound.ctx.repoPath,
-      async () => ({ ok: true, review: await branchReview(bound) }));
+    const executor = await native({ command: 'lock', transactionDir: location(input.transactionId) }, { keepOpen: true });
+    try {
+      const bound = await loadBoundTransaction(input);
+      return await (await admission()).withCheckoutPublication(bound.ctx.repoPath, async () => {
+        executor.assertHeld();
+        if (hash(await readJournal(bound.directory)) !== hash(bound.state)) fail('retirement-journal-changed');
+        return { ok: true, review: await branchReview(bound) };
+      });
+    } finally { await executor.release(); }
   }).catch(error => ({ ok: false, reason: error.message }));
   // A receiver success was fsynced before recording the schedule receipt. Replay
   // only those completed phases: this never issues a Git mutation or recreates
@@ -273,18 +297,30 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       const verify = async () => {
         executor.assertHeld();
         await ensureOwner(ctx, state.release, false);
-        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'standalone' });
-        const placement = await native({ command: 'status', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
-        if (['working', 'administration'].some(part => placement.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
+        let placement;
+        if (state.quarantineResumptionReview) {
+          placement = await native({ command: 'verify-retired-quarantine', ...quarantineProofInput({ directory, state, ctx }),
+            confirmedDeletion: { journalDigest: hash(state), branch: state.release.branch, head: state.release.head, phase: state.phase } });
+        } else {
+          await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'standalone' });
+          placement = await native({ command: 'status', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
+        }
+        if ((state.quarantineResumptionReview && (placement.verified !== true || placement.quarantineResumptionAccepted !== true))
+          || ['working', 'administration'].some(part => placement.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
         const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
         if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
-        const result = await (deps.execGit || execGit)(['show-ref', '--verify', '--quiet', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true });
-        if (result.exitCode !== 1) fail('retirement-deleted-branch-not-absent');
+        const absence = await native({ command: 'verify-deleted-branch', transactionDir: directory,
+          manifestSha256: state.proof?.manifestSha256, confirmedDeletion: { journalDigest: hash(state),
+            branch: state.release.branch, head: state.release.head, phase: state.phase } });
+        if (absence.verified !== true || absence.branchAbsent !== true) fail('retirement-deleted-branch-not-absent');
+        await ensureOwner(ctx, state.release, false);
+        executor.assertHeld();
       };
       const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(error => {
         if (error.code === 'ENOENT' && state.phase === 'retired' && state.receiptRecorded === true) return null;
         throw error;
       });
+      if (reservation && JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
       const finish = async () => {
         await verify();
         if (state.phase === 'branch-retired') {
@@ -308,12 +344,13 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     // An interrupted receiver may have completed without its journal result.
     // It is an explicit uncertainty hold, never permission to recreate a ref.
     if (state.phase === 'branch-retirement-intent') fail('retirement-branch-deletion-uncertain');
-    const current = await branchReview(bound);
-    assertReview(current, input.review);
     const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
     const gate = await admission();
     try {
       if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      executor.assertHeld();
+      const current = await branchReview(bound);
+      assertReview(current, input.review);
       const reservation = await gate.reserveCheckoutRetirement(ctx.repoPath, state.id);
       return await gate.withCheckoutReservation(reservation, async () => {
         assertReview(await branchReview(bound), input.review);
@@ -360,6 +397,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       ...(unboundPreservation ? { recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' } : {}),
       ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
       ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
+      ...(state.quarantineResumptionReview ? { quarantineResumption: state.quarantineResumptionReview.quarantineResumption,
+        quarantineResumptionComplete: state.phase === 'quarantined-with-metadata-transitions' } : {}),
       ...(state.metadataRestoreReview ? { metadataRecovery: state.metadataRestoreReview.metadataRecovery,
         metadataChangeCounts: state.metadataRestoreReview.changeCounts,
         metadataRestored: state.phase === 'restored-with-metadata-transitions' } : {}),
@@ -482,6 +521,11 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const restoreMetadata = input => withMetadataRestore(input, async (bound, { executor, gate, reservation }) => {
     const current = await metadataReview(bound);
     if (current.digest !== input.review?.digest) fail('metadata-recovery-review-changed');
+    if (current.initialPlacements.working === 'original' && current.initialPlacements.administration === 'original'
+      && bound.state.metadataRestoreReview && bound.state.metadataRestoreObservations?.some(row => row.part === 'working' && row.proof)) {
+      restoredFinalizationInputs(bound);
+      fail('metadata-recovery-already-restored-use-finalization');
+    }
     const { directory } = bound;
     let state = await appendStep(directory, bound.state, 'metadata-restore-approved',
       { metadataRestoreReview: current, metadataRestoreObservations: [], reservation });
@@ -505,6 +549,76 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     await gate.releaseCheckoutReservation(reservation);
     return { ok: true, transactionId: state.id, phase: state.phase, restored: true, archivesRetained: true,
       metadataTransitionsPreserved: true, metadataRecovery: current.metadataRecovery, archiveDir: directory };
+  });
+  const quarantineSafety = async (bound, administrationQuarantined = false) => {
+    const { ctx, state } = bound;
+    const policy = await metadataRestoreSafety(bound);
+    if (administrationQuarantined) {
+      const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+      if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
+    }
+    const facts = await forge(ctx, state.release, state.review.forge.prUrl);
+    const evidence = await comparison(ctx, state.release, facts.prUrl, state.review.snapshot, policy, facts);
+    const result = { ...evidence, policy, forge: facts };
+    delete result.digest;
+    return result;
+  };
+  const quarantineReview = async (bound, reservation) => {
+    const { state, directory, ctx } = bound;
+    const allowed = ['quarantine-working-intent', 'quarantined-working', 'quarantine-administration-intent',
+      'quarantined-administration', 'quarantine-resumption-approved', 'quarantine-resumption-administration-intent',
+      'quarantine-resumption-administration-complete', 'quarantined-with-metadata-transitions'];
+    if (!allowed.includes(state.phase) || state.branchDeleted || !state.proof?.manifestSha256) fail('quarantine-resumption-phase-not-ready');
+    if (JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('quarantine-resumption-reservation-changed');
+    const before = await quarantineSafety(bound);
+    const proof = await native({ command: 'review-quarantine-resumption', transactionDir: directory,
+      manifestSha256: state.proof.manifestSha256 });
+    if (proof.initialPlacements?.working !== 'quarantine'
+      || !['original', 'quarantine'].includes(proof.initialPlacements?.administration)) fail('quarantine-resumption-placement-not-ready');
+    const current = await quarantineSafety(bound, proof.initialPlacements.administration === 'quarantine');
+    if (JSON.stringify(current) !== JSON.stringify(before)) fail('retirement-evidence-changed');
+    // Retain the complete comparison once. This separate hash also binds the
+    // exact safety projection re-read between moves without duplicating patches.
+    const evidence = { ...current, safetyEvidenceDigest: hash(current), version: 1, mode: 'resume-initialized-quarantine', transactionId: state.id,
+      repoPath: ctx.repoPath, release: state.release, journalDigest: hash(state), phase: state.phase, reservation,
+      quarantineResumption: proof.quarantineResumption, initialPlacements: proof.initialPlacements,
+      changeCounts: proof.changeCounts, changedPaths: proof.changedPaths };
+    return { digest: hash(evidence), ...evidence };
+  };
+  const reviewQuarantineResumption = input => withMetadataRestore(input,
+    async (bound, { reservation }) => ({ ok: true, review: await quarantineReview(bound, reservation) }));
+  const resumeQuarantine = input => withMetadataRestore(input, async (bound, { executor, gate, reservation }) => {
+    const current = await quarantineReview(bound, reservation);
+    assertReview(current, input.review);
+    const { directory } = bound;
+    let state = await appendStep(directory, bound.state, 'quarantine-resumption-approved',
+      { quarantineResumptionReview: current, quarantineResumptionObservation: null });
+    const proof = quarantineProofInput({ ...bound, state });
+    const assertSafety = async administrationQuarantined => {
+      const fresh = await quarantineSafety({ ...bound, state }, administrationQuarantined);
+      if (hash(fresh) !== current.safetyEvidenceDigest) fail('retirement-evidence-changed');
+      executor.assertHeld();
+    };
+    await assertSafety(current.initialPlacements.administration === 'quarantine');
+    await native({ command: 'verify-quarantine-resumption', ...proof });
+    if (current.initialPlacements.administration === 'original') {
+      await assertSafety(false);
+      state = await appendStep(directory, state, 'quarantine-resumption-administration-intent');
+      const moved = await native({ command: 'resume-quarantine', ...proof });
+      if (moved.moved !== true || !moved.postMoveObservation?.file
+        || !/^[a-f0-9]{64}$/.test(moved.postMoveObservation.sha256 || '')
+        || !/^[a-f0-9]{64}$/.test(moved.postMoveObservation.digest || '')) fail('quarantine-postmove-evidence-missing');
+      state = await appendStep(directory, state, 'quarantine-resumption-administration-complete',
+        { quarantineResumptionObservation: moved.postMoveObservation ?? null });
+    }
+    const complete = await native({ command: 'verify-completed-quarantine', ...proof });
+    if (complete.verified !== true || complete.quarantineResumptionAccepted !== true || ['working', 'administration'].some(part => complete.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
+    await assertSafety(true);
+    state = await appendStep(directory, state, 'quarantined-with-metadata-transitions',
+      { branchDeleted: false, branchRetainedReason: 'quarantined-checkout-rollback-ref' });
+    await gate.releaseCheckoutReservation(reservation);
+    return { ok: true, transactionId: state.id, phase: state.phase, originalsQuarantined: true,
+      branchDeleted: false, branchRetainedReason: state.branchRetainedReason, archiveDir: directory };
   });
   const restoredFinalizationInputs = ({ directory, state, ctx }) => {
     const prior = state.metadataRestoreReview;
@@ -587,7 +701,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       archiveDir: directory };
   }, true);
   return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
-    reviewRestoredFinalization, finalizeRestored };
+    reviewRestoredFinalization, finalizeRestored, reviewQuarantineResumption, resumeQuarantine };
 }
 
 const recovery = _createInitializedCheckoutRecovery();
@@ -604,3 +718,6 @@ export const reviewInitializedCheckoutMetadataRestore = recovery.reviewMetadataR
 export const restoreInitializedCheckoutMetadata = recovery.restoreMetadata;
 export const reviewInitializedCheckoutRestoredFinalization = recovery.reviewRestoredFinalization;
 export const finalizeInitializedCheckoutRestored = recovery.finalizeRestored;
+
+export const reviewInitializedCheckoutQuarantineResumption = recovery.reviewQuarantineResumption;
+export const resumeInitializedCheckoutQuarantine = recovery.resumeQuarantine;

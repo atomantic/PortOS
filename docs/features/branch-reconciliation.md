@@ -213,6 +213,60 @@ node scripts/recover-initialized-checkout.js finalize /absolute/approved-request
 These operations do not relax normal retirement or restore-move checks, and
 finalization does not authorize branch deletion. Any subsequent retirement
 requires a fresh review and preservation proof for the current checkout.
+A move-based restore retry refuses when both originals are already restored and
+its working-move proof is present, preserving that evidence for this separate
+finalization path instead of replacing it with no-op observations.
+
+### Completing an interrupted quarantine
+
+When the working directory has already moved into quarantine, restoring it
+solely to retry retirement can trigger further metadata changes. A separate
+reviewed operation can instead finish quarantining its administration while
+preserving the working directory at its existing quarantine location.
+
+1. `POST /review-quarantine-resumption` accepts `appId`, `transactionId` and
+   the current `journalDigest`. Under the native executor and exact existing
+   reservation, it verifies the archive, full current sources, original inode
+   placements, current ownership and branch, and fresh forge/integration
+   evidence for the PR recorded in the original transaction.
+2. Independently inspect the returned `resume-initialized-quarantine` review.
+   Its distinct native proof preserves full current manifests and raw metadata
+   deltas. Only removal of residual compression attributes from uncompressed
+   regular files and addition of provenance on an original root directory are
+   eligible. Every other source field, including directory timestamps, stays
+   exact. Restore and already-restored finalization approvals cannot authorize
+   this operation.
+3. `POST /resume-quarantine` takes the same identifiers and
+   `review: {digest, acceptSuperseded?}`. Explicit supersession acceptance is
+   required when the fresh comparison calls for it. The service recomputes the
+   review and moves only administration, if it is still original, using an
+   exclusive rename. A separately recorded post-move observation and full
+   verification must prove both original inodes are quarantined before the
+   exact reservation is released. Unexpected drift retains all evidence and
+   requires a new review. If the rename completed but publication of its
+   post-move observation was interrupted, a fresh review may prove both
+   original inodes already quarantined; it neither repeats the rename nor
+   fabricates a missing historical observation.
+4. Quarantine completion retains the branch. The existing branch-review and
+   branch-retirement operations require a second fresh approval, now also
+   bound to the recorded quarantine metadata proof. They verify the complete
+   quarantined originals, archive and object closure, current branch tip,
+   ownership, holders and forge state before exact-head branch retirement.
+   Receipt recovery after a durably confirmed deletion verifies the preserved
+   sources again and requires the ref to remain absent.
+
+The bootstrap CLI provides `review-quarantine` and `resume-quarantine` with
+the same request fields, explicit `--install-root`, and a new private `--output`
+record for each invocation. It cannot accept a caller-supplied native proof or
+reuse a restore/finalization approval as quarantine authorization.
+
+Neither resumption nor receipt recovery deletes original directories or
+rewrites their metadata. A lost branch-deletion result remains an uncertainty
+hold; an absent ref alone does not establish that the intended deletion
+completed. An occupied or malformed loose-ref path, unsafe ref parent, or
+unreadable packed refs cannot establish absence for receipt recovery. Archive
+copies, original quarantines, raw preimages, post-move observations, journal
+staging and released reservation evidence remain retained.
 
 Managed checkout creation/adoption/removal, claim binding, the full workspace
 preparation through agent registration/spawn, and supported Git API writers

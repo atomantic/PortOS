@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * Restore-only bootstrap for an interrupted initialized checkout transaction.
+ * Guarded bootstrap for an interrupted initialized checkout transaction.
  * Run reviewed code from an independent checkout when its install's durable
  * retirement cut prevents the normal update. Never edits the install's code.
  *
- * node scripts/recover-initialized-checkout.js review|restore|review-finalization|finalize request.json \
+ * node scripts/recover-initialized-checkout.js <action> request.json \
  *   --install-root /absolute/install --output /absolute/new-private-record.jsonl
+ * Actions: review, restore, review-finalization, finalize,
+ * review-quarantine, resume-quarantine.
  *
  * Output is an exclusive 0600 JSONL journal: a durable pending intent precedes
  * the service call; a completed response is appended. A lone pending line means
@@ -20,7 +22,10 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const CODE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_REQUEST_BYTES = 16 * 1024;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
+// Two patches and a path inventory each have a 4 MiB Git output budget.
+// JSON escaping can expand these sixfold (72 MiB); reserve another 24 MiB for
+// native/forge evidence and the envelope. Refuse larger records, never truncate.
+const MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const ACTIONS = {
@@ -28,6 +33,8 @@ const ACTIONS = {
   restore: { method: 'restoreMetadata', acceptedReview: true },
   'review-finalization': { method: 'reviewRestoredFinalization', acceptedReview: false },
   finalize: { method: 'finalizeRestored', acceptedReview: true },
+  'review-quarantine': { method: 'reviewQuarantineResumption', acceptedReview: false },
+  'resume-quarantine': { method: 'resumeQuarantine', acceptedReview: true, supersession: true },
 };
 const fail = code => { throw Object.assign(new Error(code), { recoveryCode: code }); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -66,11 +73,15 @@ async function readJson(path, limit) {
 function validateRequest(action, request) {
   const acceptedReview = ACTIONS[action].acceptedReview;
   const keys = ['appId', 'transactionId', 'journalDigest', ...(acceptedReview ? ['review'] : [])];
+  const hasSupersession = ACTIONS[action].supersession && object(request?.review)
+    && Object.hasOwn(request.review, 'acceptSuperseded');
+  const reviewKeys = ['digest', ...(hasSupersession ? ['acceptSuperseded'] : [])];
   if (!exactKeys(request, keys) || typeof request.appId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(request.appId)
     || typeof request.transactionId !== 'string' || !ID.test(request.transactionId)
     || typeof request.journalDigest !== 'string' || !HASH.test(request.journalDigest)
-    || (acceptedReview && (!exactKeys(request.review, ['digest'])
-      || typeof request.review.digest !== 'string' || !HASH.test(request.review.digest)))) fail('recovery-request-invalid');
+    || (acceptedReview && (!exactKeys(request.review, reviewKeys)
+      || typeof request.review.digest !== 'string' || !HASH.test(request.review.digest)
+      || (hasSupersession && typeof request.review.acceptSuperseded !== 'boolean')))) fail('recovery-request-invalid');
   return request;
 }
 

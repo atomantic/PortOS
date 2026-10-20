@@ -32,15 +32,15 @@ def fail(reason):
     raise RuntimeError(reason)
 
 
-def command(args, env=None, input_data=None):
+def command(args, env=None, input_data=None, expected_returncode=0):
     result = subprocess.run(args, capture_output=True, text=True, env=env,
                             timeout=1200, **({'stdin': subprocess.DEVNULL} if input_data is None else {'input': input_data}))
-    if result.returncode:
+    if result.returncode != expected_returncode:
         fail('command-failed:' + str(args[0]) + ':' + result.stderr[-1200:])
     return result.stdout
 
 
-def git(admin, work, *args, objects=None, input_data=None):
+def git(admin, work, *args, objects=None, input_data=None, expected_returncode=0):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env.update(GIT_OPTIONAL_LOCKS='0', GIT_TERMINAL_PROMPT='0',
                GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
@@ -54,7 +54,8 @@ def git(admin, work, *args, objects=None, input_data=None):
         env['GIT_OBJECT_DIRECTORY'] = str(objects)
     return command(['git', '--no-optional-locks', '--git-dir', str(admin),
                     '--work-tree', str(work), '-c', 'core.fsmonitor=false',
-                    '-c', 'core.hooksPath=' + os.devnull, *args], env, input_data).strip()
+                    '-c', 'core.hooksPath=' + os.devnull, *args], env, input_data,
+                   expected_returncode=expected_returncode).strip()
 
 
 def digest(value):
@@ -923,19 +924,19 @@ def review_metadata_recovery(request):
             'changedPaths': len({(row['part'], row['path']) for row in changes})}
 
 
-def load_bound_evidence(root, reference, prefix):
+def load_bound_evidence(root, reference, prefix, reason='restored-finalization'):
     if (not isinstance(reference, dict) or set(reference) != {'file', 'sha256', 'digest'}
             or not isinstance(reference['digest'], str)
             or not re.fullmatch(r'[0-9a-f]{64}', reference['digest'])
             or reference['file'] != prefix + reference['digest'] + '.json'):
-        fail('restored-finalization-evidence-invalid')
+        fail(reason + '-evidence-invalid')
     path = root / reference['file']
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
         info = os.fstat(source.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()
                 or info.st_size > 256 * 1024 ** 2):
-            fail('restored-finalization-evidence-unsafe')
+            fail(reason + '-evidence-unsafe')
         encoded = source.read(256 * 1024 ** 2 + 1)
     evidence = json.loads(encoded)
     # All supported publishers use this canonical encoding. Exact equality also
@@ -943,7 +944,7 @@ def load_bound_evidence(root, reference, prefix):
     if (hashlib.sha256(encoded).hexdigest() != reference['sha256']
             or digest(evidence) != reference['digest']
             or encoded != (json.dumps(evidence, sort_keys=True) + '\n').encode('utf-8')):
-        fail('restored-finalization-evidence-changed')
+        fail(reason + '-evidence-changed')
     return evidence
 
 
@@ -1081,6 +1082,8 @@ def verify_restored_finalization(request):
 def verify(request):
     if 'restoredFinalization' in request:
         fail('restored-finalization-separate-command-required')
+    if 'quarantineResumption' in request:
+        fail('quarantine-resumption-separate-command-required')
     root, saved = load_transaction(request)
     facts = saved['facts']
     recovering = 'metadataRecovery' in request
@@ -1103,31 +1106,279 @@ def verify(request):
             **({'metadataRecoveryAccepted': True} if recovering else {})}
 
 
-def verify_live_common(root, saved, restoring):
+def verify_common_metadata(saved, mutable_shared):
     facts = saved['facts']
     common = safe_path(facts['commonGitDir'])
     check_admin(common, common=True)
     if identity(common) != facts['identity']['common']:
         fail('common-store-incarnation-changed')
-    mutable_shared = {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set()
     for name, expected in facts['sources']['common'].items():
         if name not in mutable_shared and manifest(common / name, True) != expected:
             fail('common-store-changed:' + name)
     if sorted(p.name for p in common.iterdir() if p.name in COMMON_PARTS and p.name not in mutable_shared) != sorted(
             name for name in facts['sources']['common'] if name not in mutable_shared):
         fail('common-store-layout-changed')
+    return common
+
+
+def verify_live_parent(saved):
+    facts = saved['facts']
+    head = git(Path(facts['commonGitDir']), Path(facts['repoPath']), 'rev-parse', '--verify',
+               'refs/heads/' + facts['release']['branch'] + '^{commit}')
+    if head != facts['parent']['head']:
+        fail('restore-live-parent-facts-changed')
+
+
+def verify_live_object_closure(root, common):
+    git(root / 'restore/administration', root / 'restore/working',
+        'fsck', '--full', '--strict', objects=common / 'objects')
+    prove_index_blobs(root / 'restore/administration', root / 'restore/working',
+                      objects=common / 'objects')
+
+
+def verify_live_common(root, saved, restoring):
+    common = verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set())
     if restoring:
         # Other branches may legitimately advance after quarantine. Rollback
         # never rewrites shared refs or objects: prove the original private index
         # and HEAD still resolve completely against today's shared store.
-        head = git(common, Path(facts['repoPath']), 'rev-parse', '--verify',
-                   'refs/heads/' + facts['release']['branch'] + '^{commit}')
-        if head != facts['parent']['head']:
-            fail('restore-live-parent-facts-changed')
-        git(root / 'restore/administration', root / 'restore/working',
-            'fsck', '--full', '--strict', objects=common / 'objects')
-        prove_index_blobs(root / 'restore/administration', root / 'restore/working',
-                          objects=common / 'objects')
+        verify_live_parent(saved)
+        verify_live_object_closure(root, common)
+
+
+def require_no_packed_ref(common, ref, oid_length):
+    path = common / 'packed-refs'
+    if not os.path.lexists(path):
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        fail('deleted-branch-packed-refs-unreadable')
+    with os.fdopen(fd, 'rb') as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            fail('deleted-branch-packed-refs-unsafe')
+        budget = 16 * 1024 ** 2
+        if before.st_size > budget:
+            fail('deleted-branch-packed-refs-budget-exceeded')
+        seen, peeled_allowed, total, count = set(), False, 0, 0
+        oid_pattern = rb'[0-9a-fA-F]{' + str(oid_length).encode('ascii') + rb'}'
+        target = os.fsencode(ref)
+        while True:
+            line = source.readline(65537)
+            if not line:
+                break
+            total += len(line)
+            count += 1
+            if len(line) > 65536 or total > budget or count > MAX_FILES:
+                fail('deleted-branch-packed-refs-budget-exceeded')
+            line = line[:-1] if line.endswith(b'\n') else line
+            if line.startswith(b'#'):
+                continue
+            if line.startswith(b'^'):
+                if not peeled_allowed or not re.fullmatch(oid_pattern, line[1:]):
+                    fail('deleted-branch-packed-refs-malformed')
+                peeled_allowed = False
+                continue
+            oid, separator, name = line.partition(b' ')
+            components = name.split(b'/')
+            if (not separator or not re.fullmatch(oid_pattern, oid) or not any(value != 48 for value in oid)
+                    or not name.startswith(b'refs/') or name.endswith((b'/', b'.'))
+                    or b'..' in name or b'@{' in name
+                    or any(value < 33 or value == 127 or value in b'~^:?*[\\' for value in name)
+                    or any(not part or part.startswith(b'.') or part.endswith(b'.lock') for part in components)
+                    or name in seen):
+                fail('deleted-branch-packed-refs-malformed')
+            seen.add(name)
+            peeled_allowed = True
+            if name == target:
+                fail('quarantine-resumption-retired-branch-not-absent')
+        lease = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+                               value.st_uid, value.st_gid, value.st_mtime_ns, value.st_ctime_ns)
+        try:
+            unchanged = lease(before) == lease(os.fstat(source.fileno())) == lease(path.lstat())
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            fail('deleted-branch-packed-refs-changed')
+
+
+def verify_deleted_parent(saved, request):
+    facts = saved['facts']
+    receipt = request.get('confirmedDeletion')
+    # The service derives this binding only from its validated durable receipt,
+    # never from ref absence or a deletion intent. This command writes no refs.
+    if (not isinstance(receipt, dict) or set(receipt) != {'journalDigest', 'branch', 'head', 'phase'}
+            or not isinstance(receipt['journalDigest'], str)
+            or not re.fullmatch(r'[0-9a-f]{64}', receipt['journalDigest'])
+            or receipt['branch'] != facts['release']['branch']
+            or receipt['head'] != facts['parent']['head']
+            or receipt['phase'] not in ('branch-retired', 'retired')):
+        fail('quarantine-resumption-confirmed-deletion-required')
+    ref = 'refs/heads/' + facts['release']['branch']
+    def require_no_loose_ref():
+        current = safe_path(facts['commonGitDir'])
+        if identity(current) != facts['identity']['common']:
+            fail('common-store-incarnation-changed')
+        parts = ref.split('/')
+        if any(part in ('', '.', '..') for part in parts):
+            fail('quarantine-resumption-retired-branch-not-absent')
+        for index, part in enumerate(parts):
+            current = current / part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                break
+            # Git can report a malformed loose ref as missing. Preserve and
+            # refuse every occupied leaf and every unsafe parent component.
+            if index == len(parts) - 1 or not stat.S_ISDIR(info.st_mode):
+                fail('quarantine-resumption-retired-branch-not-absent')
+    require_no_loose_ref()
+    require_no_packed_ref(safe_path(facts['commonGitDir']), ref, len(facts['parent']['head']))
+    try:
+        # Also check packed refs. Any status other than Git's exact missing
+        # status holds; filesystem checks separately cover skipped loose refs.
+        git(Path(facts['commonGitDir']), Path(facts['repoPath']),
+            'show-ref', '--verify', '--quiet', ref, expected_returncode=1)
+    except RuntimeError:
+        fail('quarantine-resumption-retired-branch-not-absent')
+    require_no_packed_ref(safe_path(facts['commonGitDir']), ref, len(facts['parent']['head']))
+    require_no_loose_ref()
+
+
+def verify_deleted_branch(request):
+    if not re.fullmatch(r'[0-9a-f]{64}', request.get('manifestSha256', '')):
+        fail('deleted-branch-manifest-proof-required')
+    _, saved = load_transaction(request)
+    verify_deleted_parent(saved, request)
+    return {'verified': True, 'branchAbsent': True, 'confirmedDeletion': request['confirmedDeletion']}
+
+
+def quarantine_observation(request, retired=False):
+    if 'metadataRecovery' in request or 'restoredFinalization' in request:
+        fail('quarantine-resumption-purpose-mismatch')
+    if not re.fullmatch(r'[0-9a-f]{64}', request.get('manifestSha256', '')):
+        fail('quarantine-resumption-manifest-proof-required')
+    root, saved = load_transaction(request)
+    located, sources = original_sources(root, saved['facts'])
+    if located['working']['state'] != 'quarantine':
+        fail('quarantine-resumption-working-placement-required')
+    if retired and located['administration']['state'] != 'quarantine':
+        fail('quarantine-resumption-completed-placement-required')
+    verify_saved_archive(root, saved)
+    changes = metadata_recovery_changes(root, saved, located, sources)
+    if retired:
+        verify_deleted_parent(saved, request)
+        # Receipt replay restores nothing. The strict standalone archive proof
+        # above retains closure even after legitimate live-store garbage collection.
+        verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'})
+    else:
+        verify_live_common(root, saved, restoring=True)
+    if original_sources(root, saved['facts']) != (located, sources):
+        fail('quarantine-resumption-observation-changed')
+    # The full source/archive scans may be long. Pin the ref condition again
+    # before returning the observation to the service's fresh ownership gate.
+    if retired:
+        verify_deleted_parent(saved, request)
+    else:
+        verify_live_parent(saved)
+    return root, saved, located, sources, changes
+
+
+def review_quarantine_resumption(request):
+    root, saved, located, sources, changes = quarantine_observation(request)
+    evidence = {'version': 1, 'purpose': 'resume-initialized-quarantine',
+                'manifestSha256': request['manifestSha256'],
+                'transactionIdentity': saved['transactionIdentity'],
+                'originalFingerprint': saved['facts']['fingerprint'],
+                'initialPlacements': {label: row['state'] for label, row in located.items()},
+                'sources': sources, 'changes': changes}
+    stored = immutable_recovery_evidence(root, 'quarantine-resumption-', evidence)
+    return {'quarantineResumption': {'version': 1, 'evidenceFile': stored['file'],
+                                    'evidenceSha256': stored['sha256'], 'digest': stored['digest']},
+            'initialPlacements': evidence['initialPlacements'],
+            'changeCounts': {
+                'residualCompressionRemoved': sum(row['attribute'] == 'com.apple.decmpfs' for row in changes),
+                'rootProvenanceAdded': sum(row['attribute'] == 'com.apple.provenance' for row in changes)},
+            'changedPaths': len({(row['part'], row['path']) for row in changes})}
+
+
+def verified_quarantine_resumption(request, completed=False, retired=False):
+    accepted = request.get('quarantineResumption')
+    if (not isinstance(accepted, dict)
+            or set(accepted) != {'version', 'evidenceFile', 'evidenceSha256', 'digest'}
+            or accepted['version'] != 1):
+        fail('quarantine-resumption-proof-invalid')
+    root, saved, located, sources, changes = quarantine_observation(request, retired=retired)
+    evidence = load_bound_evidence(root, {'file': accepted['evidenceFile'],
+                                         'sha256': accepted['evidenceSha256'],
+                                         'digest': accepted['digest']},
+                                   'quarantine-resumption-', reason='quarantine-resumption')
+    if (not isinstance(evidence, dict)
+            or set(evidence) != {'version', 'purpose', 'manifestSha256', 'transactionIdentity',
+                                 'originalFingerprint', 'initialPlacements', 'sources', 'changes'}
+            or evidence['version'] != 1 or evidence['purpose'] != 'resume-initialized-quarantine'
+            or evidence['manifestSha256'] != request['manifestSha256']
+            or evidence['transactionIdentity'] != saved['transactionIdentity']
+            or evidence['originalFingerprint'] != saved['facts']['fingerprint']
+            or not isinstance(evidence['initialPlacements'], dict)
+            or set(evidence['initialPlacements']) != {'working', 'administration'}
+            or evidence['initialPlacements']['working'] != 'quarantine'
+            or evidence['initialPlacements']['administration'] not in ('original', 'quarantine')):
+        fail('quarantine-resumption-proof-invalid')
+    if sources != evidence['sources'] or changes != evidence['changes']:
+        fail('quarantine-resumption-review-changed')
+    if (evidence['initialPlacements']['administration'] == 'quarantine'
+            and located['administration']['state'] != 'quarantine'):
+        fail('quarantine-resumption-placement-regressed')
+    if completed and located['administration']['state'] != 'quarantine':
+        fail('quarantine-resumption-completed-placement-required')
+    return {'verified': True, 'placements': located, 'fingerprint': saved['facts']['fingerprint'],
+            'quarantineResumptionAccepted': True,
+            **({'confirmedDeletion': request['confirmedDeletion']} if retired else {})}
+
+
+def verify_quarantine_resumption(request):
+    return verified_quarantine_resumption(request)
+
+
+def verify_completed_quarantine(request):
+    return verified_quarantine_resumption(request, completed=True)
+
+
+def verify_retired_quarantine(request):
+    return verified_quarantine_resumption(request, completed=True, retired=True)
+
+
+def resume_quarantine(request):
+    verified = verify_quarantine_resumption(request)
+    if verified['placements']['administration']['state'] == 'quarantine':
+        return {'moved': False, 'alreadyQuarantined': True, 'part': 'administration',
+                'direction': 'quarantine', 'placements': verified['placements']}
+    root, saved = load_transaction(request)
+    facts = saved['facts']
+    source, destination = Path(facts['privateGitDir']), root / 'quarantine/administration'
+    safe_path(str(source))
+    safe_path(str(destination.parent))
+    if identity(source) != facts['identity']['administration'] or os.path.lexists(destination):
+        fail('move-lease-or-destination-changed')
+    exclusive_rename(source, destination)
+    fsync_dir(source.parent)
+    fsync_dir(destination.parent)
+    if identity(destination) != facts['identity']['administration']:
+        fail('post-move-identity-uncertain')
+    located, sources = original_sources(root, facts)
+    observation = immutable_recovery_evidence(root, 'quarantine-resumption-postmove-', {
+        'version': 1, 'purpose': 'resume-initialized-quarantine',
+        'manifestSha256': request['manifestSha256'],
+        'acceptedQuarantineResumption': request['quarantineResumption'],
+        'part': 'administration', 'placements': located, 'sources': sources})
+    try:
+        verify_completed_quarantine(request)
+    except Exception as error:
+        fail('quarantine-resumption-postmove-changed:' + observation['file'] + ':' + str(error))
+    return {'moved': True, 'part': 'administration', 'direction': 'quarantine',
+            'placements': located, 'postMoveObservation': observation}
 
 
 def exclusive_rename(source, destination):
@@ -1202,13 +1453,21 @@ def main():
         root, saved = load_transaction(request)
         result = {'placements': placements(root, saved['facts']), 'fingerprint': saved['facts']['fingerprint']}
     elif action in ('preserve', 'verify', 'move', 'review-metadata-recovery',
-                    'review-restored-finalization', 'verify-restored-finalization'):
+                    'review-restored-finalization', 'verify-restored-finalization',
+                    'review-quarantine-resumption', 'verify-quarantine-resumption', 'resume-quarantine',
+                    'verify-completed-quarantine', 'verify-retired-quarantine', 'verify-deleted-branch'):
         fd = lock_file(transaction(request['transactionDir']), 'backend.lock')
         try:
             result = {'preserve': preserve, 'verify': verify, 'move': move,
                       'review-metadata-recovery': review_metadata_recovery,
                       'review-restored-finalization': review_restored_finalization,
-                      'verify-restored-finalization': verify_restored_finalization}[action](request)
+                      'verify-restored-finalization': verify_restored_finalization,
+                      'review-quarantine-resumption': review_quarantine_resumption,
+                      'verify-quarantine-resumption': verify_quarantine_resumption,
+                      'resume-quarantine': resume_quarantine,
+                      'verify-completed-quarantine': verify_completed_quarantine,
+                      'verify-retired-quarantine': verify_retired_quarantine,
+                      'verify-deleted-branch': verify_deleted_branch}[action](request)
         finally:
             os.close(fd)
     else:

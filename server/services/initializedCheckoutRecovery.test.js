@@ -69,7 +69,7 @@ beforeEach(async () => {
   const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
   const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
   fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null,
-    metadataToken: 'f'.repeat(64), finalizationToken: '7'.repeat(64) };
+    metadataToken: 'f'.repeat(64), finalizationToken: '7'.repeat(64), quarantineToken: '6'.repeat(64) };
   const admission = {
     withCheckoutPublication: async (_repo, work) => { if (fixture.cut) throw new Error('checkout-retirement-reserved'); return work(); },
     reserveCheckoutRetirement: vi.fn(async (_repo, id) => {
@@ -96,6 +96,37 @@ beforeEach(async () => {
       metadataRecovery: { version: 1, digest: fixture.metadataToken, evidenceFile: 'private-proof.json', evidenceSha256: fixture.metadataToken },
       initialPlacements: { ...fixture.placement }, changeCounts: { residualCompressionRemoved: 3, rootProvenanceAdded: 1 }, changedPaths: 4,
     };
+    if (input.command === 'verify-deleted-branch') {
+      if (fixture.deletedRefConflict) throw new Error(fixture.deletedRefConflict);
+      if (fixture.headExists || !['branch-retired', 'retired'].includes(input.confirmedDeletion?.phase)) throw new Error('retirement-deleted-branch-not-absent');
+      return { verified: true, branchAbsent: true, confirmedDeletion: input.confirmedDeletion };
+    }
+    if (input.command === 'review-quarantine-resumption') {
+      if (fixture.failArchive) throw new Error('archive-changed');
+      if (fixture.forbiddenMetadata) throw new Error('metadata-delta-not-eligible');
+      return { quarantineResumption: { version: 1, evidenceFile: 'quarantine-proof.json',
+        evidenceSha256: fixture.quarantineToken, digest: fixture.quarantineToken },
+      initialPlacements: Object.fromEntries(Object.entries(fixture.placement).map(([part, value]) => [part, value === 'quarantined' ? 'quarantine' : value])),
+      changeCounts: { residualCompressionRemoved: 3, rootProvenanceAdded: 1 }, changedPaths: 4 };
+    }
+    if (['verify-quarantine-resumption', 'resume-quarantine', 'verify-completed-quarantine', 'verify-retired-quarantine'].includes(input.command)) {
+      if (fixture.failArchive) throw new Error('archive-changed');
+      if (fixture.forbiddenMetadata) throw new Error('metadata-delta-not-eligible');
+      if (input.quarantineResumption?.digest !== fixture.quarantineToken) throw new Error('quarantine-evidence-changed');
+      if (input.command === 'resume-quarantine') {
+        if (fixture.failResume) throw new Error('resume-interrupted');
+        fixture.placement.administration = 'quarantined';
+        if (fixture.resumeDelta) { fixture.quarantineToken = '5'.repeat(64); throw new Error('quarantine-evidence-changed'); }
+        if (fixture.failResumeResult) fixture.failNextJournal = true;
+      }
+      if (input.command === 'verify-retired-quarantine'
+        && (fixture.headExists || !['branch-retired', 'retired'].includes(input.confirmedDeletion?.phase))) throw new Error('deleted-ref-proof-refused');
+      if (input.command !== 'verify-retired-quarantine' && !fixture.headExists) throw new Error('branch-ref-changed');
+      return { verified: true, quarantineResumptionAccepted: true, fingerprint: fixture.snapshot.fingerprint,
+        placements: Object.fromEntries(Object.entries(fixture.placement).map(([part, value]) => [part, { state: value === 'quarantined' ? 'quarantine' : value }])),
+        ...(input.command === 'resume-quarantine' ? { moved: true,
+          postMoveObservation: { file: 'administration-quarantine-post-move.json', sha256: fixture.quarantineToken, digest: fixture.quarantineToken } } : {}) };
+    }
     if (input.command === 'review-restored-finalization') {
       if (fixture.failArchive) throw new Error('archive-changed');
       return { restoredFinalization: { version: 1, evidenceFile: 'finalization.json',
@@ -290,6 +321,10 @@ describe('initialized checkout transaction', () => {
     const fresh = { ...input, journalDigest: status.journalDigest };
     const second = await fixture.service.reviewMetadataRestore(fresh);
     expect(await fixture.service.restoreMetadata({ ...fresh, review: { digest: second.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'metadata-recovery-already-restored-use-finalization' });
+    expect((await fixture.service.status(input)).journalDigest).toBe(fresh.journalDigest);
+    const finalization = await fixture.service.reviewRestoredFinalization(fresh);
+    expect(await fixture.service.finalizeRestored({ ...fresh, review: { digest: finalization.review.digest } }))
       .toMatchObject({ ok: true, restored: true });
     expect(fixture.cut).toBeNull();
   });
@@ -344,6 +379,254 @@ describe('initialized checkout transaction', () => {
       .toMatchObject({ ok: true, restored: true });
     expect(fixture.cut).toBeNull();
   });
+  const resumedQuarantine = async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    expect(prepared.ok).toBe(true);
+    const result = await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } });
+    expect(result).toMatchObject({ ok: true, phase: 'quarantined-with-metadata-transitions', branchDeleted: false });
+    const status = await fixture.service.status(input);
+    return { ...input, journalDigest: status.journalDigest };
+  };
+  it('retains large quarantine comparisons once and rejects changed patch bytes after approval', async () => {
+    const input = await interruptedMetadata();
+    let patch = 'private patch "\n界'.repeat(80_000);
+    const comparison = fixture.deps.comparison;
+    fixture.deps.comparison = async (...args) => {
+      const evidence = await comparison(...args);
+      return { ...evidence, comparison: { ...evidence.comparison, localPatch: patch } };
+    };
+    const service = _createInitializedCheckoutRecovery(fixture.deps);
+    const prepared = await service.reviewQuarantineResumption(input);
+    expect(prepared.ok).toBe(true);
+    expect(prepared.review.comparison.localPatch).toBe(patch);
+    expect(prepared.review).not.toHaveProperty('safetyEvidence');
+    const safety = await fixture.deps.comparison(null, release, prUrl, fixture.snapshot, null, fixture.facts);
+    expect(prepared.review.safetyEvidenceDigest).toBe(createHash('sha256').update(JSON.stringify(safety)).digest('hex'));
+    expect(JSON.stringify(prepared).split(JSON.stringify(patch).slice(1, -1))).toHaveLength(2);
+    const unsigned = { ...prepared.review }; delete unsigned.digest;
+    expect(createHash('sha256').update(JSON.stringify(unsigned)).digest('hex')).toBe(prepared.review.digest);
+    // Drift after the fresh approval recheck must also be caught by the
+    // between-moves safety read, before administration leaves its original path.
+    const native = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async request => {
+      const result = await native(request);
+      if (request.command === 'verify-quarantine-resumption') patch += 'changed';
+      return result;
+    });
+    expect(await service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-evidence-changed' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'original' });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.native.mock.calls.some(([row]) => row.command === 'resume-quarantine')).toBe(false);
+  });
+  it('keeps previously journalled full safety evidence verifiable for a fresh branch review', async () => {
+    const input = await resumedQuarantine();
+    const directory = join(root, input.transactionId);
+    const names = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const previous = JSON.parse(await readFile(join(directory, names.at(-1)), 'utf8'));
+    // Model an immutable journal produced by the preceding release, including
+    // its duplicated safety evidence. The new code must not rewrite this row.
+    const accepted = { ...previous.quarantineResumptionReview };
+    const safetyEvidence = await fixture.deps.comparison(null, release, prUrl, fixture.snapshot, null, fixture.facts);
+    delete accepted.digest;
+    delete accepted.safetyEvidenceDigest;
+    accepted.safetyEvidence = safetyEvidence;
+    const legacy = { ...previous, sequence: previous.sequence + 1,
+      previous: createHash('sha256').update(JSON.stringify(previous)).digest('hex'),
+      quarantineResumptionReview: { digest: createHash('sha256').update(JSON.stringify(accepted)).digest('hex'), ...accepted } };
+    const saved = JSON.stringify(legacy);
+    const name = join(directory, `${String(legacy.sequence).padStart(6, '0')}.json`);
+    await writeFile(name, saved, { mode: 0o600, flag: 'wx' });
+    const response = await _createInitializedCheckoutRecovery(fixture.deps).reviewBranch({
+      ...input, journalDigest: createHash('sha256').update(saved).digest('hex'),
+    });
+    expect(response).toMatchObject({ ok: true, review: { quarantineResumptionReview: legacy.quarantineResumptionReview } });
+    expect(await readFile(name, 'utf8')).toBe(saved);
+  });
+  it('resumes only administration quarantine under a fresh purpose-bound review, then requires a separate branch approval', async () => {
+    const input = await interruptedMetadata();
+    const moves = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move').length;
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    expect(prepared).toMatchObject({ ok: true, review: { mode: 'resume-initialized-quarantine', initialPlacements: { working: 'quarantine', administration: 'original' } } });
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: true, originalsQuarantined: true, branchDeleted: false });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move')).toHaveLength(moves);
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine')).toHaveLength(1);
+    expect(fixture.cut).toBeNull();
+    expect(fixture.headExists).toBe(true);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(await fixture.service.status(input)).toMatchObject({ quarantineResumptionComplete: true });
+    const status = await fixture.service.status(input);
+    const branchInput = { ...input, journalDigest: status.journalDigest };
+    const branch = await fixture.service.reviewBranch(branchInput);
+    expect(branch).toMatchObject({ ok: true, review: { quarantineResumptionReview: { digest: prepared.review.digest } } });
+    expect(await fixture.service.retireBranch({ ...branchInput, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(await fixture.service.retireBranch({ ...branchInput, review: { digest: branch.review.digest } })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(fixture.deps.native).toHaveBeenCalledWith(expect.objectContaining({ command: 'verify-completed-quarantine' }));
+  });
+  it.each(['delta', 'owner', 'ref', 'holder', 'cut', 'archive', 'metadata', 'forge', 'default'])('retains quarantine and its cut when reviewed %s evidence changes', async change => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    if (change === 'delta') fixture.quarantineToken = '4'.repeat(64);
+    if (change === 'owner') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+    if (change === 'ref') fixture.headExists = false;
+    if (change === 'holder') fixture.newHolder = true;
+    if (change === 'cut') fixture.cut.owner.id = 'foreign';
+    if (change === 'archive') fixture.failArchive = true;
+    if (change === 'metadata') fixture.forbiddenMetadata = true;
+    if (change === 'forge') fixture.facts.prHead = '9'.repeat(40);
+    if (change === 'default') fixture.facts.defaultHead = '8'.repeat(40);
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false, recoveryRequired: true });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'original' });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine')).toHaveLength(0);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('requires fresh explicit supersession acceptance for quarantine resumption', async () => {
+    const input = await interruptedMetadata();
+    fixture.superseded = true;
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest, acceptSuperseded: true } }))
+      .toMatchObject({ ok: true });
+  });
+  it('does not accept restoration evidence or restoration phases for quarantine resumption', async () => {
+    const input = await interruptedMetadata();
+    const restoration = await fixture.service.reviewMetadataRestore(input);
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: restoration.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    fixture.failRestorePart = 'working';
+    await fixture.service.restoreMetadata({ ...input, review: { digest: restoration.review.digest } });
+    const status = await fixture.service.status(input);
+    expect(await fixture.service.reviewQuarantineResumption({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'quarantine-resumption-phase-not-ready' });
+  });
+  it.each(['move', 'result', 'delta'])('requires a new review after quarantine %s interruption and never repeats a completed rename', async failure => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    fixture.failResume = failure === 'move';
+    fixture.failResumeResult = failure === 'result';
+    fixture.resumeDelta = failure === 'delta';
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false });
+    const status = await fixture.service.status(input);
+    const retry = { ...input, journalDigest: status.journalDigest };
+    expect(await fixture.service.resumeQuarantine({ ...retry, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    fixture.failResume = fixture.failResumeResult = fixture.resumeDelta = false;
+    const fresh = await fixture.service.reviewQuarantineResumption(retry);
+    const calls = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine').length;
+    expect(await fixture.service.resumeQuarantine({ ...retry, review: { digest: fresh.review.digest } })).toMatchObject({ ok: true });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine')).toHaveLength(calls + (failure === 'move' ? 1 : 0));
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('never moves after interrupted publication of a resumption approval and requires a new digest', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    fixture.stopAfterJournalPublication = true;
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'journal-publication-interrupted' });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine')).toHaveLength(0);
+    const status = await fixture.service.status(input);
+    expect(status.phase).toBe('quarantine-resumption-approved');
+    expect(await fixture.service.resumeQuarantine({ ...input, journalDigest: status.journalDigest, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('requires a fresh terminal quarantine review for interrupted cut release and never recreates a released cut', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-ack-lost'));
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false });
+    const status = await fixture.service.status(input);
+    expect(status.phase).toBe('quarantined-with-metadata-transitions');
+    const retry = { ...input, journalDigest: status.journalDigest };
+    expect(await fixture.service.resumeQuarantine({ ...retry, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    const next = await fixture.service.reviewQuarantineResumption(retry);
+    const calls = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine').length;
+    expect(await fixture.service.resumeQuarantine({ ...retry, review: { digest: next.review.digest } })).toMatchObject({ ok: true });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'resume-quarantine')).toHaveLength(calls);
+    const finished = await fixture.service.status(input);
+    expect(await fixture.service.reviewQuarantineResumption({ ...input, journalDigest: finished.journalDigest })).toMatchObject({ ok: false });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks forge and ownership after native quarantine verification before releasing the cut', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewQuarantineResumption(input);
+    const original = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async value => {
+      const result = await original(value);
+      if (value.command === 'verify-completed-quarantine') fixture.facts.defaultHead = '8'.repeat(40);
+      return result;
+    });
+    expect(await fixture.service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-evidence-changed' });
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('verifies full transitioned sources on confirmed-deletion receipt replay without Git writes', async () => {
+    const input = await resumedQuarantine();
+    const prepared = await fixture.service.reviewBranch(input);
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-interrupted'));
+    expect(await fixture.service.retireBranch({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false });
+    const status = await fixture.service.status(input);
+    expect(status).toMatchObject({ phase: 'branch-retired', branchDeleted: true });
+    const retry = { ...input, journalDigest: status.journalDigest };
+    fixture.forbiddenMetadata = true;
+    expect(await fixture.service.retireBranch(retry)).toMatchObject({ ok: false, reason: 'metadata-delta-not-eligible' });
+    expect(fixture.cut).not.toBeNull();
+    fixture.forbiddenMetadata = false;
+    expect(await fixture.service.retireBranch(retry)).toMatchObject({ ok: true, receiptRecorded: true });
+    expect(fixture.deps.native).toHaveBeenCalledWith(expect.objectContaining({ command: 'verify-retired-quarantine',
+      confirmedDeletion: { journalDigest: status.journalDigest, branch: release.branch, head: release.head, phase: 'branch-retired' } }));
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+  });
+  it.each(['source', 'archive', 'ref', 'holder', 'cut'])('refuses changed %s during a completed quarantine receipt replay', async change => {
+    const input = await resumedQuarantine();
+    const prepared = await fixture.service.reviewBranch(input);
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-interrupted'));
+    await fixture.service.retireBranch({ ...input, review: { digest: prepared.review.digest } });
+    const status = await fixture.service.status(input);
+    if (change === 'source') fixture.quarantineToken = '3'.repeat(64);
+    if (change === 'archive') fixture.failArchive = true;
+    if (change === 'ref') fixture.headExists = true;
+    if (change === 'holder') fixture.newHolder = true;
+    if (change === 'cut') fixture.cut.owner.id = 'another-owner';
+    expect(await fixture.service.retireBranch({ ...input, journalDigest: status.journalDigest })).toMatchObject({ ok: false });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])('reverifies retired quarantine after uncertain release without deleting again, cutReleased=%s', async released => {
+    const input = await resumedQuarantine();
+    const prepared = await fixture.service.reviewBranch(input);
+    fixture.deps.admission.releaseCheckoutReservation.mockImplementationOnce(async () => {
+      if (released) fixture.cut = null;
+      throw new Error('release-ack-lost');
+    });
+    expect(await fixture.service.retireBranch({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false });
+    const status = await fixture.service.status(input);
+    expect(status).toMatchObject({ phase: 'retired', branchDeleted: true });
+    const before = fixture.deps.native.mock.calls.length;
+    expect(await fixture.service.retireBranch({ ...input, journalDigest: status.journalDigest })).toMatchObject({ ok: true, receiptRecorded: true });
+    expect(fixture.deps.native.mock.calls.slice(before).map(([row]) => row.command)).toEqual(['lock', 'verify-retired-quarantine', 'verify-deleted-branch']);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+    expect(fixture.cut).toBeNull();
+  });
+  it('never promotes absent-ref quarantine deletion intent to success', async () => {
+    const input = await resumedQuarantine();
+    const prepared = await fixture.service.reviewBranch(input);
+    fixture.deps.deleteRef.mockImplementationOnce(async () => { fixture.headExists = false; throw new Error('receiver-outcome-lost'); });
+    await fixture.service.retireBranch({ ...input, review: { digest: prepared.review.digest } });
+    const status = await fixture.service.status(input);
+    expect(status.phase).toBe('branch-retirement-intent');
+    expect(await fixture.service.retireBranch({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-branch-deletion-uncertain' });
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'verify-retired-quarantine')).toHaveLength(0);
+    expect(fixture.cut).not.toBeNull();
+  });
   const restoredWithDelayedDrift = async () => {
     const input = await interruptedMetadata();
     const prepared = await fixture.service.reviewMetadataRestore(input);
@@ -355,6 +638,24 @@ describe('initialized checkout transaction', () => {
     expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
     return { ...input, journalDigest: status.journalDigest };
   };
+  it('preserves completed move evidence when a redundant metadata restore should use finalization', async () => {
+    const input = await restoredWithDelayedDrift();
+    const previousFinalization = await fixture.service.reviewRestoredFinalization(input);
+    const redundant = await fixture.service.reviewMetadataRestore(input);
+    expect(redundant).toMatchObject({ ok: true, review: { initialPlacements: { working: 'original', administration: 'original' } } });
+    const directory = join(root, input.transactionId);
+    const names = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const last = join(directory, names.at(-1));
+    const previousBytes = await readFile(last, 'utf8');
+    const moves = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move').length;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: redundant.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'metadata-recovery-already-restored-use-finalization' });
+    expect((await fixture.service.status(input)).journalDigest).toBe(input.journalDigest);
+    expect(await readFile(last, 'utf8')).toBe(previousBytes);
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move')).toHaveLength(moves);
+    expect(await fixture.service.finalizeRestored({ ...input, review: { digest: previousFinalization.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+  });
   it('finalizes a retried restore using only its current observations while retaining earlier immutable evidence', async () => {
     const original = fixture.deps.native.getMockImplementation();
     fixture.deps.native.mockImplementation(async input => {
@@ -649,6 +950,22 @@ describe('initialized checkout transaction', () => {
     expect(fixture.cut).not.toBeNull();
     expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
     expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+  });
+  it.each(['deleted-branch-loose-path-occupied', 'deleted-branch-parent-unsafe', 'deleted-branch-packed-refs-invalid'])('preserves legacy receipt recovery when native ref absence refuses: %s', async conflict => {
+    const input = await quarantinedReview();
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-interrupted'));
+    await fixture.service.retireBranch(input);
+    const status = await fixture.service.status(input);
+    expect(status).toMatchObject({ phase: 'branch-retired', branchDeleted: true });
+    fixture.deletedRefConflict = conflict;
+    const result = await fixture.service.retireBranch({ ...input, journalDigest: status.journalDigest });
+    expect(result).toMatchObject({ ok: false, reason: conflict });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect((await fixture.service.status(input)).journalDigest).toBe(status.journalDigest);
+    expect(fixture.deps.native).toHaveBeenCalledWith(expect.objectContaining({ command: 'verify-deleted-branch',
+      confirmedDeletion: { journalDigest: status.journalDigest, branch: release.branch, head: release.head, phase: 'branch-retired' } }));
   });
   it('does not duplicate receipts or refresh their timestamps when the sink succeeded before journal failure', async () => {
     const input = await quarantinedReview();
