@@ -66,6 +66,48 @@ describe('initialized checkout recovery CLI', () => {
     await expect(stat(f.output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('records complete large escaped quarantine evidence privately', async () => {
+    const f = await fixture('review-quarantine');
+    // Each patch remains within the upstream 4 MiB byte budget, but JSON
+    // escaping plus Unicode makes the complete response much larger than 1 MiB.
+    const patch = '\0\n"\\界'.repeat(512 * 1024);
+    expect(Buffer.byteLength(patch)).toBeLessThanOrEqual(4 * 1024 * 1024);
+    const response = { ok: true, review: { digest: 'c'.repeat(64),
+      comparison: { localPatch: patch, difference: patch, paths: ['src/界.js'] } } };
+    const stdout = vi.fn();
+    expect(await runRecovery(f.args, { load: async () => ({ reviewQuarantineResumption: async () => response }), stdout })).toBe(0);
+    const raw = await readFile(f.output, 'utf8');
+    expect(Buffer.byteLength(raw)).toBeGreaterThan(1024 * 1024);
+    const records = raw.trim().split('\n').map(JSON.parse);
+    expect(records).toHaveLength(2);
+    expect(records[1].response).toEqual(response);
+    if (process.platform !== 'win32') expect((await stat(f.output)).mode & 0o777).toBe(0o600);
+    expect(stdout.mock.calls).toHaveLength(1);
+    expect(Buffer.byteLength(stdout.mock.calls[0][0])).toBeLessThan(1024);
+    expect(JSON.parse(stdout.mock.calls[0][0])).toMatchObject({ ok: true, reviewDigest: response.review.digest });
+    expect(stdout.mock.calls[0][0]).not.toContain('comparison');
+  });
+
+  it('retains an inspect-before-retry outcome when serialized evidence exceeds the fixed response budget', async () => {
+    const f = await fixture('review-quarantine');
+    const stdout = vi.fn();
+    // 16 MiB of control bytes expands to 96 MiB before the JSON envelope.
+    // Exercise the actual byte cap without creating an oversized output file.
+    const load = async () => ({ reviewQuarantineResumption: async () => ({
+      ok: true, review: { digest: 'c'.repeat(64), evidence: '\0'.repeat(16 * 1024 * 1024) },
+    }) });
+    expect(await runRecovery(f.args, { load, stdout })).toBe(1);
+    const raw = await readFile(f.output, 'utf8');
+    expect(Buffer.byteLength(raw)).toBeLessThan(2048);
+    const records = raw.trim().split('\n').map(JSON.parse);
+    expect(records).toHaveLength(2);
+    expect(records[0].outcome).toBe('pending-or-uncertain');
+    expect(records[1]).toMatchObject({ outcome: 'inspect-before-any-retry', reason: 'recovery-response-exceeds-budget' });
+    expect(records[1]).not.toHaveProperty('response');
+    expect(JSON.parse(stdout.mock.calls[0][0])).toEqual({ ok: false, reason: 'recovery-response-exceeds-budget' });
+    if (process.platform !== 'win32') expect((await stat(f.output)).mode & 0o777).toBe(0o600);
+  });
+
   it.each(['missing-review', 'nonboolean-supersession', 'caller-proof'])('refuses quarantine %s before loading the service', async change => {
     const f = await fixture('resume-quarantine');
     const body = { ...f.body };

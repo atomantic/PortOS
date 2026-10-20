@@ -577,7 +577,9 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       || !['original', 'quarantine'].includes(proof.initialPlacements?.administration)) fail('quarantine-resumption-placement-not-ready');
     const current = await quarantineSafety(bound, proof.initialPlacements.administration === 'quarantine');
     if (JSON.stringify(current) !== JSON.stringify(before)) fail('retirement-evidence-changed');
-    const evidence = { ...current, safetyEvidence: current, version: 1, mode: 'resume-initialized-quarantine', transactionId: state.id,
+    // Retain the complete comparison once. This separate hash also binds the
+    // exact safety projection re-read between moves without duplicating patches.
+    const evidence = { ...current, safetyEvidenceDigest: hash(current), version: 1, mode: 'resume-initialized-quarantine', transactionId: state.id,
       repoPath: ctx.repoPath, release: state.release, journalDigest: hash(state), phase: state.phase, reservation,
       quarantineResumption: proof.quarantineResumption, initialPlacements: proof.initialPlacements,
       changeCounts: proof.changeCounts, changedPaths: proof.changedPaths };
@@ -594,7 +596,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const proof = quarantineProofInput({ ...bound, state });
     const assertSafety = async administrationQuarantined => {
       const fresh = await quarantineSafety({ ...bound, state }, administrationQuarantined);
-      if (JSON.stringify(fresh) !== JSON.stringify(current.safetyEvidence)) fail('retirement-evidence-changed');
+      if (hash(fresh) !== current.safetyEvidenceDigest) fail('retirement-evidence-changed');
       executor.assertHeld();
     };
     await assertSafety(current.initialPlacements.administration === 'quarantine');

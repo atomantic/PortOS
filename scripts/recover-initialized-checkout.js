@@ -22,7 +22,10 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const CODE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_REQUEST_BYTES = 16 * 1024;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
+// Two patches and a path inventory each have a 4 MiB Git output budget.
+// JSON escaping can expand these sixfold (72 MiB); reserve another 24 MiB for
+// native/forge evidence and the envelope. Refuse larger records, never truncate.
+const MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const ACTIONS = {

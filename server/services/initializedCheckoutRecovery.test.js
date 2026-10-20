@@ -388,6 +388,62 @@ describe('initialized checkout transaction', () => {
     const status = await fixture.service.status(input);
     return { ...input, journalDigest: status.journalDigest };
   };
+  it('retains large quarantine comparisons once and rejects changed patch bytes after approval', async () => {
+    const input = await interruptedMetadata();
+    let patch = 'private patch "\n界'.repeat(80_000);
+    const comparison = fixture.deps.comparison;
+    fixture.deps.comparison = async (...args) => {
+      const evidence = await comparison(...args);
+      return { ...evidence, comparison: { ...evidence.comparison, localPatch: patch } };
+    };
+    const service = _createInitializedCheckoutRecovery(fixture.deps);
+    const prepared = await service.reviewQuarantineResumption(input);
+    expect(prepared.ok).toBe(true);
+    expect(prepared.review.comparison.localPatch).toBe(patch);
+    expect(prepared.review).not.toHaveProperty('safetyEvidence');
+    const safety = await fixture.deps.comparison(null, release, prUrl, fixture.snapshot, null, fixture.facts);
+    expect(prepared.review.safetyEvidenceDigest).toBe(createHash('sha256').update(JSON.stringify(safety)).digest('hex'));
+    expect(JSON.stringify(prepared).split(JSON.stringify(patch).slice(1, -1))).toHaveLength(2);
+    const unsigned = { ...prepared.review }; delete unsigned.digest;
+    expect(createHash('sha256').update(JSON.stringify(unsigned)).digest('hex')).toBe(prepared.review.digest);
+    // Drift after the fresh approval recheck must also be caught by the
+    // between-moves safety read, before administration leaves its original path.
+    const native = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async request => {
+      const result = await native(request);
+      if (request.command === 'verify-quarantine-resumption') patch += 'changed';
+      return result;
+    });
+    expect(await service.resumeQuarantine({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-evidence-changed' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'original' });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.native.mock.calls.some(([row]) => row.command === 'resume-quarantine')).toBe(false);
+  });
+  it('keeps previously journalled full safety evidence verifiable for a fresh branch review', async () => {
+    const input = await resumedQuarantine();
+    const directory = join(root, input.transactionId);
+    const names = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const previous = JSON.parse(await readFile(join(directory, names.at(-1)), 'utf8'));
+    // Model an immutable journal produced by the preceding release, including
+    // its duplicated safety evidence. The new code must not rewrite this row.
+    const accepted = { ...previous.quarantineResumptionReview };
+    const safetyEvidence = await fixture.deps.comparison(null, release, prUrl, fixture.snapshot, null, fixture.facts);
+    delete accepted.digest;
+    delete accepted.safetyEvidenceDigest;
+    accepted.safetyEvidence = safetyEvidence;
+    const legacy = { ...previous, sequence: previous.sequence + 1,
+      previous: createHash('sha256').update(JSON.stringify(previous)).digest('hex'),
+      quarantineResumptionReview: { digest: createHash('sha256').update(JSON.stringify(accepted)).digest('hex'), ...accepted } };
+    const saved = JSON.stringify(legacy);
+    const name = join(directory, `${String(legacy.sequence).padStart(6, '0')}.json`);
+    await writeFile(name, saved, { mode: 0o600, flag: 'wx' });
+    const response = await _createInitializedCheckoutRecovery(fixture.deps).reviewBranch({
+      ...input, journalDigest: createHash('sha256').update(saved).digest('hex'),
+    });
+    expect(response).toMatchObject({ ok: true, review: { quarantineResumptionReview: legacy.quarantineResumptionReview } });
+    expect(await readFile(name, 'utf8')).toBe(saved);
+  });
   it('resumes only administration quarantine under a fresh purpose-bound review, then requires a separate branch approval', async () => {
     const input = await interruptedMetadata();
     const moves = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move').length;
