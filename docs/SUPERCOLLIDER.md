@@ -184,7 +184,9 @@ Both first setup runs built the image and passed the stock-synth probe. Both sec
 
 ## Troubleshooting
 
-- **Build fails fetching packages**: `snapshot.debian.org` is occasionally slow or rate-limited. Apt retries five times. Re-run setup; Docker reuses completed layers.
+On an image build failure, setup retains and prints the trailing build lines (such as compiler or package download errors) directly in the CLI and CI failure log so the failure is diagnosable without re-running. If needed, re-run with `--verbose` for the full build log from the start.
+
+- **Build fails fetching packages**: `snapshot.debian.org` is occasionally slow or rate-limited. Apt retries five times. On build failure, setup prints the failing package lines (`E: ...`) directly in the error output. Re-run setup; Docker reuses completed layers.
 - **Build fails downloading the SuperCollider source, or the checksum fails**: the GitHub release asset was unreachable or altered. The build stops at the checksum rather than compiling unverified source.
 - **`smoke-failed`**: read `smoke.error`, then try `npm run setup:supercollider -- --yes --rebuild`, which rebuilds without the layer cache.
 - **`docker-stopped` right after starting Docker Desktop**: the engine can take a minute to come up. Re-run once it reports running.
