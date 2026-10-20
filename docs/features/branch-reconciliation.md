@@ -217,6 +217,57 @@ A move-based restore retry refuses when both originals are already restored and
 its working-move proof is present, preserving that evidence for this separate
 finalization path instead of replacing it with no-op observations.
 
+### Automatic continuation of initialized retirement journals
+
+CoS discovers existing private initialized-retirement journals at startup evaluation
+and every 30 minutes, independently of branch-reconcile scheduling or free agent
+slots. It acts only while the daemon is running, unpaused, and CoS autonomy is
+`execute`. Discovery never starts a retirement or grants authority from a journal
+phase alone. The bounded drain handles at most two transactions per pass, rotates
+past held work, and refreshes evidence on subsequent passes. It creates no agent,
+worktree, or additional persistent queue.
+
+Automatic continuation requires a valid original transaction, a bound preservation
+manifest, the original exact reservation, and fresh service/native proofs. The
+local tip must equal the merged PR head; the complete scoped comparison must be
+`integrated` with no differences. The native classifier permits only the archived
+residual-compression removal and root-provenance addition described below. Every
+other source field must still match the preserved baseline. A successful review
+is passed to the same purpose-specific operation with its exact digest; the
+operation recomputes the proof before moving anything. After its internal scan,
+the native helper waits for an exact, fresh server acknowledgement before rename;
+pause, a lost executor, invalid replies, and parent exit grant nothing. The branch
+receiver guard runs after preservation and fsyncs deletion intent before invoking
+Git. Before lengthy branch verification, `branch-retirement-prepared` durably
+binds the new exact reservation without granting deletion. Restart obtains a fresh
+branch review under that same cut. The daemon never accepts
+supersession. Branch retirement requires its own subsequent fresh review.
+
+A plain `quarantined` journal whose reservation release was interrupted can finish
+through this same proof without moving either original again. Durably confirmed
+branch deletion can replay its receipt without another Git deletion; it still
+requires archive, placement, absent-ref, ownership, and reservation checks. A
+completed receipt or completed restore with an already released reservation needs
+no further action and consumes no replay slot. A missing owner file inside an
+existing cut is uncertainty, not a released reservation.
+
+Unknown metadata, changed sources, superseded work, active owners, manual policy
+holds, unsupported pre-move/restoration phases, and uncertain deletion results
+remain held for explicit review. CoS does not restore originals automatically,
+transfer a cut, infer ownership from age/PIDs, or turn ref absence into a deletion
+receipt. Existing schedule status exposes `reconcileOutcomes[appId].initializedRetirements`
+with each transaction, branch, observed journal digest, phase, and reason. These
+observations are diagnostics, never cached approval. Invalid unbound journals are
+reported in the global reconcile outcome. The journals and archives remain the
+recovery evidence after restart. A crash between cut creation and publication of
+its preparation record remains an explicit reservation-mismatch hold; the daemon
+never adopts an unrecorded owner. A pause or interruption after deletion intent
+was fsynced remains uncertain even when no receiver result was observed.
+
+The narrow machine-verified continuation above does not require another runtime
+agent or human approval. The explicit operations below remain available for
+independent inspection, supersession decisions, and unsupported recovery cases.
+
 ### Completing an interrupted quarantine
 
 When the working directory has already moved into quarantine, restoring it
@@ -280,6 +331,6 @@ age, timer or automatic retry clears this evidence. Reservation release atomical
 moves the intact owner into a durable private release record, preserving evidence
 across a crash without leaving an ownerless cut. Receipt replay keeps the original
 archive identity and timestamp so a newer checkout obligation cannot be satisfied
-by replaying an older retirement. An interrupted transaction
-requires explicit status and recovery; ambiguous identities remain held. The
+by replaying an older retirement. Interrupted transactions outside the machine-verified continuation above
+require explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.

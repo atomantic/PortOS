@@ -1,6 +1,6 @@
 import { pinPlatform } from '../lib/testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -71,10 +71,11 @@ beforeEach(async () => {
   fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null,
     metadataToken: 'f'.repeat(64), finalizationToken: '7'.repeat(64), quarantineToken: '6'.repeat(64) };
   const admission = {
+    _checkoutAdmission: async () => ({ directory: join(root, 'admission') }),
     withCheckoutPublication: async (_repo, work) => { if (fixture.cut) throw new Error('checkout-retirement-reserved'); return work(); },
     reserveCheckoutRetirement: vi.fn(async (_repo, id) => {
       if (fixture.cut) throw new Error('checkout-retirement-reserved');
-      fixture.cut = { owner: { id }, directory: '/fixture/admission' }; return fixture.cut;
+      fixture.cut = { owner: { version: 1, id, generation: id, kind: 'snapshot', pid: process.pid, startedAt: new Date().toISOString() }, directory: '/fixture/admission' }; return fixture.cut;
     }),
     withCheckoutReservation: async (_cut, work) => work(),
     readCheckoutReservation: async () => {
@@ -161,11 +162,11 @@ beforeEach(async () => {
     ownership: vi.fn(async () => ({ ok: true, policy: null })),
     forge: async () => ({ ...fixture.facts }),
     comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({
-      forge, policy, comparison: { disposition: fixture.superseded ? 'review-supersession' : 'ancestor' },
+      release: _release, forge, policy, comparison: { disposition: fixture.superseded ? 'review-supersession' : 'integrated', difference: fixture.superseded ? 'review the changed work' : '' },
     }),
     listWorktrees: async () => fixture.newHolder ? [{ path: '/fixture/new', branch: release.branch }] : [],
     execGit: vi.fn(async () => ({ exitCode: fixture.headExists ? 0 : 1, stdout: fixture.headExists ? release.head : '' })),
-    deleteRef: vi.fn(async () => { fixture.headExists = false; return true; }),
+    deleteRef: vi.fn(async (_repo, _branch, _head, options) => { await options.beforeMutation(); fixture.headExists = false; return true; }),
     recordRetirement: vi.fn(async () => {}),
   };
   fixture.deps = deps; fixture.service = _createInitializedCheckoutRecovery(deps);
@@ -618,7 +619,7 @@ describe('initialized checkout transaction', () => {
   it('never promotes absent-ref quarantine deletion intent to success', async () => {
     const input = await resumedQuarantine();
     const prepared = await fixture.service.reviewBranch(input);
-    fixture.deps.deleteRef.mockImplementationOnce(async () => { fixture.headExists = false; throw new Error('receiver-outcome-lost'); });
+    fixture.deps.deleteRef.mockImplementationOnce(async (_repo, _branch, _head, options) => { await options.beforeMutation(); fixture.headExists = false; throw new Error('receiver-outcome-lost'); });
     await fixture.service.retireBranch({ ...input, review: { digest: prepared.review.digest } });
     const status = await fixture.service.status(input);
     expect(status.phase).toBe('branch-retirement-intent');
@@ -869,7 +870,7 @@ describe('initialized checkout transaction', () => {
     const input = await quarantinedReview();
     const result = await fixture.service.retireBranch(input);
     expect(result).toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
-    expect(fixture.deps.deleteRef).toHaveBeenCalledWith('/fixture/repo', release.branch, release.head);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledWith('/fixture/repo', release.branch, release.head, { beforeMutation: expect.any(Function) });
     expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', { path: release.path, branch: release.branch,
       head: release.head, branchDeleted: true, archiveDir: join(root, input.transactionId) });
     expect(fixture.cut).toBeNull();
@@ -893,7 +894,7 @@ describe('initialized checkout transaction', () => {
   });
   it('retains the delete intent and reports uncertainty after deletion without a journal outcome', async () => {
     const input = await quarantinedReview();
-    fixture.deps.deleteRef.mockImplementation(async () => { fixture.headExists = false; throw new Error('receiver-result-lost'); });
+    fixture.deps.deleteRef.mockImplementation(async (_repo, _branch, _head, options) => { await options.beforeMutation(); fixture.headExists = false; throw new Error('receiver-result-lost'); });
     expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'receiver-result-lost', recoveryRequired: true });
     const restarted = _createInitializedCheckoutRecovery(fixture.deps);
     const status = await restarted.status(input);
@@ -1067,5 +1068,254 @@ describe('initialized checkout transaction', () => {
     const value = JSON.parse(await readFile(first, 'utf8')); value.repoPath = '/different';
     await writeFile(first, JSON.stringify(value));
     await expect(fixture.service.status({ appId: 'app', transactionId: result.transactionId })).rejects.toThrow('retirement-journal-invalid');
+  });
+});
+
+// These exercise persisted journal discovery through the actual service
+// continuation, not a synthetic phase-to-command mapping.
+describe('automatic initialized retirement continuation', () => {
+  const automaticInput = async () => {
+    const result = await fixture.service.discover();
+    expect(result.ok).toBe(true);
+    expect(result.transactions).toHaveLength(1);
+    const row = result.transactions[0];
+    expect(row.reason).toBeUndefined();
+    return { appId: row.appId, transactionId: row.transactionId, journalDigest: row.journalDigest };
+  };
+  const permitted = { blocked: async () => null };
+  const interrupted = async () => {
+    fixture.failPart = 'administration';
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, recoveryRequired: true });
+    fixture.failPart = null;
+    fixture.service = _createInitializedCheckoutRecovery(fixture.deps);
+    return automaticInput();
+  };
+  it('discovers after restart and finishes archive-backed quarantine plus a separate fresh branch retirement', async () => {
+    const input = await interrupted();
+    const originalReservation = structuredClone(fixture.cut);
+    await expect(fixture.deps.admission.withCheckoutPublication('/fixture/repo', () => {}))
+      .rejects.toThrow('checkout-retirement-reserved');
+    const before = fixture.deps.native.mock.calls.length;
+    expect(await fixture.service.recoverAutomatically(input, permitted))
+      .toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
+    expect(fixture.deps.admission.releaseCheckoutReservation.mock.calls[0][0]).toEqual(originalReservation);
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
+    expect(fixture.deps.native.mock.calls.slice(before).some(([arg]) => ['inspect', 'preserve', 'move'].includes(arg.command))).toBe(false);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+    expect(fixture.cut).toBeNull();
+  });
+  it('finishes the plain quarantined journal left before releasing its exact reservation', async () => {
+    fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));
+    const result = await fixture.service.retire(await reviewed());
+    expect(result).toMatchObject({ ok: false, reason: 'release-interrupted' });
+    expect((await fixture.service.status({ appId: 'app', transactionId: result.transactionId })).phase).toBe('quarantined');
+    const moves = fixture.deps.native.mock.calls.filter(([arg]) => arg.command === 'move').length;
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true, receiptRecorded: true });
+    expect(fixture.deps.native.mock.calls.filter(([arg]) => arg.command === 'move')).toHaveLength(moves);
+    expect(fixture.deps.native.mock.calls.some(([arg]) => arg.command === 'resume-quarantine')).toBe(false);
+  });
+  it.each(['superseded', 'different-pr-head', 'unknown-metadata', 'active-owner', 'new-holder', 'archive-changed', 'executor-busy', 'reservation-changed'])(
+    'retains the original reservation and all sources when fresh evidence is %s', async cause => {
+      const input = await interrupted();
+      if (cause === 'superseded') fixture.superseded = true;
+      if (cause === 'different-pr-head') fixture.facts.prHead = '9'.repeat(40);
+      if (cause === 'unknown-metadata') fixture.forbiddenMetadata = true;
+      if (cause === 'active-owner') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+      if (cause === 'new-holder') fixture.newHolder = true;
+      if (cause === 'archive-changed') fixture.failArchive = true;
+      if (cause === 'executor-busy') fixture.deps.native.mockImplementationOnce(async () => { throw new Error('retirement-executor-busy'); });
+      if (cause === 'reservation-changed') fixture.cut.owner.id = 'other-transaction';
+      expect(await fixture.service.recoverAutomatically(input, permitted)).toMatchObject({ ok: false });
+      expect(fixture.cut).not.toBeNull();
+      expect(fixture.placement.administration).toBe('original');
+      expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+      expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+    });
+  it.each(['pause', 'default', 'owner'])('rechecks %s after preparing a review and before the remaining move', async changed => {
+    const input = await interrupted();
+    let gates = 0;
+    const blocked = async () => {
+      if (++gates !== 2) return null;
+      if (changed === 'pause') return 'daemon-paused';
+      if (changed === 'default') fixture.facts.defaultHead = '8'.repeat(40);
+      if (changed === 'owner') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+      return null;
+    };
+    expect(await fixture.service.recoverAutomatically(input, { blocked })).toMatchObject({ ok: false });
+    expect(fixture.placement.administration).toBe('original');
+    expect(fixture.cut).not.toBeNull();
+  });
+  it.each(['remaining-rename', 'branch-delete'])('honors a pause arriving inside the second native review before %s', async stage => {
+    const input = stage === 'remaining-rename' ? await interrupted() : await (async () => {
+      await fixture.service.retire(await reviewed()); return automaticInput();
+    })();
+    let paused = false, checks = 0;
+    const native = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async request => {
+      const result = await native(request);
+      if (stage === 'remaining-rename' && request.command === 'verify-quarantine-resumption') paused = true;
+      if (stage === 'branch-delete' && request.command === 'verify' && request.mode === 'restore' && ++checks === 3) paused = true;
+      return result;
+    });
+    expect(await fixture.service.recoverAutomatically(input, { blocked: async () => paused ? 'daemon-paused' : null }))
+      .toMatchObject({ ok: false, reason: 'daemon-paused' });
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.cut).not.toBeNull();
+    if (stage === 'remaining-rename') expect(fixture.placement.administration).toBe('original');
+  });
+  it('restarts a durably prepared branch retirement under the exact original cut without creating another reservation', async () => {
+    await fixture.service.retire(await reviewed());
+    fixture.deps.deleteRef.mockRejectedValueOnce(new Error('branch-archive-interrupted'));
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: false, reason: 'branch-archive-interrupted' });
+    const input = await automaticInput();
+    expect((await fixture.service.status(input)).phase).toBe('branch-retirement-prepared');
+    const reservation = structuredClone(fixture.cut);
+    const reservations = fixture.deps.admission.reserveCheckoutRetirement.mock.calls.length;
+    fixture.service = _createInitializedCheckoutRecovery(fixture.deps);
+    expect(await fixture.service.recoverAutomatically(input, permitted)).toMatchObject({ ok: true, receiptRecorded: true });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).toHaveBeenCalledTimes(reservations);
+    expect(fixture.deps.admission.releaseCheckoutReservation.mock.calls.at(-1)[0]).toEqual(reservation);
+  });
+  it.each(['owner', 'archive', 'forge', 'reservation'])('holds prepared retirement after fresh %s evidence changes', async changed => {
+    await fixture.service.retire(await reviewed());
+    fixture.deps.deleteRef.mockRejectedValueOnce(new Error('branch-archive-interrupted'));
+    await fixture.service.recoverAutomatically(await automaticInput(), permitted);
+    const input = await automaticInput();
+    if (changed === 'owner') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+    if (changed === 'archive') fixture.failArchive = true;
+    if (changed === 'forge') fixture.facts.prHead = '9'.repeat(40);
+    if (changed === 'reservation') fixture.cut.owner.id = 'foreign';
+    expect(await fixture.service.recoverAutomatically(input, permitted)).toMatchObject({ ok: false });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.cut).not.toBeNull(); expect(fixture.headExists).toBe(true);
+  });
+  it('rechecks pause after durable intent publication and retains uncertainty without calling the receiver', async () => {
+    await fixture.service.retire(await reviewed());
+    let received = false;
+    fixture.deps.deleteRef.mockImplementation(async (_repo, _branch, _head, options) => {
+      await options.beforeMutation(); received = true; fixture.headExists = false; return true;
+    });
+    const input = await automaticInput();
+    const blocked = async () => {
+      const status = await fixture.service.status(input);
+      return status.phase === 'branch-retirement-intent' ? 'daemon-paused' : null;
+    };
+    expect(await fixture.service.recoverAutomatically(input, { blocked })).toMatchObject({ ok: false, reason: 'daemon-paused' });
+    expect(received).toBe(false); expect(fixture.headExists).toBe(true); expect(fixture.cut).not.toBeNull();
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted))
+      .toMatchObject({ ok: false, reason: 'retirement-branch-deletion-uncertain' });
+  });
+  it.each(['restored', 'restored-with-metadata-transitions', 'restored-with-reviewed-finalization'])(
+    'treats completed %s with released reservation as settled, never as new retirement intent', async phase => {
+      const input = await interrupted();
+      if (phase === 'restored') {
+        expect(await fixture.service.restore(input)).toMatchObject({ ok: true });
+      } else {
+        const review = await fixture.service.reviewMetadataRestore(input);
+        fixture.delayedRestoreDrift = phase === 'restored-with-reviewed-finalization';
+        expect(await fixture.service.restoreMetadata({ ...input, review: { digest: review.review.digest } }))
+          .toMatchObject({ ok: !fixture.delayedRestoreDrift });
+        if (phase === 'restored-with-reviewed-finalization') {
+          const current = await automaticInput();
+          const final = await fixture.service.reviewRestoredFinalization(current);
+          expect(await fixture.service.finalizeRestored({ ...current, review: { digest: final.review.digest } })).toMatchObject({ ok: true });
+        }
+      }
+      const discovered = await fixture.service.discover();
+      expect(discovered.transactions[0]).toMatchObject({ phase, settled: true });
+      const commands = fixture.deps.native.mock.calls.length;
+      expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true, alreadyComplete: true, phase });
+      expect(fixture.deps.native).toHaveBeenCalledTimes(commands);
+      expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    });
+  it('skips completed historical journals beside a fresh foreign cut without starving its exact owner', async () => {
+    for (let i = 0; i < 3; i++) {
+      const retired = await fixture.service.retire(await reviewed());
+      expect(await fixture.service.restore({ appId: 'app', transactionId: retired.transactionId })).toMatchObject({ ok: true });
+    }
+    fixture.failPart = 'administration';
+    const pending = await fixture.service.retire(await reviewed());
+    fixture.failPart = null;
+    const originalCut = fixture.cut;
+    const owner = originalCut.owner;
+    await mkdir(join(root, 'admission/cut'), { recursive: true, mode: 0o700 });
+    await writeFile(join(root, 'admission/cut/owner.json'), JSON.stringify(owner), { mode: 0o600 });
+    fixture.deps.admission.readCheckoutReservation = async (_repo, id) => {
+      if (id !== pending.transactionId) throw Object.assign(new Error('checkout-retirement-reserved'), { code: 'CHECKOUT_RETIREMENT_RESERVED' });
+      return { ...originalCut, owner };
+    };
+    // Discovery proves terminal history is unrelated to the fresh owner. Its
+    // sweep slot must go to that owner, not any of the three completed rows.
+    const discovered = await fixture.service.discover();
+    expect(discovered.transactions.filter(row => row.settled)).toHaveLength(3);
+    const { _createInitializedRecoverySweep } = await import('./initializedCheckoutRecoverySweep.js');
+    const recover = vi.fn(async () => ({ ok: false, reason: 'fixture-current-owner-hold' }));
+    await _createInitializedRecoverySweep({ discover: () => fixture.service.discover(), recover })(async () => null);
+    expect(recover.mock.calls.map(([input]) => input.transactionId)).toEqual([pending.transactionId]);
+    expect(fixture.cut).toBe(originalCut);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    // Unknown or same-owner metadata is never treated as proof of release.
+    await writeFile(join(root, 'admission/cut/owner.json'), '{}', { mode: 0o600 });
+    expect((await fixture.service.discover()).transactions.some(row => row.settled)).toBe(false);
+  });
+  it('replays a durably confirmed receipt without another deletion, but retains uncertain deletion', async () => {
+    await fixture.service.retire(await reviewed());
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-disk-full'));
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: false });
+    fixture.superseded = true; // Receipt replay does not delete superseded work.
+    fixture.service = _createInitializedCheckoutRecovery(fixture.deps);
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true, receiptRecorded: true });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.cut).toBeNull();
+    const calls = fixture.deps.native.mock.calls.length;
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true, alreadyComplete: true });
+    expect(fixture.deps.native).toHaveBeenCalledTimes(calls);
+  });
+  it('never interprets an absent ref as a completed deletion without the committed result', async () => {
+    await fixture.service.retire(await reviewed());
+    fixture.deps.deleteRef.mockImplementation(async (_repo, _branch, _head, options) => { await options.beforeMutation(); fixture.headExists = false; throw new Error('receiver-result-lost'); });
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: false });
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted))
+      .toMatchObject({ ok: false, reason: 'retirement-branch-deletion-uncertain' });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+  it('reports unsupported pre-move phases and corrupt journals without creating a fresh transaction', async () => {
+    fixture.failPreserve = true;
+    await fixture.service.retire(await reviewed());
+    const input = await automaticInput();
+    expect(await fixture.service.recoverAutomatically(input, permitted)).toMatchObject({ ok: false, reason: 'preservation-proof-unbound' });
+    const first = join(root, input.transactionId, '000000.json');
+    await writeFile(first, '{', { mode: 0o600 });
+    const found = await fixture.service.discover();
+    expect(found.transactions[0]).toMatchObject({ transactionId: input.transactionId, reason: expect.any(String) });
+    expect(fixture.deps.native.mock.calls.some(([arg]) => arg.command === 'move')).toBe(false);
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('does not call a terminal receipt settled when its owner file disappeared but the cut still exists', async () => {
+    await fixture.service.retire(await reviewed());
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true });
+    await mkdir(join(root, 'admission/cut'), { recursive: true, mode: 0o700 });
+    const found = await fixture.service.discover();
+    expect(found.transactions[0].settled).toBe(false);
+    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted))
+      .toMatchObject({ ok: false, reason: 'retirement-reservation-owner-missing' });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+  });
+  it('holds an oversized journal before reading or dispatching its contents', async () => {
+    const input = await interrupted();
+    const file = await open(join(root, input.transactionId, '000000.json'), 'r+');
+    try { await file.truncate(16 * 1024 * 1024 + 1); } finally { await file.close(); }
+    const found = await fixture.service.discover();
+    expect(found.transactions[0]).toMatchObject({ transactionId: input.transactionId, reason: 'retirement-journal-budget-exceeded' });
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('refuses stale discovery digests and requires an explicit running gate', async () => {
+    const input = await interrupted();
+    expect(await fixture.service.recoverAutomatically(input)).toMatchObject({ ok: false, reason: 'automatic-retirement-gate-required' });
+    expect(await fixture.service.recoverAutomatically({ ...input, journalDigest: '0'.repeat(64) }, permitted))
+      .toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
   });
 });

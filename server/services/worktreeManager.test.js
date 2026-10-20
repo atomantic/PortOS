@@ -50,6 +50,7 @@ vi.mock('./git.js', () => ({
 const {
   shouldRefuseDefaultBranchMerge,
   deleteCompletedLocalBranch,
+  forceRemoveWorktreeDir,
   isHumanClaimWorktree,
   classifyWorktreeDirt,
   isGitLockError,
@@ -85,6 +86,48 @@ describe('completed branch archival boundary', () => {
   });
   afterEach(() => {
     preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
+  });
+  it('runs the trusted receiver guard after archival verification and preserves its refusal reason without pushing', async () => {
+    let ready = false;
+    preserveBranchMock.mockResolvedValue({ verify: async () => { ready = true; return true; } });
+    const beforeMutation = vi.fn(async () => {
+      expect(ready).toBe(true);
+      throw new Error('daemon-paused');
+    });
+    await expect(deleteCompletedLocalBranch('/repo', 'done', head, { beforeMutation })).rejects.toThrow('daemon-paused');
+    expect(beforeMutation).toHaveBeenCalledOnce();
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
+  });
+  it('checks automatic permission after final registration refresh before checkout removal', async () => {
+    let reads = 0, verified = false;
+    execGitMock.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        reads++;
+        return { stdout: `worktree /checkout\nHEAD ${head}\nbranch refs/heads/done\n\n`, exitCode: 0 };
+      }
+      return { stdout: '', exitCode: 0 };
+    });
+    const beforeMutation = vi.fn(async () => {
+      expect(verified).toBe(true); expect(reads).toBe(2);
+      throw new Error('daemon-paused');
+    });
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', {
+      verifyRemoval: async () => { verified = true; return null; }, beforeMutation,
+    })).toMatchObject({ removed: false, reason: 'daemon-paused' });
+    expect(beforeMutation).toHaveBeenCalledOnce();
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && ['remove', 'prune'].includes(args[1]))).toBe(false);
+  });
+  it('rechecks automatic permission before pruning an already absent checkout after a failed removal', async () => {
+    execGitMock.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('remove interrupted');
+      return { stdout: '', exitCode: 0 };
+    });
+    lstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    const beforeMutation = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('daemon-stopped'));
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', { verifyRemoval: async () => null, beforeMutation }))
+      .toMatchObject({ removed: false, reason: 'daemon-stopped' });
+    expect(beforeMutation).toHaveBeenCalledTimes(2);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'prune')).toBe(false);
   });
   it.each(['archive failure', 'archive verification failure'])('never sends the deletion when there is an %s', async failure => {
     if (failure === 'archive failure') preserveBranchMock.mockRejectedValue(new Error('archive disk full'));

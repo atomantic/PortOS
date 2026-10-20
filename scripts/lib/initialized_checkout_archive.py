@@ -1350,6 +1350,29 @@ def verify_retired_quarantine(request):
     return verified_quarantine_resumption(request, completed=True, retired=True)
 
 
+def await_mutation_permit(request):
+    """Automatic callers recheck the live daemon gate after native verification.
+
+    The backend lock stays held while waiting. EOF, missing/invalid replies and
+    parent death grant nothing; explicit operations retain their old protocol.
+    """
+    token = request.get('mutationPermit')
+    if token is None:
+        return
+    if not isinstance(token, str) or not re.fullmatch(r'[a-f0-9-]{36}', token):
+        fail('mutation-permit-invalid')
+    print(json.dumps({'mutationReady': token, 'part': 'administration'}), flush=True)
+    reply = sys.stdin.readline(4097)
+    try:
+        accepted = json.loads(reply)
+    except (ValueError, TypeError):
+        fail('mutation-permit-missing')
+    if (len(reply) > 4096 or not reply.endswith('\n') or not isinstance(accepted, dict)
+            or set(accepted) != {'mutationPermit', 'allow'}
+            or accepted['mutationPermit'] != token or accepted['allow'] is not True):
+        fail('mutation-permit-invalid')
+
+
 def resume_quarantine(request):
     verified = verify_quarantine_resumption(request)
     if verified['placements']['administration']['state'] == 'quarantine':
@@ -1360,6 +1383,9 @@ def resume_quarantine(request):
     source, destination = Path(facts['privateGitDir']), root / 'quarantine/administration'
     safe_path(str(source))
     safe_path(str(destination.parent))
+    if identity(source) != facts['identity']['administration'] or os.path.lexists(destination):
+        fail('move-lease-or-destination-changed')
+    await_mutation_permit(request)
     if identity(source) != facts['identity']['administration'] or os.path.lexists(destination):
         fail('move-lease-or-destination-changed')
     exclusive_rename(source, destination)

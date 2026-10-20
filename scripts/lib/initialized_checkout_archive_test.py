@@ -780,6 +780,43 @@ class NativeArchive(unittest.TestCase):
         self.assertFalse(self.work.exists())
         self.assertEqual((self.txn / 'manifest.json').read_bytes(), baseline)
 
+    def test_automatic_quarantine_requires_fresh_exact_permit_after_native_verification(self):
+        request = {**self.quarantine_resumption_fixture(), 'command': 'resume-quarantine',
+                   'mutationPermit': '11111111-1111-1111-1111-111111111111'}
+        saved = archive.load_transaction(request)[1]
+        source = Path(saved['facts']['privateGitDir'])
+        original = archive.identity(source)
+        destination = self.txn / 'quarantine/administration'
+        for reply in ('', '{}\n', json.dumps({'mutationPermit': request['mutationPermit'], 'allow': False}) + '\n',
+                      json.dumps({'mutationPermit': request['mutationPermit'], 'allow': 1}) + '\n'):
+            with subprocess.Popen([sys.executable, str(Path(archive.__file__))], env=self.env,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True) as child:
+                child.stdin.write(json.dumps(request) + '\n')
+                child.stdin.flush()
+                ready = json.loads(child.stdout.readline())
+                self.assertEqual(ready, {'mutationReady': request['mutationPermit'], 'part': 'administration'})
+                # This readiness record is emitted after full native verification,
+                # while the exact original and backend lock remain in place.
+                self.assertEqual(archive.identity(source), original)
+                self.assertFalse(destination.exists())
+                output, _ = child.communicate(reply, timeout=30)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertFalse(json.loads(output)['ok'])
+            self.assertEqual(archive.identity(source), original)
+            self.assertFalse(destination.exists())
+        with subprocess.Popen([sys.executable, str(Path(archive.__file__))], env=self.env,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as child:
+            child.stdin.write(json.dumps(request) + '\n')
+            child.stdin.flush()
+            self.assertEqual(json.loads(child.stdout.readline())['mutationReady'], request['mutationPermit'])
+            output, _ = child.communicate(json.dumps({'mutationPermit': request['mutationPermit'], 'allow': True}) + '\n', timeout=30)
+            self.assertEqual(child.returncode, 0, output)
+            self.assertTrue(json.loads(output)['moved'])
+        self.assertEqual(archive.identity(destination), original)
+        self.assertFalse(source.exists())
+
     def test_quarantine_resumption_recovers_postmove_evidence_interruption_without_replaying_rename(self):
         request = self.quarantine_resumption_fixture()
         write = archive.private_json

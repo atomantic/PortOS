@@ -248,7 +248,8 @@ async function queueWorktreeCreate(repo, fn) {
  * policy still apply. Share the creation lane so managed attachments cannot
  * enter between the receiver's holder check and ref transaction.
  */
-export function deleteCompletedLocalBranch(repoPath, branch, expectedHead) {
+export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { beforeMutation = async () => {} } = {}) {
+  let callbackError;
   return queueWorktreeCreate(repoPath, async () => {
     if (PROTECTED_BRANCHES.includes(branch)) return false;
     const { getDefaultBranch } = await import('./git.js');
@@ -261,11 +262,12 @@ export function deleteCompletedLocalBranch(repoPath, branch, expectedHead) {
     if (!isAbsolute(common)) return false;
     const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
     if (!await preservation.verify()) return false;
+    await Promise.resolve().then(beforeMutation).catch(error => { callbackError = error; throw error; });
     const result = await execGit(['push',
       '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
       `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
     return result.exitCode === 0;
-  }).catch(() => false);
+  }).catch(error => { if (error === callbackError) throw error; return false; });
 }
 
 /**
@@ -417,7 +419,7 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
     .catch(error => ({ removed: false, reason: error.message, warning: 'Checkout retained: repository reservation unavailable' }));
 }
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation = async () => {} } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
@@ -439,6 +441,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     return null;
   };
   heldReason = await check();
+  if (!heldReason) await beforeMutation();
   if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
@@ -448,6 +451,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     // bypass a lock acquired after our last read, even with a caller guard.
     const directory = await lstat(worktreePath).then(() => 'present', err => err.code === 'ENOENT' ? 'absent' : 'unknown');
     if (directory !== 'absent') { heldReason = 'worktree-removal-refused'; return; }
+    await beforeMutation();
     await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
       lastFailure = errorExcerpt(pruneErr);
       if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
