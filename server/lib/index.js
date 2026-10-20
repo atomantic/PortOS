@@ -505,6 +505,7 @@ export * from './scheduleRunOrder.js';
 export * from './taskReadinessReasons.js';
 export * from './taskTargetScope.js';
 export * from './taxonomyTally.js';
+export * from './worktreeNodeModules.js';
 export * from './worktreeOwnership.js';
 export * from './xmlEntities.js';
 

@@ -31,6 +31,9 @@ vi.mock('fs/promises', () => ({
   readlink: vi.fn().mockResolvedValue(''),
   symlink: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
+  // lib/worktreeNodeModules.js (workspace-link farm); its behavior has a real-filesystem suite.
+  rmdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
@@ -149,7 +152,8 @@ describe('Worktree dependency preparation', () => {
     symlink.mockClear();
     unlink.mockClear();
     existsSync.mockImplementation(path => normalize(path) === '/repo/nested/.git');
-    readdir.mockResolvedValue([
+    // The source's node_modules holds no workspace links, so the plain directory symlink applies.
+    readdir.mockImplementation(async path => normalize(path).endsWith('/repo/node_modules') ? [] : [
       ...directories.map(name => ({ name, isDirectory: () => true })),
       { name: 'linked-package', isDirectory: () => false },
     ]);

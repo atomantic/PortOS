@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -37,6 +37,43 @@ describe('link-worktree-deps script', () => {
     expect(readlinkSync(join(worktree, 'server', 'node_modules'))).toBe(join(source, 'server', 'node_modules'));
     expect(lstatSync(join(worktree, 'client', 'node_modules')).isSymbolicLink()).toBe(false);
     expect(lstatSync(join(source, 'node_modules')).isSymbolicLink()).toBe(false);
+  });
+
+  it('resolves workspace links inside the worktree, not the source checkout (#12633)', () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-')));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    // Source install: a registry package, a workspace scope next to a registry scope entry, a bin shim.
+    const modules = join(source, 'node_modules');
+    mkdirSync(join(modules, 'left-pad'), { recursive: true });
+    mkdirSync(join(modules, '@acme'), { recursive: true });
+    mkdirSync(join(modules, '@types', 'node'), { recursive: true });
+    mkdirSync(join(modules, '.bin'), { recursive: true });
+    mkdirSync(join(source, 'packages', 'core'), { recursive: true });
+    mkdirSync(join(worktree, 'packages', 'core'), { recursive: true });
+    writeFileSync(join(source, 'packages', 'core', 'marker.txt'), 'stale');
+    writeFileSync(join(worktree, 'packages', 'core', 'marker.txt'), 'fresh');
+    writeFileSync(join(modules, 'left-pad', 'index.js'), 'source');
+    writeFileSync(join(modules, '@types', 'node', 'index.d.ts'), 'source');
+    symlinkSync('../../packages/core', join(modules, '@acme', 'core'), 'dir');
+    symlinkSync('../left-pad', join(modules, '.bin', 'left-pad'), 'dir');
+
+    const result = runScript(source, worktree);
+
+    expect(result.status).toBe(0);
+    const linked = join(worktree, 'node_modules');
+    expect(lstatSync(linked).isSymbolicLink()).toBe(false);
+    // Windows reports the recreated relative target with backslashes.
+    expect(readlinkSync(join(linked, '@acme', 'core')).replaceAll('\\', '/')).toBe('../../packages/core');
+    expect(readFileSync(join(linked, '@acme', 'core', 'marker.txt'), 'utf8')).toBe('fresh');
+    // Everything that is not a workspace link still shares the source's install.
+    expect(readFileSync(join(linked, 'left-pad', 'index.js'), 'utf8')).toBe('source');
+    expect(readFileSync(join(linked, '@types', 'node', 'index.d.ts'), 'utf8')).toBe('source');
+    expect(existsSync(join(linked, '.bin', 'left-pad'))).toBe(true);
+
+    // Already provisioned: a rerun leaves the directory exactly as it was.
+    expect(runScript(source, worktree).status).toBe(0);
+    expect(readFileSync(join(linked, '@acme', 'core', 'marker.txt'), 'utf8')).toBe('fresh');
   });
 
   it('exits non-zero without both paths', () => {
