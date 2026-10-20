@@ -24,16 +24,21 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
 // a temp tree so the suite can never write into the live install's data dir.
+// PATHS.data is <install>/data, as in production: a restore runs frozen file
+// migrations, which take the install root and join `data/` themselves.
 var TEST_DATA_ROOT;
 function testDataRoot() {
-  if (!TEST_DATA_ROOT) TEST_DATA_ROOT = mkdtempSync(joinPath(tmpdir(), 'portos-backup-data-'));
+  if (!TEST_DATA_ROOT) {
+    TEST_DATA_ROOT = joinPath(mkdtempSync(joinPath(tmpdir(), 'portos-backup-install-')), 'data');
+    mkdirSync(TEST_DATA_ROOT);
+  }
   return TEST_DATA_ROOT;
 }
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
@@ -42,7 +47,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 afterAll(() => {
-  if (TEST_DATA_ROOT) rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+  if (TEST_DATA_ROOT) rmSync(dirname(TEST_DATA_ROOT), { recursive: true, force: true });
 });
 
 
@@ -2403,6 +2408,87 @@ describe('restoreSnapshot manifest verification', () => {
     withLiveCosRestore.mockClear();
     await finishRestore({ dryRun: false, subdirFilter });
     expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+  });
+
+  describe('snapshot from before a store split (#12626)', () => {
+    const legacyPeople = JSON.stringify({ records: {
+      'p-1': { name: 'Example Person', updatedAt: '2026-01-01T00:00:00.000Z' },
+      'p-2': { _deleted: true, updatedAt: '2026-01-02T00:00:00.000Z', deletedAt: '2026-01-02T00:00:00.000Z' },
+    } });
+    const live = (...parts) => joinPath(PATHS.data, ...parts);
+    const readLive = async (...parts) => JSON.parse(await realFs.readFile(live(...parts), 'utf8'));
+
+    beforeEach(async () => {
+      // An upgraded install: split layout at v1 with a record of its own.
+      await realFs.mkdir(live('brain', 'people', 'live-1'), { recursive: true });
+      await realFs.writeFile(live('brain', 'people', 'index.json'), JSON.stringify({ schemaVersion: 1, type: 'people', config: {} }));
+      await realFs.writeFile(live('brain', 'people', 'live-1', 'index.json'), JSON.stringify({ name: 'Live Person' }));
+      invalidateBrainCaches.mockClear();
+    });
+
+    afterEach(async () => {
+      await realFs.rm(live('brain'), { recursive: true, force: true });
+    });
+
+    async function seedSnapshot(files) {
+      const manifest = {};
+      for (const [path, body] of Object.entries(files)) manifest[path] = await writeSnapshotFile(path, body);
+      await writeManifest(manifest);
+    }
+
+    it.each([undefined, 'brain', 'brain/people.json'])('converts a restored legacy Brain store and parks the live one (scope %s)', async (subdirFilter) => {
+      await seedSnapshot({ 'brain/people.json': legacyPeople });
+
+      const preview = await finishRestore({ dryRun: true, subdirFilter });
+      expect(preview.restoredLegacyStores).toEqual([{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'pending', parkedAs: null }]);
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+
+      // rsync is faked, so stand in for its transfer of the snapshot monolith.
+      await realFs.writeFile(live('brain', 'people.json'), legacyPeople);
+      spawn.mockReset();
+      const result = await finishRestore({ dryRun: false, subdirFilter });
+
+      const [converted] = result.restoredLegacyStores;
+      expect(converted).toMatchObject({ store: 'brain/people', status: 'converted', parkedAs: expect.stringMatching(/^brain\/people\.pre-restore-/) });
+      expect(await readLive('brain', 'people', 'p-1', 'index.json')).toMatchObject({ name: 'Example Person' });
+      expect(await readLive('brain', 'people', 'p-2', 'index.json')).toMatchObject({ _deleted: true });
+      expect(existsSync(live('brain', 'people', 'live-1'))).toBe(false);
+      expect(await readLive(converted.parkedAs, 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      expect(existsSync(live('brain', 'people.json.bak-200'))).toBe(true);
+      expect(invalidateBrainCaches).toHaveBeenCalled();
+    });
+
+    it('treats a split snapshot with a stray re-seeded monolith as current', async () => {
+      await seedSnapshot({
+        'brain/people.json': legacyPeople,
+        'brain/people/index.json': JSON.stringify({ schemaVersion: 1, type: 'people', config: {} }),
+      });
+      await realFs.writeFile(live('brain', 'people.json'), legacyPeople);
+
+      const result = await finishRestore({ dryRun: false });
+      expect(result).not.toHaveProperty('restoredLegacyStores');
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      expect(existsSync(live('brain', 'people', 'p-1'))).toBe(false);
+    });
+
+    it('leaves Brain alone when the restore scope excludes it', async () => {
+      await seedSnapshot({ 'brain/people.json': legacyPeople, 'cos/example.json': '{}' });
+
+      const result = await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      expect(result).not.toHaveProperty('restoredLegacyStores');
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      await realFs.rm(live('cos', 'example.json'), { force: true });
+    });
+
+    it('never parks the live store for a monolith the split would refuse', async () => {
+      const malformed = JSON.stringify({ records: [{ id: 'p-1' }] });
+      await seedSnapshot({ 'brain/people.json': malformed });
+      await realFs.writeFile(live('brain', 'people.json'), malformed);
+
+      const result = await finishRestore({ dryRun: false });
+      expect(result.restoredLegacyStores).toEqual([{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'unreadable', parkedAs: null }]);
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+    });
   });
 
   describe('folder restore of an older snapshot (#12355)', () => {

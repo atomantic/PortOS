@@ -62,6 +62,8 @@ const snapshotIdentity = (snapshot) =>
   snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
 const snapshotSourceLabel = (snapshot) =>
   snapshot.sourceLabel || snapshot.source || 'Current machine';
+const legacyStoreNames = (stores, status) =>
+  stores.filter(store => store.status === status).map(store => store.store).join(', ');
 
 // ---------------------------------------------------------------------------
 // RestorePanel
@@ -133,7 +135,9 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     if (result) {
       // Execution re-verifies the snapshot; report its status after the preview closes.
       const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
-      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
+      const parked = (result.restoredLegacyStores ?? []).filter(store => store.parkedAs).map(store => store.parkedAs);
+      const conversion = parked.length > 0 ? `. Converted older-format data; the replaced stores were kept as ${parked.join(', ')}` : '';
+      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
@@ -213,6 +217,19 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="min-w-0 break-words">
                 This snapshot predates {pluralize(preview.ledgerGap.count, 'data migration')} this install has applied ({preview.ledgerGap.names.join(', ')}). A folder restore keeps this install&apos;s migration record, so restored files may stay in their older format. A full restore (leave the folder blank) re-runs the missing migrations on the next start.
+              </span>
+            </p>
+          )}
+          {preview.restoredLegacyStores?.length > 0 && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                {legacyStoreNames(preview.restoredLegacyStores, 'pending') && (
+                  <>This snapshot keeps {legacyStoreNames(preview.restoredLegacyStores, 'pending')} in an older single-file format. Restoring converts it to the current format and moves this install&apos;s copy aside to <code>&lt;store&gt;.pre-restore-&lt;time&gt;</code> instead of merging the two. </>
+                )}
+                {legacyStoreNames(preview.restoredLegacyStores, 'unreadable') && (
+                  <>The snapshot copy of {legacyStoreNames(preview.restoredLegacyStores, 'unreadable')} is unreadable, so it is restored as-is without conversion and its records stay hidden until the file is repaired.</>
+                )}
               </span>
             </p>
           )}

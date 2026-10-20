@@ -33,6 +33,7 @@ import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
+import { convertRestoredLegacySplitStores, describeLegacySplitStores, snapshotLegacySplitStores } from './backupLegacyStores.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
 
 // Module-level state
@@ -1750,6 +1751,13 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
   const ledgerGap = subdirFilter ? await migrationLedgerGap(srcDir) : undefined;
+  // Split migrations gate on their output, so neither ledger re-runs them over
+  // a restored monolith; restore converts those stores itself (#12626).
+  const legacyStores = await snapshotLegacySplitStores(srcDir, subdirFilter);
+  const restoreNotes = (restoredLegacyStores) => ({
+    ...(ledgerGap !== undefined && { ledgerGap }),
+    ...(restoredLegacyStores.length > 0 && { restoredLegacyStores }),
+  });
 
   // Restore must compare destination bytes even when size and mtime match.
   // Rsync's default quick-check would otherwise report a successful no-op for
@@ -1802,15 +1810,22 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
-    return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
+    return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(describeLegacySplitStores(legacyStores)) };
   }
 
   const scope = subdirFilter;
+  let restoredLegacyStores = [];
+  // Conversion parks live stores, so it runs only after a successful transfer,
+  // and before reconciliation so the Brain caches drop the parked records.
   const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
     subdirFilter,
-    transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
+    transfer: async () => {
+      const changed = await transferWithIdentityFence({ scope, srcDir, transferFiles });
+      restoredLegacyStores = await convertRestoredLegacySplitStores(legacyStores);
+      return changed;
+    },
   }));
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...(ledgerGap !== undefined && { ledgerGap }) };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacyStores) };
 }
 
 const MIGRATION_LEDGER_FILE = 'migrations.applied.json';
