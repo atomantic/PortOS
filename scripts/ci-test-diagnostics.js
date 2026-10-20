@@ -27,6 +27,16 @@ export function persistTestDiagnostic(path, value) {
   }
 }
 
+// No raw process identity or command arguments enter this projection.
+export function processExitDiagnostic(run) {
+  const final = run.processExit;
+  if (!Number.isInteger(final?.eventCode)
+    || (final.exitCode !== null && !Number.isInteger(final.exitCode))) {
+    return 'Diagnostic gap: Vitest process exit event unavailable; final process status is unverified.';
+  }
+  return `Vitest process exit event: code=${final.eventCode}; exitCode=${final.exitCode}.`;
+}
+
 function readReport(path, limit = 100_000) {
   if (statSync(path).size > limit) throw new Error('report exceeds limit');
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -62,6 +72,13 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Launcher ${invocation.completed ? 'completed' : 'interrupted or completion not recorded'}; `
         + `exit=${Number.isInteger(invocation.status) ? invocation.status : 'unavailable'}; `
         + `signal=${/^SIG[A-Z]+$/.test(invocation.signal) ? invocation.signal : 'none'}.`);
+      const boundary = ['direct npm process', 'cmd.exe -> npm.cmd'].includes(invocation.commandBoundary) ? invocation.commandBoundary : 'unavailable';
+      lines.push(`Observed command boundary: ${boundary}.`);
+      for (const [event, value] of [['exit', invocation.childExit], ['close', invocation.childClose]]) {
+        lines.push(`Command ${event}: code=${Number.isInteger(value?.code) ? value.code : 'unavailable'}; `
+          + `signal=${/^SIG[A-Z]+$/.test(value?.signal) ? value.signal : 'none'}.`);
+      }
+      if (boundary === 'cmd.exe -> npm.cmd') lines.push('Diagnostic gap: npm process exit is not observed independently of the Windows command wrapper.');
       if (Array.isArray(invocation.selectors)) lines.push(`Selected inputs (up to 100): ${invocation.selectors.slice(0, 100).map(diagnosticTestFile).join(', ') || 'full suite or no file selectors'}`);
     } catch {
       lines.push('Diagnostic gap: invocation metadata unavailable; launcher completion is unverified.');
@@ -71,6 +88,7 @@ export async function collectTestDiagnostics(root, {
       if (!Array.isArray(run.activeModules) || !Array.isArray(run.completedModules)
         || !Number.isInteger(run.completedCount) || !Number.isInteger(run.errorCount)) throw Error('invalid progress');
       const reason = ['passed', 'failed', 'interrupted', 'not-finished'].includes(run.reason) ? run.reason : 'unavailable';
+      lines.push(processExitDiagnostic(run));
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);

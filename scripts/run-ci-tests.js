@@ -11,7 +11,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
+import { diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
@@ -162,6 +162,7 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
         throw new Error('invalid run report schema');
       }
       lines.push(`Vitest run: reason=${run.reason}, exitCode=${run.exitCode}, unhandledErrors=${run.errorCount}`);
+      lines.push(processExitDiagnostic(run));
       if (run.teardownTimeout) lines.push('Vitest teardown timed out.');
       if (run.errors.length) lines.push(`Vitest unhandled errors (up to 10):\n${run.errors.slice(0, 10).map(error => error.slice(0, 8000)).join('\n')}`);
     } catch {
@@ -259,7 +260,6 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     selectors: extraArgs.filter(arg => !arg.startsWith('-')).slice(0, 100)
       .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
   };
-  persistTestDiagnostic(invocationPath, invocation);
   const args = ['run', script, '--prefix', scope];
   args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
     `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
@@ -267,6 +267,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   // `shell:false` and throws EINVAL, so this script could never run on a
   // Windows checkout. See server/lib/bufferedSpawn.js.
   const { command, args: spawnArgs } = prepareCliSpawn('npm', args, env);
+  invocation.commandBoundary = command === 'cmd.exe' ? 'cmd.exe -> npm.cmd' : 'direct npm process';
+  persistTestDiagnostic(invocationPath, invocation);
   return new Promise((resolve) => {
     // npm is a launcher, not the entire test tree. Give this invocation its
     // own POSIX group; Windows killProcessTree uses taskkill /T instead. The
@@ -319,6 +321,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     child.stderr.on('data', (chunk) => tee(process.stderr, chunk));
     // A spawn error also emits close. Settle only there, after the pipes close.
     child.on('error', (error) => { spawnError = error; });
+    let childExit = null;
+    child.on('exit', (code, signal) => { childExit = { code, signal }; });
     const finish = (code, signal) => {
       if (settled) return;
       settled = true;
@@ -333,7 +337,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       process.removeListener('SIGTERM', onSigterm);
       abortSignal?.removeEventListener('abort', onAbort);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
-      persistTestDiagnostic(invocationPath, { ...invocation, completed: !cleanupUnverified, status, signal: signal ?? interrupted ?? null });
+      persistTestDiagnostic(invocationPath, { ...invocation, completed: !cleanupUnverified, status, signal: signal ?? interrupted ?? null,
+        childExit, childClose: { code, signal } });
       if (status !== 0) {
         console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
         console.error(structuredFailureDiagnostics(reportPath, runReportPath));
