@@ -1,7 +1,13 @@
 /**
- * Task Parser for TASKS.md format
+ * Task Parser for the Markdown task format
  *
- * Parses markdown task files with the following format:
+ * The CoS task queues are rows in `cos_tasks` now. This format survives as two
+ * things: a task's STORED FORM (`lib/cosTaskRows.js` normalizes every task by
+ * round-tripping it through one row, which is why scalar metadata reads back as
+ * strings; comments elsewhere that mention a "TASKS.md round-trip" mean that),
+ * and the input of db-migration 018, the only code that reads whole task files.
+ *
+ * Parses markdown task text with the following format:
  *
  * # Tasks
  *

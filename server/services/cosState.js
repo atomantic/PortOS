@@ -90,8 +90,6 @@ export function withStateLock(fn) {
 export const withConfigLock = createFileWriteQueue();
 
 export const DEFAULT_CONFIG = {
-  userTasksFile: 'data/TASKS.md',
-  cosTasksFile: 'data/COS-TASKS.md',
   goalsFile: 'GOALS.md',
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,

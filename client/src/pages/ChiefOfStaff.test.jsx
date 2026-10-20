@@ -769,25 +769,6 @@ describe('ChiefOfStaff task-change subscriptions', () => {
 
   const renderSettledTasksTab = () => renderSettledAt('tasks');
 
-  it('renders a newly queued system task straight off the watcher event', async () => {
-    await renderSettledTasksTab();
-    await waitFor(() => expect(api.getCosTasks).toHaveBeenCalled());
-    const before = api.getCosTasks.mock.calls.length;
-
-    const handleCosTasksChanged = getSocketHandler('cos:tasks:cos:changed');
-    expect(handleCosTasksChanged).toBeTypeOf('function');
-    await act(async () => {
-      handleCosTasksChanged({
-        exists: true,
-        tasks: [{ id: 'cos-task-1', description: 'Example scheduled task', status: 'pending', metadata: {} }],
-      });
-    });
-
-    expect(await screen.findByText('Example scheduled task')).toBeInTheDocument();
-    // The event carries the whole list, so it must not cost a round trip.
-    expect(api.getCosTasks.mock.calls.length).toBe(before);
-  });
-
   it('renders a submitted user task before the follow-up refresh resolves', async () => {
     await renderSettledTasksTab();
     await screen.findByRole('button', { name: 'Add test task' });

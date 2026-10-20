@@ -59,12 +59,14 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
 }));
 
 import { addTask, updateTask, challengeTask, resolveTaskChallenge, getTaskById, __resetTaskCache } from './cosTaskStore.js';
+import { __resetCosTaskRepository } from './cosTaskRepository.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 import { withStateLock } from './cosState.js';
 import { prepareAgentSpawn } from './agentSpawnPreparation.js';
 const { dequeueNextTask } = await vi.importActual('./cos.js');
 
 beforeEach(() => {
+  __resetCosTaskRepository();
   __resetTaskCache();
   activeAgents.clear();
   runnerAgents.clear();

@@ -1,19 +1,18 @@
 # Chief of Staff
 
-Autonomous agent manager that watches task files, spawns sub-agents, and maintains system health.
+Autonomous agent manager that works the task queues, spawns sub-agents, and maintains system health.
 
 ## Architecture
 
-- **Task Parser** (`server/lib/taskParser.js`): Parses TASKS.md and COS-TASKS.md formats
+- **Task Store** (`server/services/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cosTaskRepository.js` is the persistence layer
 - **CoS Service** (`server/services/cos.js`): State management, health monitoring, task evaluation
-- **Task Watcher** (`server/services/taskWatcher.js`): File watching with chokidar
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
 - **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
 
 ## Features
 
-1. **Dual Task Lists**: User tasks (TASKS.md) and system tasks (COS-TASKS.md)
+1. **Dual Task Lists**: User tasks and system tasks, both stored in `cos_tasks`
 2. **Autonomous Execution**: Auto-approved tasks run without user intervention
 3. **Approval Workflow**: Tasks marked APPROVAL require user confirmation
 4. **System Health Monitoring**: PM2 process checks, memory usage, error detection

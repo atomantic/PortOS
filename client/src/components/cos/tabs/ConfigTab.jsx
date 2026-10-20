@@ -5,7 +5,6 @@ import {
   Brain,
   Database,
   ExternalLink,
-  FileText,
   Gauge,
   Palette,
   Server,
@@ -555,22 +554,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
                   <span className="ml-2 break-all text-port-text-muted">{mcp.command} {mcp.args?.join(' ')}</span>
                 </div>
               )) : <span className="text-xs text-port-text-muted">No MCP servers configured</span>}
-            </div>
-          </div>
-          <div className="rounded-lg border border-port-border bg-port-card p-4">
-            <h5 className="text-sm font-medium text-port-text">Task files</h5>
-            <p className="mt-1 text-xs text-port-text-muted">Editable Markdown queues. Changes made in these files are picked up automatically.</p>
-            <div className="mt-3 space-y-2 text-xs">
-              <div className="flex items-center gap-2 rounded-md bg-port-bg px-3 py-2">
-                <FileText size={14} className="text-port-text-muted" />
-                <span className="text-port-text-muted">User</span>
-                <span className="ml-auto font-mono text-port-text">{config?.userTasksFile || 'TASKS.md'}</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-md bg-port-bg px-3 py-2">
-                <FileText size={14} className="text-port-text-muted" />
-                <span className="text-port-text-muted">System</span>
-                <span className="ml-auto font-mono text-port-text">{config?.cosTasksFile || 'COS-TASKS.md'}</span>
-              </div>
             </div>
           </div>
         </div>

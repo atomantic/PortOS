@@ -6,7 +6,7 @@ import * as api from '../../../services/api';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatDurationMs } from '../../../utils/formatters';
 
-const RESOURCE_EVENTS = ['cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:cos:changed'];
+const RESOURCE_EVENTS = ['cos:tasks:changed'];
 
 // Auto-fix telemetry (issue #2328). Self-fetches the aggregated
 // GET /api/autofix/metrics (derived server-side from persisted

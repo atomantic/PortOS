@@ -90,7 +90,7 @@ npm run pm2:restart
 
 `setup:data` (`scripts/setup-data.js`) creates `data/` from `data.reference/` when it is absent. Otherwise it copies only the missing files, adds new starter entries to `providers.json` and the prompt configs without touching yours, and expands `__PORTOS_ROOT__` in `apps.json`. It also skips any path a migration derives from your own records (`scripts/lib/migrationOwnedPaths.js`). Pending migrations run when the server boots.
 
-**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
+**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
 
 ### Dynamic import callback missing after profiling
 
@@ -379,15 +379,11 @@ Still never run `npm install` in a worktree.
 
 ### Tasks Not Being Picked Up
 
-**Symptom**: Added tasks to TASKS.md but CoS ignores them.
+**Symptom**: Added a task but CoS ignores it.
 
 **Solution**:
-1. Verify task format matches expected syntax:
-   ```markdown
-   ## Pending
-   - [ ] #task-001 | HIGH | Task description
-   ```
-2. Check file path in CoS config matches your TASKS.md location
+1. Add tasks through the UI or `POST /api/cos/tasks`; the queues are database rows (`cos_tasks`), and editing `data/TASKS.md` no longer does anything. After an update the old files are kept as `data/*.md.imported`.
+2. Check the task's status and approval flag in the Tasks tab (a task awaiting approval does not run).
 3. Trigger manual evaluation via UI
 
 ### Agent Writes Files Into the PortOS Folder Instead of My App

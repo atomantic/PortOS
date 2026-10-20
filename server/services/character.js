@@ -17,8 +17,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS, sleep } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
-import { getAllTasks } from './cosTaskStore.js';
-import { listArchivedSummaries } from './cosTaskArchive.js';
+import { listCompletedTaskSummaries } from './cosTaskRepository.js';
 import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
@@ -587,14 +586,9 @@ export async function syncJiraXP() {
 }
 
 export async function syncTaskXP() {
-  const { user: userTasks, cos: cosTasks } = await getAllTasks();
-  // Completed tasks past the file window live in the archive; one that finished
-  // before this sync ran must still earn its XP, so include them by summary.
-  const archived = await listArchivedSummaries();
-  const completed = [
-    ...[...(userTasks.tasks || []), ...(cosTasks.tasks || [])].filter(t => t.status === 'completed'),
-    ...archived,
-  ];
+  // Every completed task, not only the recent working set: one that finished
+  // before this sync ran must still earn its XP. Summaries carry no prompt bodies.
+  const completed = await listCompletedTaskSummaries();
 
   const { saved, result } = await mutateCharacter((character) => {
     character.syncedTaskIds ??= [];

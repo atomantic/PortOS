@@ -9,8 +9,7 @@ import { useSocketResource } from '../../hooks/useSocketResource.js';
 import * as api from '../../services/api.js';
 
 const QUEUE_EVENTS = [
-  'cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:user:added',
-  'cos:tasks:user:completed', 'cos:tasks:cos:changed',
+  'cos:tasks:changed',
   'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed',
 ];
 

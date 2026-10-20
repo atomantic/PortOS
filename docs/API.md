@@ -269,7 +269,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | POST | `/cos/tools/call` | Execute one schema-validated semantic tool with server-derived authority and idempotency |
 | GET | `/cos/tools/calls/:requestId` | Read a retained normalized tool result |
 | PUT | `/cos/config` | Update configuration |
-| GET | `/cos/tasks` | Bounded task list: all non-completed tasks plus the first 25 completed (`completedCount`, `completedNextCursor`); `view=queue`, `view=completed` (paged), `view=full` (everything the task files hold: the open queue plus the recent completed window; completed tasks older than that move to the archive and page through `view=completed`) |
+| GET | `/cos/tasks` | Bounded task list: all non-completed tasks plus the first 25 completed (`completedCount`, `completedNextCursor`); `view=queue`, `view=completed` (paged), `view=full` (the working set: the open queue plus completed tasks from the last 3 days and the newest 100; older completed history pages through `view=completed`); `limit`/`offset` window the working set |
 | GET | `/cos/tasks/:id` | One task as stored plus the queue it lives in: `{ task, source: 'user' \| 'internal' }`; 404 when unknown |
 | POST | `/cos/evaluate` | Force task evaluation |
 | GET | `/cos/health` | Get health status |

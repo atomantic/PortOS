@@ -6,7 +6,6 @@ import { persistentMindMaintainerSchema } from '../lib/persistentMindMaintainer.
 import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
-import * as taskWatcher from '../services/taskWatcher.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -30,8 +29,6 @@ const pauseSchema = z.object({
 });
 
 export const cosConfigSchema = z.object({
-  userTasksFile: z.string().optional(),
-  cosTasksFile: z.string().optional(),
   goalsFile: z.string().optional(),
   healthCheckIntervalMs: z.number().int().min(1000).optional(),
   maxConcurrentAgents: z.number().int().min(1).optional(),
@@ -131,14 +128,12 @@ router.get('/', asyncHandler(async (req, res) => {
 // POST /api/cos/start - Start CoS daemon
 router.post('/start', asyncHandler(async (req, res) => {
   const result = await cos.start();
-  await taskWatcher.startWatching();
   res.json(result);
 }));
 
 // POST /api/cos/stop - Stop CoS daemon
 router.post('/stop', asyncHandler(async (req, res) => {
   const result = await cos.stop();
-  await taskWatcher.stopWatching();
   res.json(result);
 }));
 

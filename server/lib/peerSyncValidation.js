@@ -366,10 +366,10 @@ export const peerCosHistoryManifestSchema = z.object({
 }).strict();
 
 // --- Live CoS task-list + claim-metadata federation (#1712) --------------
-// A full-sync peer advertises its live task backlog (both the user TASKS.md and
-// the internal COS-TASKS.md) at GET /api/peer-sync/cos-tasks; a receiver (only
+// A full-sync peer advertises its live task backlog (both the user and the
+// internal queue) at GET /api/peer-sync/cos-tasks; a receiver (only
 // for peers it flags fullSync) runs a claim-aware per-task LWW merge into its own
-// task files (see cosTaskStore.mergePeerTasks). Unlike the cos-history archives
+// task queues (see cosTaskStore.mergePeerTasks). Unlike the cos-history archives
 // this is NOT byte replication — both peers mutate the files live and each task
 // carries claim/lease metadata (#1563), so the merge unions by id and respects
 // `leaseExpiresAt` so a peer's fresh claim is never clobbered.

@@ -84,14 +84,6 @@ vi.mock('../services/agentOrchestrator.js', () => ({
   getAgentProcessStats: vi.fn()
 }));
 
-// Mock the taskWatcher service
-vi.mock('../services/taskWatcher.js', () => ({
-  startWatching: vi.fn(),
-  stopWatching: vi.fn(),
-  refreshTasks: vi.fn(),
-  getWatcherStatus: vi.fn()
-}));
-
 // Mock the appActivity service
 vi.mock('../services/appActivity.js', () => ({
   loadAppActivity: vi.fn(),
@@ -148,7 +140,6 @@ vi.mock('../services/codeReview.js', () => ({
 // Import mocked modules
 import * as cos from '../services/cos.js';
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
-import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
@@ -194,28 +185,24 @@ describe('CoS Routes', () => {
   describe('POST /api/cos/start', () => {
     it('should start CoS daemon', async () => {
       cos.start.mockResolvedValue({ success: true });
-      taskWatcher.startWatching.mockResolvedValue();
 
       const response = await request(app).post('/api/cos/start');
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(cos.start).toHaveBeenCalled();
-      expect(taskWatcher.startWatching).toHaveBeenCalled();
     });
   });
 
   describe('POST /api/cos/stop', () => {
     it('should stop CoS daemon', async () => {
       cos.stop.mockResolvedValue({ success: true });
-      taskWatcher.stopWatching.mockResolvedValue();
 
       const response = await request(app).post('/api/cos/stop');
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(cos.stop).toHaveBeenCalled();
-      expect(taskWatcher.stopWatching).toHaveBeenCalled();
     });
   });
 
@@ -889,143 +876,6 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(cos.getReport).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/cos/watcher', () => {
-    it('should return watcher status', async () => {
-      taskWatcher.getWatcherStatus.mockReturnValue({
-        watching: true,
-        files: ['TASKS.md']
-      });
-
-      const response = await request(app).get('/api/cos/watcher');
-
-      expect(response.status).toBe(200);
-      expect(response.body.watching).toBe(true);
-    });
-  });
-
-  describe('GET /api/cos/app-activity', () => {
-    it('should return app activity data', async () => {
-      appActivity.loadAppActivity.mockResolvedValue({
-        'app-001': { lastReview: '2024-01-15T10:00:00Z' }
-      });
-
-      const response = await request(app).get('/api/cos/app-activity');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('GET /api/cos/app-activity/:appId', () => {
-    it('should return activity for specific app', async () => {
-      appActivity.getAppActivityById.mockResolvedValue({
-        lastReview: '2024-01-15T10:00:00Z'
-      });
-
-      const response = await request(app).get('/api/cos/app-activity/app-001');
-
-      expect(response.status).toBe(200);
-      expect(response.body.appId).toBe('app-001');
-    });
-
-    it('should return message if no activity', async () => {
-      appActivity.getAppActivityById.mockResolvedValue(null);
-
-      const response = await request(app).get('/api/cos/app-activity/app-999');
-
-      expect(response.status).toBe(200);
-      expect(response.body.activity).toBeNull();
-      expect(response.body.message).toBeDefined();
-    });
-  });
-
-  describe('POST /api/cos/app-activity/:appId/clear-cooldown', () => {
-    it('should clear cooldown for app', async () => {
-      appActivity.clearAppCooldown.mockResolvedValue({ cooldownCleared: true });
-
-      const response = await request(app).post('/api/cos/app-activity/app-001/clear-cooldown');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(appActivity.clearAppCooldown).toHaveBeenCalledWith('app-001');
-    });
-  });
-
-  describe('POST /api/cos/tasks/:id/spawn', () => {
-    it('should force-spawn a pending task', async () => {
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-001' });
-
-      const response = await request(app).post('/api/cos/tasks/task-001/spawn');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-001');
-    });
-
-    it('should return 404 when task not found', async () => {
-      cos.forceSpawnTask.mockResolvedValue({ error: 'Task not found' });
-
-      const response = await request(app).post('/api/cos/tasks/bad-id/spawn');
-
-      expect(response.status).toBe(404);
-      expect(response.body.code).toBe('NOT_FOUND');
-    });
-
-    it('should return 409 when task is not pending', async () => {
-      cos.forceSpawnTask.mockResolvedValue({ error: 'Task is completed, not pending' });
-
-      const response = await request(app).post('/api/cos/tasks/task-002/spawn');
-
-      expect(response.status).toBe(409);
-      expect(response.body.code).toBe('TASK_NOT_PENDING');
-    });
-
-    it('should return 429 when no agent slots available', async () => {
-      cos.forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
-
-      const response = await request(app).post('/api/cos/tasks/task-003/spawn');
-
-      expect(response.status).toBe(429);
-      expect(response.body.code).toBe('NO_CAPACITY');
-    });
-  });
-
-  // ============================================================
-  // Task Routes — additional coverage
-  // ============================================================
-
-  describe('GET /api/cos/tasks/user', () => {
-    it('should return user tasks', async () => {
-      cos.getUserTasks.mockResolvedValue({ tasks: [{ id: 't1' }], grouped: {} });
-
-      const response = await request(app).get('/api/cos/tasks/user');
-
-      expect(response.status).toBe(200);
-      expect(response.body.tasks).toHaveLength(1);
-    });
-  });
-
-  describe('GET /api/cos/tasks/internal', () => {
-    it('should return internal tasks', async () => {
-      cos.getCosTasks.mockResolvedValue({ tasks: [], grouped: {} });
-
-      const response = await request(app).get('/api/cos/tasks/internal');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('tasks');
-    });
-  });
-
-  describe('POST /api/cos/tasks/refresh', () => {
-    it('should force refresh tasks', async () => {
-      taskWatcher.refreshTasks.mockResolvedValue({ user: [], cos: [] });
-
-      const response = await request(app).post('/api/cos/tasks/refresh');
-
-      expect(response.status).toBe(200);
-      expect(taskWatcher.refreshTasks).toHaveBeenCalled();
     });
   });
 

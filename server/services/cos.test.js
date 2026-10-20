@@ -2024,8 +2024,8 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
     vi.spyOn(state, 'loadState').mockResolvedValue({ agents: { latest, older } });
     vi.spyOn(identity, 'ensureInstanceId').mockResolvedValue('synthetic-instance');
     vi.spyOn(taskStore, 'getAllTasks').mockResolvedValue({
-      user: { exists: true, grouped: { in_progress: [{ id: taskId, status: 'in_progress', metadata: {} }] } },
-      cos: { exists: false },
+      user: { grouped: { in_progress: [{ id: taskId, status: 'in_progress', metadata: {} }] } },
+      cos: { grouped: {} },
     });
     vi.spyOn(taskStore, 'updateTask').mockResolvedValue({});
     vi.spyOn(agentManagement, 'handleOrphanedTask').mockResolvedValue({});

@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git.js';
 import * as cos from '../services/cos.js';
-import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
@@ -254,12 +253,6 @@ router.get('/tasks/:id', asyncHandler(async (req, res) => {
   const found = await cos.findTaskWithSource(req.params.id);
   if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
   res.json(found);
-}));
-
-// POST /api/cos/tasks/refresh - Force refresh tasks
-router.post('/tasks/refresh', asyncHandler(async (req, res) => {
-  const tasks = await taskWatcher.refreshTasks();
-  res.json(tasks);
 }));
 
 // POST /api/cos/tasks/reorder - Reorder tasks

@@ -53,7 +53,7 @@ vi.mock('./creativeDirector/recovery.js', () => ({
 
 vi.mock('./cosTaskStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })),
+  getAllTasks: vi.fn(async () => ({ user: { tasks: [], grouped: {} }, cos: { tasks: [], grouped: {} } })),
   getCosTasks: vi.fn(async () => ({ tasks: [] })),
 }));
 vi.mock('./instanceIdentity.js', async (importOriginal) => ({

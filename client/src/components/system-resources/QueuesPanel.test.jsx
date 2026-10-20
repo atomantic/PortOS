@@ -117,11 +117,10 @@ it('updates queues from task/agent events, coalesces reads and preserves stale d
 
   let resolveRead;
   api.getCosTasks.mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve; }));
-  await act(async () => socket.fire('cos:tasks:user:added'));
+  await act(async () => socket.fire('cos:tasks:changed'));
   await act(async () => {
     socket.fire('cos:agent:spawned');
     socket.fire('cos:tasks:changed');
-    socket.fire('cos:tasks:cos:changed');
   });
   expect(api.getCosTasks).toHaveBeenCalledTimes(2);
   api.getCosTasks.mockResolvedValue({ user: { tasks: [{ ...pending.user.tasks[0], spawning: true }] }, cos: { tasks: [] } });
@@ -131,7 +130,7 @@ it('updates queues from task/agent events, coalesces reads and preserves stale d
   expect(countCard('Agent pending')).toBe('0');
 
   api.getCosTasks.mockRejectedValueOnce(new Error('offline'));
-  await act(async () => socket.fire('cos:tasks:user:completed'));
+  await act(async () => socket.fire('cos:agent:completed'));
   expect(countCard('Agent running')).toBe('1');
   await act(async () => socket.fire('connect'));
   expect(api.getCosTasks).toHaveBeenCalledTimes(5);

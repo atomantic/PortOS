@@ -30,7 +30,7 @@ init-db.sql, each with a one-line reason.
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
 | `userActions.js` | `userActionsDdl` | Operator-action ledger — what the human did in the UI (machine-local) |
 | `reviewQueueTriage.js` | `reviewQueueTriageDdl` | Machine-local Review Hub presentation markers — snooze, optional dismissal, and delivery generation keyed by canonical action identity |
-| `cosTaskArchive.js` | `cosTaskArchiveDdl` | Machine-local archive of completed CoS tasks (full records, prompts included) moved out of `TASKS.md` / `COS-TASKS.md` |
+| `cosTasks.js` | `cosTasksDdl` | The CoS task queues, one row per task (stored form, queue order, completed-at window) plus a per-queue write version |
 | `cosAgentFeedback.js` | `cosAgentFeedbackDdl` | Durable machine-local references to completed manual CoS runs awaiting a rating (agent id + archive locator only) |
 | `aiGraph.js` | `aiGraphDdl` | AI provider connection graph — connections, harness bindings, executable route bindings (machine-local) |
 | `peerExecution.js` | `peerExecutionDdl` | Receiver-local permanent execution consumption and generation floors; no grants or federation |
@@ -52,7 +52,7 @@ init-db.sql, each with a one-line reason.
 
 ### Composer (`index.js`)
 
-- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTaskArchive` → `aiGraph` → `peerExecution`).
+- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `aiGraph` → `peerExecution`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `beeper` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).

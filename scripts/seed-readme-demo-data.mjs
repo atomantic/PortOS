@@ -8,6 +8,10 @@
  * empty directory, then overlays fake records that make the public UI pages
  * useful to inspect without exposing a real install.
  *
+ * The demo's tasks are Markdown files that db-migration 018 imports, so the demo
+ * server must start against a database that has not yet run it (a fresh,
+ * disposable one). An already-migrated database ignores them.
+ *
  * Usage:
  *   node scripts/seed-readme-demo-data.mjs --root /tmp/portos-readme-demo
  */
@@ -45,9 +49,11 @@ const writeJson = (relativePath, value) => {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 };
 
-// The task store resolves configured files relative to PATHS.root. Keep these
-// paths relative to the checkout so PORTOS_DATA_ROOT still points at the
-// disposable root when the server runs from this repository.
+// The task queues live in PostgreSQL. These Markdown files are the input of
+// db-migration 018, which imports them into whichever database the demo server
+// uses on its first boot; the migration resolves configured files relative to
+// PATHS.root, so keep these paths relative to the checkout and PORTOS_DATA_ROOT
+// still points at the disposable root when the server runs from this repository.
 const userTasksFile = relative(repoRoot, join(dataRoot, 'TASKS.md'));
 const cosTasksFile = relative(repoRoot, join(dataRoot, 'COS-TASKS.md'));
 

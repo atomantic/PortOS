@@ -456,12 +456,11 @@ describe('socket.js — initSocket', () => {
     compact.handlers['cos:subscribe']({ taskLists: 'invalidate' });
     compact.handlers['cos:subscribe'](); // another shared consumer must not widen it
     legacy.handlers['cos:subscribe']();
-    const payload = { tasks: [{ id: 'example', metadata: { prompt: 'large private prompt' } }] };
-    const forward = queueListeners.cos.find(([event]) => event === 'tasks:user:changed')[1];
-    forward(payload);
-    expect(compact.emitted).toContainEqual(['cos:tasks:user:changed', { invalidated: true }]);
-    expect(legacy.emitted).toContainEqual(['cos:tasks:user:changed', payload]);
+    const payload = { task: { id: 'example', status: 'in_progress', metadata: { prompt: 'large private prompt' } } };
     const forwardChange = queueListeners.cos.find(([event]) => event === 'tasks:changed')[1];
+    forwardChange(payload);
+    expect(compact.emitted).toContainEqual(['cos:tasks:changed', { invalidated: true }]);
+    expect(legacy.emitted).toContainEqual(['cos:tasks:changed', payload]);
     forwardChange({ task: { id: 'done', status: 'completed' } });
     expect(compact.emitted).toContainEqual(['cos:tasks:changed', { invalidated: true, completedChanged: true }]);
     forwardChange({ task: { id: 'live', status: 'in_progress' } });

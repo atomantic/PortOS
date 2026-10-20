@@ -258,7 +258,7 @@ describe('IssuesTab', () => {
     expect(screen.queryByRole('link', { name: /Completed/ })).not.toBeInTheDocument();
   });
 
-  it('applies every task from a user task-list update', async () => {
+  it('applies every task update that arrives in the same tick', async () => {
     const SECOND_ISSUE = {
       ...ISSUE,
       number: 43,
@@ -276,12 +276,10 @@ describe('IssuesTab', () => {
     fireEvent.click(claimButtons[1]);
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledTimes(2));
 
-    act(() => socketHandlers.get('cos:tasks:user:changed')({
-      tasks: [
-        { id: 'task-1', status: 'completed' },
-        { id: 'task-2', status: 'completed' },
-      ],
-    }));
+    act(() => {
+      socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-1', status: 'completed' } });
+      socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-2', status: 'completed' } });
+    });
 
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Completed/ })).toHaveLength(2));
   });
@@ -290,7 +288,7 @@ describe('IssuesTab', () => {
     const listenerCountBeforeMount = socketHandlers.size;
     const { unmount } = await renderTab();
 
-    expect(socketHandlers.size).toBe(listenerCountBeforeMount + 6);
+    expect(socketHandlers.size).toBe(listenerCountBeforeMount + 4);
     unmount();
     expect(socketHandlers.size).toBe(listenerCountBeforeMount);
   });
