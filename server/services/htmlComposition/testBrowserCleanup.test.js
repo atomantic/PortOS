@@ -152,7 +152,7 @@ describe('failure process observations', () => {
     const read = vi.fn();
     const threads = vi.fn();
     const resources = { cpus: vi.fn(), usage: vi.fn(), disk: vi.fn() };
-    expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'darwin', read, threads, ...resources })).toBe('os=unsupported');
+    expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'win32', read, threads, ...resources })).toBe('os=unsupported');
     expect(_testChromeProcessFacts({}, { platform: 'linux', read, threads, ...resources })).toBe('os=linux child=unavailable');
     expect(_testChromeProcessFacts({ pid: 123, exitCode: 0 }, { platform: 'linux', read, threads, ...resources })).toBe('os=linux child=settled');
     expect(_testChromeProcessFacts({ pid: 123, signalCode: 'SIGTERM' }, { platform: 'linux', read, threads, ...resources })).toBe('os=linux child=settled');
@@ -328,6 +328,31 @@ describe('test Chrome startup', () => {
     await expect(ready).rejects.toThrow('cpuAvg10=1.25 memoryAvg10=0 ioAvg10=3.5');
     await expect(ready).rejects.not.toThrow('example-secret');
     expectStartupClean(proc);
+  });
+
+  it('separates a never-spawned, early-exited and silent running macOS child without reading procfs', async () => {
+    const read = vi.fn();
+    const facts = owned => _testChromeProcessFacts(owned, { platform: 'darwin', read, now: () => performance.now() + 20000 });
+    const outcome = async (pid, act) => {
+      const proc = startingChild();
+      proc.pid = pid;
+      const rejected = _waitForTestChrome(proc, 20000, undefined, { observeProcess: facts }).catch(error => error.message);
+      act(proc);
+      await vi.advanceTimersByTimeAsync(20000);
+      expectStartupClean(proc);
+      return rejected;
+    };
+    const none = await outcome(undefined, () => {});
+    const exited = await outcome(123, proc => { proc.emit('spawn'); proc.exitCode = 3; proc.emit('exit', 3, null); });
+    const running = await outcome(123, proc => proc.emit('spawn'));
+    expect(none).toMatch(/did not start within 20000ms; no stderr; process: os=darwin spawned=no pid=no exit=running startElapsedMs=\d+$/);
+    expect(exited).toMatch(/exited before startup \(code 3, signal none; no stderr; process: os=darwin spawned=yes pid=yes exit=failed startElapsedMs=\d+\)$/);
+    expect(running).toMatch(/did not start within 20000ms; no stderr; process: os=darwin spawned=yes pid=yes exit=running startElapsedMs=\d+$/);
+    // A child this wait never observed has no startup record; exit categories still hold.
+    expect(facts({ pid: 123, signalCode: 'SIGKILL' })).toBe('os=darwin spawned=unavailable pid=yes exit=signaled startElapsedMs=unavailable');
+    expect(facts({ pid: 123, exitCode: 0 })).toContain('exit=clean');
+    expect([none, running].join('\n')).not.toMatch(/123/);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('captures capped syscall categories only at failure, without leaking registers or inventing denied observations', async () => {
