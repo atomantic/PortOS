@@ -98,6 +98,8 @@ let lastInstalledModelsError = null
 let lastCheckAt = null
 let _managedProcess = null
 let managedProcessPid = null
+// `{ signature, promise }` of the `startServer` spawn currently in flight.
+let startInFlight = null
 // What PortOS knows about the Ollama daemon that is up RIGHT NOW. Every field
 // describes ONE live process, so the whole record is written by `recordDaemon`
 // and dropped by `forgetDaemon` — "which env" and "which process" can never
@@ -440,10 +442,31 @@ async function terminateManagedProcess() {
  * second, context-only parameter: two spellings of one variable would need a
  * precedence rule, and the latches below would have to read both.
  *
+ * Single-flight per launch env: concurrent callers asking for the same env
+ * share one spawn and one result. Two racing `ollama serve` children left the
+ * loser to fail its bind and exit, and its exit cleared `managedProcessPid`,
+ * leaving the surviving daemon untracked and unstoppable on Windows. A caller
+ * asking for a DIFFERENT env waits for the in-flight start, then runs its own,
+ * which sees the daemon up and reports `alreadyRunning` exactly as a
+ * sequential call would, instead of claiming a start under an env it never got.
+ *
  * @param {{ env?: Record<string, string> }} [options]
  * @returns {Promise<{ success: boolean, running?: boolean, alreadyRunning?: boolean, pid?: number, error?: string }>}
  */
 async function startServer({ env = null } = {}) {
+  const signature = envSignature(env)
+  while (startInFlight) {
+    if (startInFlight.signature === signature) return startInFlight.promise
+    await startInFlight.promise.catch(() => {})
+  }
+  const promise = spawnServer(env).finally(() => {
+    if (startInFlight?.promise === promise) startInFlight = null
+  })
+  startInFlight = { signature, promise }
+  return promise
+}
+
+async function spawnServer(env) {
   if (await checkOllamaAvailable(true)) {
     return { success: true, running: true, alreadyRunning: true }
   }

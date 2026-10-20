@@ -344,10 +344,24 @@ export function createOnDemandDaemon({
    * Resolves `{ ready, reason }` rather than throwing: a caller in front of an
    * inference request wants to report "could not be started" alongside its own
    * error, not have a lazy start unwind its stack.
+   *
+   * Single-flight: concurrent callers (two CoS agents, an agent plus a voice
+   * turn) share one wake. Without it each saw the daemon offline and called
+   * `start`, whose `pm2 delete` killed the sibling launch, so both failed with
+   * "exited while loading". Joining is safe because the launch line comes from
+   * live/saved state, not from the caller. The slot clears on settle, so a later
+   * wake after another stop starts the daemon again.
    */
-  const ensureRunning = async () => {
-    markUsed();
+  let wakeInFlight = null;
 
+  const ensureRunning = () => {
+    markUsed();
+    if (wakeInFlight) return wakeInFlight;
+    wakeInFlight = wake().finally(() => { wakeInFlight = null; });
+    return wakeInFlight;
+  };
+
+  const wake = async () => {
     const pm2Status = await getStatusStrict();
     if (pm2Status?.status === 'online') return { ready: true, reason: null };
 

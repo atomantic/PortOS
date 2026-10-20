@@ -151,6 +151,38 @@ describe('ollamaManager startup failures', () => {
   })
 })
 
+// Two racing `ollama serve` children left the loser's exit clearing the
+// tracked pid, so the surviving daemon became unstoppable on Windows.
+describe('ollamaManager concurrent starts', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('shares one spawn for the same env, and a different env reports the running daemon instead of a start', async () => {
+    const state = { up: false }
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (!state.up) throw new Error('ECONNREFUSED')
+      const body = { version: '0.32.13' }
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+    }))
+    const { spawn } = await import('../lib/childProcess.js')
+    spawn.mockReset().mockImplementation(() => {
+      state.up = true
+      return { pid: 4242, stderr: { on: () => {} }, on: () => {}, unref: () => {} }
+    })
+    const { startServer } = await loadManager()
+
+    const [a, b, other] = await Promise.all([
+      startServer(),
+      startServer({ env: {} }),
+      startServer({ env: { OLLAMA_FLASH_ATTENTION: '1' } }),
+    ])
+
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(a).toEqual({ success: true, running: true, pid: 4242 })
+    expect(b).toBe(a)
+    expect(other).toEqual({ success: true, running: true, alreadyRunning: true })
+  })
+})
+
 describe('ollamaManager model capability sentinel', () => {
   afterEach(() => vi.unstubAllGlobals())
 

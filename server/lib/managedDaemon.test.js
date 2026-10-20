@@ -170,6 +170,28 @@ describe('createOnDemandDaemon', () => {
     expect(probe).toHaveBeenCalledWith('http://127.0.0.1:9200/v1');
   });
 
+  // A second concurrent wake used to call `start` too; its `pm2 delete` killed
+  // the first launch and both callers failed with "exited while loading".
+  it('shares one start between concurrent wakes and starts again after the wake settles', async () => {
+    let finish;
+    const start = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const { onDemand } = makeOnDemand({ start });
+
+    const first = onDemand.ensureRunning();
+    const second = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    finish({ online: false, error: new Error('port bind failed') });
+
+    expect(await first).toEqual({ ready: false, reason: 'port bind failed' });
+    expect(await second).toEqual({ ready: false, reason: 'port bind failed' });
+    expect(start).toHaveBeenCalledTimes(1);
+
+    const third = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    finish({ online: true });
+    expect(await third).toEqual({ ready: true, reason: null });
+  });
+
   it('waitForReady reports the shared exit-tail diagnosis when the process dies before answering', async () => {
     const { onDemand, setStatus } = makeOnDemand({
       start: vi.fn(async () => ({ online: false, endpoint: 'http://127.0.0.1:9000/v1' })),
