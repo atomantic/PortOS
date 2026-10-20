@@ -51,7 +51,7 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
   beforeEach(() => {
     getDataOverview.mockReset().mockResolvedValue(overview);
     getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [] });
-    getTombstoneSweepStatus.mockClear();
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
     socket.emit.mockClear();
   });
 
@@ -61,6 +61,22 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
     const button = screen.getByRole('button', { name: 'Clean up deleted records now' });
     expect(button).toHaveAttribute('title', expect.stringMatching(/24 hours/));
     expect(screen.queryByText(/tombstone|GC|orchestrator|acked|snapshot-mode/i)).not.toBeInTheDocument();
+  });
+
+  it('names a paused peer and says to resume or remove it, not to turn it off', async () => {
+    getTombstoneSweepStatus.mockResolvedValue({
+      refused: ['universe', 'series', 'issue', 'mediaCollection'],
+      heldByPausedPeers: [{ instanceId: 'peer-paused', kinds: ['universe', 'series', 'issue'] }],
+    });
+    render(<DataManager />);
+    const note = await screen.findByText(/Paused peer peer-paused is holding universes, series, issues/);
+    expect(note).toHaveTextContent('Resume or remove the peer to release them.');
+    expect(note).toHaveTextContent('Pausing does not release the hold.');
+    expect(note).not.toHaveTextContent('turn the peer off');
+    const button = screen.getByRole('button', { name: 'Clean up deleted records now' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', expect.stringMatching(/Resume or remove the peer to release them/));
+    expect(button).not.toHaveAttribute('title', expect.stringMatching(/turn the peer off/));
   });
 
   it('subscribes to the instances room on mount', async () => {

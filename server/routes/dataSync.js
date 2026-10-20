@@ -76,6 +76,9 @@ const tombstoneSweepBodySchema = z.object({
   graceMs: z.number().int().min(0).max(TOMBSTONE_GRACE_MS).optional(),
 }).strict();
 
+// `heldByPausedPeers` names who is holding deletes. The Data Manager (and the
+// gc-tombstones CLI) tell the operator to resume or remove that peer — pausing
+// does not release the hold, and neither does this route.
 router.get('/tombstones/status', asyncHandler(async (req, res) => {
   const status = await getSweepStatus();
   res.json(status);

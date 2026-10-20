@@ -32,9 +32,38 @@ import { sweepTombstones, getSweepStatus } from '../server/services/sharing/tomb
 
 // Mirrors `TOMBSTONE_KIND_PLURAL` in the Instances UI so the CLI output
 // matches the toast wording. Dedupe handles the series/issue cohort.
-const KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
+const KIND_PLURAL = {
+  universe: 'universes',
+  series: 'series',
+  issue: 'issues',
+  mediaCollection: 'media collections',
+  author: 'authors',
+  artist: 'artists',
+  album: 'albums',
+  track: 'tracks',
+  creativeDirectorProject: 'creative director projects',
+  moodBoard: 'mood boards',
+  fableLoom: 'looms',
+  writersRoomWork: 'writers room works',
+  writersRoomFolder: 'writers room folders',
+  writersRoomExercise: 'writers room exercises',
+  musicVideoProject: 'music videos',
+  commissionFeedback: 'commission feedback',
+  creativeCommission: 'commissions',
+  deck: 'decks',
+};
 const KIND_SINGULAR = { universe: 'universe', series: 'series', issue: 'issue', mediaCollection: 'media collection' };
 const labelKinds = (kinds) => [...new Set(kinds.map((k) => KIND_PLURAL[k] ?? k))].join(', ');
+
+// Same sentence as Data Manager: resume or remove releases a paused peer's
+// deletes. Pausing does not.
+function pausedHoldSentence(held) {
+  if (!Array.isArray(held) || held.length === 0) return '';
+  const ids = held.map((row) => row?.instanceId).filter(Boolean);
+  const kinds = [...new Set(held.flatMap((row) => (Array.isArray(row?.kinds) ? row.kinds : [])))];
+  const who = ids.length === 1 ? `Paused peer ${ids[0]} is` : `Paused peers ${ids.join(', ')} are`;
+  return `${who} holding ${labelKinds(kinds) || 'deleted records'}. Resume or remove the peer to release them.`;
+}
 const countPhrase = (count, key) => `${count} ${count === 1 ? KIND_SINGULAR[key] : KIND_PLURAL[key]}`;
 
 function parseArgs(argv) {
@@ -59,10 +88,12 @@ async function main() {
   // the actual prune would write to) so we deliberately don't preview them
   // — too easy to misread "would prune N" as "did prune N".
   const status = await getSweepStatus();
+  const heldSentence = pausedHoldSentence(status.heldByPausedPeers);
+  if (heldSentence) console.log(`⚠️  ${heldSentence}`);
   if (status.refused.length > 0) {
-    console.log(`⚠️  Still waiting on ${labelKinds(status.refused)}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off.`);
+    console.log(`⚠️  Still waiting on ${labelKinds(status.refused)}: open Instances, select the peer, and turn on that category under Sync Categories so it receives the deletion, or remove the peer. Pausing does not release the hold.`);
     console.log('   Cleanup stays off so a peer that has not received the deletion cannot bring the record back.');
-  } else {
+  } else if (!heldSentence) {
     console.log('✅ No refusals — deleted-record cleanup can run for every kind');
   }
 
@@ -80,7 +111,7 @@ async function main() {
   if (result.collections) parts.push(countPhrase(result.collections, 'mediaCollection'));
   console.log(`\n🗑️  Pruned ${parts.join(' / ')}`);
   if (result.refused.length > 0) {
-    console.log(`⚠️  Skipped ${labelKinds(result.refused)}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off.`);
+    console.log(`⚠️  Skipped ${labelKinds(result.refused)}: open Instances, select the peer, and turn on that category under Sync Categories so it receives the deletion, or remove the peer. Pausing does not release the hold.`);
   }
 }
 

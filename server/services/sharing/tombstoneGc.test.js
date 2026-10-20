@@ -549,12 +549,11 @@ describe('sweepTombstones — peers behind', () => {
     expect(firstCallArgs).not.toContain('peer-ghost');
   });
 
-  it('ignores subscriptions for disabled or globally-silenced peers (cursor stall)', async () => {
-    // Regression: peerIdsSubscribedToKind must mirror snapshotPeerIdsForKind
-    // — disabled peers (enabled:false) and globally-silenced peers
-    // (syncEnabled:false) receive no pushes, so their ack cursor never
-    // advances. Including them in getMinAckAcrossPeers would freeze the
-    // cutoff at their last ack (often 0) and stall GC indefinitely.
+  it('keeps paused peers in the ack cohort (a disable must not drop deletes they never received)', async () => {
+    // enabled:false and syncEnabled:false receive nothing until resume.
+    // Dropping them here let GC prune a tombstone the peer never got, and
+    // the record came back on the next sync. Removal (absent from the
+    // registry) is what releases the hold — see the test below that.
     mockSubs({
       universe: [
         { peerId: 'peer-disabled' },
@@ -570,9 +569,129 @@ describe('sweepTombstones — peers behind', () => {
     getMinAckAcrossPeers.mockResolvedValue(NOW - 1000);
     await sweepTombstones({ now: NOW });
     const firstCallArgs = getMinAckAcrossPeers.mock.calls[0][0];
-    expect(firstCallArgs).toEqual(['peer-active']);
-    expect(firstCallArgs).not.toContain('peer-disabled');
-    expect(firstCallArgs).not.toContain('peer-silenced');
+    expect(firstCallArgs).toEqual(expect.arrayContaining(['peer-disabled', 'peer-silenced', 'peer-active']));
+    expect(new Set(firstCallArgs).size).toBe(firstCallArgs.length);
+  });
+});
+
+describe('sweepTombstones — paused peers stay in the GC cohort (#12595)', () => {
+  const deletedAt = NOW - 1000;
+  const confirmedAt = deletedAt - 60_000;
+
+  it.each([
+    ['enabled:false', { instanceId: 'peer-paused', enabled: false }],
+    ['syncEnabled:false', { instanceId: 'peer-paused', enabled: true, syncEnabled: false }],
+  ])('does not prune a universe tombstone a paused peer (%s) has not confirmed, even with graceMs:0', async (_label, peer) => {
+    mockSubs({
+      universe: [{ peerId: 'peer-paused', lastConfirmedPushedAt: confirmedAt }],
+    });
+    getPeers.mockResolvedValue([peer]);
+    // The per-peer cursor can already be past this delete (a later record
+    // advanced it). The confirm floor on the paused peer's row is the hold.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    expect(cutoff).toBe(confirmedAt + 1);
+    expect(deletedAt < cutoff).toBe(false);
+    expect(getMinAckAcrossPeers.mock.calls[0][0]).toContain('peer-paused');
+  });
+
+  it('prunes that tombstone once the paused peer is removed from the registry', async () => {
+    mockSubs({
+      universe: [{ peerId: 'peer-paused', lastConfirmedPushedAt: confirmedAt }],
+    });
+    getPeers.mockResolvedValue([]);
+    getMinAckAcrossPeers.mockResolvedValue(Infinity);
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    expect(deletedAt < cutoff).toBe(true);
+    expect(getMinAckAcrossPeers).toHaveBeenCalledWith([]);
+  });
+
+  it('refuses universe when a disabled snapshot peer has the category and no subscription', async () => {
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-paused', enabled: false, syncCategories: { universe: true } },
+    ]);
+    const result = await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(result.refused).toContain('universe');
+    expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
+    expect(pruneCollectionItemRemovals).not.toHaveBeenCalled();
+  });
+
+  it('refuses every snapshot kind for a paused full-sync peer with no per-record subscription', async () => {
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-paused', enabled: false, syncEnabled: false, fullSync: true, syncCategories: {} },
+    ]);
+    const result = await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(result.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
+  });
+
+  it('still floors a paused peer\'s never-confirmed row to createdAt', async () => {
+    const createdAt = NOW - 30 * 60 * 1000;
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-paused', enabled: false }]);
+    mockSubs({
+      universe: [{
+        peerId: 'peer-paused',
+        recordId: 'u-new',
+        createdAt: new Date(createdAt).toISOString(),
+        lastConfirmedPushedAt: null,
+      }],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(pruneTombstonedUniverses).toHaveBeenCalledWith(createdAt + 1);
+    expect(deletedAt < createdAt + 1).toBe(false);
+  });
+
+  it('a paused series subscriber still clamps issue tombstones to the series confirm floor', async () => {
+    const seriesStuckConfirm = NOW - 25 * 60 * 1000;
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-paused', enabled: true, syncEnabled: false }]);
+    mockSubs({
+      series: [{
+        peerId: 'peer-paused',
+        recordId: 's-A',
+        createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(),
+        lastConfirmedPushedAt: seriesStuckConfirm,
+      }],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const seriesCutoff = pruneTombstonedSeries.mock.calls[0][0];
+    const issueCutoff = pruneTombstonedIssues.mock.calls[0][0];
+    expect(seriesCutoff).toBe(seriesStuckConfirm + 1);
+    expect(issueCutoff).toBe(seriesCutoff);
+  });
+
+  it('a paused universe subscriber still holds collection item removals', async () => {
+    const minAck = NOW - 48 * 60 * 60 * 1000;
+    mockSubs({ universe: [{ peerId: 'peer-paused' }] });
+    getPeers.mockResolvedValue([{ instanceId: 'peer-paused', enabled: false }]);
+    getMinAckAcrossPeers.mockImplementation(async (peerIds) => (peerIds.includes('peer-paused') ? minAck : Infinity));
+    await sweepTombstones({ now: NOW });
+    expect(pruneCollectionItemRemovals).toHaveBeenCalledWith(minAck - TOMBSTONE_GRACE_MS + 1);
+  });
+
+  it('a paused musicVideoProject-only peer still holds the track bundle floor', async () => {
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-paused', enabled: false }]);
+    const createdAt = NOW - 30 * 60 * 1000;
+    mockSubs({
+      musicVideoProject: [{
+        peerId: 'peer-paused',
+        createdAt: new Date(createdAt).toISOString(),
+        lastConfirmedTrackBundleAtMs: null,
+      }],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(pruneTombstonedTracks).toHaveBeenCalledWith(createdAt + 1);
+    const trackAckCall = getMinAckAcrossPeers.mock.calls.find((call) => call[0].includes('peer-paused'));
+    expect(trackAckCall).toBeTruthy();
+    const status = await getSweepStatus({ now: NOW });
+    expect(status.heldByPausedPeers).toEqual([
+      { instanceId: 'peer-paused', kinds: ['track', 'musicVideoProject'] },
+    ]);
   });
 });
 
@@ -822,6 +941,7 @@ describe('getSweepStatus — dry-run for UI button gating', () => {
     ]);
     const result = await getSweepStatus({ now: NOW });
     expect(result.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
+    expect(result.heldByPausedPeers).toEqual([]);
     expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
     expect(pruneTombstonedSeries).not.toHaveBeenCalled();
     expect(pruneTombstonedIssues).not.toHaveBeenCalled();
@@ -834,7 +954,39 @@ describe('getSweepStatus — dry-run for UI button gating', () => {
 
   it('returns an empty refused list when every kind has an ack horizon', async () => {
     const result = await getSweepStatus({ now: NOW });
-    expect(result.refused).toEqual([]);
+    expect(result).toEqual({ refused: [], heldByPausedPeers: [] });
+  });
+
+  it('reports each paused peer and the kinds it holds, and omits active peers', async () => {
+    mockSubs({
+      universe: [{ peerId: 'peer-disabled', lastConfirmedPushedAt: NOW - 5000 }],
+      series: [{ peerId: 'peer-silenced', lastConfirmedPushedAt: NOW - 5000 }],
+      moodBoard: [{ peerId: 'peer-disabled', lastConfirmedPushedAt: NOW - 5000 }],
+    });
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-disabled', enabled: false },
+      { instanceId: 'peer-silenced', enabled: true, syncEnabled: false },
+      // Uncovered snapshot peer — refuses universe, but is not paused.
+      { instanceId: 'peer-active', enabled: true, syncEnabled: true, syncCategories: { universe: true } },
+    ]);
+    const status = await getSweepStatus({ now: NOW });
+    expect(status.heldByPausedPeers).toEqual([
+      { instanceId: 'peer-disabled', kinds: ['universe', 'moodBoard'] },
+      { instanceId: 'peer-silenced', kinds: ['series', 'issue'] },
+    ]);
+    expect(status.refused).toContain('universe');
+  });
+
+  it('reports a disabled snapshot peer that is refusing universe with no subscription', async () => {
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-paused', enabled: false, syncCategories: { universe: true } },
+    ]);
+    const status = await getSweepStatus({ now: NOW });
+    expect(status.refused).toContain('universe');
+    expect(status.heldByPausedPeers).toEqual([
+      { instanceId: 'peer-paused', kinds: ['universe'] },
+    ]);
   });
 });
 
@@ -899,13 +1051,14 @@ describe('sweepTombstones — resurrection safety against snapshot-mode peers', 
     expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
   });
 
-  it("ignores disabled snapshot-mode peers (can't resurrect from a disabled peer)", async () => {
+  it('refuses universe for a disabled snapshot peer (resume can still resurrect)', async () => {
     listPeerSubscriptions.mockResolvedValue([]);
     getPeers.mockResolvedValue([
       { instanceId: 'peer-a', enabled: false, syncCategories: { universe: true } },
     ]);
-    await sweepTombstones({ now: NOW });
-    expect(pruneTombstonedUniverses).toHaveBeenCalled();
+    const result = await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
+    expect(result.refused).toContain('universe');
   });
 
   it("ignores legacy peers with no syncCategories (they can't send universe/pipeline snapshots)", async () => {
