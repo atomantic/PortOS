@@ -4,6 +4,7 @@ import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, 
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import * as api from '../../../services/api';
 import { formatDateNumeric } from '../../../utils/formatters';
 import RepositorySourcePanel from './RepositorySourcePanel';
@@ -145,6 +146,9 @@ export default function GitTab({ appId, appName, repoPath }) {
   const [releasing, setReleasing] = useState(false);
   const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
   const [branches, setBranches] = useState([]);
+  // A failed branch read is kept apart from a repo that has no branches; a
+  // refresh failure keeps the last good list on screen beside the error row.
+  const [branchesError, setBranchesError] = useState(null);
   const [checkingOut, setCheckingOut] = useState(null);
   const [pushing, setPushing] = useState(null);
   const [syncing, setSyncing] = useState(null);
@@ -173,7 +177,7 @@ export default function GitTab({ appId, appName, repoPath }) {
 
     const promises = [
       api.getGitInfo(repoPath).catch(() => null),
-      api.getBranches(repoPath).catch(() => ({ branches: [] }))
+      api.getBranches(repoPath, { silent: true }).catch((error) => ({ error }))
     ];
     if (includeRemote) {
       promises.push(api.getRemoteBranches(repoPath).catch(() => null));
@@ -187,7 +191,12 @@ export default function GitTab({ appId, appName, repoPath }) {
     }
 
     setGitInfo(info);
-    setBranches(branchesResult?.branches || []);
+    if (branchesResult?.error) {
+      setBranchesError(branchesResult.error);
+    } else {
+      setBranchesError(null);
+      setBranches(branchesResult?.branches || []);
+    }
     setBranchComparison(comparison);
     setLoading(false);
 
@@ -945,7 +954,10 @@ export default function GitTab({ appId, appName, repoPath }) {
                       </div>
                     </div>
                   ))}
-                  {branches.length === 0 && (
+                  {branchesError && (
+                    <ListLoadError what="branches" error={branchesError} onRetry={() => loadGitData({ includeRemote: false })} retrying={loading} />
+                  )}
+                  {!branchesError && branches.length === 0 && (
                     <div className="text-gray-500 text-sm">No branches found</div>
                   )}
                 </div>

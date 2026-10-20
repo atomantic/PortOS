@@ -368,3 +368,25 @@ describe('GitTab shell terminal integration', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/shell?cwd=%2Fsrv%2Fexample-app');
   });
 });
+
+describe('GitTab branch read failure', () => {
+  it('shows an error row with Retry instead of "No branches found", then recovers', async () => {
+    api.getBranches.mockRejectedValueOnce(new Error('boom'));
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load branches');
+    expect(screen.queryByText('No branches found')).toBeNull();
+
+    api.getBranches.mockResolvedValue({ branches: [{ name: 'main', current: true }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('main');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('still renders the empty copy when the read succeeds with no branches', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+    expect(await screen.findByText('No branches found')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
