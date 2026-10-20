@@ -270,6 +270,10 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     if (updateResult?.error) {
       emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
     }
+    if (prep.cleanupReviewPinConsumed && (updateResult?.error || updateResult?.statusChanged)) {
+      await context.cleanupOnError('Failed to persist reviewed-head launch admission; retained checkout requires revalidation');
+      return null;
+    }
     if (!updateResult) {
       await context.cleanupOnError('Failed to update task status');
       return null;

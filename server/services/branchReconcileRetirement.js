@@ -1,4 +1,5 @@
 /** Review work is dispatchable; a review hold is never deletion authority. */
+import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
@@ -44,6 +45,7 @@ async function mergedPrUrl(app, branch, tip) {
 export async function prepareReconcileRetirements(app, result, deps = {}) {
   const candidates = [];
   const held = [];
+  const retired = [];
   const readPr = deps.readPr || mergedPrUrl;
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
   for (const branch of result.wip || []) {
@@ -59,14 +61,60 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       // The preview's policy gate requires completed successful legacy review
       // owners. An empty policy set after a concurrent change is not that proof.
       if (!prepared.review?.policy?.policies?.length) { held.push({ ...release, reason: 'retirement-policy-changed' }); continue; }
-      candidates.push({ ...branch, state: 'REVIEW_RETIREMENT', retirement: { release, prUrl, digest: prepared.review.digest } });
+      if (!['integrated', 'review-supersession'].includes(prepared.review.comparison?.disposition)
+        || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') {
+        held.push({ ...release, reason: 'retirement-comparison-unavailable' }); continue;
+      }
+      // Exact affected-file equality plus exact published head requires no
+      // cognitive judgment. The service repeats all guards and archive checks.
+      if (prepared.review.forge?.prHead === release.head
+        && prepared.review.comparison?.disposition === 'integrated'
+        && prepared.review.comparison.difference === '') {
+        const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
+        const result = await retire({ appId: app.id, release,
+          review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed });
+        if (result.ok && result.archiveDir && result.branchDeleted === true) retired.push(release);
+        else held.push({ ...release, reason: result.reason || 'retirement-receipt-unverified' });
+        continue;
+      }
+      candidates.push({ ...branch, state: 'REVIEW_RETIREMENT', retirement: { release, prUrl, digest: prepared.review.digest,
+        cognition: retirementCognitiveIdentity(prepared.review, release, prUrl) } });
     } catch (error) {
-      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported'].includes(error.message)
+      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported', 'daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
         ? error.message : 'retirement-review-unavailable';
       held.push({ ...release, reason });
     }
   }
-  return { candidates, held };
+  return { candidates, held, retired };
+}
+
+/** Re-read daemon authority at each automatic mutation boundary. Manual API
+ * callers keep their existing operator-authorized contract.
+ */
+export async function assertAutomaticRetirementAllowed() {
+  const [{ isDaemonRunning, loadState }, { getDomainMode }] = await Promise.all([
+    import('./cosState.js'), import('../lib/domainAutonomy.js'),
+  ]);
+  if (!isDaemonRunning()) throw new Error('daemon-stopped');
+  const state = await loadState();
+  if (state.paused || getDomainMode(state.config, 'cos') !== 'execute') throw new Error('automatic-retirement-disabled');
+}
+
+/** The review's relevant source/history, not timestamp/default-ref churn. */
+export function retirementCognitiveIdentity(review, release, prUrl) {
+  const owners = [...(review.policy?.policies || [])].sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)) || String(a.id).localeCompare(String(b.id)));
+  return { ownerAgentId: owners[0]?.id || null, observation: processAuditFingerprint({
+    release: { branch: release.branch, path: release.path, head: release.head }, prUrl,
+    localPatch: review.comparison?.localPatch, difference: review.comparison?.difference,
+    disposition: review.comparison?.disposition,
+  }) };
+}
+
+export async function reserveRetirementReview(branch) {
+  const identity = branch.retirement?.cognition;
+  if (!identity?.ownerAgentId || !identity.observation) return { admitted: false };
+  const { reserveRepoCleanupRecovery } = await import('./cosAgentLifecycle.js');
+  return reserveRepoCleanupRecovery(identity.ownerAgentId, branch.branch, identity.observation);
 }
 
 export function retirementReviewInstructions(branch, appId) {
