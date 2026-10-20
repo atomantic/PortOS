@@ -26,8 +26,8 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
+import { SIDECAR_MAX_BYTES } from './assetLimits.js';
 
-const SIDECAR_MAX_BYTES = 256 * 1024;
 // Mirror the image-pull timeout (peerSync.js ASSET_PULL_TIMEOUT_MS) so a hung
 // peer connection aborts instead of holding the pull open indefinitely.
 const SIDECAR_PULL_TIMEOUT_MS = 60000;

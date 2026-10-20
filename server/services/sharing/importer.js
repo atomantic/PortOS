@@ -22,13 +22,13 @@
  */
 
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { join, basename, relative, resolve, sep } from 'path';
-import { createHash } from 'crypto';
-import { readdir, lstat, realpath, open } from 'fs/promises';
+import { join, basename, relative, resolve, sep, dirname } from 'path';
+import { createHash, randomUUID } from 'crypto';
+import { readdir, lstat, realpath, open, link } from 'fs/promises';
 import { existsSync, constants } from 'fs';
 import { EventEmitter } from 'events';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { PATHS, writeFileGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { PATHS, unlinkGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { isSafeRecordId } from '../../lib/validation.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
@@ -49,7 +49,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 import { isStr } from '../../lib/textUtils.js';
 import { detectImageFormat, detectMediaManifest } from '../../lib/mimeTypes.js';
-import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
+import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
 // Record kinds that participate in the non-blocking conflict journal. Universe,
@@ -311,18 +311,18 @@ function copyAssetsLocally(bucketPath, assetRefs) {
 // Pin reads to one regular-file descriptor. A cloud-sync writer can replace
 // paths during inspection; neither a symlink nor a later path swap may select
 // the bytes we publish. The extra byte detects growth without an unbounded read.
-async function readBucketAsset(bucketPath, sourcePath) {
+async function readBucketAsset(bucketPath, sourcePath, maxBytes) {
   const root = await realpath(bucketPath);
   const source = await realpath(sourcePath);
   const expected = resolve(root, relative(resolve(bucketPath), resolve(sourcePath)));
   if (source !== expected || !source.startsWith(`${root}${sep}`)) return null;
   const info = await lstat(sourcePath);
-  if (!info.isFile() || info.size > ASSET_PULL_MAX_BYTES) return null;
+  if (!info.isFile() || info.size > maxBytes) return null;
   const handle = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino
-      || opened.size > ASSET_PULL_MAX_BYTES || await realpath(sourcePath) !== source) return null;
+      || opened.size > maxBytes || await realpath(sourcePath) !== source) return null;
     const buffer = Buffer.alloc(opened.size + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -337,20 +337,28 @@ async function readBucketAsset(bucketPath, sourcePath) {
   }
 }
 
-async function verifiedBucketAsset(bucketPath, sourcePath, { hash, image = false } = {}) {
-  const buffer = await readBucketAsset(bucketPath, sourcePath).catch(() => null);
+async function verifiedBucketAsset(bucketPath, sourcePath, { hash, image = false, maxBytes = ASSET_PULL_MAX_BYTES } = {}) {
+  const buffer = await readBucketAsset(bucketPath, sourcePath, maxBytes).catch(() => null);
   if (!buffer?.length || detectMediaManifest(buffer) || image && !detectImageFormat(buffer)) return null;
   if (hash && createHash('sha256').update(buffer).digest('hex') !== hash) return null;
   return buffer;
 }
 
-// Exclusive creation preserves skip-if-present semantics even for overlapping
-// imports, without following a destination symlink created between checks.
-function publishBucketAsset(targetPath, buffer) {
-  return writeFileGuarded(targetPath, buffer, { flag: 'wx' }).then(() => true).catch(err => {
-    if (err?.code === 'EEXIST') return false;
-    throw err;
-  });
+// Publish durable bytes atomically without replacing an existing destination.
+// The short temporary name also supports asset filenames already at NAME_MAX.
+async function publishBucketAsset(targetPath, buffer) {
+  const temporary = join(dirname(targetPath), `.sharing-${randomUUID()}.tmp`);
+  try {
+    await atomicWrite(temporary, buffer);
+    return await link(temporary, targetPath).then(() => true).catch(err => {
+      if (err?.code === 'EEXIST') return false;
+      throw err;
+    });
+  } finally {
+    await unlinkGuarded(temporary).catch(err => {
+      if (err?.code !== 'ENOENT') throw err;
+    });
+  }
 }
 
 async function copyAssetsLocallyAdmitted(bucketPath, assetRefs) {
@@ -374,7 +382,7 @@ async function copyAssetsLocallyAdmitted(bucketPath, assetRefs) {
     }
     const buffer = await verifiedBucketAsset(bucketPath, blobPath, { hash: ref.hash, image: kind !== 'video' });
     const hasSidecar = sidecarPath && existsSync(sidecarPath);
-    const sidecar = hasSidecar ? await verifiedBucketAsset(bucketPath, sidecarPath) : null;
+    const sidecar = hasSidecar ? await verifiedBucketAsset(bucketPath, sidecarPath, { maxBytes: SIDECAR_MAX_BYTES }) : null;
     if (!buffer || hasSidecar && !sidecar) {
       console.warn(`⚠️ sharing.importer: refused asset ${kind}/${JSON.stringify(filename)}`);
       missing.push({ kind, ref: filename });
