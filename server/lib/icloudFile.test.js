@@ -231,10 +231,21 @@ describe('requestMaterialization', () => {
     expect(icloud.requestMaterialization(ICLOUD_PATH)).toBe(false);
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
-    // Once the child exits the dedupe entry clears, so a later read can retry.
+    // Once the child exits the in-flight entry clears, but brctl exits 0 as soon
+    // as the download is QUEUED — re-requesting inside the cooldown would re-spawn
+    // (and re-log) on every poll while the file is still evicted.
     child.emit('exit', 0, null);
-    expect(icloud.requestMaterialization(ICLOUD_PATH)).toBe(true);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(icloud.requestMaterialization(ICLOUD_PATH)).toBe(false);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // After the cooldown a later read can retry.
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      expect(icloud.requestMaterialization(ICLOUD_PATH)).toBe(true);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('unrefs the child so a slow download cannot hold the process open', () => {
@@ -498,6 +509,9 @@ describe('background download slot ownership', () => {
     const originalDeadline = icloud.DOWNLOAD_DEADLINE_MS;
     icloud._setDownloadDeadlineForTest(10);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    // Each read is a cooldown window apart so only slot ownership gates the spawn.
+    let clock = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
     try {
       statMock.mockResolvedValue(datalessStats);
       const children = [];
@@ -510,6 +524,7 @@ describe('background download slot ownership', () => {
       // Deadline fires and frees the slot; a fresh read then starts a REPLACEMENT
       // child for the same path.
       await new Promise(r => setTimeout(r, 30));
+      clock += 31_000;
       await icloud.readIfMaterialized(P).catch(() => {});
       expect(spawnMock).toHaveBeenCalledTimes(2);
 
@@ -522,9 +537,11 @@ describe('background download slot ownership', () => {
 
       // The replacement's own exit does release it.
       children[1].emit('exit', 0, null);
+      clock += 31_000;
       await icloud.readIfMaterialized(P).catch(() => {});
       expect(spawnMock).toHaveBeenCalledTimes(3);
     } finally {
+      nowSpy.mockRestore();
       killSpy.mockRestore();
       icloud._setDownloadDeadlineForTest(originalDeadline);
     }
