@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
@@ -14,7 +14,9 @@ describe('completed claim checkout evidence', () => {
     result: { success: true }, metadata: { ...agent.metadata, completedCheckouts: receipts } });
 
   beforeEach(async () => {
-    scratch = await realpath(await mkdtemp(join(tmpdir(), 'completed-checkout-')));
+    // Preserve tmpdir's spelling for the destructive fixture guard: Windows
+    // may expose TEMP as an 8.3 alias while async realpath returns its long name.
+    scratch = await mkdtemp(join(tmpdir(), 'completed-checkout-'));
     repoPath = join(scratch, 'repo');
     path = join(scratch, 'claim');
     await mkdir(repoPath);

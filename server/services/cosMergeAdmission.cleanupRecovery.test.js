@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 
@@ -94,7 +95,7 @@ beforeEach(() => {
   f.state = { agents: { 'parent-1': { id: 'parent-1', taskId: 'task-parent', status: 'completed', startedAt: '2026-01-01T00:00:00Z',
     completedAt: '2026-01-01T01:00:00Z', metadata: { isWorktree: true, sourceWorkspace: '/repos/source', worktreeBranch: BRANCH,
       workspacePath: '/repos/source/data/cos/worktrees/parent-1', prOpenedBy: 'agent-slashdo' } } }, mergeAdmissions: {}, stats: { agentsSpawned: 0 } };
-  f.archive['/synthetic/agents/2026-01-01/parent-1/metadata.json'] = JSON.stringify(f.state.agents['parent-1']);
+  f.archive[join('/synthetic/agents', '2026-01-01', 'parent-1', 'metadata.json')] = JSON.stringify(f.state.agents['parent-1']);
   persist();
 });
 
