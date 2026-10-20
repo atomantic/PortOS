@@ -161,7 +161,9 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       copyFileSync(join(REPO_ROOT, path), join(root, path));
     }
-    write('package.json', '{"type":"module","scripts":{"pregate":"node scripts/pregate.js"}}\n');
+    // The real npm script and its Windows shim, so the harness exercises what `npm run pregate` runs.
+    write('package.json', JSON.stringify({ type: 'module', scripts: { pregate: JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts.pregate } }) + '\n');
+    copyFileSync(join(REPO_ROOT, 'exec.cmd'), join(root, 'exec.cmd'));
     // The receipt lands under /.cache/, which the real repository ignores too.
     write('.gitignore', 'node_modules\n/.cache/\n');
     for (const workspace of ['', 'client', 'server', 'autofixer']) {
@@ -335,12 +337,16 @@ describe('pregate hidden-content invocation', () => {
     }
   });
 
-  // #12641: a Ctrl-C reaches pregate from the terminal group AND from npm's
-  // forwarding; the duplicate used to kill pregate before it signalled the
-  // stage, orphaning the runner. The fixture stage mirrors run-ci-tests.js: a
+  // #12641/#12670: a Ctrl-C reaches pregate from the terminal group AND from
+  // npm's forwarding; the duplicate used to kill pregate before it signalled the
+  // stage, orphaning the runner. A group SIGTERM also kills the `sh -c` wrapper
+  // npm runs the script under (dash on Linux does not always exec its last
+  // command), and npm exits the moment that wrapper dies. The simulated shell
+  // below never execs on its own, so only the script's own `exec` keeps the
+  // wrapper out of the way. The fixture stage mirrors run-ci-tests.js: a
   // launcher that settles its own separately grouped child on a signal, plus
   // an in-group descendant that ignores signals and keeps writing.
-  it.skipIf(process.platform === 'win32').each(['SIGINT', 'SIGTERM'])('settles every owned stage process before a %s through npm finishes', async (signal) => {
+  it.skipIf(process.platform === 'win32').each(['SIGINT', 'SIGTERM'])('settles every owned stage process before npm exits on a group %s', async (signal) => {
     const heartbeat = join(scratch, 'heartbeat');
     write('scripts/scan-diff-hidden-content.js', `
       import { spawn } from 'child_process';
@@ -363,8 +369,11 @@ describe('pregate hidden-content invocation', () => {
       setInterval(() => {}, 1000);
     `);
     const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+    const nonExecShell = join(scratch, 'non-exec-shell');
+    writeFileSync(nonExecShell, '#!/bin/sh\nexec /bin/sh "$1" "$2 ; :"\n', { mode: 0o755 });
     const npm = spawn('npm', ['run', 'pregate', '--', '--base', base, '--skip-lint'], {
-      cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: { ...process.env, FIXTURE_HEARTBEAT: heartbeat },
+      cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+      env: { ...process.env, FIXTURE_HEARTBEAT: heartbeat, npm_config_script_shell: nonExecShell },
     });
     const alive = (pid) => {
       try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
@@ -389,13 +398,7 @@ describe('pregate hidden-content invocation', () => {
         npm.once('error', reject);
         npm.once('exit', (status, exitSignal) => resolve({ status, signal: exitSignal }));
       });
-      // npm's own exit is not the boundary: a SIGTERM to the group kills the
-      // `sh -c` wrapper npm runs the script under, and npm then exits at once.
-      // The contract is that pregate itself does not finish before its stage
-      // group settled, so liveness is checked the moment pregate is gone.
-      for (const until = Date.now() + 15_000; alive(pregatePid) && Date.now() < until;) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      // The boundary is npm's own exit: nothing pregate owns may outlive it.
       expect(alive(pregatePid)).toBe(false);
       expect(owned).toHaveLength(3);
       expect(owned.filter(alive)).toEqual([]);
