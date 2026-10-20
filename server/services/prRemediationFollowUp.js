@@ -239,6 +239,12 @@ export async function handBackPrRemediation({ task, workspacePath } = {}) {
     : 'an earlier revision';
   const login = typeof meta.prRemediationAuthorLogin === 'string' ? meta.prRemediationAuthorLogin.trim() : '';
   const terminalBlock = meta.blockedCategory && meta.blockedCategory !== 'pr-head-moved';
+  const marker = `<!-- portos-pr-remediation-handback:${task.id} -->`;
+  const viewer = (await execGh(['api', 'user', '--jq', '.login'], undefined, options)).trim();
+  if (!viewer) throw new Error('Could not resolve the authenticated hand-back account');
+  const existing = await execGh(['pr', 'view', ...prRef, '--json', 'comments', '--jq',
+    `any(.comments[]; .author.login == ${JSON.stringify(viewer)} and (.body | contains(${JSON.stringify(marker)})))`], undefined, options);
+  if (!['true', 'false'].includes(existing.trim())) throw new Error('Could not check prior remediation hand-back');
   const body = [
     ...(terminalBlock ? [
       `PortOS reviewed this pull request at ${reviewed} and queued an agent to finish it, but the remediation task is now blocked.`,
@@ -249,7 +255,9 @@ export async function handBackPrRemediation({ task, workspacePath } = {}) {
     ]),
     `${login ? `@${login}, this` : 'This'} pull request is back with its author; the next push gets a fresh review.`,
   ].join(' ');
-  await execGh(['pr', 'comment', ...prRef, '--body', body], undefined, options);
+  // Forge-side dedupe survives a failed assignment or local stamp write. Only
+  // this authenticated account's marker counts; contributor prose cannot claim it.
+  if (existing.trim() !== 'true') await execGh(['pr', 'comment', ...prRef, '--body', `${body}\n\n${marker}`], undefined, options);
   if (login) await execGh(['pr', 'edit', ...prRef, '--add-assignee', login], undefined, options);
   emitLog('info', `↩️ Handed PR #${number} in ${repoFullName} back after its remediation was blocked`, { taskId: task.id, prNumber: number });
   return true;
