@@ -5,7 +5,7 @@ vi.mock('./catalogDB.js', () => ({
   getIngredientIdentityIds: vi.fn(async (id) => [id, `${id}-alias`]),
   listRefsForIngredient: vi.fn(async () => [{ refKind: 'universe', refId: 'universe-a' }]),
   getIngredientTimestamps: vi.fn(async (ids) => new Map(ids.map((id) => [id, '2026-01-01T00:00:00.000Z']))),
-  updateIngredient: vi.fn(async () => ({})),
+  updateIngredientIfFresh: vi.fn(async () => ({ status: 'written', ingredient: {} })),
 }));
 vi.mock('./catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: vi.fn(async () => null) }));
 
@@ -46,7 +46,7 @@ describe('operation-scoped catalog projection echoes', () => {
         expect(await projectToCatalog(universeId, { characters: [entry(ingredient.id)] }))
           .toEqual({ written: 1, skipped: 0 });
       }
-      expect(catalogDB.updateIngredient).toHaveBeenCalledTimes(2);
+      expect(catalogDB.updateIngredientIfFresh).toHaveBeenCalledTimes(2);
     } finally {
       held.release();
       await forward;
@@ -73,7 +73,7 @@ describe('operation-scoped catalog projection echoes', () => {
         // overlapping projection finishes. Unrelated canon still writes.
         expect(result).toEqual({ written: 1, skipped: 2 });
       }
-      expect(catalogDB.updateIngredient.mock.calls.map(([id]) => id)).toEqual(['ingredient-b', 'ingredient-b']);
+      expect(catalogDB.updateIngredientIfFresh.mock.calls.map(([id]) => id)).toEqual(['ingredient-b', 'ingredient-b']);
       expect(await projectToCatalog('universe-a', { characters: [entry(ingredient.id)] }))
         .toEqual({ written: 1, skipped: 0 });
     } finally {
