@@ -3,7 +3,7 @@ vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAc
  * Tests for the boot-time canon↔catalog reconciliation.
  *
  * fs/promises (marker), fileUtils (PATHS), universeBuilder (listUniverses /
- * updateUniverse) and catalogDB (getIngredient / updateIngredient) are mocked,
+ * updateUniverse) and catalogDB (getIngredient / updateIngredientIfFresh) are mocked,
  * so this exercises the walk + LWW-merge + dual-write orchestration:
  *   - newer catalog row wins → stamped back onto the embedded canon entry;
  *   - newer embedded entry wins → written into the catalog row;
@@ -14,7 +14,7 @@ vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAc
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const fsState = { marker: null, written: null };
-const dbState = { rows: {}, updates: [] };
+const dbState = { rows: {}, updates: [], stale: new Set() };
 const uniState = { universes: [], canonStamps: [] };
 
 // Marker I/O is delegated to migrationMarker.js; mock it against `fsState`
@@ -36,16 +36,19 @@ vi.mock('../services/universeBuilder.js', () => ({
 
 vi.mock('../services/catalogDB.js', () => ({
   getIngredient: vi.fn(async (id) => dbState.rows[id] || null),
-  updateIngredient: vi.fn(async (id, patch, ctx) => {
+  updateIngredientIfFresh: vi.fn(async (id, patch, ctx) => {
+    // The locked freshness re-check itself is covered against Postgres in
+    // catalogCanonProjection.test.js; here a fixture id opts into a refusal.
+    if (dbState.stale.has(id)) return { status: 'stale', ingredient: null };
     dbState.updates.push({ id, patch, ctx });
     // Simulate the real DB trigger: a write bumps updated_at to "now" (a clock
     // strictly later than any fixture timestamp). This is what makes the
     // mid-pass clock-mutation bug observable — a later universe comparing
     // against the LIVE row would see this fresh clock.
     if (dbState.rows[id]) {
-      dbState.rows[id] = { ...dbState.rows[id], ...patch, updatedAt: '2099-01-01T00:00:00.000Z' };
+      dbState.rows[id] = { ...dbState.rows[id], ...patch, updatedAt: '2099-01-01T00:00:00.000Z', syncSequence: String(dbState.updates.length) };
     }
-    return dbState.rows[id];
+    return { status: 'written', ingredient: dbState.rows[id] };
   }),
 }));
 
@@ -56,6 +59,7 @@ beforeEach(() => {
   fsState.written = null;
   dbState.rows = {};
   dbState.updates = [];
+  dbState.stale = new Set();
   uniState.universes = [];
   uniState.canonStamps = [];
 });
@@ -127,6 +131,25 @@ describe('reconcileCanonCatalog', () => {
     expect(payloadsWritten[payloadsWritten.length - 1]).toBe('new');
     // u-old never wins.
     expect(payloadsWritten).not.toContain('old');
+    // The 'new' write supersedes the pass's own 'mid' write by row version.
+    expect(dbState.updates.at(-1).ctx.priorWrite).toEqual({ syncSequence: '1', sourceUpdatedAt: '2026-02-01T00:00:00.000Z' });
+  });
+
+  it('a canon-winner refused by the locked re-check is not counted and keeps the pass clean (#12503)', async () => {
+    dbState.rows['cat-chr-s'] = { id: 'cat-chr-s', name: 'S', payload: { role: 'old' }, updatedAt: '2026-01-01T00:00:00.000Z' };
+    dbState.stale.add('cat-chr-s');
+    uniState.universes = [{
+      id: 'u-1',
+      characters: [{ id: 'e1', ingredientId: 'cat-chr-s', name: 'S', role: 'fresh', updatedAt: '2026-02-01T00:00:00.000Z' }],
+    }];
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await reconcileCanonCatalog();
+
+    expect(result.stats).toMatchObject({ canonWon: 0, catalogWon: 0, errors: 0 });
+    expect(result.markerWritten).toBe(true);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
   it('leaves entries without an ingredientId untouched', async () => {

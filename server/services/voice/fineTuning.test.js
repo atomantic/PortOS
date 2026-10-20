@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as setWatchdog, clearTimeout as clearWatchdog } from 'node:timers';
 import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 
@@ -18,9 +19,15 @@ let runtimeOverride = null;
 // Every sidecar write is recorded when it is ATTEMPTED, so a test can tell a write
 // held behind backup admission from one that is merely still in flight.
 const sidecarWrites = [];
+let onSidecarWritten = null;
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, atomicWrite: (path, ...rest) => { sidecarWrites.push(path); return actual.atomicWrite(path, ...rest); } };
+  return { ...actual, atomicWrite: async (path, ...rest) => {
+    sidecarWrites.push(path);
+    const result = await actual.atomicWrite(path, ...rest);
+    onSidecarWritten?.(path, rest[0]);
+    return result;
+  } };
 });
 vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
 vi.mock('../../lib/paths.js', async () => {
@@ -545,7 +552,8 @@ describe('fineTuning', () => {
   });
 
   it('evicts the in-memory job entry after the grace window and keeps serving from disk', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let watchdog;
     try {
       queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
       await seedSourceAudio();
@@ -556,9 +564,19 @@ describe('fineTuning', () => {
         epochs: 2,
         checkpointInterval: 20,
       });
+      // vi.waitFor advances fake time while real filesystem writes are pending.
+      // Observe the terminal write instead; only advance the eviction clock once
+      // the actual sidecar is durable, with the same five-second real watchdog.
+      const persisted = new Promise((resolve, reject) => {
+        watchdog = setWatchdog(() => reject(new Error('Terminal sidecar write did not finish')), 5_000);
+        onSidecarWritten = (path, record) => {
+          if (path === jobRecordPath(jobId) && record.status === 'completed') resolve();
+        };
+      });
       scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
       scripted().exit(0);
-      await drainJobRecord(jobId);
+      await persisted;
+      expect(JSON.parse(await readFile(jobRecordPath(jobId), 'utf8')).status).toBe('completed');
 
       // Without a profileId the in-memory map is the only lookup source, so this
       // resolving proves the entry is still resident.
@@ -568,6 +586,8 @@ describe('fineTuning', () => {
       await expect(getFineTuningJobStatus(jobId)).rejects.toThrow(/not found/i);
       expect((await getFineTuningJobStatus(jobId, PROFILE.id)).status).toBe('completed');
     } finally {
+      clearWatchdog(watchdog);
+      onSidecarWritten = null;
       vi.useRealTimers();
     }
   });

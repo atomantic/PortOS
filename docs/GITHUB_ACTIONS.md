@@ -1064,6 +1064,24 @@ test and a minimal Windows reproduction before changing production metadata
 handling (#8152). Microsoft documents these fields in its
 [application crash troubleshooting guide](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-application-service-crashing-behavior).
 
+### Final test process exit evidence
+
+The run report retains the exit-code snapshot from Vitest's normal hooks and
+adds the later Node `exit` event code and `process.exitCode` in a synchronous,
+best-effort write. The invocation report records the observed command boundary
+(`direct npm process`, or `cmd.exe -> npm.cmd` when a batch wrapper is needed), its child `exit` and `close`
+events, and the launcher's effective status. Collection prints only bounded
+numeric status and allowlisted boundary names. Missing exit evidence stays an
+explicit diagnostic gap; diagnostic I/O never changes the original result.
+
+An exit event is later evidence, not proof of a cause or of every subsequent
+exit listener's behavior. When a Windows batch wrapper is needed, npm's own process exit is still not
+observed independently of `cmd.exe`; a passing Vitest exit with a failing
+command boundary narrows the remaining investigation to that boundary. Forced
+termination can prevent any exit-event write. Preserve the first failing job
+and compare these observations on a hosted recurrence rather than classifying
+a green rerun or a synthetic fixture as a causal fix (#12536).
+
 ### External cancellation and one automatic retry
 
 Not every cancel comes from this repository. When several PRs build at once,

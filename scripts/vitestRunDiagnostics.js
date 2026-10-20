@@ -13,19 +13,29 @@ function errorDiagnostic(error, depth = 0) {
 const moduleStates = new Set(['queued', 'pending', 'passed', 'failed', 'skipped']);
 
 export default function vitestRunDiagnostics() {
+  const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+  let snapshotExitCode = null;
   let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [], completedCount: 0 };
   const activeModules = new Set();
   const completedModules = [];
   const moduleResults = [];
-  const persist = () => {
-    const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+  const persist = (processExit) => {
+    if (!processExit) snapshotExitCode = process.exitCode ?? null;
     if (!path) return;
     persistTestDiagnostic(path, { ...diagnostics, activeModules: [...activeModules].slice(0, 100),
-      completedModules, moduleResults, exitCode: process.exitCode ?? null });
+      completedModules, moduleResults, exitCode: snapshotExitCode,
+      ...(processExit ? { processExit } : {}) });
   };
   return {
     onInit(vitest) {
-      vitest.onClose(persist);
+      // Exit listeners can only do synchronous I/O. Preserve the ordinary hook
+      // snapshot separately: the event is later evidence, not a causal verdict.
+      const onExit = (eventCode) => {
+        const processExit = { eventCode, exitCode: process.exitCode ?? null };
+        persist(processExit);
+      };
+      if (path) process.once('exit', onExit);
+      vitest.onClose(() => persist());
       persist();
     },
     onTestModuleQueued(module) {

@@ -166,10 +166,13 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     expect((await getIngredient(input.survivorId)).payload.description).toBe('Original biography');
     const updated = await getIngredient(input.sourceId);
     let projected;
-    const stats = await projectToCanon(input.sourceId, updated, { updateUniverse: async (_id, mutate) => {
+    const stats = await projectToCanon(input.sourceId, updated, { updateUniverse: async (_id, mutate, options) => {
       projected = await mutate({ characters: [oldEntry] });
       // The synchronous echo cannot race the source alias against the survivor.
-      expect(await projectToCatalog('example-universe', projected)).toEqual({ written: 0, skipped: 1 });
+      expect(await projectToCatalog('example-universe', projected, {
+        guardToken: options.canonProjectionGuard,
+        guardIdentityIds: options.canonProjectionIdentityIds,
+      })).toEqual({ written: 0, skipped: 1 });
       return projected;
     } });
     expect(stats.written).toBe(1);

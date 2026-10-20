@@ -79,6 +79,8 @@ describe('independent CI test failure recovery (#11552)', () => {
     const output = await launchAndCollect(false);
     expect(output).toContain('Launcher completed; exit=17');
     expect(output).toContain('reason=failed; completed=1');
+    expect(output).toContain('Vitest process exit event: code=17; exitCode=17.');
+    expect(output).toContain('Command exit: code=17; signal=none.');
     expect(output).toContain('Failed suites (up to 10): server/lib/synthetic.test.js');
   });
 
@@ -89,9 +91,24 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(output).toContain('structured test report missing');
   });
 
+  it.each([0, 17])('diagnostic write failure preserves process exit %i', (code) => {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import reporter from ${JSON.stringify(reporter)};
+      const hooks = reporter();
+      hooks.onInit({ onClose(callback) { callback(); } });
+      hooks.onTestRunEnd([], [], 'passed');
+      process.exitCode = ${code};
+    `], { encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, PORTOS_CI_DIAGNOSTICS_PATH: new URL(import.meta.url).pathname + '/missing/run.json' } });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(code);
+    expect(result.stderr).toContain('Unable to persist CI test diagnostics.');
+  });
+
   it('recovers bounded completed outcomes without final JSON or private error details', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-outcomes-'));
     const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+    const priorExitListeners = new Set(process.listeners('exit'));
     try {
       const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
       const path = join(attempt, 'run.json');
@@ -108,8 +125,10 @@ describe('independent CI test failure recovery (#11552)', () => {
       const lines = await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
       expect(lines.join('\n')).toContain('server/lib/synthetic.test.js=failed');
       expect(lines.join('\n')).toContain('structured test report missing');
+      expect(lines.join('\n')).toContain('Vitest process exit event unavailable');
       expect(lines.join('\n')).not.toContain('private-sentinel');
     } finally {
+      for (const listener of process.listeners('exit')) if (!priorExitListeners.has(listener)) process.removeListener('exit', listener);
       if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
       else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
       rmSync(root, { recursive: true, force: true });

@@ -325,6 +325,21 @@ export const catalogDdl = [
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence)`,
 
+    // #12500: the LWW clock every catalog trigger stamps on a local change.
+    // Transaction-start NOW() let a transaction that began before a
+    // concurrent, already-committed edit stamp an OLDER clock than the row it
+    // overwrote, and peers' strict `EXCLUDED.updated_at >` guard then dropped
+    // it for good. The wire carries milliseconds (Date#toISOString), so the
+    // clock is millisecond-representable and strictly above the previous one
+    // at that precision; a future (skewed peer) clock is never moved backward.
+    `CREATE OR REPLACE FUNCTION catalog_next_change_clock(previous TIMESTAMPTZ)
+     RETURNS TIMESTAMPTZ AS $$
+       SELECT GREATEST(
+         date_trunc('milliseconds', clock_timestamp()),
+         date_trunc('milliseconds', previous) + INTERVAL '1 millisecond'
+       )
+     $$ LANGUAGE sql VOLATILE`,
+
     `CREATE OR REPLACE FUNCTION update_catalog_ingredient_timestamp()
      RETURNS TRIGGER AS $$
      DECLARE
@@ -342,7 +357,7 @@ export const catalogDdl = [
        );
        IF NOT content_changed THEN RETURN NEW; END IF;
        IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-         NEW.updated_at := NOW();
+         NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
        END IF;
        NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredients', 'sync_sequence'));
        RETURN NEW;
@@ -371,7 +386,7 @@ export const catalogDdl = [
        );
        IF NOT content_changed THEN RETURN NEW; END IF;
        IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-         NEW.updated_at := NOW();
+         NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
        END IF;
        NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_scraps', 'sync_sequence'));
        RETURN NEW;
@@ -416,7 +431,7 @@ export const catalogDdl = [
        IF NEW.deleted IS DISTINCT FROM OLD.deleted
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
          IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-           NEW.updated_at := NOW();
+           NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
          END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_refs', 'sync_sequence'));
        END IF;
@@ -438,7 +453,7 @@ export const catalogDdl = [
        IF NEW.deleted IS DISTINCT FROM OLD.deleted
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
          IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-           NEW.updated_at := NOW();
+           NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
          END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
        END IF;
@@ -464,7 +479,7 @@ export const catalogDdl = [
           OR NEW.caption IS DISTINCT FROM OLD.caption
           OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
          IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-           NEW.updated_at := NOW();
+           NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
          END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
        END IF;
@@ -494,7 +509,7 @@ export const catalogDdl = [
        );
        IF NOT content_changed THEN RETURN NEW; END IF;
        IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-         NEW.updated_at := NOW();
+         NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
        END IF;
        NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_tags', 'sync_sequence'));
        RETURN NEW;
