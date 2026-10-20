@@ -322,6 +322,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     // A spawn error also emits close. Settle only there, after the pipes close.
     child.on('error', (error) => { spawnError = error; });
     let childExit = null;
+    let childClose = null;
     child.on('exit', (code, signal) => { childExit = { code, signal }; });
     const finish = (code, signal) => {
       if (settled) return;
@@ -338,7 +339,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       abortSignal?.removeEventListener('abort', onAbort);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
       persistTestDiagnostic(invocationPath, { ...invocation, completed: !cleanupUnverified, status, signal: signal ?? interrupted ?? null,
-        childExit, childClose: { code, signal } });
+        childExit, childClose });
       if (status !== 0) {
         console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
         console.error(structuredFailureDiagnostics(reportPath, runReportPath));
@@ -349,7 +350,10 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}),
         ...(cleanupUnverified ? { cleanupUnverified: true } : {}) });
     };
-    child.on('close', finish);
+    child.on('close', (code, signal) => {
+      childClose = { code, signal };
+      finish(code, signal);
+    });
   });
 }
 

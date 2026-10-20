@@ -721,7 +721,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       expect(result.error.message).toContain('cleanup unverified');
       expect(result.diagnosticsPath).toBe(join(host, readdirSync(host)[0]));
       expect(JSON.parse(readFileSync(join(result.diagnosticsPath, 'invocation.json'), 'utf8')))
-        .toMatchObject({ completed: false, status: 143, signal: 'SIGTERM' });
+        .toMatchObject({ completed: false, status: 143, signal: 'SIGTERM', childExit: null, childClose: null });
       expect(errors).toHaveBeenCalledWith(expect.stringContaining(result.diagnosticsPath));
     } finally {
       vi.useRealTimers();
