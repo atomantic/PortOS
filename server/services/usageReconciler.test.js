@@ -16,7 +16,6 @@ const {
   reconcileRunUsage,
   recordCompletedRunUsage,
   resolveFamilyProvider,
-  pruneUsageClaims,
   snapshotUsageClaims,
   CLAIM_RETENTION_MS,
   __resetUsageClaims
@@ -790,6 +789,21 @@ describe('claim ledger retention', () => {
     vi.useRealTimers();
   });
 
+  // Every completed run prunes the ledger; one with no transcript adds nothing.
+  const completeUnrelatedRunAt = async (nowMs) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(nowMs);
+    await recordCompletedRunUsage({
+      providerId: 'ollama',
+      model: 'llama3',
+      workspacePath: '/work/unrelated-repo',
+      promptLength: 1,
+      startTime: new Date(nowMs - 60_000).toISOString(),
+      endTime: new Date(nowMs).toISOString()
+    }, 'x', { home, providers: [] });
+    vi.useRealTimers();
+  };
+
   it('stays bounded across many sequential completed runs', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const days = 12;
@@ -843,7 +857,7 @@ describe('claim ledger retention', () => {
 
     const first = await readMeasuredUsage({ ...run, family: 'claude', home });
     // A prune between the two reads — the second run is still pending.
-    pruneUsageClaims(Date.parse(overlapping.endTime) + CLAIM_RETENTION_MS - HOUR);
+    await completeUnrelatedRunAt(Date.parse(overlapping.endTime) + CLAIM_RETENTION_MS - HOUR);
     const second = await readMeasuredUsage({ ...overlapping, family: 'claude', home });
 
     expect(first.tokensOut).toBe(75);
@@ -869,12 +883,12 @@ describe('claim ledger retention', () => {
 
     // Long past the claiming run's window, but the session stayed active
     // later, so a run overlapping its tail must still find it claimed.
-    pruneUsageClaims(lastActive + HOUR);
+    await completeUnrelatedRunAt(lastActive + HOUR);
     expect(await readMeasuredUsage({
       ...run, startTime: '2026-07-03T09:00:00.000Z', endTime: '2026-07-03T09:30:00.000Z', family: 'grok', home
     })).toBeNull();
 
-    pruneUsageClaims(lastActive + CLAIM_RETENTION_MS + 2 * HOUR);
+    await completeUnrelatedRunAt(lastActive + CLAIM_RETENTION_MS + 2 * HOUR);
     expect(snapshotUsageClaims().claimedMessages).toEqual([]);
   });
 });

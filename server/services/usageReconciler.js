@@ -179,7 +179,7 @@ export function mergeUsageClaims({ claimedMessages: claimed = [], codexHighWater
  *
  * @param {number} [nowMs]
  */
-export function pruneUsageClaims(nowMs = Date.now()) {
+function pruneUsageClaims(nowMs = Date.now()) {
   const cutoff = nowMs - CLAIM_RETENTION_MS - WINDOW_SLACK_MS;
   for (const [fileKey, messages] of claimedMessages) {
     for (const [messageKey, stampMs] of messages) {
