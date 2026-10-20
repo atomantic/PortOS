@@ -418,6 +418,10 @@ describe('questionResultSchema chunkId/element (issue #2016)', () => {
     expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: key, results: [{ correct: true }] }).success).toBe(false);
     expect(memoryPracticeSchema.safeParse({ mode: 'element-flash', results: [{ correct: true, element: key }] }).success).toBe(false);
     expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: 'verse-1', results: [{ correct: true, chunkId: 'verse-1' }] }).success).toBe(true);
+    // An item saved with such a chunk id could never be practiced.
+    const item = (id) => ({ title: 'Song', type: 'song', lines: ['a'], chunks: [{ id, lineRange: [0, 0], label: 'Verse' }] });
+    expect(memoryItemCreateSchema.safeParse(item(key)).success).toBe(false);
+    expect(memoryItemCreateSchema.safeParse(item('verse-1')).success).toBe(true);
   });
 
   it('accepts a null chunkId (question with no matching chunk)', () => {

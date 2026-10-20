@@ -508,7 +508,8 @@ const memoryLineSchema = z.object({
 });
 
 const memoryChunkSchema = z.object({
-  id: z.string(),
+  // Practice submits this id as a mastery key, so it takes the same check.
+  id: masteryKeySchema,
   lineRange: z.array(z.number().int().min(0)).length(2),
   label: z.string(),
 });
