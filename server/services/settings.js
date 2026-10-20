@@ -311,7 +311,10 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {},
   // newline; atomicWrite's own JSON.stringify omits it.
   await atomicWrite(SETTINGS_FILE, JSON.stringify(await persistPrivateKeys(cleaned, PATHS.data, { previousSettings: prev }), null, 2) + '\n');
   await hydratePrivateKeys(cleaned, PATHS.data);
-  settingsSignature = await readSettingsSignature();
+  // Another process can replace the file between our write and a stat. Never
+  // label this in-memory save with metadata that might belong to that writer;
+  // the next reviewer-selection read reconciles the persisted snapshot once.
+  settingsSignature = undefined;
   // Warn AFTER the successful write so a thrown write never produces
   // a misleading "stripped" log line for a write that didn't happen.
   if (isPlainObject(settings)) {

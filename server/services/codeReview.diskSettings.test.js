@@ -3,16 +3,25 @@ import { mkdtemp, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const context = vi.hoisted(() => ({ data: '' }));
+const context = vi.hoisted(() => ({ data: '', afterHydrate: null }));
 vi.mock('../lib/paths.js', async importActual => {
   const actual = await importActual();
   return { ...actual, PATHS: { ...actual.PATHS, get data() { return context.data; } } };
+});
+vi.mock('./privateKeyStore.js', async importActual => {
+  const actual = await importActual();
+  return { ...actual, hydratePrivateKeys: async (...args) => {
+    const hydrated = await actual.hydratePrivateKeys(...args);
+    await context.afterHydrate?.(hydrated);
+    return hydrated;
+  } };
 });
 vi.mock('./userActions.js', () => ({ recordUserAction: vi.fn() }));
 let settings;
 let getCodeReviewDefaults;
 let file;
 beforeEach(async () => {
+  context.afterHydrate = null;
   context.data = await mkdtemp(join(tmpdir(), 'review-settings-'));
   file = join(context.data, 'settings.json');
   vi.resetModules();
@@ -77,4 +86,18 @@ it('invalidates corrupt settings without broadcasting an empty update, then obse
   expect(invalidated).toHaveBeenCalledTimes(1);
   await writeFile(file, JSON.stringify({ codeReview: { reviewers: ['claude'] } }));
   expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+});
+
+it('observes a bridge write landing after local persistence but before save completes', async () => {
+  const config = { reviewerFallbackGroups: [['codex'], ['claude']] };
+  await settings.updateSettings({ codeReview: config }, { skipUserAction: true });
+  expect((await getCodeReviewDefaults()).reviewers).toEqual(['codex']);
+  const health = { codex: { pausedUntil: Date.now() + 60_000, reason: 'quota', lastFailureAt: Date.now() } };
+  context.afterHydrate = async current => {
+    if (!current.localSave) return;
+    context.afterHydrate = null;
+    await writeFile(file, JSON.stringify({ ...current, codeReview: { ...config, reviewerHealth: health } }));
+  };
+  await settings.updateSettings({ localSave: true }, { skipUserAction: true });
+  expect(await getCodeReviewDefaults()).toMatchObject({ reviewers: ['claude'], reviewerHealth: health });
 });
