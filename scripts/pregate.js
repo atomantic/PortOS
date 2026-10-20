@@ -80,6 +80,9 @@ export const UNCOVERED_SUITES = Object.freeze({
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
 });
 
+/** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
+const PROBE_FAILED_REMEDY = 'the prerequisite probe itself failed, which does not show anything is missing; rerun `npm run pregate`, and if it repeats diagnose Chrome startup/teardown before reinstalling anything';
+
 /** Does the plan select this suite at all? `browser` is a file list, the rest flags. */
 export function suiteSelected(plan, suite) {
   return suite === 'browser' ? (plan.browser?.files?.length ?? 0) > 0 : Boolean(plan[suite]);
@@ -101,7 +104,14 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
     let reason = null;
     if (flags[suite]) reason = `skipped by --skip-${suite}`;
     else if (downgraded) reason = 'full plan downgraded; pass --full to run it';
-    else if (prerequisites[suite]?.ok === false) reason = `prerequisite missing: ${prerequisites[suite].reason}`;
+    else if (prerequisites[suite]?.ok === false) {
+      const { reason: detail, category } = prerequisites[suite];
+      const probeOnly = category === 'probe-failed';
+      reason = probeOnly ? `probe failed: ${detail}` : `prerequisite missing: ${detail}`;
+      // Only the probe-failed category swaps the remedy: a genuinely absent tool keeps its install advice.
+      uncovered.push({ suite, reason, ...(category ? { category } : {}), remedy: probeOnly ? PROBE_FAILED_REMEDY : UNCOVERED_SUITES[suite] });
+      continue;
+    }
     if (reason) uncovered.push({ suite, reason, remedy: UNCOVERED_SUITES[suite] });
   }
   if (suiteSelected(plan, 'windows')) {
