@@ -1439,7 +1439,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
             onClick={handleToggle}
             className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 transition-colors text-xs font-mono ${peer.enabled ? 'text-port-success hover:text-port-success/80' : 'text-gray-600 hover:text-white'}`}
             title={peer.enabled ? 'Disable polling' : 'Enable polling'}
-            aria-label={peer.enabled ? 'Disable polling' : 'Enable polling'}
+            aria-label={peer.enabled ? 'ON, disable polling' : 'OFF, enable polling'}
           >
             {peer.enabled ? 'ON' : 'OFF'}
           </button>
