@@ -236,6 +236,17 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     expect(r.lockfilePaths).toEqual(['package-lock.json', 'client/package-lock.json']);
   });
 
+  it('decodes Git-quoted paths before lockfile and scratch classification', () => {
+    const lockfile = classifyWorktreeDirt(' M "my app/package-lock.json"\n');
+    expect(lockfile.lockfileOnly).toBe(true);
+    expect(lockfile.lockfilePaths).toEqual(['my app/package-lock.json']);
+
+    expect(classifyWorktreeDirt('?? ".portos-public-review/"').clean).toBe(true);
+    expect(classifyWorktreeDirt('?? "PORTOS_PUBLIC_REVIEW_INPUT.json"').clean).toBe(true);
+    expect(classifyWorktreeDirt('?? "caf\\303\\251/package-lock.json"').lockfilePaths)
+      .toEqual(['café/package-lock.json']);
+  });
+
   it('treats mixed lockfile + real changes as real changes', () => {
     const r = classifyWorktreeDirt(' M package-lock.json\n M src/app.js');
     expect(r.lockfileOnly).toBe(false);
@@ -249,6 +260,11 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     const r = classifyWorktreeDirt(' M package-lock.json\n M src/app.js\n?? src/new.js\nR  src/old.js -> src/renamed.js');
     expect(r.realChangePaths).toEqual(['src/app.js', 'src/new.js', 'src/renamed.js']);
     expect(r.realChangePaths).not.toContain('package-lock.json');
+  });
+
+  it('splits quoted rename paths without treating a literal arrow as the separator', () => {
+    const r = classifyWorktreeDirt('R  "a -> b/x" -> "a b/y"');
+    expect(r.realChangePaths).toEqual(['a b/y']);
   });
 
   it('handles a trimmed first line (no leading status space)', () => {

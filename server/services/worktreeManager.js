@@ -531,15 +531,59 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  */
 export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
   const ignored = [...AGENT_SCRATCH_PATHS, ...ignoredPaths];
-  const toPath = (line) => line.replace(/^\s*\S+\s+/, '').split(' -> ').pop();
+  // Git's porcelain v1 output C-quotes paths with spaces and several other
+  // characters. Decode those paths before comparing them with scratch roots or
+  // lockfile names. Octal escapes represent bytes, so collect them as bytes and
+  // decode UTF-8 only after the whole quoted path has been read.
+  const unquoteGitPath = (path) => {
+    if (!path.startsWith('"') || !path.endsWith('"')) return path;
+    const bytes = [];
+    for (let i = 1; i < path.length - 1; i += 1) {
+      const char = path[i];
+      if (char !== '\\') {
+        bytes.push(...Buffer.from(char));
+        continue;
+      }
+      const escaped = path[++i];
+      if (/[0-7]/.test(escaped || '')) {
+        const octal = path.slice(i, i + 3);
+        if (!/^[0-7]{3}$/.test(octal)) {
+          bytes.push(...Buffer.from(`\\${escaped}`));
+          continue;
+        }
+        bytes.push(parseInt(octal, 8));
+        i += 2;
+        continue;
+      }
+      const controls = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
+      if (Object.hasOwn(controls, escaped)) bytes.push(controls[escaped]);
+      else bytes.push(...Buffer.from(escaped || ''));
+    }
+    return Buffer.from(bytes).toString('utf8');
+  };
+  const splitRename = (path) => {
+    let quoted = false;
+    let escaped = false;
+    for (let i = 0; i <= path.length - 4; i += 1) {
+      const char = path[i];
+      if (escaped) { escaped = false; continue; }
+      if (quoted && char === '\\') { escaped = true; continue; }
+      if (char === '"') { quoted = !quoted; continue; }
+      if (!quoted && path.startsWith(' -> ', i)) return [path.slice(0, i), path.slice(i + 4)];
+    }
+    return [path];
+  };
+  const toPath = (line) => {
+    const statusless = line.replace(/^\s*\S+\s+/, '');
+    return splitRename(statusless).map(unquoteGitPath).at(-1);
+  };
   const lines = (porcelain || '').split('\n')
-    .map(l => l.trim())
-    .filter(Boolean)
+    .filter(l => l.trim())
     .filter(line => !matchesScratchRoot(toPath(line), ignored));
   if (lines.length === 0) {
     return { clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
-  const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f));
+  const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => toPath(line).endsWith(f));
   // `R old -> new` (rename) names two paths; the post-rename path is the one
   // that exists on disk and the one a diff against the default branch reports.
   const lockfileLines = lines.filter(isLockfile);
