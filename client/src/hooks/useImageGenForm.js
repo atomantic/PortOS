@@ -288,6 +288,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     if (get('guidance')) setGuidance(get('guidance'));
     if (get('quantize')) setQuantize(get('quantize'));
     if (initFile && initImage.source == null) {
+      pickSeqRef.current.init += 1;
       setInitImage({ source: 'gallery', file: null, name: initFile, previewUrl: `/data/images/${initFile}` });
       wantI2iModeRef.current = true;
     }
@@ -364,12 +365,14 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   };
 
   const handleClearInitImage = () => {
+    pickSeqRef.current.init += 1;
     revokeIfBlob(initImage.previewUrl);
     setInitImage({ source: null, file: null, name: null, previewUrl: null });
   };
 
   const handlePickGalleryInitImage = (item) => {
     if (!item?.filename) return;
+    pickSeqRef.current.init += 1;
     if (item.raw) {
       handleRemix(item.raw, { applyModel: false });
       setPrompt(item.raw.prompt || '');
@@ -396,6 +399,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   };
 
   const handleClearReferenceImage = (slotIndex) => {
+    pickSeqRef.current.refs[slotIndex] = (pickSeqRef.current.refs[slotIndex] ?? 0) + 1;
     setReferenceImages((previous) => {
       const next = [...previous];
       revokeIfBlob(next[slotIndex]?.previewUrl);
@@ -421,11 +425,14 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
 
   const handlePickGalleryReferenceImage = async (slotIndex, item) => {
     if (!item?.filename) return;
+    const sequences = pickSeqRef.current.refs;
+    const myPick = sequences[slotIndex] = (sequences[slotIndex] ?? 0) + 1;
+    const isCurrent = () => mountedRef.current && myPick === pickSeqRef.current.refs[slotIndex];
     const file = await galleryImageToFile(item.filename).catch((error) => {
-      toast.error(`Failed to load reference image: ${error.message}`);
+      if (isCurrent()) toast.error(`Failed to load reference image: ${error.message}`);
       return null;
     });
-    if (!file) return;
+    if (!file || !isCurrent()) return;
     setReferenceImages((previous) => {
       const next = [...previous];
       revokeIfBlob(next[slotIndex]?.previewUrl);
@@ -558,6 +565,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   }, [i2iCapable, availableBackends, switchMode]);
 
   const setGalleryInitImage = useCallback((filename) => {
+    pickSeqRef.current.init += 1;
     revokeIfBlob(initImagePreviewRef.current);
     setInitImage({ source: 'gallery', file: null, name: filename, previewUrl: `/data/images/${filename}` });
     setInitImageStrength(0.4);

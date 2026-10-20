@@ -93,6 +93,9 @@ beforeEach(() => {
       availableLoras: [],
       clearPendingCanonAdditions: fn(),
       draft,
+      draftReady: true,
+      draftReadError: null,
+      retryDraft: fn(),
       draftRef: { current: draft },
       effectiveDefaultMode: null,
       flushDraftIfDirty: vi.fn().mockResolvedValue(true),
@@ -156,6 +159,28 @@ beforeEach(() => {
   hookMocks.useUniverseBucketActions.mockReturnValue({
     autoSorting: false, handleAutoSort: fn(), handleGenerateInCategory: fn(),
     handlePromoteVariation: fn(), promoting: false,
+  });
+});
+
+describe('UniverseBuilderPage draft admission', () => {
+  it('hides draft actions while loading and exposes an inline retry on failure', () => {
+    const draft = hookMocks.useUniverseDraft({ selectedId: 'u1' });
+    const retryDraft = vi.fn();
+    hookMocks.useUniverseDraft.mockReturnValue({ ...draft, draftReady: false, draftReadError: null, retryDraft });
+    const view = () => <MemoryRouter initialEntries={['/universes/u1']}>
+      <Routes><Route path="/universes/:universeId" element={<UniverseBuilderPage />} /></Routes>
+    </MemoryRouter>;
+    const { rerender } = render(view());
+    expect(screen.getByRole('status')).toHaveTextContent('Loading universe');
+    expect(screen.queryByRole('button', { name: /^Save$/ })).not.toBeInTheDocument();
+    hookMocks.useUniverseDraft.mockReturnValue({ ...draft, draftReady: false, draftReadError: 'World unavailable', retryDraft });
+    rerender(view());
+    expect(screen.getByRole('alert')).toHaveTextContent('World unavailable');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading universe' }));
+    expect(retryDraft).toHaveBeenCalledTimes(1);
+    hookMocks.useUniverseDraft.mockReturnValue({ ...draft, draftReady: true });
+    rerender(view());
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeEnabled();
   });
 });
 
