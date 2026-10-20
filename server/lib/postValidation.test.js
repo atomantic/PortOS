@@ -413,6 +413,8 @@ describe('questionResultSchema chunkId/element (issue #2016)', () => {
     });
     expect(postSessionSubmitSchema.safeParse(session({ chunkId: key })).success).toBe(false);
     expect(postSessionSubmitSchema.safeParse(session({ element: key })).success).toBe(false);
+    // Each fill-blank answer's element is merged as its own mastery key.
+    expect(postSessionSubmitSchema.safeParse(session({ answered: [{ index: 0, value: 'b', element: key }] })).success).toBe(false);
     expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: key, results: [{ correct: true }] }).success).toBe(false);
     expect(memoryPracticeSchema.safeParse({ mode: 'element-flash', results: [{ correct: true, element: key }] }).success).toBe(false);
     expect(memoryPracticeSchema.safeParse({ mode: 'sequence', chunkId: 'verse-1', results: [{ correct: true, chunkId: 'verse-1' }] }).success).toBe(true);

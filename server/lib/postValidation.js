@@ -50,7 +50,8 @@ const fillBlankAnswerSchema = z.object({
   value: z.string().nullable(),
   expected: z.string().optional(),
   correct: z.boolean().optional(),
-  element: z.string().nullable().optional(),
+  // Copied onto the question's element by expandMemoryQuestionResults.
+  element: masteryKeySchema.nullable().optional(),
 });
 
 const questionResultSchema = z.object({

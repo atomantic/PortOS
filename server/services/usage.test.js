@@ -1123,6 +1123,27 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
     await loadUsage();
   });
 
+  it('skips a correction whose provider or model names a prototype key', async () => {
+    const correction = (overrides) => ({
+      runId: 'run-example-proto', day: dayKey, providerId, model,
+      estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
+      measured: [{ providerId, model, messages: 2, tokensIn: 100, tokensOut: 200, source: 'measured' }],
+      ...overrides,
+    });
+    const before = structuredClone(getUsage());
+    expect(await applyHistoricalUsageCorrections([
+      correction({ measured: [{ providerId, model: '__proto__', messages: 2, tokensOut: 200 }] }),
+      correction({ siblings: [{ providerId: '__proto__', model, messages: 1, tokensOut: 5 }], siblingScanned: true }),
+      correction({ model: 'constructor' }),
+    ])).toMatchObject({ corrected: 0 });
+    expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
+    expect(Object.hasOwn(Object.prototype, 'tokensOut')).toBe(false);
+    const after = getUsage();
+    for (const key of ['dailyActivity', 'byProvider', 'byModel', 'totalTokens', 'totalMessages']) {
+      expect(after[key]).toEqual(before[key]);
+    }
+  });
+
   it('replaces the configured-provider estimate, rebuilds flat totals, and is idempotent', async () => {
     const correction = {
       runId: 'run-example-1',

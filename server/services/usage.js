@@ -391,9 +391,16 @@ export async function applyHistoricalUsageCorrections(corrections = []) {
     && Boolean(usageData.dailyActivity?.[correction.day]?.byProvider?.[correction.providerId]);
   const pendingSiblings = (correction) => (correction?.siblings?.length > 0)
     && !usageData.siblingReconciledRuns[correction.runId];
+  // Transcript-derived provider ids and model names index the same plain-object
+  // maps as live recording, so a correction naming a prototype key is skipped.
+  const usableRecord = (record) => !record
+    || ((!record.providerId || isUsageKey(record.providerId)) && (!record.model || usageModelKey(record.model) !== null));
   const eligible = corrections.filter((correction) => {
     const { runId, day: dayKey, providerId } = correction || {};
     if (!runId || !dayKey || !providerId) return false;
+    if (POLLUTING_KEYS.has(runId) || POLLUTING_KEYS.has(dayKey) || !isUsageKey(providerId)) return false;
+    const records = [correction, ...[correction.measured].flat(), ...(correction.siblings || [])];
+    if (!records.every(usableRecord)) return false;
     return pendingParent(correction) || pendingSiblings(correction);
   });
   const providerScopes = new Map();
