@@ -122,6 +122,57 @@ const loadCards = async (client, deckId) => {
   return rows.map(projectCard);
 };
 
+const INTERRUPTED_RENDER_ERROR = 'interrupted by restart';
+
+// Same read-time projection as a mood-board note: a queued card whose job is
+// gone fails. A missing job id is not a live claim (deck stamps always carry
+// one). The wire strips `render`, so this must not move either clock.
+export function projectInterruptedCardRenders(cards, isLive = () => false) {
+  const updates = [];
+  let changed = false;
+  const next = (Array.isArray(cards) ? cards : []).map((card) => {
+    const render = card?.render;
+    if (!render || render.status !== 'queued') return card;
+    if (render.jobId && isLive(render.jobId)) return card;
+    changed = true;
+    updates.push({ id: card.id, jobId: render.jobId || '' });
+    return { ...card, render: { ...render, status: 'failed', error: INTERRUPTED_RENDER_ERROR } };
+  });
+  return { cards: changed ? next : cards, changed, updates };
+}
+
+async function reconcileInterruptedCardRenders(deckId, cards) {
+  if (!cards.some((card) => card.render?.status === 'queued')) return null;
+  const { getJob } = await import('./mediaJobQueue/index.js');
+  const isLive = (jobId) => {
+    const status = getJob(jobId)?.status;
+    return status === 'queued' || status === 'running';
+  };
+  const projected = projectInterruptedCardRenders(cards, isLive);
+  if (!projected.changed) return null;
+  const stampedAt = new Date().toISOString();
+  let wrote = 0;
+  await queueRecordWrite(deckId, () => withTransaction(async (client) => {
+    for (const card of projected.updates) {
+      const { rowCount } = await client.query(
+        `UPDATE deck_cards
+           SET definition = jsonb_set(
+             definition,
+             '{render}',
+             (definition->'render') || jsonb_build_object('status', 'failed', 'error', $4::text, 'updatedAt', $5::text)
+           )
+         WHERE deck_id = $1 AND id = $2
+           AND definition->'render'->>'status' = 'queued'
+           AND COALESCE(definition->'render'->>'jobId', '') = $3`,
+        [deckId, card.id, card.jobId, INTERRUPTED_RENDER_ERROR, stampedAt],
+      );
+      wrote += rowCount;
+    }
+  }));
+  if (wrote) console.warn(`⚠️ Deck ${deckId}: a card render was interrupted by restart`);
+  return loadCards({ query }, deckId);
+}
+
 export async function listDecks({ includeDeleted = false } = {}) {
   await ensureSchema();
   const { rows } = await query(
@@ -142,11 +193,17 @@ export async function listDecks({ includeDeleted = false } = {}) {
   }));
 }
 
-export async function getDeck(id, { includeDeleted = false } = {}) {
+export async function getDeck(id, { includeDeleted = false, reconcileRenders = true } = {}) {
   await ensureSchema();
   const { rows } = await query('SELECT * FROM decks WHERE id = $1', [id]);
   if (!rows[0] || (!includeDeleted && rows[0].deleted === true)) throw notFound();
-  const cards = await loadCards({ query }, id);
+  let cards = await loadCards({ query }, id);
+  // Callers already inside this deck's write tail must pass reconcileRenders
+  // false. The tail is not re-entrant, and a nested heal would deadlock.
+  if (reconcileRenders) {
+    const reconciled = await reconcileInterruptedCardRenders(id, cards);
+    if (reconciled) cards = reconciled;
+  }
   return { ...projectDeck(rows[0]), cards, completion: deckCompletion(cards) };
 }
 
@@ -474,7 +531,7 @@ export function removeSample(id, sampleId) {
  * merge would treat an existing deck as new and skip the LWW compare entirely.
  */
 export async function getDeckForSync(id) {
-  return getDeck(id, { includeDeleted: true }).catch((error) => {
+  return getDeck(id, { includeDeleted: true, reconcileRenders: false }).catch((error) => {
     if (error?.code === 'DECK_NOT_FOUND') return null;
     throw error;
   });
@@ -699,6 +756,6 @@ export async function restoreDeck(id, patch = {}) {
       ],
     );
     emitRecordUpdated(DECK_KIND, id);
-    return getDeck(id);
+    return getDeck(id, { reconcileRenders: false });
   });
 }

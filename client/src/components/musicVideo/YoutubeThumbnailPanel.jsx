@@ -105,6 +105,9 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
   const tests = Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests.filter((t) => t?.filename) : [];
   const inTest = Boolean(thumb.filename) && tests.some((t) => t.filename === thumb.filename);
   const crop = wide ? focusX : focusY;
+  // `pending` survives a read only while the paint is live. A restart clears a
+  // dead one and sets lastError, which leaves Paint enabled. The click itself
+  // stays disabled until that request returns.
   const painting = Boolean(publishKit.paintingThumbnail || thumb.pending);
   const paintTitle = title.trim();
   // The exact prompt the paint would send, from the server's own builder, refreshed as the title or the committed notes change.

@@ -34,6 +34,7 @@ import {
   claimItemRender,
   settleItemRender,
   applyRenderedItem,
+  projectInterruptedNoteRenders,
   mergeBoardRecord,
   applyPinterestLink,
   healPinterestFeedRecord,
@@ -264,6 +265,24 @@ export async function updateBoardItem(id, itemId, patch) {
 
 // Text note render lifecycle (#10531) — see the logic.js transforms. The two
 // settle steps skip the write when the note moved on (stale job).
+// Re-check liveness under the row lock. A pre-lock snapshot can mark a render
+// that was claimed while this read was in flight. Returns null when the board
+// was deleted between the read and the lock.
+export async function healInterruptedNoteRenders(id, { isLive = () => false, now } = {}) {
+  try {
+    let changed = false;
+    const locked = await withLockedBoard(id, (board) => {
+      const projected = projectInterruptedNoteRenders(board, { isLive, ...(now ? { now } : {}) });
+      changed = projected.changed;
+      return { board: projected.board, skipPersist: !projected.changed };
+    });
+    return { board: locked.board, changed };
+  } catch (err) {
+    if (err?.code === 'NOT_FOUND') return null;
+    throw err;
+  }
+}
+
 export async function claimBoardItemRender(id, itemId, opts) {
   const { result } = await withLockedBoard(id, (b) => {
     const { board, item } = claimItemRender(b, itemId, opts);

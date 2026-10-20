@@ -1,5 +1,5 @@
 /** Deck designer over HTTP and PostgreSQL. Runs only against portos_test. */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
@@ -9,6 +9,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import deckRoutes from './decks.js';
 import { attachCardRender, markCardsRenderQueued, markCardRenderTerminal } from '../services/decks.js';
 import { cardStatus } from '../lib/deckTemplates.js';
+import * as mediaJobs from '../services/mediaJobQueue/index.js';
 
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('routes/decks.db.test', health.connected, health.error);
@@ -101,11 +102,27 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
     await patch(`/${deck.id}/cards/${card.id}`, { prompt: 'a queen' });
     await markCardsRenderQueued(deck.id, [{ cardId: card.id, render: { jobId: 'job-1', status: 'queued', queuedAt: new Date().toISOString() } }]);
     const readCard = async () => (await get(`/${deck.id}`)).body.cards.find((c) => c.id === card.id);
-    expect(cardStatus(await readCard())).toBe('queued');
+    // job-1 is not in the media queue. A detail read treats that as interrupted
+    // unless the job is still queued or running.
+    const live = vi.spyOn(mediaJobs, 'getJob').mockImplementation((jobId) => (
+      jobId === 'job-1' ? { id: jobId, status: 'queued' } : null
+    ));
+    try {
+      expect(cardStatus(await readCard())).toBe('queued');
+    } finally {
+      live.mockRestore();
+    }
 
     // A failure event for a superseded job must not flip the card.
     expect(await markCardRenderTerminal(deck.id, card.id, { jobId: 'job-0', status: 'failed' })).toBeNull();
-    expect(cardStatus(await readCard())).toBe('queued');
+    const stillQueued = vi.spyOn(mediaJobs, 'getJob').mockImplementation((jobId) => (
+      jobId === 'job-1' ? { id: jobId, status: 'queued' } : null
+    ));
+    try {
+      expect(cardStatus(await readCard())).toBe('queued');
+    } finally {
+      stillQueued.mockRestore();
+    }
 
     const attached = await attachCardRender({ deckId: deck.id, cardId: card.id, filename: 'job-1.png', jobId: 'job-1' });
     expect(attached).toMatchObject({ imageRefs: ['job-1.png'], primaryImageRef: 'job-1.png' });
@@ -124,6 +141,22 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
     expect(cardStatus(curated.body)).toBe('rendered');
     // A card that vanished returns null rather than throwing from the hook.
     expect(await attachCardRender({ deckId: deck.id, cardId: randomUUID(), filename: 'x.png', jobId: 'j' })).toBeNull();
+  });
+
+  it('reads a card whose render job is gone as interrupted without moving the deck clock', async () => {
+    const deck = await create({ name: 'Interrupted Deck', kind: 'playing' });
+    const card = deck.cards.find((c) => c.key === 'spades-K');
+    await patch(`/${deck.id}/cards/${card.id}`, { prompt: 'a king' });
+    const before = (await get(`/${deck.id}`)).body;
+    const beforeCard = before.cards.find((c) => c.id === card.id);
+    await markCardsRenderQueued(deck.id, [{ cardId: card.id, render: { jobId: 'job-dead', status: 'queued', queuedAt: '2026-01-01T00:00:00.000Z' } }]);
+    const read = await get(`/${deck.id}`);
+    const healed = read.body.cards.find((c) => c.id === card.id);
+    expect(healed.render).toMatchObject({ jobId: 'job-dead', status: 'failed', error: 'interrupted by restart' });
+    expect(cardStatus(healed)).toBe('failed');
+    expect(read.body.updatedAt).toBe(before.updatedAt);
+    expect(healed.updatedAt).toBe(beforeCard.updatedAt);
+    expect(cardStatus((await get(`/${deck.id}`)).body.cards.find((c) => c.id === card.id))).toBe('failed');
   });
 
   it('adds a sample with an adopted style guide in one write, removes it, and cascades on delete', async () => {

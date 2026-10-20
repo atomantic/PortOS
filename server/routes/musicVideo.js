@@ -253,14 +253,21 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // Approvals decide stage completion and only the server computes them (#10136), so the read
 // response carries `productionReadiness` — stages derive from one record, never "not done" while a
 // second request is in flight. GET /:id/production-review still serves the full review payload.
-const presentProjectForRead = (project) => {
-  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(project)));
+// A restart archives a thumbnail paint without clearing `pending`. Heal on read,
+// and only when one is present, so a project list does not load the image stack.
+async function presentProjectForRead(project) {
+  let current = project;
+  if (project?.publishKit?.youtubeThumbnail?.pending) {
+    const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+    current = await reconcileInterruptedYoutubeThumbnail(project);
+  }
+  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
   return { ...presented, productionReadiness: productionReadiness(presented) };
-};
+}
 
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
-  const projects = (await listProjects()).map(presentProjectForRead);
+  const projects = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
   if (query.summary === '1' || query.summary === 'true') {
     const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
       .map((project) => summarizeMusicVideoProject(project, project.productionReadiness));
@@ -301,7 +308,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const p = await requireProject(req.params.id);
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  const presented = presentProjectForRead(p);
+  const presented = await presentProjectForRead(p);
   res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
 }));
 
@@ -369,7 +376,7 @@ router.put('/:id/finished-outside', asyncHandler(async (req, res) => {
   }
   const finishedOutside = finished ? { markedAt: new Date().toISOString(), ...(note ? { note } : {}) } : null;
   await updateProject(req.params.id, { finishedOutside });
-  res.json(presentProjectForRead(await getProject(req.params.id)));
+  res.json(await presentProjectForRead(await getProject(req.params.id)));
 }));
 
 // Preview is read-only; Apply rechecks audio and the serialized project basis.

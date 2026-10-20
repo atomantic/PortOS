@@ -144,6 +144,56 @@ describe('painting the title with the image model', () => {
     expect(Math.max(...stats.channels.map((c) => c.stdev))).toBeLessThan(2);
   });
 
+  it('clears a paint a restart interrupted and still accepts the next one', async () => {
+    const { id, frame } = await projectWithFrame();
+    await projects.mutateProjectRecord(id, (current) => ({
+      project: {
+        ...current,
+        publishKit: {
+          ...current.publishKit,
+          youtubeThumbnail: {
+            pending: { requestId: 'req-dead', jobId: 'job-dead', mode: 'codex', requestedAt: '2020-01-01T00:00:00.000Z' },
+            lastError: null,
+          },
+        },
+      },
+    }));
+    thumbs.__setYoutubeThumbnailDepsForTests({ jobStatus: async () => 'failed' });
+    const healed = await thumbs.reconcileInterruptedYoutubeThumbnail(await projects.getProject(id));
+    expect(healed.publishKit.youtubeThumbnail).toMatchObject({ pending: null, lastError: 'interrupted by restart' });
+    expect((await kitOf(id)).youtubeThumbnail).toMatchObject({ pending: null, lastError: 'interrupted by restart' });
+
+    const enqueue = vi.fn(async () => ({ jobId: 'job-next' }));
+    thumbs.__setYoutubeThumbnailDepsForTests({
+      getSettings: async () => ({}), defaultRoute: async () => ({ mode: 'codex', model: null }),
+      imageParams: async (_s, _r, common) => common, enqueue, jobStatus: async () => 'queued',
+    });
+    await thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example Song' });
+    expect((await kitOf(id)).youtubeThumbnail.pending).toMatchObject({ jobId: 'job-next' });
+    thumbs.__setYoutubeThumbnailDepsForTests({});
+  });
+
+  it('leaves a live paint and a fresh reservation with no job id', async () => {
+    const { id } = await projectWithFrame();
+    const stamp = async (pending) => projects.mutateProjectRecord(id, (current) => ({
+      project: { ...current, publishKit: { ...current.publishKit, youtubeThumbnail: { pending, lastError: null } } },
+    }));
+    thumbs.__setYoutubeThumbnailDepsForTests({ jobStatus: async () => 'running' });
+    await stamp({ requestId: 'req-live', jobId: 'job-live', mode: 'codex', requestedAt: '2020-01-01T00:00:00.000Z' });
+    const live = await thumbs.reconcileInterruptedYoutubeThumbnail(await projects.getProject(id));
+    expect(live.publishKit.youtubeThumbnail.pending).toMatchObject({ jobId: 'job-live' });
+    expect((await kitOf(id)).youtubeThumbnail.pending.jobId).toBe('job-live');
+
+    await stamp({ requestId: 'req-reserved', jobId: null, mode: 'codex', requestedAt: new Date().toISOString() });
+    const reserved = await thumbs.reconcileInterruptedYoutubeThumbnail(await projects.getProject(id));
+    expect(reserved.publishKit.youtubeThumbnail.pending).toMatchObject({ requestId: 'req-reserved', jobId: null });
+
+    await stamp({ requestId: 'req-stale', jobId: null, mode: 'codex', requestedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString() });
+    const stale = await thumbs.reconcileInterruptedYoutubeThumbnail(await projects.getProject(id));
+    expect(stale.publishKit.youtubeThumbnail).toMatchObject({ pending: null, lastError: 'interrupted by restart' });
+    thumbs.__setYoutubeThumbnailDepsForTests({});
+  });
+
   it('records why a paint failed', async () => {
     const { id, frame } = await projectWithFrame();
     const enqueue = vi.fn(async () => ({ jobId: 'job-failing' }));
