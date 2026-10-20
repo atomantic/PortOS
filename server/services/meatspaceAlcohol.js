@@ -60,8 +60,9 @@ export function computeRollingAverages(entries, sex = 'male') {
 
   // Helper: average over last N days (including zero-drink days)
   const rollingAverage = (days) => {
+    // Window is exactly `days` calendar days including today: [today - (days - 1), today].
     const cutoff = new Date(now);
-    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setDate(cutoff.getDate() - (days - 1));
     const cutoffStr = getDateString(cutoff);
 
     let totalDrinks = 0;
