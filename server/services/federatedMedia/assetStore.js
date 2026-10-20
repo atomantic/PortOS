@@ -199,10 +199,16 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body, jobs = [] 
 
 async function enforceAssetQuota(callerId, incomingBytes) {
   const ownerPrefix = `${federatedMediaAssetOwner(callerId)}-`;
-  const entries = await readdir(PATHS.federatedMediaInbox).catch(() => []);
+  // Fail closed: only a missing directory/entry (not yet created, or swept
+  // mid-scan) is safe to treat as empty; any other error refuses the upload.
+  const ignoreMissing = (error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  };
+  const entries = (await readdir(PATHS.federatedMediaInbox).catch(ignoreMissing)) || [];
   const infos = await Promise.all(entries.map(async (name) => ({
     name,
-    info: await lstat(join(PATHS.federatedMediaInbox, name)).catch(() => null),
+    info: await lstat(join(PATHS.federatedMediaInbox, name)).catch(ignoreMissing),
   })));
   let totalBytes = 0;
   let callerCount = 0;
