@@ -132,6 +132,21 @@ describe('parseFhirLabResult', () => {
 // =============================================================================
 
 describe('processClinicalRecords', () => {
+  it('keeps export-supplied names from writing through to Object.prototype', () => {
+    const jsons = [
+      // A LOINC code inherited from Object.prototype must not map to a function key.
+      makeFhirObservation({ code: 'constructor', display: 'Hostile', value: 1, date: '2025-01-15T10:00:00Z' }),
+      // A display name that snake-cases to a polluting key is skipped, not stored.
+      makeFhirObservation({ display: 'Prototype', value: 2, date: '2025-01-15T10:00:00Z', refLow: 0, refHigh: 2 }),
+      makeFhirObservation({ display: 'Glucose', value: 95, date: '2025-01-15T10:00:00Z' }),
+    ];
+    const result = processClinicalRecords(jsons);
+    expect(result.tests).toEqual([{ date: '2025-01-15', hostile: 1, glucose: 95 }]);
+    expect(result.referenceRanges).toEqual({});
+    expect(Object.prototype).not.toHaveProperty('value');
+    expect(Object.prototype).not.toHaveProperty('label');
+  });
+
   it('groups results by date and collects reference ranges', () => {
     const jsons = [
       makeFhirObservation({ code: '2345-7', display: 'Glucose', value: 95, date: '2025-01-15T10:00:00Z', refLow: 70, refHigh: 99 }),

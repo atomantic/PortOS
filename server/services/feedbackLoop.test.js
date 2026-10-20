@@ -35,6 +35,20 @@ afterAll(cleanup);
 
 const merge = async (remote) => (await sync.applyDigitalTwinRemote({ feedback: remote })).count > 0;
 
+describe('document attribution keyed by stored strings', () => {
+  it('recalculates weights without writing a __proto__ document key onto Object.prototype', async () => {
+    const entries = Array.from({ length: 5 }, (_, i) => ({
+      ...entry(`e${i}`, `2026-01-0${i + 1}T00:00:00.000Z`, 'sounds_like_me'),
+      documentsUsed: ['__proto__'],
+    }));
+    await writeFile(FILE, JSON.stringify(doc(entries, '2026-01-06T00:00:00.000Z')));
+    const result = await feedback.recalculateWeights();
+    expect(result.adjustments).toEqual({});
+    expect(Object.prototype).not.toHaveProperty('total');
+    expect(Object.prototype).not.toHaveProperty('positive');
+  });
+});
+
 describe('feedback peer merge vs local submit', () => {
   it('keeps synced entries when a local submit follows a peer merge (stale cache)', async () => {
     await feedback.submitFeedback({ contentType: 'enrichment', validation: 'sounds_like_me', contentSnippet: 'a' }); // primes cache

@@ -10,6 +10,7 @@ import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
 import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueHealthDayMutation } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
+import { bucketFor } from '../lib/objects.js';
 
 // === Mapping Tables ===
 
@@ -311,9 +312,11 @@ export async function importAppleHealthXml(filePath, io = null) {
 
           const { metricName, dateStr, dataPoint } = normalized;
 
-          if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
-          if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
-          dayBuckets[dateStr][metricName].push(dataPoint);
+          // dateStr and metricName both come from the uploaded export.
+          const metrics = bucketFor(dayBuckets, dateStr, () => ({}));
+          const points = metrics && bucketFor(metrics, metricName, () => []);
+          if (!points) return;
+          points.push(dataPoint);
           allDays.add(dateStr);
 
           processedRecords++;

@@ -27,7 +27,7 @@
 
 import { join } from 'path';
 import { atomicWrite, readJSONFile, dataPath, PATHS } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
+import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } from '../lib/tombstones.js';
@@ -340,7 +340,8 @@ export async function applyUsageRemote(remoteData) {
     let changed = 0;
 
     for (const [key, rawEntry] of Object.entries(incoming)) {
-      if (!isNonBlankStr(key) || key === selfId) continue;
+      // A peer-chosen key of `__proto__` would replace this map's prototype on assignment.
+      if (!isNonBlankStr(key) || key === selfId || POLLUTING_KEYS.has(key)) continue;
       const entry = sanitizeEntry(rawEntry, key);
       if (!entry) continue;
       // A digest CAPTURED after the deletion is a machine that came back, and
