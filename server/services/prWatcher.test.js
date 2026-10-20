@@ -34,8 +34,10 @@ vi.mock('./forgeExecOptions.js', () => ({
 }));
 
 const screenMock = vi.fn();
+const fingerprintMock = vi.fn();
 vi.mock('./untrustedContent.js', () => ({
   screenUntrustedContent: (...args) => screenMock(...args),
+  getContributionAssessmentFingerprint: (...args) => fingerprintMock(...args),
 }));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({
@@ -102,6 +104,7 @@ const pr = (number, login, extra = {}) => ({
 beforeEach(() => {
   execGhMock.mockReset();
   screenMock.mockReset().mockResolvedValue({ ok: true, screening: { safe: true } });
+  fingerprintMock.mockReset().mockResolvedValue('policy-1');
   ensureForgeReachableMock.mockReset();
   ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
   mergePrMock.mockReset();
@@ -301,6 +304,86 @@ describe('merge-only PR watcher', () => {
     expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0 });
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(readPendingMergePrs(mockApps.get(app.id))[0].ticks).toBe(1);
+  });
+
+  describe('a withheld contribution assessment', () => {
+    const modelRequired = { ok: false, code: 'untrusted-content-model-required', message: 'No eligible API provider has a default model.' };
+    const sweep = async (app) => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try { return { result: await processPendingMergePrs(app), lines: logged.mock.calls.map(call => String(call[0])) }; }
+      finally { logged.mockRestore(); }
+    };
+
+    it('names the assessment code in the log line and the deadline notification', async () => {
+      const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
+      mockApps.set(app.id, app);
+      installPendingEvidence();
+      screenMock.mockResolvedValue(modelRequired);
+      const { lines } = await sweep(app);
+      expect(lines.some(line => line.includes('Deterministic merge failed for PR #88') && line.includes('untrusted-content-model-required'))).toBe(true);
+      expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+        description: expect.stringContaining('untrusted-content-model-required'),
+      }));
+    });
+
+    it('reports a thrown assessment as security-action-assessment-error', async () => {
+      const app = pendingApp();
+      mockApps.set(app.id, app);
+      installPendingEvidence();
+      screenMock.mockRejectedValue(new Error('boom'));
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { lines } = await sweep(app);
+      warned.mockRestore();
+      expect(lines.some(line => line.includes('security-action-assessment-error'))).toBe(true);
+    });
+
+    it('is not re-assessed, and takes no admission lease, while the head and policy are unchanged', async () => {
+      const app = pendingApp();
+      mockApps.set(app.id, app);
+      installPendingEvidence();
+      screenMock.mockResolvedValue(modelRequired);
+      await sweep(app);
+      expect(screenMock).toHaveBeenCalledTimes(1);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].assessmentWithheld).toMatchObject({ headSha: 'a'.repeat(40), policy: 'policy-1' });
+
+      // A live parent holding the lease would defer any entry that asked for it.
+      const { claimMergeAdmission } = await import('./cosMergeAdmission.js');
+      admissionState.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01', status: 'running',
+        metadata: { sourceWorkspace: '/repos/app1', claimPicksOwnBranch: true } };
+      const lease = await claimMergeAdmission({ agentId: 'parent', action: 'acquire' });
+      expect(lease.admitted).toBe(true);
+      const held = await processPendingMergePrs(mockApps.get(app.id));
+      expect(held.waiting || 0).toBe(0);
+      expect(screenMock).toHaveBeenCalledTimes(1);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].ticks).toBe(2);
+      await claimMergeAdmission({ agentId: 'parent', action: 'release', token: lease.token, outcome: 'leave-open' });
+    });
+
+    it.each([
+      ['a changed policy', () => fingerprintMock.mockResolvedValue('policy-2'), () => {}],
+      ['a new head', () => {}, (e) => { e.pr.headRefOid = 'b'.repeat(40); }],
+    ])('is assessed again after %s', async (_name, changePolicy, changeEvidence) => {
+      const app = pendingApp();
+      mockApps.set(app.id, app);
+      const evidence = installPendingEvidence();
+      screenMock.mockResolvedValue(modelRequired);
+      await sweep(app);
+      changePolicy();
+      changeEvidence(evidence);
+      screenMock.mockResolvedValue({ ok: true, screening: { safe: true } });
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(mockApps.get(app.id))).toMatchObject({ merged: 1 });
+      expect(screenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache a transport failure that can heal without a change', async () => {
+      const app = pendingApp();
+      mockApps.set(app.id, app);
+      installPendingEvidence();
+      screenMock.mockResolvedValue({ ok: false, code: 'untrusted-content-reasoner-failed' });
+      await sweep(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].assessmentWithheld).toBeUndefined();
+    });
   });
 
   it.each([

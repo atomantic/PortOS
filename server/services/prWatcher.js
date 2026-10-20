@@ -53,6 +53,14 @@ const PR_LIST_LIMIT = 200;
 // stays the sole owner of the budget and of every entry after the cap.
 export const PENDING_MERGE_SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 export const MAX_PENDING_MERGE_TICKS = 12;
+// Withheld-assessment causes that repeat identically until the head or the
+// untrusted-content configuration changes. Transport and readiness failures
+// are deliberately absent: they heal without either changing.
+const STABLE_ASSESSMENT_CAUSES = new Set([
+  'untrusted-content-model-required', 'untrusted-content-context-too-small', 'untrusted-content-too-large',
+  'untrusted-content-policy-invalid', 'untrusted-content-endpoint-blocked', 'untrusted-content-blocked',
+  'security-model-withheld', 'security-model-uncertain', 'security-model-assessment-required',
+]);
 export const HANDOFF_FOLLOW_UP_INTERVAL_MS = 60 * 1000;
 export const HANDOFF_FOLLOW_UP_FAST_POLLS = 5;
 export const HANDOFF_FOLLOW_UP_BACKOFF_MS = 2 * 60 * 1000;
@@ -634,7 +642,22 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
     }
 
     let withheldReason = null;
-    if (isPendingMergeReady(prView)) {
+    // The last assessment withheld for this exact head and configuration. While
+    // neither has changed a retry cannot succeed, so skip the classifier run and
+    // the repository's merge-admission lease; the entry stays in attention.
+    let assessmentWithheld = null;
+    const ready = isPendingMergeReady(prView);
+    if (ready && entry.assessmentWithheld) {
+      const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+      const policy = await getContributionAssessmentFingerprint().catch(() => null);
+      const held = entry.assessmentWithheld;
+      if (policy && held.policy === policy
+        && String(prView.headRefOid || '').toLowerCase() === held.headSha) {
+        assessmentWithheld = held;
+        withheldReason = held.reason;
+      }
+    }
+    if (ready && !assessmentWithheld) {
       const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
       const admitted = await withPendingMergeAdmission(origin, async () => {
         const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
@@ -653,8 +676,23 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
           readIssue: async (number) => safeJSONParse(await execGh([
             'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
           ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
-        }).catch(() => ({ ok: false }));
-        withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
+        }).catch((err) => {
+          console.warn(`⚠️ Contribution assessment for PR #${entry.prNumber} threw: ${err.message}`);
+          return { ok: false, code: 'security-action-assessment-error' };
+        });
+        if (!assessment.ok) {
+          const code = assessment.code || 'security-action-assessment-unavailable';
+          const detail = assessment.cause ? `${code}: ${assessment.cause}` : code;
+          withheldReason = `the complete current contribution assessment was unavailable or withheld (${detail})`;
+          // Evidence, mutable-state, transport and provider-readiness failures
+          // can clear on a retry of the same head; only a stable outcome of this
+          // head under this configuration is cached.
+          if (assessment.code === 'security-action-assessment-withheld' && STABLE_ASSESSMENT_CAUSES.has(assessment.cause)) {
+            const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+            const policy = await getContributionAssessmentFingerprint().catch(() => null);
+            if (policy) assessmentWithheld = { headSha: String(expectedHeadSha).toLowerCase(), code: detail, policy, reason: withheldReason };
+          }
+        } else withheldReason = null;
         // Re-read the durable owner's policy inside admission, after remote
         // assessment and immediately before merge. Waiting CI is not authority
         // to ignore a later manual hold or a changed review requirement.
@@ -695,7 +733,8 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
       console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
     }
 
-    const next = { ...entry, ticks: entry.ticks + charge };
+    const { assessmentWithheld: _previous, ...settled } = entry;
+    const next = { ...settled, ticks: entry.ticks + charge, ...(assessmentWithheld ? { assessmentWithheld } : {}) };
     if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
       const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
         ? `it is ${String(prView.state).toLowerCase()} rather than open`

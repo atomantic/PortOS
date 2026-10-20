@@ -5,7 +5,7 @@ vi.mock('../../services/api', () => ({ getSettings: vi.fn(), updateSettings: vi.
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
   providers: [
     { id: 'local-api', name: 'Local example', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', models: ['example-model'] },
-    { id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1', models: ['example-model'] },
+    { id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1', models: ['example-model'], defaultModel: 'example-model' },
   ], loading: false,
 }) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
@@ -40,6 +40,16 @@ describe('content safety policy configuration', () => {
       },
     } }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save content policies' })).toBeDisabled());
+  });
+
+  it('shows what Automatic resolves to, skipping an eligible provider without a default model', async () => {
+    render(<UntrustedContentPolicyPanel />);
+    fireEvent.change(await screen.findByLabelText('Source'), { target: { value: 'github-pr' } });
+    expect(screen.getByText(/Resolves to Cloud example with model example-model/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Source'), { target: { value: 'email' } });
+    expect(screen.getByRole('status')).toHaveTextContent('No eligible API provider has a default model');
+    fireEvent.change(screen.getByLabelText('Analysis API provider'), { target: { value: 'local-api' } });
+    expect(screen.getByRole('status')).toHaveTextContent('The pinned provider has no default model');
   });
 
   it('requires loaded settings before editing and supports a failed-read retry', async () => {
