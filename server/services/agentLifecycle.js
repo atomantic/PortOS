@@ -435,7 +435,7 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
  * "route, then complete the live agent" instead of two unrelated jobs sharing
  * one name.
  */
-async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration) {
+async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null } = {}) {
   // Dynamic import: `cos.js` imports back into this cluster, so a static import
   // of the transcript-hydrating `getAgent` here would close an import cycle.
   const { getAgent: getAgentState } = await import('./cos.js');
@@ -467,7 +467,8 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     success,
     exitCode,
     duration,
-    errorMessage: willSucceed ? undefined : 'Agent completed after server restart',
+    errorMessage: interruptedStartup?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
+    ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } } : {}),
   });
   if (cosAgent.taskId && task && task.status !== 'completed') {
     if (retiredSuccess) {
@@ -485,7 +486,11 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
       // that is sitting right there. `handleOrphanedTask` stamps the LI verdict
       // itself on every terminal settlement (#8440), so there is nothing left
       // to re-read and stamp here.
-      await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
+      await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, {
+        agentMetadata: cosAgent.metadata,
+        agentStartedAt: cosAgent.startedAt,
+        ...(interruptedStartup ? { interrupted: true } : {}),
+      });
     }
   }
   await maintenance.finishResource('agent', agentId);
@@ -563,6 +568,24 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     if (persistedAgent && persistedAgent.status !== 'running') {
       console.log(`✅ Agent ${agentId} already ${persistedAgent.status} — ignoring duplicate completion (exit ${exitCode})`);
       return;
+    }
+
+    // A recovered TUI whose runner positively knew no prompt had been submitted
+    // was stopped by PortOS itself (syncRunnerAgents); the task never began.
+    // Settle it as a restart interruption — no retry charged, spawn refunded, no
+    // task-type failure and no app cooldown — exactly like an agent the restart
+    // killed mid-run, instead of finalizing it as the task's own startup failure.
+    // Only for a FAILED exit with a readable persisted record: the marker is
+    // cleared only after the guarded stop answers, so a run that submitted and
+    // finished in that window must still finalize normally, and the untracked
+    // settlement has nothing to work from without the record.
+    if (agent.startupErrorAnalysis && !success && persistedAgent) {
+      if (laneName) release(agentId);
+      if (executionId) {
+        errorExecution(executionId, { message: agent.startupErrorAnalysis.message, code: exitCode });
+        completeExecution(executionId, { success: false });
+      }
+      return completeUntrackedAgentFromCosState(agentId, exitCode, false, duration, { interruptedStartup: agent.startupErrorAnalysis });
     }
 
     // Normalize the agent's task shape — recovered agents (post-restart,
