@@ -31,6 +31,12 @@ describe('parseAllowedHosts', () => {
     expect(p).toMatchObject({ present: true, allowsAll: false, hosts: ['.ts.net', 'localhost'] });
   });
 
+  it('parses an array whose entries contain brackets (bracketed IPv6)', () => {
+    const p = parseAllowedHosts("server: { allowedHosts: ['localhost', '[::1]', '.ts.net'] }");
+    expect(p.hosts).toEqual(['localhost', '[::1]', '.ts.net']);
+    expect(hostIsAllowed(p, 'host.example-tailnet.ts.net')).toBe(true);
+  });
+
   it('ignores a commented-out allowedHosts', () => {
     const src = `server: {
       // allowedHosts: true,
@@ -100,6 +106,13 @@ describe('rewriteAllowedHosts', () => {
     expect(out.strategy).toBe('replace-value');
     expect(out.content).toContain('allowedHosts: true');
     expect(out.content).not.toContain("['localhost']");
+  });
+
+  it('replaces a whole array containing a bracketed IPv6 entry without leaving remnants', () => {
+    const src = "export default defineConfig({ server: { allowedHosts: ['localhost', '[::1]', 'foo.test'], port: 1 } })";
+    const out = rewriteAllowedHosts(src);
+    expect(out.ok).toBe(true);
+    expect(out.content).toBe("export default defineConfig({ server: { allowedHosts: true, port: 1 } })");
   });
 
   it('replaces allowedHosts: false with true', () => {

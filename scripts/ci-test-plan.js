@@ -717,8 +717,13 @@ const isDocumentationOnly = (path) => !isExecutable(path) && DOCUMENTATION_RULES
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
+// Model-capability fixtures ship deliberately broken `*.test.mjs` sandboxes that
+// a model is asked to repair. They are data, not suites: no runner collects them,
+// and a feature-name match ("models") must not hand one to vitest as a target.
+const RUNNER_EXCLUDED_FIXTURES = /^server\/fixtures\//;
+
 const runnerForTest = (path) => {
-  if (!isTestFile(path)) return null;
+  if (!isTestFile(path) || RUNNER_EXCLUDED_FIXTURES.test(path)) return null;
   if (isClientRunnerFile(path)) return 'client';
   if (isServerRunnerFile(path)) return 'server';
   return null;

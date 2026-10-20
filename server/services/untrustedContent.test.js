@@ -5,7 +5,7 @@ vi.mock('./modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('./settings.js', () => ({ readSettingsStrict: mocks.read }));
 vi.mock('./providers.js', () => ({ getAllProviders: mocks.providers }));
 vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
-import { runUntrustedContentAnalysis, screenUntrustedContent } from './untrustedContent.js';
+import { getContributionAssessmentReadiness, runUntrustedContentAnalysis, screenUntrustedContent } from './untrustedContent.js';
 const local = { id: 'local', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'example-text' };
 const cloud = { ...local, id: 'cloud', contextWindow: 32768, endpoint: 'https://api.example.com/v1' };
 const args = { content: 'Example sender asks about a meeting.', prompt: 'Return {"action":"review"}.', source: 'messages', responseSchema: z.object({ action: z.literal('review') }).strict() };
@@ -199,5 +199,41 @@ describe('GitHub security-model admission', () => {
     expect(await screenUntrustedContent({ source: 'github-issue', content: 'A proposed change', policy: { jevMode: 'only' } }))
       .toMatchObject({ ok: false, code: 'security-model-assessment-required', screening: { safe: false } });
     expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// An Ollama-style provider that lists installed models but ships no
+// defaultModel used to shadow every provider after it (outage behind #12584).
+describe('automatic provider selection requires a resolvable model', () => {
+  const noDefault = { ...local, id: 'no-default', defaultModel: null };
+  const usable = { ...local, id: 'usable', endpoint: 'http://127.0.0.1:1234/v1', defaultModel: 'example-usable', numCtx: 16384, contextWindow: 32768 };
+  it('skips an eligible provider without a default model for one that has it', async () => {
+    mocks.providers.mockResolvedValue({ providers: [noDefault, usable] });
+    expect(await screenUntrustedContent({ source: 'github-pr', content: 'A proposed change' })).toMatchObject({ ok: true });
+    const [url, request] = mocks.fetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:1234/v1/chat/completions');
+    expect(JSON.parse(request.body).model).toBe('example-usable');
+  });
+  it('fails with model-required, and reports not ready, when no eligible provider resolves a model', async () => {
+    mocks.providers.mockResolvedValue({ providers: [noDefault] });
+    expect(await screenUntrustedContent({ source: 'github-pr', content: 'A proposed change' }))
+      .toMatchObject({ ok: false, code: 'untrusted-content-model-required', message: expect.stringContaining('No eligible API provider has a default model') });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(await getContributionAssessmentReadiness()).toMatchObject({
+      ready: false, code: 'untrusted-content-model-required',
+      sources: { 'github-pr': { ready: false }, 'github-issue': { ready: false } },
+    });
+    mocks.providers.mockResolvedValue({ providers: [noDefault, usable] });
+    expect(await getContributionAssessmentReadiness()).toMatchObject({
+      ready: true, sources: { 'github-pr': { ready: true, providerId: 'usable', model: 'example-usable' } },
+    });
+  });
+  it('never switches providers when a pinned provider has no model', async () => {
+    mocks.providers.mockResolvedValue({ providers: [noDefault, usable] });
+    mocks.read.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { defaults: { providerId: 'no-default' } } } });
+    expect(await screenUntrustedContent({ source: 'github-pr', content: 'A proposed change' }))
+      .toMatchObject({ ok: false, code: 'untrusted-content-model-required' });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(await getContributionAssessmentReadiness()).toMatchObject({ ready: false, code: 'untrusted-content-model-required' });
   });
 });
