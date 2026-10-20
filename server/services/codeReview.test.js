@@ -41,6 +41,7 @@ vi.mock('./ollamaManager.js', () => ({
 const commandExistsMock = { impl: async () => true }
 vi.mock('../lib/commandExists.js', () => ({ commandExists: (...args) => commandExistsMock.impl(...args) }))
 
+// Vitest 5 clears mock call histories before each case by default.
 vi.mock('./providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(),
   markProviderUnavailable: vi.fn(),
@@ -483,7 +484,7 @@ describe('codeReview helpers', () => {
     it.each([
       { error: 'Reviewer stopped after a 4290-byte diff' },
       { message: 'Reviewer stopped after a 4020-byte diff' },
-      { error: 'The reviewer process exhausted its memory capacity and credit allowance' },
+      { error: 'The reviewer process exhausted its memory capacity and credit allowance: resource exhausted' },
       { error: 'Reviewer process failed', text: 'Review: credit, capacity, quota and rate limit handling changed' },
       { error: 'Reviewer process failed', output: 'HTTP 429: out of credits' },
     ])('keeps non-quota failures transient despite byte counts or model prose: %j', async (failure) => {
@@ -518,7 +519,11 @@ describe('codeReview helpers', () => {
 
     it.each([
       { error: 'HTTP 429' },
+      { error: 'HTTP/1.1 429' },
+      { error: 'Your credit balance is too low' },
       { message: 'status 402' },
+      { stderr: 'statusCode: 429' },
+      { stderr: 'status_code=402' },
       { stderr: '429 Too Many Requests' },
       { error: 'insufficient_quota' },
       { error: "You've hit your usage limit" },
