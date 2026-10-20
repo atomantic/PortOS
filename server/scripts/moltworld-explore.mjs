@@ -35,6 +35,7 @@
 import { readFile } from 'fs/promises';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { pickMoltworldAccount, buildQueueUrl, explorerBanner, portosAuthHeaders } from '../lib/moltworldExplore.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -55,6 +56,7 @@ const MAX_INTERVAL_S = parseInt(process.env.MOLTWORLD_MAX_INTERVAL, 10) || 540;
 // PortOS WebSocket relay config
 const USE_WS = process.env.MOLTWORLD_USE_WS === 'true';
 const PORTOS_API_BASE = process.env.PORTOS_API_BASE || 'http://localhost:5555';
+const PORTOS_AUTH = portosAuthHeaders();
 
 // LM Studio config
 // Keep the historical LMSTUDIO_* spellings as compatibility fallbacks while
@@ -221,6 +223,7 @@ async function checkPortosWs() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   const result = await fetch(`${PORTOS_API_BASE}/api/agents/tools/moltworld/ws/status`, {
+    headers: PORTOS_AUTH,
     signal: controller.signal
   }).then(r => r.ok ? r.json() : null).catch(() => null).finally(() => clearTimeout(timeout));
   return result?.status === 'connected';
@@ -234,7 +237,7 @@ async function sendWsMove(x, y, thinking) {
   if (thinking) body.thought = thinking;
   const res = await fetch(`${PORTOS_API_BASE}/api/agents/tools/moltworld/ws/move`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...PORTOS_AUTH },
     body: JSON.stringify(body)
   }).catch(() => null);
   return res?.ok || false;
@@ -248,16 +251,9 @@ async function sendWsMove(x, y, thinking) {
 async function loadCredentials() {
   const accountsPath = resolve(PROJECT_ROOT, 'data/agents/accounts.json');
   const raw = await readFile(accountsPath, 'utf-8');
-  const { accounts } = JSON.parse(raw);
-
-  for (const account of Object.values(accounts)) {
-    if (account.platform === 'moltworld' && account.status === 'active') {
-      const agentId = account.credentials.agentId || account.credentials.apiKey;
-      const name = account.credentials.username || account.platformData?.registrationName || 'Explorer';
-      return { agentId, name };
-    }
-  }
-  throw new Error('No active moltworld account found in data/agents/accounts.json');
+  const found = pickMoltworldAccount(JSON.parse(raw).accounts);
+  if (!found) throw new Error('No active moltworld account found in data/agents/accounts.json');
+  return found;
 }
 
 /**
@@ -290,12 +286,12 @@ async function apiRequest(endpoint, body) {
 /**
  * Check the PortOS queue for manually-scheduled actions and execute them
  */
-async function executeQueuedActions(agentId, name, currentX, currentY) {
+async function executeQueuedActions(agentId, personalityId, name, currentX, currentY) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
-  const queueUrl = `${PORTOS_API_BASE}/api/agents/tools/moltworld/queue/${encodeURIComponent(agentId)}`;
+  const queueUrl = buildQueueUrl(PORTOS_API_BASE, personalityId);
 
-  const items = await fetch(queueUrl, { signal: controller.signal })
+  const items = await fetch(queueUrl, { headers: PORTOS_AUTH, signal: controller.signal })
     .then(r => r.ok ? r.json() : [])
     .catch(() => [])
     .finally(() => clearTimeout(timeout));
@@ -339,12 +335,12 @@ async function executeQueuedActions(agentId, name, currentX, currentY) {
 
     // Mark completed or failed via PortOS queue API
     if (success) {
-      await fetch(`${PORTOS_API_BASE}/api/agents/tools/moltworld/queue/${item.id}/complete`, { method: 'POST' }).catch(() => {});
+      await fetch(`${PORTOS_API_BASE}/api/agents/tools/moltworld/queue/${item.id}/complete`, { method: 'POST', headers: PORTOS_AUTH }).catch(() => {});
       console.log(`  📋 Queued ${item.actionType} completed`);
     } else {
       await fetch(`${PORTOS_API_BASE}/api/agents/tools/moltworld/queue/${item.id}/fail`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...PORTOS_AUTH },
         body: JSON.stringify({ error: 'Execution failed' })
       }).catch(() => {});
       console.log(`  📋 Queued ${item.actionType} failed`);
@@ -358,13 +354,13 @@ async function executeQueuedActions(agentId, name, currentX, currentY) {
 // ─── Main loop ──────────────────────────────────────────────────────────────
 
 async function explore() {
-  const { agentId, name } = await loadCredentials();
+  const { agentId, personalityId, name } = await loadCredentials();
 
   // Check LM Studio availability
   lmStudioAvailable = await checkLMStudio();
   // Check PortOS WS relay availability
   portosWsAvailable = await checkPortosWs();
-  console.log(`🌍 Moltworld Explorer — ${name} (${agentId})`);
+  console.log(explorerBanner(name));
   console.log(`🧠 LM Studio: ${lmStudioAvailable ? `${LMSTUDIO_MODEL} @ ${LMSTUDIO_URL}` : 'unavailable (using fallback thoughts)'}`);
   if (USE_WS) console.log(`🌐 WS Relay: ${portosWsAvailable ? `connected @ ${PORTOS_API_BASE}` : 'unavailable (falling back to REST)'}`);
   console.log(`⏱️ Join interval: ${MIN_INTERVAL_S}-${MAX_INTERVAL_S}s`);
@@ -392,7 +388,7 @@ async function explore() {
 
   while (running && Date.now() < endTime) {
     // Check for manually-queued actions before auto-generated actions
-    await executeQueuedActions(agentId, name, x, y);
+    await executeQueuedActions(agentId, personalityId, name, x, y);
 
     joinCount++;
     const now = Date.now();
