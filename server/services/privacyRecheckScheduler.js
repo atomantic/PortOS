@@ -13,8 +13,8 @@
  * without a restart.
  */
 
-import { schedule, cancel, parseCronToNextRun } from './eventScheduler.js';
-import { getSettings } from './settings.js';
+import { schedule, cancel, parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
+import { getSettings, updateSettingsWith } from './settings.js';
 import { getUserTimezone } from './userTimezone.js';
 import { runScanPass } from './privacyScan.js';
 import { runOptOutPass } from './privacyOptOut.js';
@@ -23,7 +23,61 @@ import { listSubjects } from './privacySubjects.js';
 const EVENT_ID = 'privacy-recheck';
 const DEFAULT_CRON = '0 4 * * 0'; // weekly, Sun 4am
 
-export async function startPrivacyRecheckScheduler() {
+// Boot delay before a missed-slot catch-up runs, mirroring backupScheduler.js
+// (#8456): stays clear of boot-time migrations and store warm-up.
+const CATCHUP_BOOT_DELAY_MS = 5 * 60_000;
+
+// At most one catch-up evaluation per process boot, and its pending timer so
+// stopPrivacyRecheckScheduler() can cancel it.
+let catchUpEvaluated = false;
+let catchUpTimer = null;
+
+const toMs = (iso) => {
+  const ms = iso ? new Date(iso).getTime() : NaN;
+  return Number.isFinite(ms) ? ms : NaN;
+};
+
+/** Settings-gated run shared by the cron handler and the missed-slot catch-up. */
+async function runIfEnabled(logReason) {
+  const current = await getSettings();
+  if (current.privacy?.recheck?.enabled !== true) {
+    console.log(`🛡️ Privacy recheck: disabled since registration — skipping ${logReason} run`);
+    return;
+  }
+  await runScheduledRecheck();
+}
+
+/**
+ * If the latest cron slot elapsed without a recheck (server down across it),
+ * schedule one catch-up after a boot delay — however many slots were missed.
+ * With no `lastRunAt` yet, only a slot after `enabledAt` counts as missed, so
+ * enabling the feature never replays a slot that predates it.
+ */
+function maybeCatchUpMissedSlot(recheck, cronExpression, timezone) {
+  if (catchUpEvaluated) return;
+  catchUpEvaluated = true;
+  const prevRun = parseCronToPrevRun(cronExpression, new Date(), timezone);
+  if (!prevRun) return;
+  const prevRunMs = prevRun.getTime();
+  const lastRunMs = toMs(recheck.lastRunAt);
+  const enabledAtMs = toMs(recheck.enabledAt);
+  if (Number.isFinite(lastRunMs) ? lastRunMs >= prevRunMs : !(enabledAtMs < prevRunMs)) return;
+
+  console.log(`🛡️ Privacy recheck scheduler: missed slot ${prevRun.toISOString()} — catching up in ${Math.round(CATCHUP_BOOT_DELAY_MS / 60_000)}m`);
+  catchUpTimer = setTimeout(() => {
+    catchUpTimer = null;
+    runIfEnabled('missed-slot catch-up').catch((err) =>
+      console.error(`❌ Privacy recheck catch-up failed: ${err.message}`));
+  }, CATCHUP_BOOT_DELAY_MS);
+  catchUpTimer.unref?.();
+}
+
+/**
+ * @param {object} [options]
+ * @param {boolean} [options.catchUpMissedSlot] - boot only; a settings-save
+ *   restart must not replay a slot the user did not miss.
+ */
+export async function startPrivacyRecheckScheduler({ catchUpMissedSlot = false } = {}) {
   const settings = await getSettings();
   const recheck = settings.privacy?.recheck || {};
 
@@ -40,18 +94,12 @@ export async function startPrivacyRecheckScheduler() {
     type: 'cron',
     cron: cronExpression,
     timezone,
-    handler: async () => {
-      const current = await getSettings();
-      if (current.privacy?.recheck?.enabled !== true) {
-        console.log('🛡️ Privacy recheck: disabled since registration — skipping run');
-        return;
-      }
-      await runScheduledRecheck();
-    },
+    handler: () => runIfEnabled('scheduled'),
     metadata: { source: 'privacyRecheckScheduler' },
   });
 
   console.log(`🛡️ Privacy recheck scheduler: registered at cron "${cronExpression}"`);
+  if (catchUpMissedSlot) maybeCatchUpMissedSlot(recheck, cronExpression, timezone);
 }
 
 // Each scheduled purpose, in run order: scan first (re-checks due cases + finds
@@ -86,10 +134,22 @@ async function runScheduledRecheck() {
       }
     }
   }
+  // Stamped on completion, partial failures included (they are isolated above).
+  await updateSettingsWith((current) => ({
+    ...current,
+    privacy: {
+      ...(current.privacy || {}),
+      recheck: { ...(current.privacy?.recheck || {}), lastRunAt: new Date().toISOString() },
+    },
+  }));
 }
 
 export function stopPrivacyRecheckScheduler() {
   cancel(EVENT_ID);
+  if (catchUpTimer) {
+    clearTimeout(catchUpTimer);
+    catchUpTimer = null;
+  }
   console.log('🛡️ Privacy recheck scheduler: stopped');
 }
 
@@ -126,5 +186,11 @@ export async function getPrivacyRecheckStatus() {
     autoApproveOptOutEmails: recheck.autoApproveOptOutEmails === true,
     autoSubmitWebForms: recheck.autoSubmitWebForms === true,
     nextRun,
+    lastRunAt: recheck.lastRunAt ?? null,
   };
+}
+
+/** Test seam: allow another boot-time catch-up evaluation in the same process. */
+export function __resetCatchUpForTests() {
+  catchUpEvaluated = false;
 }

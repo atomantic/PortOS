@@ -517,7 +517,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
   // re-runs the broker scan + opt-out pass when the user opts in via
   // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
-  startPrivacyRecheckScheduler().catch(err => logBootstrapFailure('❌ Privacy recheck scheduler init failed', err));
+  startPrivacyRecheckScheduler({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Privacy recheck scheduler init failed', err));
   // Quota-burn loop — ONE install-level loop that spends subscription quota that
   // would otherwise expire. OFF by default: the tick returns before touching a
   // provider unless the user enabled it on the Quota Burn page, where the
