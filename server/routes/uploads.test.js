@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, rmSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -196,12 +196,13 @@ describe('uploads routes (#4101)', () => {
 
 
 describe('streamed uploads', () => {
+  const multipart = (filename, bytes) => Buffer.concat([
+    Buffer.from(`--upload-test\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`),
+    bytes, Buffer.from('\r\n--upload-test--\r\n'),
+  ]);
+
   it('accepts media beyond the JSON ceiling, persists the bytes, and rejects unsupported extensions', async () => {
     const payload = Buffer.alloc(56 * 1024 * 1024, 7);
-    const multipart = (filename, bytes) => Buffer.concat([
-      Buffer.from(`--upload-test\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`),
-      bytes, Buffer.from('\r\n--upload-test--\r\n'),
-    ]);
     const res = await request(buildApp()).post('/api/uploads')
       .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('large.mp4', payload));
     expect(res.status).toBe(200);
@@ -212,5 +213,25 @@ describe('streamed uploads', () => {
       .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('bad.exe', Buffer.from('bad')));
     expect(bad.status).toBe(400);
     expect(bad.body.code).toBe('INVALID_FILE_TYPE');
+  });
+
+  // ffmpeg 4.4/5.1 open these bytes as HLS whatever the extension and read the
+  // local file the playlist names into a probe, thumbnail or render.
+  it('refuses media whose bytes are a playlist ffmpeg would follow, in both transports', async () => {
+    const playlist = '#EXTM3U\n#EXTINF:2.0,\n../private/clip.mp4\n#EXT-X-ENDLIST\n';
+    const stored = () => (existsSync(PATHS.uploads) ? readdirSync(PATHS.uploads) : []).filter((name) => /-(song\.mp3|clip\.mp4)$/.test(name));
+    const before = stored();
+
+    const json = await post(buildApp(), 'song.mp3', playlist);
+    expect(json.status).toBe(400);
+    expect(json.body.code).toBe('INVALID_FILE_TYPE');
+    const streamed = await request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('clip.mp4', Buffer.from(playlist)));
+    expect(streamed.status).toBe(400);
+    expect(streamed.body.code).toBe('INVALID_FILE_TYPE');
+    expect(stored()).toEqual(before);
+
+    // The same text under a non-media extension never reaches ffmpeg.
+    expect((await post(buildApp(), 'playlist-notes.txt', playlist)).status).toBe(200);
   });
 });

@@ -37,6 +37,7 @@ import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
 import { isStr } from '../../lib/textUtils.js';
+import { detectMediaManifest } from '../../lib/mimeTypes.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
@@ -1133,6 +1134,13 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
   if (!buffer) return;
   if (isStr(entry.sha256) && createHash('sha256').update(buffer).digest('hex') !== entry.sha256) {
     console.warn('⚠️ peerSync: discarded asset with mismatched sha256');
+    return;
+  }
+  // Every pulled kind is media that ffmpeg may probe, thumbnail or render, and
+  // ffmpeg opens a playlist or manifest by its bytes whatever the name says.
+  const manifest = detectMediaManifest(buffer);
+  if (manifest) {
+    console.warn(`⚠️ peerSync: discarded ${entry.kind} asset whose bytes are a ${manifest} manifest`);
     return;
   }
   // The download stays outside the backup lease. Replacing the file, its sidecar

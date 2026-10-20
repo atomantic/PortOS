@@ -52,6 +52,20 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+// The real peer-pull gate runs; only the peer registry and settings it reads
+// are stubbed, as in routes/dataSync.test.js.
+const peers = [];
+vi.mock('../services/instances.js', async () => ({
+  ...(await vi.importActual('../services/instances.js')),
+  getPeers: async () => peers,
+}));
+let settings = {};
+vi.mock('../services/settings.js', async () => ({
+  ...(await vi.importActual('../services/settings.js')),
+  getSettings: async () => settings,
+}));
+
+import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
 import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
@@ -75,6 +89,8 @@ describe('Memory Routes', () => {
     app.use(express.json());
     app.use('/api/memory', memoryRoutes);
     vi.clearAllMocks();
+    settings = {};
+    peers.length = 0;
   });
 
   describe('DELETE /api/memory/:id', () => {
@@ -201,6 +217,20 @@ describe('Memory Routes', () => {
 
       expect(response.status).toBe(200);
       expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3);
+    });
+
+    it('strict mode refuses a peer the user does not share memory with', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      settings = { federation: { strictPullAuthorization: true } };
+      peers.splice(0, peers.length, {
+        instanceId: 'peer-a-instance-id', enabled: true, syncEnabled: true,
+        directions: ['outbound', 'inbound'], syncCategories: { brain: true, memory: false },
+      });
+
+      const response = await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
+
+      expect(response.status).toBe(403);
+      expect(memorySync.getChangesSince).not.toHaveBeenCalled();
     });
 
     it('passes a schema-version conflict through at the HTTP boundary', async () => {

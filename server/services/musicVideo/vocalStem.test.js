@@ -1,5 +1,6 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -38,4 +39,19 @@ it('keeps a stem file and its project reference behind an active backup cut', as
   } finally {
     release();
   }
+});
+
+// The stem is probed before it is imported, so the bytes are checked first.
+it('refuses a playlist posing as a stem before ffmpeg probes it', async () => {
+  const project = await createProject({ name: 'Vocal example', mediaMode: 'code-images' });
+  await mkdir(PATHS.data, { recursive: true });
+  const tempPath = join(PATHS.data, 'synthetic-playlist.wav');
+  await writeFile(tempPath, '#EXTM3U\n#EXTINF:2.0,\n../private/vocals.wav\n#EXT-X-ENDLIST\n');
+  probeVideoDuration.mockClear();
+
+  await expect(attachVocalStem(project.id, { tempPath, originalName: 'vocals.wav' }))
+    .rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+  expect(probeVideoDuration).not.toHaveBeenCalled();
+  expect((await getProject(project.id)).vocalStemFilename).toBeFalsy();
+  expect(existsSync(tempPath)).toBe(false);
 });
