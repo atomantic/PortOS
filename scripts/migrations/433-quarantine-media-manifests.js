@@ -39,14 +39,14 @@ async function quarantineDirectory(dir) {
     } else if (entry.isFile() && !entry.name.endsWith('.quarantined')) {
       const format = await manifestFormat(path);
       if (!format) continue;
-      const destination = `${path}.quarantined`;
-      // Upgrade migrations are serialized; refuse an existing destination
-      // rather than letting rename overwrite any previously preserved bytes.
-      const exists = await lstat(destination).then(() => true, (err) => {
+      // A restored pre-433 snapshot puts the original beside an earlier
+      // quarantine. Throwing would abort the runner and block every later
+      // migration, so take the first free numbered name; never overwrite.
+      let destination = `${path}.quarantined`;
+      for (let n = 1; await lstat(destination).then(() => true, (err) => {
         if (err.code === 'ENOENT') return false;
         throw err;
-      });
-      if (exists) throw new Error('Media quarantine destination already exists; preserve both files before retrying');
+      }); n++) destination = `${path}.${n}.quarantined`;
       await rename(path, destination);
       quarantined++;
       console.log(`📦 Quarantined ${format} media manifest`);

@@ -63,14 +63,28 @@ describe('migration 433 — persisted media manifests', () => {
     expect(await readFile(`${path}.quarantined`)).toEqual(Buffer.concat([tag, Buffer.from(playlist)]));
   });
 
-  it('does not overwrite an existing quarantine and tolerates missing stores', async () => {
+  it('never overwrites an existing quarantine: takes the next free numbered name and tolerates missing stores', async () => {
     rootDir = await mkdtemp(join(tmpdir(), 'migration-433-'));
     await expect(migration.up({ rootDir })).resolves.toEqual({ quarantined: 0 });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     const path = await fixture('uploads', 'disguised.mp4', playlist);
     await writeFile(`${path}.quarantined`, 'previous evidence');
-    await expect(migration.up({ rootDir })).rejects.toThrow('destination already exists');
-    expect(await readFile(path, 'utf8')).toBe(playlist);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ quarantined: 1 });
     expect(await readFile(`${path}.quarantined`, 'utf8')).toBe('previous evidence');
-    expect((await readdir(join(rootDir, 'data', 'uploads'))).sort()).toEqual(['disguised.mp4', 'disguised.mp4.quarantined']);
+    expect(await readFile(`${path}.1.quarantined`, 'utf8')).toBe(playlist);
+    expect((await readdir(join(rootDir, 'data', 'uploads'))).sort()).toEqual(['disguised.mp4.1.quarantined', 'disguised.mp4.quarantined']);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ quarantined: 0 });
+  });
+
+  it('survives the restore shape: same bytes present as both the original and its quarantine', async () => {
+    rootDir = await mkdtemp(join(tmpdir(), 'migration-433-'));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const path = await fixture('music', 'clip.mp3', playlist);
+    await writeFile(`${path}.quarantined`, playlist);
+    await writeFile(`${path}.1.quarantined`, 'earlier');
+    await expect(migration.up({ rootDir })).resolves.toEqual({ quarantined: 1 });
+    expect(await readFile(`${path}.2.quarantined`, 'utf8')).toBe(playlist);
+    expect(await readFile(`${path}.1.quarantined`, 'utf8')).toBe('earlier');
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
