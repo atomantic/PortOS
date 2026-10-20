@@ -134,7 +134,7 @@ describe('catalog projection ordering through persisted universe writes', () => 
         characters: cur.characters.map((entry) => ({ ...entry, name: 'Universe edit' })),
       }));
       expect(row.name).toBe('Universe edit');
-      expect(catalog.updateIngredient).toHaveBeenCalledTimes(1);
+      expect(catalog.updateIngredientIfFresh).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
       await projection;
