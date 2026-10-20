@@ -1,5 +1,6 @@
 import { hydratePrivateKeys, persistPrivateKeys } from './privateKeyStore.js';
 import { join } from 'path';
+import { stat } from 'node:fs/promises';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue, drainDetachedWrites, trackDetachedWrite } from '../lib/fileWriteQueue.js';
@@ -137,9 +138,21 @@ export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
 //   same `cleaned` object it also returns to its caller). structuredClone is the
 //   right tool for this JSON-shaped data and stays far cheaper than the disk
 //   read + full-tree JSON.parse it replaces.
-// A manual edit of settings.json while the server runs is not observed until
-// the next app-driven save or a restart — the standard trade-off for a cache,
-// and app-driven changes (the only ones the schedulers care about) refresh it.
+// The local review bridge writes from another process. Reviewer-selection
+// reads explicitly refresh from disk metadata; ordinary getSettings() calls
+// keep this hot cache without paying a stat on every read.
+const readSettingsSignature = async () => {
+  try {
+    const { mtimeMs, size } = await stat(SETTINGS_FILE);
+    return { mtimeMs, size };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    // Metadata is advisory; the strict read below owns unreadable/corrupt
+    // handling and invalidates consumers without broadcasting auth-off data.
+    return undefined;
+  }
+};
+let settingsSignature;
 let settingsCache = null;
 settingsEvents.on('settings:updated', (cleaned) => {
   settingsCache = structuredClone(cleaned);
@@ -150,6 +163,7 @@ settingsEvents.on('settings:updated', (cleaned) => {
 // the cache coherent via the `settings:updated` event above.
 export const __resetSettingsCache = () => {
   settingsCache = null;
+  settingsSignature = undefined;
 };
 
 // Re-sync the read cache with the current on-disk settings.json and notify every
@@ -157,8 +171,8 @@ export const __resetSettingsCache = () => {
 // OUTSIDE the normal save() path — e.g. a backup restore rsyncs it into place —
 // since such a write bypasses the save()-emitted event the cache rides on and
 // would otherwise leave every settings consumer serving pre-restore values.
-export const reloadSettings = async () => {
-  const { corrupt, settings } = await readSettingsStrict();
+const reloadSettingsFromDisk = async (signaturePromise = readSettingsSignature()) => {
+  const [signature, { corrupt, settings }] = await Promise.all([signaturePromise, readSettingsStrict()]);
   if (corrupt) {
     // Do NOT broadcast a corrupt on-disk settings.json as `{}` (issue #2684). The
     // concrete path is a backup restore of a malformed snapshot: backup.js calls
@@ -169,19 +183,33 @@ export const reloadSettings = async () => {
     // consumers (auth) to drop theirs, so the next read goes to disk and fails
     // closed / re-reads. Self-heals on the next clean read.
     settingsCache = null;
+    settingsSignature = undefined;
     settingsEvents.emit('settings:invalidated');
     return {};
   }
   const cleaned = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
+  settingsSignature = signature;
   settingsEvents.emit('settings:updated', cleaned);
   return cleaned;
 };
 
+export const reloadSettings = () => reloadSettingsFromDisk();
+
 // Serialize all writes to settings.json on a single tail so an updateSettings
 // read-merge-write can't interleave with a concurrent save (two browser tabs,
-// a background job racing a user save) and clobber the other's patch. Reads
-// stay off the queue — atomicWrite's temp-file+rename keeps every read whole.
+// a background job racing a user save) and clobber the other's patch. Ordinary
+// reads stay off the queue; explicit disk refreshes serialize their cache events.
 const queueWrite = createFileWriteQueue();
+
+// Share the write queue so an older disk snapshot cannot emit after a newer
+// in-process save. reloadSettings itself stays usable inside the restore lock.
+export const refreshSettingsIfChangedOnDisk = () => queueWrite(async () => {
+  const signature = await readSettingsSignature();
+  if (settingsCache !== null && settingsSignature !== undefined
+    && signature?.mtimeMs === settingsSignature?.mtimeMs
+    && signature?.size === settingsSignature?.size) return;
+  await reloadSettingsFromDisk(signature);
+});
 
 /**
  * Drain admitted settings writes and hold later writes through an out-of-band
@@ -283,6 +311,7 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {},
   // newline; atomicWrite's own JSON.stringify omits it.
   await atomicWrite(SETTINGS_FILE, JSON.stringify(await persistPrivateKeys(cleaned, PATHS.data, { previousSettings: prev }), null, 2) + '\n');
   await hydratePrivateKeys(cleaned, PATHS.data);
+  settingsSignature = await readSettingsSignature();
   // Warn AFTER the successful write so a thrown write never produces
   // a misleading "stripped" log line for a write that didn't happen.
   if (isPlainObject(settings)) {
@@ -361,7 +390,7 @@ export const getSettingsWithStatus = async () => {
     // defeating the no-restart self-heal the auth fail-closed path promises. This
     // covers BOTH failure modes (malformed content and an unreadable-but-present
     // file); only a genuinely ABSENT file (fresh install) caches `{}`.
-    const { corrupt, settings } = await readSettingsStrict();
+    const [signature, { corrupt, settings }] = await Promise.all([readSettingsSignature(), readSettingsStrict()]);
     const loaded = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
@@ -371,6 +400,7 @@ export const getSettingsWithStatus = async () => {
     // very next call re-reads and picks up a repair immediately.
     if (corrupt) return { corrupt: true, settings: structuredClone(loaded) };
     settingsCache = loaded;
+    settingsSignature = signature;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
   // can't corrupt the shared cache — matching the prior per-call
