@@ -105,6 +105,7 @@ export function buildPregateReport({
       windows: plan.windows,
       promptHistory: plan.promptHistory,
       linuxContainment: plan.linuxContainment,
+      supercolliderLive: plan.supercolliderLive,
       suiteReasons: plan.suiteReasons ?? {},
     },
     stages: stageRecords,

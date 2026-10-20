@@ -23,7 +23,7 @@ const NODE = 26;
 const encode = (stages, tree = TREE) => encodeAttestation({ tree, stages, os: OS, node: NODE });
 
 const stage = (suite, status = 'passed', name = suite) => ({ name, suite, command: `node scripts/${suite}.js`, status, durationMs: 1, exitCode: status === 'passed' ? 0 : 1 });
-const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: [], sources: [] }, client: { mode: 'skip', files: [], sources: [] }, lint: { mode: 'full', files: [] }, browser: { files: [] }, db: false, build: false, smoke: false, windows: false, promptHistory: false, linuxContainment: false, suiteReasons: {} };
+const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: [], sources: [] }, client: { mode: 'skip', files: [], sources: [] }, lint: { mode: 'full', files: [] }, browser: { files: [] }, db: false, build: false, smoke: false, windows: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, suiteReasons: {} };
 
 /** A receipt as pregate writes it, with the given stage outcomes. */
 const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [], base = { ref: 'origin/main', sha: BASE } }) => buildPregateReport({
