@@ -154,7 +154,13 @@ export async function assessPullRequestForAction({ pr, diff, repoFullName, readP
     .filter(Boolean).join('\n\n');
   if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) return failure('security-action-input-too-large');
   const screened = await screenUntrustedContent({ content, source: 'github-pr' });
-  if (screened?.ok !== true || screened.screening?.safe !== true) return failure('security-action-assessment-withheld');
+  if (screened?.ok !== true || screened.screening?.safe !== true) {
+    // `code`/`message` on a screen failure are server-authored, never model prose.
+    return failure('security-action-assessment-withheld', {
+      ...(screened?.code ? { cause: screened.code } : {}),
+      ...(screened?.message ? { message: screened.message } : {}),
+    });
+  }
 
   const actionState = (row) => JSON.stringify({
     state: row.state, isDraft: row.isDraft, author: row.author?.login,

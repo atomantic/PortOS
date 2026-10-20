@@ -1092,6 +1092,15 @@ describe('CI test impact planner', () => {
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
   });
 
+  it('never selects a model-capability fixture sandbox as a suite on a feature-name match', () => {
+    const source = 'client/src/components/models/Panel.jsx';
+    const fixture = 'server/fixtures/model-tests/sandbox/cart-totals/cart-totals.test.mjs';
+    const real = 'client/src/components/models/Panel.test.jsx';
+    const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, real, fixture] });
+    expect(plan.client.files).toContain(real);
+    expect(plan.server.files).not.toContain(fixture);
+  });
+
   describe('scoped fan-out instead of a full plan (#11871)', () => {
     const SERVER_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.server);
     const CLIENT_FANOUT = shardIndexes('full', FULL_SUITE_SHARDS.client);

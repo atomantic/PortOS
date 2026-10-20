@@ -50,6 +50,10 @@ vi.mock('../services/modelAbuseGuard.js', () => ({
   cancelModelAbuseGuardInstall: (...args) => cancelModelAbuseGuardInstall(...args),
 }));
 
+vi.mock('../services/untrustedContent.js', () => ({
+  getContributionAssessmentReadiness: vi.fn(async () => ({ ready: false, code: 'untrusted-content-model-required', sources: {} })),
+}));
+
 vi.mock('../services/localLlmPlayground.js', () => ({
   runLocalLlmTest: vi.fn(),
   compareLocalLlmModels: vi.fn(),
@@ -211,6 +215,8 @@ describe('local LLM playground routes', () => {
     const status = await request(makeApp()).get('/api/local-llm/security-guard/status');
     expect(status.status).toBe(200);
     expect(getModelAbuseGuardStatus).toHaveBeenCalled();
+    // A ready classifier must not mask a contribution assessment with no usable provider/model.
+    expect(status.body.contributionAssessment).toEqual(expect.objectContaining({ ready: false, code: 'untrusted-content-model-required' }));
 
     const install = await request(makeApp()).post('/api/local-llm/security-guard/install').send({});
     expect(install.status).toBe(200);

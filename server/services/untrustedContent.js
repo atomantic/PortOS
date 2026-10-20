@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { CONTRIBUTION_SECURITY_ASSESSMENT, contributionSecurityAssessmentSchema } from '../lib/contributionSecurityPolicy.js';
 import { readSettingsStrict } from './settings.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -6,7 +7,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { getAllProviders } from './providers.js';
 import { modelAbuseContentFingerprint } from '../lib/modelAbuseGuard.js';
-import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedContentPolicy, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
+import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedContentPolicy, selectUntrustedContentProvider, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
 // Deep imports on purpose (#7473): both leaves are cheap (`ollamaContext.js`
 // is zero-dependency, `providerStatus.js` reaches only the `num_ctx` clamp it
 // already shares), unlike `services/stageRunner.js#effectiveContextWindow`,
@@ -286,16 +287,55 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   return analysis;
 }
 
+/**
+ * Whether contribution assessment for github-pr / github-issue can resolve a
+ * provider and model under the current policy, for the Abuse Guard status.
+ * Reports codes only; never provider endpoints or credentials.
+ */
+export async function getContributionAssessmentReadiness() {
+  const state = await readSettingsStrict();
+  if (state.corrupt) return { ready: false, sources: {}, code: 'untrusted-content-settings-unreadable' };
+  const providers = (await getAllProviders()).providers || [];
+  const sources = {};
+  for (const source of ['github-pr', 'github-issue']) {
+    const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source);
+    const selection = policy ? selectUntrustedContentProvider({ providers, policy, source }) : { code: 'untrusted-content-policy-invalid' };
+    sources[source] = selection.provider
+      ? { ready: true, providerId: selection.provider.id, model: selection.model }
+      : { ready: false, code: selection.code };
+  }
+  const failed = Object.values(sources).find(entry => !entry.ready);
+  return { ready: !failed, sources, ...(failed ? { code: failed.code } : {}) };
+}
+
+/**
+ * Digest of everything that decides whether and how a GitHub PR assessment can
+ * run: the resolved source policy and the provider/model it selects. A caller
+ * that withheld an action for a configuration-caused failure compares this to
+ * know when a settings or provider change makes a retry worthwhile.
+ */
+export async function getContributionAssessmentFingerprint(source = 'github-pr') {
+  const state = await readSettingsStrict();
+  if (state.corrupt) return 'settings-unreadable';
+  const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source);
+  const providers = (await getAllProviders()).providers || [];
+  const selection = policy ? selectUntrustedContentProvider({ providers, policy, source }) : null;
+  const chosen = selection?.provider;
+  return createHash('sha256').update(JSON.stringify({
+    policy,
+    selection: chosen
+      ? { id: chosen.id, model: selection.model, endpoint: chosen.endpoint, numCtx: chosen.numCtx ?? null, contextWindow: chosen.contextWindow ?? null }
+      : { code: selection?.code ?? 'untrusted-content-policy-invalid' },
+  })).digest('hex');
+}
+
 // Private transport entry: only callers above can supply a completed screen.
 async function analyzeScreenedContent({ provider, model, content, prompt, source, responseSchema, screened }) {
   const config = screened.policy;
   const providers = provider ? [provider] : (await getAllProviders()).providers || [];
-  const selected = provider || (config.providerId
-    ? providers.find(item => item.id === config.providerId)
-    : providers.find(item => isUntrustedContentProvider(item, source)));
-  if (!isUntrustedContentProvider(selected, source)) return failure('untrusted-content-provider-unavailable', 'Configure an enabled text API provider in Models > LLMs > Abuse Guard. Private messages require a local API endpoint. CLI agents and provider fallback are disabled for external content.');
-  const effectiveModel = model || (provider && provider.id !== config.providerId ? null : config.model) || selected.defaultModel;
-  if (!effectiveModel) return failure('untrusted-content-model-required', 'Select an installed text model in Models > LLMs > Abuse Guard.');
+  const selection = selectUntrustedContentProvider({ providers, policy: config, source, provider, model });
+  if (!selection.provider) return failure(selection.code, selection.message);
+  const { provider: selected, model: effectiveModel } = selection;
   const taskPrompt = `${UNTRUSTED_CONTENT_INSTRUCTIONS}\n\nTRUSTED TASK:\n${prompt}`;
   const evidence = formatUntrustedContent(content);
   const local = isUntrustedContentProvider(selected, 'messages');

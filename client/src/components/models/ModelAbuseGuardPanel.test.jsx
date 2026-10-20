@@ -59,6 +59,14 @@ const renderPanel = async () => {
 };
 
 describe('ModelAbuseGuardPanel', () => {
+  it('warns when a ready classifier cannot back GitHub contribution assessment', async () => {
+    getModelAbuseGuardStatus.mockResolvedValue({ ready: true, stages: STAGES.map(stage => ({ ...stage, ready: true })),
+      contributionAssessment: { ready: false, code: 'untrusted-content-model-required' } });
+    await renderPanel();
+    expect(await screen.findByText(/assessment is not ready \(untrusted-content-model-required\)/)).toBeInTheDocument();
+    expect(screen.getByText('Not ready').className).toContain('text-port-warning');
+  });
+
   it('offers repair for partial setup and disables installation without Python', async () => {
     getModelAbuseGuardStatus.mockResolvedValueOnce({
       ready: false, setupState: 'incomplete', venvReady: true, pythonAvailable: false, stages: STAGES,
