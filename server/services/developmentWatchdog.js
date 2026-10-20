@@ -12,6 +12,7 @@ let scanTail = Promise.resolve();
 const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
 const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
+const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPSTREAM_OWNER : app.forgeAccount;
 
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
@@ -99,7 +100,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   };
   // Other forge support remains explicit rather than silently using GitHub semantics.
   if (tracker !== 'github' || !target?.repoSpec) { row.blockers.push('unsupported-forge'); return row; }
-  const account = isUpstreamOwner(target.fullName) ? UPSTREAM_OWNER : app.forgeAccount;
+  const account = forgeAccountFor(target, app);
   if (account === UPSTREAM_OWNER && app.forgeAccount && app.forgeAccount !== UPSTREAM_OWNER) { row.blockers.push('conflicting-forge-account-pin'); return row; }
   const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: account });
   const login = (await execGh(['api', 'user', '--hostname', target.apiHost, '--jq', '.login'], undefined, exec)).trim();
@@ -261,7 +262,7 @@ async function dispatch(app, decision) {
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { target } = await resolveAppForgeTarget(app);
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
-  const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: isUpstreamOwner(target.fullName) ? UPSTREAM_OWNER : app.forgeAccount });
+  const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: forgeAccountFor(target, app) });
   const { execGh } = await import('./github.js');
   const { parseBlockingIssueNumbers } = await import('./blockedIssueReconcile.js');
   const body = await execGh([decision.kind === 'pr' ? 'pr' : 'issue', 'view', String(item.number), '--repo', target.repoSpec, '--json', 'body'], undefined, exec)
