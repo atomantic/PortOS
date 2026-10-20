@@ -88,7 +88,7 @@ are refused. Brain, memory, catalog and `/api/sync/*` reads also check this
 install's sharing settings for the caller (`authorizePeerPull`): a peer whose
 category is off is warned about, and refused with `403 PEER_PULL_FORBIDDEN`
 when `federation.strictPullAuthorization` is on (the digital twin, MeatSpace
-and character snapshots are always refused). The generic `GET /api/instances/peers/:id/query` proxy reaches only
+and character snapshots refuse a denied caller even without strict mode). The generic `GET /api/instances/peers/:id/query` proxy reaches only
 these paths on a paired peer.
 
 `POST /api/instances/peers/pair-secret` is a separate Basic-auth bootstrap, not
