@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { parseIndexParam, validateRequest } from '../lib/validation.js';
 import {
   activitySchema,
   activityUpdateSchema,
@@ -54,7 +54,7 @@ router.post('/activities', asyncHandler(async (req, res) => {
  * Update an activity by index.
  */
 router.put('/activities/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
+  const index = parseIndexParam(req.params.index);
   const data = validateRequest(activityUpdateSchema, req.body);
   const activities = await calendarService.updateActivity(index, data);
   if (!activities) {
@@ -68,7 +68,7 @@ router.put('/activities/:index', asyncHandler(async (req, res) => {
  * Remove an activity by index.
  */
 router.delete('/activities/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
+  const index = parseIndexParam(req.params.index);
   const activities = await calendarService.removeActivity(index);
   if (!activities) {
     throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
