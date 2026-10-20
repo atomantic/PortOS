@@ -11,6 +11,8 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
   const state = useRef(page);
   const generation = useRef(0);
   const pending = useRef(null);
+  const restartPending = useRef(null);
+  const currentRead = useRef(null);
   const refreshQueued = useRef(false);
   const retryRefresh = useRef(false);
   const commit = useCallback(next => { state.current = next; setPage(next); }, []);
@@ -21,6 +23,7 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
     const epoch = generation.current;
     const controller = new AbortController();
     pending.current = controller;
+    restartPending.current = () => readPage(refresh);
     commit({ ...state.current, loading: true, error: null });
     try {
       const result = await fetchPage({ cursor: refresh ? null : state.current.nextCursor, signal: controller.signal });
@@ -49,6 +52,8 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
     }
   }, [enabled, fetchPage, commit]);
 
+  useEffect(() => { currentRead.current = read; }, [read]);
+
   const loadMore = useCallback(() => read(Boolean(state.current.error && retryRefresh.current)), [read]);
   const refreshFirst = useCallback(() => read(true), [read]);
 
@@ -69,5 +74,23 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
   const setItems = useCallback(update => commit({ ...state.current,
     items: typeof update === 'function' ? update(state.current.items) : update }), [commit]);
 
-  return { ...page, setItems, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
+  // Apply a confirmed deletion without resetting already loaded pages. A read
+  // started before the mutation may still contain the removed row: invalidate
+  // it and replay the same cursor/refresh so concurrent arrivals are not lost.
+  const removeItem = useCallback(id => {
+    const interrupted = pending.current;
+    const restart = restartPending.current;
+    generation.current += 1;
+    interrupted?.abort();
+    pending.current = null;
+    const previous = state.current;
+    const items = previous.items.filter(item => item.id !== id);
+    // A concurrent response may already include the deletion in its total,
+    // even while the additive history merge retained the row. Never subtract
+    // twice: reconcile the count from a read started after confirmation.
+    commit({ ...previous, items, loading: false });
+    return interrupted ? restart() : currentRead.current(true);
+  }, [commit]);
+
+  return { ...page, setItems, removeItem, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
 }

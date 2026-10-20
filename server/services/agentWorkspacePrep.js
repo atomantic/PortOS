@@ -45,6 +45,7 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
+import { leavesPrForHuman, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
@@ -110,7 +111,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -146,6 +147,11 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     return null;
   }
 
+  if (reviewTarget) {
+    const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
+    const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
+    if (refused) return { refused };
+  }
   const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume ? [{ deepResume: true }] : [])).catch(err => {
     if (err.code === 'DEEP_RESUME_PRESERVED') return { refused: err.message };
     emitLog('warn', `🌳 Could not adopt ${holder.path} holding ${branchName} for task ${taskId}: ${err.message}`, { taskId });
@@ -203,6 +209,7 @@ async function prepareRequestedWorktree({
     await blockTask(task, reason, 'worktree-failed');
     return { outcome: 'blocked', reason };
   }
+  const reviewTarget = task.metadata?.cleanupReviewTarget;
   const pinnedHead = existingBranch ? resolveTaskPinnedHead(task.metadata) : null;
   if (pinnedHead === '') {
     return refusePinnedAttach(task, workspacePath, `Task ${task.id} must attach at a reviewed head commit but records none; refusing to check out ${existingBranch}`);
@@ -237,6 +244,7 @@ async function prepareRequestedWorktree({
       // its remote tip are proven to be the reviewed commit; only a fresh attach
       // can prove both. Releasing an idle sibling holder in place stays allowed.
       adopt: !pinnedHead,
+      reviewTarget,
     })
     : Promise.resolve(null);
 
@@ -276,7 +284,7 @@ async function prepareRequestedWorktree({
     ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
     // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
-    expectedHeadSha: pinnedHead || undefined,
+    expectedHeadSha: pinnedHead || reviewTarget?.headSha || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,
   }).catch(err => {
@@ -465,9 +473,26 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
     return onPrepared({ outcome: 'blocked', reason });
   }
 
-  const prepareAndRegister = async () => onPrepared(await prepareResolvedWorkspace({
-    agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly,
-  }));
+  const prepareAndRegister = async () => {
+    const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly });
+    if (result.outcome === 'ready' && task.metadata?.cleanupReviewTarget) {
+      const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
+      const refused = await validateCleanupReviewTarget({ target: task.metadata.cleanupReviewTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
+      if (refused) {
+        await blockTask(task, refused, 'pr-head-moved');
+        return onPrepared({ outcome: 'blocked', reason: refused });
+      }
+      // This is an initial-launch pin. Dispatch registers the owner, then saves
+      // this metadata before starting the provider. A pre-registration failure
+      // leaves the persisted pin intact; a registered coordinator may fix code
+      // and resume under its existing ownership/budget without the initial SHA
+      // blocking its own new commits. Keep the admission as historical evidence.
+      task.metadata.cleanupReviewLaunchEvidence = task.metadata.cleanupReviewTarget;
+      task.metadata.cleanupReviewTarget = undefined;
+      result.cleanupReviewPinConsumed = true;
+    }
+    return onPrepared(result);
+  };
   // Resolve once, then admit the entire preparation → registration → spawn
   // lifetime. A create/adopt helper's shorter permit cannot protect dependency
   // changes or an owner which has not yet been durably registered.
@@ -481,6 +506,17 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
 }
 
 async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly }) {
+  const recoveryTarget = task.metadata?.cleanupReviewTarget;
+  if (recoveryTarget) {
+    const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
+    const refused = recoveryTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== recoveryTarget.branch || isReadOnly || leavesPrForHuman(task)
+      || resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+      ? 'review-target-task-changed' : await validateCleanupReviewTarget({ target: recoveryTarget, workspacePath, launchTaskId: task.id });
+    if (refused) {
+      await blockTask(task, refused, 'pr-head-moved');
+      return { outcome: 'blocked', reason: refused };
+    }
+  }
   const remediationPin = resolveTaskPinnedHead(task.metadata);
   if (remediationPin !== null && (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(remediationPin)
     || !resolveTaskRemoteBranch(task.metadata))) {

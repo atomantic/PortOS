@@ -25,6 +25,9 @@ vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mockCosState.state?.agents ?? {} })),
 }));
 
+const recoveryTasks = vi.hoisted(() => new Map());
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async id => recoveryTasks.get(id) || null) }));
+
 vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
@@ -90,7 +93,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -114,6 +117,71 @@ describe('cosAgentLifecycle', () => {
 
   afterEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('bounds original-parent recoveries across 70 scans, evidence cycles, active ownership and restart', async () => {
+    const id = 'agent-recovery-history';
+    mockCosState.state.agents[id] = { id, status: 'completed', completedAt: '2026-01-01T00:00:00Z', metadata: {} };
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'A')).toMatchObject({ admitted: true, attempt: 1 });
+    for (let i = 0; i < 70; i++) expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: false, reason: 'cleanup-publication-unverified' });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'A', { phase: 'dispatched', taskId: 'successor-1' });
+    recoveryTasks.set('successor-1', { status: 'in_progress' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: false, reason: 'cleanup-successor-owned' });
+    recoveryTasks.set('successor-1', { status: 'completed' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: true, attempt: 2 });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'B', { phase: 'dispatched', taskId: 'successor-2' });
+    recoveryTasks.set('successor-2', { status: 'completed' });
+    // Reconstruct persisted state; neither the old parent's empty recoveryOrigin
+    // nor a process restart resets this history or the total attempt budget.
+    mockCosState.state = JSON.parse(JSON.stringify(mockCosState.state));
+    for (let i = 0; i < 70; i++) expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'A')).toMatchObject({ admitted: false, reason: 'cleanup-observation-already-attempted' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'C')).toMatchObject({ admitted: true, attempt: 3 });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'C', { phase: 'dispatched', taskId: 'successor-3' });
+    recoveryTasks.set('successor-3', { status: 'completed' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'D')).toMatchObject({ admitted: false, reason: 'cleanup-cognitive-budget-exhausted' });
+    expect(mockCosState.state.agents[id].metadata.repoCleanupRecoveries['claim/one'].observations).toEqual(['A', 'B', 'C']);
+  });
+
+  it.each(['automatic-retirement-paused', 'review-obligation-changed'])('resumes known-unexecuted %s deferrals without resetting real attempts', async reason => {
+    const id = 'agent-deferred-review';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'prior')).toMatchObject({ admitted: true, attempt: 1 });
+    await recordRepoCleanupRecovery(id, 'fix/work', 'prior', { phase: 'dispatched', taskId: 'completed-review' });
+    recoveryTasks.set('completed-review', { status: 'completed' });
+    for (let i = 0; i < 70; i++) {
+      expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'current')).toMatchObject({ admitted: true, attempt: 2 });
+      await recordRepoCleanupRecovery(id, 'fix/work', 'current', { phase: 'blocked-before-dispatch', taskId: null, reason });
+      mockCosState.state = JSON.parse(JSON.stringify(mockCosState.state));
+    }
+    expect(mockCosState.state.agents[id].metadata.repoCleanupRecoveries['fix/work']).toMatchObject({ attempt: 1, observations: ['prior'] });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'prior')).toMatchObject({ admitted: false, reason: 'cleanup-observation-already-attempted' });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'current')).toMatchObject({ admitted: true, attempt: 2 });
+    await recordRepoCleanupRecovery(id, 'fix/work', 'current', { phase: 'dispatched', taskId: 'active-review' });
+    recoveryTasks.set('active-review', { status: 'in_progress' });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'changed')).toMatchObject({ admitted: false, reason: 'cleanup-successor-owned' });
+  });
+
+  it('replaces provisional owner holds when the original checkout completes without hiding other paths', async () => {
+    const id = 'agent-owner-completion';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    await recordCleanupOutcome(id, { branch: 'claim/one', status: 'blocked', reason: 'owner-active' });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/other', status: 'blocked', reason: 'archive-unavailable' });
+    await recordCleanupOutcome(id, { branch: 'claim/one', path: '/example/original', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', total: 2, unresolved: 1, branch: 'claim/other' });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/new-incarnation', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', total: 3, unresolved: 1 });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/other', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'verified', unresolved: 0 });
+  });
+
+  it.each([true, false])('aggregates every branch outcome independently of update order (%s)', async reversed => {
+    const id = 'agent-swarm-outcome';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    const rows = [{ branch: 'claim/blocked', path: '/example/blocked', status: 'blocked', reason: 'checkout-incarnation-changed' },
+      { branch: 'claim/verified', path: '/example/verified', status: 'verified', reason: 'retirement-receipt-verified' }];
+    for (const row of reversed ? rows.reverse() : rows) await recordCleanupOutcome(id, row);
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', unresolved: 1, total: 2 });
+    expect(Object.values(mockCosState.state.agents[id].metadata.cleanupOutcomes)).toHaveLength(2);
   });
 
   it('archives interrupted audit findings before removing their workspace and reloads them after live retention', async () => {

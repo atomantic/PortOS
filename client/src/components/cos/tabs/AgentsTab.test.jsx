@@ -26,6 +26,7 @@ vi.mock('../../../services/api', () => ({
   getCosPendingAgentFeedback: vi.fn(),
   hydrateCosAgentDescription: vi.fn(async (agent) => agent),
   clearCompletedCosAgents: vi.fn(),
+  deleteCosAgent: vi.fn(),
   resumeCosAgent: vi.fn(),
   relaunchCosAgent: vi.fn(),
   addCosTask: vi.fn(),
@@ -36,9 +37,11 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 vi.mock('./AgentCard', () => ({
-  default: ({ agent, onFeedbackChange, onResume, onRelaunch }) => (
+  default: ({ agent, onFeedbackChange, onResume, onRelaunch, onDelete }) => (
     <div data-testid={`agent-${agent.id}`}>
       <span>{agent.metadata?.taskDescription}</span>
+      {onDelete && <button type="button" onClick={() => onDelete(agent.id)}>Delete {agent.id}</button>}
+      <input aria-label={`Card draft ${agent.id}`} defaultValue="" />
       {onResume && (
         <button type="button" onClick={() => onResume(agent)}>Resume {agent.id}</button>
       )}
@@ -484,4 +487,164 @@ it('makes the clear scope explicit when the feedback filter hides completed reco
   await userEvent.click(screen.getByRole('button', { name: 'Clear all completed agents' }));
   expect(screen.getByText(/including records outside the current filter and unloaded pages/)).toBeInTheDocument();
   expect(screen.queryByText(/removes 1 agent record/)).not.toBeInTheDocument();
+});
+
+
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+
+describe('AgentsTab confirmed deletion', () => {
+  it('retains other card instances, search, filter and loaded pages without a list reload', async () => {
+    const user = userEvent.setup();
+    const first = completedAgent('first', 'Shared first');
+    const second = completedAgent('second', 'Shared second');
+    const older = completedAgent('older', 'Shared older');
+    api.getCosCompletedAgents
+      .mockResolvedValueOnce({ items: [first, second], total: 4, nextCursor: 'second-cursor' })
+      .mockResolvedValueOnce({ items: [older], total: 4, nextCursor: 'older-cursor' })
+      .mockResolvedValueOnce({ items: [second], total: 3, nextCursor: 'second-cursor' })
+      .mockResolvedValueOnce({ items: [completedAgent('oldest', 'Shared oldest')], total: 3, nextCursor: null });
+    const deletion = deferred();
+    api.deleteCosAgent.mockReturnValue(deletion.promise);
+    const onRefresh = vi.fn();
+    renderTab([], onRefresh, '/cos/agents?feedback=needs-feedback');
+    await screen.findByTestId('agent-second');
+    await user.click(screen.getByRole('button', { name: 'Load older agents' }));
+    const olderCard = await screen.findByTestId('agent-older');
+    const secondCard = screen.getByTestId('agent-second');
+    const grid = olderCard.parentElement;
+    grid.scrollTop = 240;
+    await user.type(screen.getByRole('textbox', { name: 'Card draft second' }), 'Keep local state');
+    await user.type(screen.getByRole('textbox', { name: 'Search completed agents' }), 'Shared');
+    await user.click(screen.getByRole('button', { name: 'Delete first' }));
+    expect(screen.getByTestId('agent-first')).toBeInTheDocument();
+    await act(async () => deletion.resolve({ success: true, agentId: 'first' }));
+    expect(screen.queryByTestId('agent-first')).toBeNull();
+    expect(screen.getByTestId('agent-second')).toBe(secondCard);
+    expect(screen.getByTestId('agent-older')).toBe(olderCard);
+    expect(screen.getByRole('textbox', { name: 'Card draft second' })).toHaveValue('Keep local state');
+    expect(screen.getByRole('textbox', { name: 'Search completed agents' })).toHaveValue('Shared');
+    expect(screen.getByRole('button', { name: /Needs feedback:/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(grid.scrollTop).toBe(240);
+    expect(screen.getByText('(3 total)')).toBeInTheDocument();
+    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(3);
+    expect(onRefresh).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Load older agents' }));
+    expect(api.getCosCompletedAgents).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older-cursor', feedback: true }));
+  });
+
+  it('removes only each confirmed ID when deletes settle out of order and parent props stay stale', async () => {
+    const user = userEvent.setup();
+    const first = completedAgent('first', 'First');
+    const second = completedAgent('second', 'Second');
+    const survivor = completedAgent('survivor', 'Survivor');
+    api.getCosCompletedAgents.mockResolvedValue({ items: [first, second, survivor], total: 3, nextCursor: null });
+    const firstDelete = deferred();
+    const secondDelete = deferred();
+    api.deleteCosAgent.mockImplementation(id => id === 'first' ? firstDelete.promise : secondDelete.promise);
+    renderTab([first, second]);
+    const survivorCard = await screen.findByTestId('agent-survivor');
+    await user.click(screen.getByRole('button', { name: 'Delete first' }));
+    await user.click(screen.getByRole('button', { name: 'Delete second' }));
+    api.getCosCompletedAgents.mockResolvedValue({ items: [first, survivor], total: 2, nextCursor: null });
+    await act(async () => secondDelete.resolve({ success: true, agentId: 'second' }));
+    expect(screen.queryByTestId('agent-second')).toBeNull();
+    expect(screen.getByTestId('agent-first')).toBeInTheDocument();
+    expect(screen.getByText('(2 total)')).toBeInTheDocument();
+    api.getCosCompletedAgents.mockResolvedValue({ items: [survivor], total: 1, nextCursor: null });
+    await act(async () => {
+      socket.receive('cos:agent:feedback', { agentId: 'second', feedback: { rating: 'positive' } });
+      firstDelete.resolve({ success: true, agentId: 'first' });
+    });
+    expect(screen.queryByTestId('agent-first')).toBeNull();
+    expect(screen.queryByTestId('agent-second')).toBeNull();
+    expect(screen.getByTestId('agent-survivor')).toBe(survivorCard);
+    expect(screen.getByText('(1 total)')).toBeInTheDocument();
+  });
+
+  it('keeps every card and local state when deletion fails', async () => {
+    const user = userEvent.setup();
+    api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('first', 'First')], total: 1, nextCursor: null });
+    api.deleteCosAgent.mockRejectedValue(new Error('Could not remove agent'));
+    const onRefresh = vi.fn();
+    renderTab([], onRefresh);
+    const card = await screen.findByTestId('agent-first');
+    await user.type(screen.getByRole('textbox', { name: 'Card draft first' }), 'Keep me');
+    await user.click(screen.getByRole('button', { name: 'Delete first' }));
+    expect(toast.error).toHaveBeenCalledWith('Could not remove agent');
+    expect(screen.getByTestId('agent-first')).toBe(card);
+    expect(screen.getByRole('textbox', { name: 'Card draft first' })).toHaveValue('Keep me');
+    expect(screen.getByText('(1 total)')).toBeInTheDocument();
+    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('AgentsTab deletion reconciliation races', () => {
+  it('uses the server count when a completion refresh observes deletion before DELETE returns', async () => {
+    const user = userEvent.setup();
+    const removed = completedAgent('removed', 'Removed');
+    const kept = completedAgent('kept', 'Kept');
+    const deletion = deferred();
+    api.deleteCosAgent.mockReturnValue(deletion.promise);
+    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [removed, kept], total: 2, nextCursor: null })
+      .mockResolvedValue({ items: [kept], total: 1, nextCursor: null });
+    const tab = revision => <MemoryRouter><AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}}
+      providers={[]} apps={[]} completedRevision={revision} /></MemoryRouter>;
+    const view = render(tab(0));
+    const keptCard = await screen.findByTestId('agent-kept');
+    await user.click(screen.getByRole('button', { name: 'Delete removed' }));
+    view.rerender(tab(1));
+    await waitFor(() => expect(screen.getByText('(1 total)')).toBeInTheDocument());
+    // The additive refresh retains loaded rows; the DELETE hasn't acknowledged yet.
+    expect(screen.getByTestId('agent-removed')).toBeInTheDocument();
+    await act(async () => deletion.resolve({ success: true, agentId: 'removed' }));
+    expect(screen.queryByTestId('agent-removed')).toBeNull();
+    expect(screen.getByText('(1 total)')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-kept')).toBe(keptCard);
+  });
+
+  it('reconciles counts when deleting a selected record outside loaded history', async () => {
+    const user = userEvent.setup();
+    const selected = completedAgent('selected', 'Selected');
+    const kept = completedAgent('kept', 'Kept');
+    api.getCosAgent.mockResolvedValue(selected);
+    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [kept], total: 2, nextCursor: 'kept' })
+      .mockResolvedValue({ items: [kept], total: 1, nextCursor: null });
+    api.deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
+    render(<MemoryRouter initialEntries={['/cos/agents/selected']}><Routes>
+      <Route path="/cos/agents/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()}
+        liveOutputs={{}} providers={[]} apps={[]} />} />
+    </Routes></MemoryRouter>);
+    await screen.findByTestId('agent-selected');
+    const keptCard = await screen.findByTestId('agent-kept');
+    await user.click(screen.getByRole('button', { name: 'Delete selected' }));
+    expect(screen.queryByTestId('agent-selected')).toBeNull();
+    expect(screen.getByText('(1 total)')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-kept')).toBe(keptCard);
+  });
+
+  it('does not restore a deleted card when its focused detail read resolves late', async () => {
+    const user = userEvent.setup();
+    const selected = completedAgent('selected', 'Selected');
+    const focus = deferred();
+    api.getCosAgent.mockReturnValue(focus.promise);
+    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [selected], total: 1, nextCursor: null })
+      .mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    api.deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
+    render(<MemoryRouter initialEntries={['/cos/agents/selected']}><Routes>
+      <Route path="/cos/agents/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()}
+        liveOutputs={{}} providers={[]} apps={[]} />} />
+    </Routes></MemoryRouter>);
+    await screen.findByTestId('agent-selected');
+    await user.click(screen.getByRole('button', { name: 'Delete selected' }));
+    await act(async () => focus.resolve(selected));
+    expect(screen.queryByTestId('agent-selected')).toBeNull();
+    expect(screen.getByText('Agent not found or unavailable.')).toBeInTheDocument();
+  });
 });

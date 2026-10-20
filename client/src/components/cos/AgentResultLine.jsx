@@ -28,7 +28,10 @@ export default function AgentResultLine({ agent, className = '' }) {
   const interruption = agent.metadata?.executionInterruption || agent.result.executionInterruption;
   const scanner = agent.metadata?.securityScan;
   const scanIncomplete = scanner && scanner.status !== 'completed';
-  const incomplete = interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
+  const cleanup = agent.metadata?.cleanupOutcome;
+  const cleanupRecovery = agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
+  const cleanupPending = (cleanupRecovery || cleanup) && cleanup?.status !== 'verified';
+  const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
   const tone = handoff ? 'text-port-accent' : agent.result.success ? incomplete ? 'text-port-warning' : 'text-port-success' : 'text-port-error';
 
   return (
@@ -43,6 +46,7 @@ export default function AgentResultLine({ agent, className = '' }) {
       )}
       </span>
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
+      {cleanupPending && <div>Cleanup {cleanup?.status === 'already-absent' ? 'already absent; preservation unverified' : cleanup?.status === 'blocked' ? 'blocked' : 'unverified/pending'}{cleanup?.reason ? `: ${cleanup.reason}` : ''}</div>}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}

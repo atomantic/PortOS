@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router';
-import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle, Search } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
@@ -21,8 +21,24 @@ const INTERVAL_OPTIONS = [
   { value: 'cron', label: 'Scheduled' }
 ];
 
+// Order the catalogue with this app's switched-on tasks first, then alphabetical.
+const orderTaskTypes = (taskTypes, overrides) => [...taskTypes].sort((a, b) => {
+  const onA = overrides[a]?.enabled === true;
+  const onB = overrides[b]?.enabled === true;
+  return onA === onB ? a.localeCompare(b) : onA ? -1 : 1;
+});
+
 export default function AutomationTab({ appId, appName }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showParam = searchParams.get('show');
+  const query = searchParams.get('q') || '';
+  const updateParam = (key, value, defaultValue = '') => {
+    const params = new URLSearchParams(searchParams);
+    if (!value || value === defaultValue) params.delete(key);
+    else params.set(key, value);
+    setSearchParams(params, { replace: true });
+  };
   const [overrides, setOverrides] = useState({});
   const [schedule, setSchedule] = useState(null);
   const [providers, setProviders] = useState([]);
@@ -145,6 +161,23 @@ export default function AutomationTab({ appId, appName }) {
   }
 
   const taskTypes = schedule?.tasks ? Object.keys(schedule.tasks).sort() : [];
+  const enabledCount = taskTypes.filter(t => overrides[t]?.enabled === true).length;
+  // A configured app opens on its live automation; an unconfigured one on the full catalogue.
+  const defaultShow = enabledCount > 0 ? 'on' : 'all';
+  const show = showParam === 'on' || showParam === 'all' ? showParam : defaultShow;
+  const needle = query.trim().toLowerCase();
+  const visibleTaskTypes = orderTaskTypes(taskTypes, overrides).filter(t => {
+    if (show === 'on' && overrides[t]?.enabled !== true) return false;
+    if (!needle) return true;
+    return `${t} ${schedule.tasks[t]?.description || ''}`.toLowerCase().includes(needle);
+  });
+  const clearFilters = () => {
+    const params = new URLSearchParams(searchParams);
+    params.delete('q');
+    params.set('show', 'all');
+    if (defaultShow === 'all') params.delete('show');
+    setSearchParams(params, { replace: true });
+  };
   const allEnabled = taskTypes.length > 0 && taskTypes.every(t => (overrides[t] || {}).enabled === true);
 
   const handleToggleAll = async () => {
@@ -181,7 +214,7 @@ export default function AutomationTab({ appId, appName }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-port-warning">Scheduled automation is globally paused</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              Scheduled and autonomous tasks won&apos;t run until resumed. You can still trigger an enabled task manually with <span className="text-gray-300">Run</span>.
+              Scheduled and autonomous tasks won&apos;t run until resumed. Any task can still be run once with <span className="text-gray-300">Run Now</span>.
             </p>
           </div>
           <button
@@ -219,8 +252,45 @@ export default function AutomationTab({ appId, appName }) {
           No task types configured in the schedule
         </div>
       ) : (
+        <>
+        <div className="flex flex-wrap items-center gap-3">
+          <div role="group" aria-label="Task visibility" className="inline-flex rounded-lg border border-port-border overflow-hidden">
+            {[['on', `On for this app (${enabledCount})`], ['all', `All (${taskTypes.length})`]].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={show === value}
+                onClick={() => updateParam('show', value, defaultShow)}
+                className={`px-3 py-1.5 text-xs font-medium ${show === value ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-[12rem] max-w-md">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Search tasks"
+              value={query}
+              onChange={e => updateParam('q', e.target.value)}
+              placeholder="Search task id or description…"
+              className="w-full pl-8 pr-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            />
+          </div>
+        </div>
+        {visibleTaskTypes.length === 0 && (
+          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500 space-y-2">
+            <p>
+              No tasks match {show === 'on' ? '“On for this app”' : 'all tasks'}{needle ? ` and “${query.trim()}”` : ''}.
+            </p>
+            <button type="button" onClick={clearFilters} className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs">
+              Show all tasks
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 items-start">
-          {taskTypes.map(taskType => {
+          {visibleTaskTypes.map(taskType => {
             const override = overrides[taskType] || {};
             const globalConfig = schedule.tasks[taskType] || {};
             const isEnabled = override.enabled === true;
@@ -386,6 +456,7 @@ export default function AutomationTab({ appId, appName }) {
             );
           })}
         </div>
+        </>
       )}
 
 

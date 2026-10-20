@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,47 @@ async function nativeFocusReader(page) {
     return result.value;
   };
 }
+
+// Vitest reports a timeout only as "Test timed out in 60000ms". The clock names
+// the phase in flight and what each finished phase cost (#12657); phase names
+// are a fixed set, so the line stays bounded.
+function phaseClock() {
+  const finished = new Map();
+  const startedAt = performance.now();
+  let current = null;
+  return {
+    async run(name, work) {
+      current = { name, at: performance.now() };
+      try {
+        return await work();
+      } finally {
+        const prior = finished.get(name) ?? { count: 0, ms: 0 };
+        finished.set(name, { count: prior.count + 1, ms: prior.ms + performance.now() - current.at });
+        current = null;
+      }
+    },
+    describe() {
+      const done = [...finished].map(([name, { count, ms }]) => `${name} ${count}x ${Math.round(ms)}ms`).join(', ');
+      const running = current ? `; in flight: ${current.name} ${Math.round(performance.now() - current.at)}ms` : '';
+      return `${Math.round(performance.now() - startedAt)}ms elapsed${running}; finished: ${done || 'none'}`;
+    },
+  };
+}
+
+// Counts only, never URLs or messages. The fixture is static (watcher and HMR
+// off, #12230), so one navigation and no reload, page error or failing request
+// is the baseline; the client's routine "[vite] connecting/connected" lines are
+// not counted.
+function countPageEvents(page) {
+  const seen = { navigations: 0, pageErrors: 0, viteReloads: 0, httpErrors: 0 };
+  page.on('framenavigated', frame => { if (frame === page.mainFrame()) seen.navigations += 1; });
+  page.on('pageerror', () => { seen.pageErrors += 1; });
+  page.on('console', message => { if (/^\[vite\] (page reload|hot updated|server connection lost)/.test(message.text())) seen.viteReloads += 1; });
+  page.on('response', response => { if (response.status() >= 400) seen.httpErrors += 1; });
+  return () => Object.entries(seen).map(([name, count]) => `${name}=${count}`).join(' ');
+}
+
+const REACHABLE_VIEWPORTS = [[360, 640], [390, 667], [360, 800], [768, 1024], [1440, 900]];
 
 describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
   let browser;
@@ -266,62 +307,73 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
 
   // This catches footer-induced body collapse using real CSS rectangles, not
   // class names. All media and callbacks are synthetic and requests intercepted.
-  it.each(['classic-midnight', 'kestrel-neon'])('keeps settings and image/video actions reachable in %s', async theme => {
-    for (const [width, height] of [[360, 640], [390, 667], [360, 800], [768, 1024], [1440, 900]]) {
+  // One case per theme and viewport, like the cases around it: the combined loop
+  // held ~1,300 browser round trips in a single 60s budget, so a loaded host
+  // overran it with no single stalled phase (#12657).
+  it.each(['classic-midnight', 'kestrel-neon'].flatMap(theme => REACHABLE_VIEWPORTS.map(([width, height]) => [theme, width, height])))(
+    'keeps settings and image/video actions reachable in %s at %dx%d', async (theme, width, height) => {
+      const phases = phaseClock();
       const page = await browser.newPage({ viewport: { width, height }, hasTouch: true });
+      const pageEvents = countPageEvents(page);
+      onTestFailed(() => console.error(`❌ lightbox ${theme} ${width}x${height} failed after ${phases.describe()}; ${pageEvents()}`));
       try {
         await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
-        await page.goto(`${origin}lightbox-test?theme=${theme}`);
+        await phases.run('goto', () => page.goto(`${origin}lightbox-test?theme=${theme}`));
         for (const opener of ['#gallery', '#opener']) {
-          await page.locator(opener).click();
+          // The fixture renders only after it records its synthetic clip, so the
+          // click waits for that too.
+          await phases.run('open', () => page.locator(opener).click());
           const aside = page.locator('aside');
           const prompt = aside.locator('#media-prompt');
-          await prompt.fill('Synthetic multiline prompt\nSecond invented line\nThird invented line');
-          const scroll = aside.locator('header + div');
-          const roomy = width >= 640 && height >= 800;
-          const body = roomy ? scroll.locator(':scope > div') : scroll;
-          const bounds = await body.boundingBox();
-          expect(bounds.height, `${width}x${height} editing region`).toBeGreaterThan(120);
-          const header = await aside.locator('header').boundingBox();
-          const assertReachable = async locator => {
-            await locator.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'nearest' }));
-            const rect = await locator.boundingBox();
-            const viewport = await body.boundingBox();
-            // Roomy footers sit outside the body scroller by design.
-            if (!(roomy && await locator.evaluate(el => !!el.closest('footer')))) {
-              expect(rect.y).toBeGreaterThanOrEqual(viewport.y - 1);
-              expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.y + viewport.height + 1);
+          await phases.run('fill', () => prompt.fill('Synthetic multiline prompt\nSecond invented line\nThird invented line'));
+          await phases.run('reach', async () => {
+            const scroll = aside.locator('header + div');
+            const roomy = width >= 640 && height >= 800;
+            const body = roomy ? scroll.locator(':scope > div') : scroll;
+            const bounds = await body.boundingBox();
+            expect(bounds.height, `${width}x${height} editing region`).toBeGreaterThan(120);
+            const header = await aside.locator('header').boundingBox();
+            const assertReachable = async locator => {
+              await locator.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'nearest' }));
+              const rect = await locator.boundingBox();
+              const viewport = await body.boundingBox();
+              // Roomy footers sit outside the body scroller by design.
+              if (!(roomy && await locator.evaluate(el => !!el.closest('footer')))) {
+                expect(rect.y).toBeGreaterThanOrEqual(viewport.y - 1);
+                expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.y + viewport.height + 1);
+              }
+              const close = await aside.getByRole('button', { name: 'Close', exact: true }).boundingBox();
+              expect(close.y).toBeGreaterThanOrEqual(0);
+              expect(close.y + close.height).toBeLessThanOrEqual(height);
+              expect((await aside.locator('header').boundingBox()).y).toBeCloseTo(header.y);
+              const card = await aside.evaluate(el => el.parentElement.getBoundingClientRect().toJSON());
+              expect(card.y).toBeGreaterThanOrEqual(0);
+              expect(card.bottom).toBeLessThanOrEqual(height);
+            };
+            await assertReachable(prompt);
+            await assertReachable(aside.getByRole('button', { name: 'Save prompt' }));
+            for (const control of await aside.locator('footer button, footer a, button:has-text("Save prompt")').all()) {
+              const rect = await control.boundingBox();
+              expect(rect.height).toBeGreaterThanOrEqual(44);
+              expect(rect.width).toBeGreaterThanOrEqual(44);
             }
-            const close = await aside.getByRole('button', { name: 'Close', exact: true }).boundingBox();
-            expect(close.y).toBeGreaterThanOrEqual(0);
-            expect(close.y + close.height).toBeLessThanOrEqual(height);
-            expect((await aside.locator('header').boundingBox()).y).toBeCloseTo(header.y);
-            const card = await aside.evaluate(el => el.parentElement.getBoundingClientRect().toJSON());
-            expect(card.y).toBeGreaterThanOrEqual(0);
-            expect(card.bottom).toBeLessThanOrEqual(height);
-          };
-          await assertReachable(prompt);
-          await assertReachable(aside.getByRole('button', { name: 'Save prompt' }));
-          for (const control of await aside.locator('footer button, footer a, button:has-text("Save prompt")').all()) {
-            const rect = await control.boundingBox();
-            expect(rect.height).toBeGreaterThanOrEqual(44);
-            expect(rect.width).toBeGreaterThanOrEqual(44);
-          }
-          const fullScreen = await page.getByRole('button', { name: 'Full screen', exact: true }).boundingBox();
-          expect(fullScreen.width).toBeGreaterThanOrEqual(44);
-          expect(fullScreen.height).toBeGreaterThanOrEqual(44);
-          await assertReachable(aside.getByRole('textbox', { name: 'Note' }));
-          for (const control of await aside.locator('footer button, footer a').all()) await assertReachable(control);
-          if (!roomy) expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+            const fullScreen = await page.getByRole('button', { name: 'Full screen', exact: true }).boundingBox();
+            expect(fullScreen.width).toBeGreaterThanOrEqual(44);
+            expect(fullScreen.height).toBeGreaterThanOrEqual(44);
+            await assertReachable(aside.getByRole('textbox', { name: 'Note' }));
+            for (const control of await aside.locator('footer button, footer a').all()) await assertReachable(control);
+            if (!roomy) expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+          });
           // Pointer overlap from gallery arrows is tracked independently in #10690.
-          await page.keyboard.press('Escape');
-          await page.getByRole('dialog').waitFor({ state: 'detached' });
+          await phases.run('dismiss', async () => {
+            await page.keyboard.press('Escape');
+            await page.getByRole('dialog').waitFor({ state: 'detached' });
+          });
         }
       } finally {
-        await page.close();
+        await phases.run('teardown', () => page.close());
       }
-    }
-  }, 60000);
+    }, 60000);
 
   // Real card/menu primitives catch shrinking flex targets and neighboring hits.
   it.each([[360, 800], [768, 1024], [1440, 900]])('gives touch media actions independent 44px targets at %dx%d', async (width, height) => {

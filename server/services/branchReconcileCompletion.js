@@ -29,6 +29,16 @@ export async function settleBranchReconcileRun(agent) {
   });
   const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
   const outcome = await getBranchReconcileOutcome(app.id);
+  const { recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+  for (const target of task.metadata.reconcileRetirements || []) {
+    if (target.cognition?.ownerAgentId && target.cognition.observation) {
+      await recordRepoCleanupRecovery(target.cognition.ownerAgentId, target.release.branch, target.cognition.observation,
+        { phase: 'completed', taskId: task.id });
+    }
+    const verified = hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt });
+    await recordCleanupOutcome(agent.id, { ...target.release, status: verified ? 'verified' : 'blocked',
+      reason: verified ? 'retirement-receipt-verified' : 'retirement-receipt-unverified' });
+  }
   const unverifiedRetirements = unresolvedRetirements(outcome,
     (task.metadata.reconcileRetirements || []).map(({ release, createdAt }) => ({ ...release, createdAt, reason: 'retirement-review-pending' })));
   if (task.metadata.reconcileRetirements?.length) {
@@ -64,10 +74,18 @@ export async function settleRetirementReviewRun(agent) {
   if (agent?.metadata?.recoveryOrigin?.subsystem !== 'repository-cleanup') return null;
   const task = await getTaskById(agent.taskId);
   const target = task?.metadata?.retirementReview;
-  if (!target?.appId || !target.release?.branch || !target.release.path || !target.release.head) return null;
+  const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+  if (!target?.appId || !target.release?.branch || !target.release.path || !target.release.head) {
+    await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
+    return { verified: false };
+  }
   const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
   const outcome = await getBranchReconcileOutcome(target.appId);
-  if (hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt })) return { verified: true };
+  if (hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt })) {
+    await recordCleanupOutcome(agent.id, { status: 'verified', reason: 'retirement-receipt-verified', ...target.release });
+    return { verified: true };
+  }
+  await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'retirement-receipt-unverified', ...target.release });
   await recordBranchReconcileOutcome(target.appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
     retirementObligations: [{ ...target.release, reason: 'retirement-receipt-unverified' }],

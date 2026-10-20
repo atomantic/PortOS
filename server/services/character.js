@@ -18,6 +18,7 @@ import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS, sleep } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import { getAllTasks } from './cosTaskStore.js';
+import { listArchivedSummaries } from './cosTaskArchive.js';
 import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
@@ -587,7 +588,13 @@ export async function syncJiraXP() {
 
 export async function syncTaskXP() {
   const { user: userTasks, cos: cosTasks } = await getAllTasks();
-  const completed = [...(userTasks.tasks || []), ...(cosTasks.tasks || [])].filter(t => t.status === 'completed');
+  // Completed tasks past the file window live in the archive; one that finished
+  // before this sync ran must still earn its XP, so include them by summary.
+  const archived = await listArchivedSummaries();
+  const completed = [
+    ...[...(userTasks.tasks || []), ...(cosTasks.tasks || [])].filter(t => t.status === 'completed'),
+    ...archived,
+  ];
 
   const { saved, result } = await mutateCharacter((character) => {
     character.syncedTaskIds ??= [];

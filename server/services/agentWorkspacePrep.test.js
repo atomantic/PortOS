@@ -11,6 +11,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 const publication = vi.hoisted(() => ({ active: false, refuse: false }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (publication.refuse) throw new Error('checkout-retirement-reserved');
@@ -89,7 +91,7 @@ import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktree
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
+beforeEach(() => { vi.clearAllMocks(); recoveryCheck.mockReset().mockResolvedValue(null); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -746,6 +748,37 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(r.workspacePath).toBe('/mock/worktrees/agent-new');
     // Not blocked, not paused — the task never reaches updateTask at all.
     expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('checks a recovered head before adoption and consumes only its initial-launch pin before registration', async () => {
+    const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40) };
+    const task = followUpTask({ cleanupReviewTarget: target });
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: target.branch, adopted: true });
+    const registered = vi.fn(async result => {
+      expect(task.metadata.cleanupReviewTarget).toBeUndefined();
+      expect(Object.hasOwn(task.metadata, 'cleanupReviewTarget')).toBe(true);
+      expect(task.metadata.cleanupReviewLaunchEvidence).toEqual(target);
+      return result;
+    });
+    expect((await prepareAgentWorkspace({ agentId: 'agent-new', task, onPrepared: registered })).outcome).toBe('ready');
+    expect(recoveryCheck.mock.calls.map(([call]) => call.workspacePath)).toEqual([PATHS.root, '/mock/worktrees/agent-y', '/mock/worktrees/agent-new']);
+    expect(registered).toHaveBeenCalledOnce();
+    // Its own later fixes are governed by the registered coordinator's normal
+    // continuation, not a stale initial-head pin that recursively spawns work.
+    recoveryCheck.mockClear();
+    await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(recoveryCheck).not.toHaveBeenCalled();
+  });
+
+  it('preserves the pin and holder when target drift is detected before adoption', async () => {
+    const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40) };
+    const task = followUpTask({ cleanupReviewTarget: target });
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    recoveryCheck.mockResolvedValueOnce(null).mockResolvedValueOnce('review-head-moved');
+    expect((await prepareAgentWorkspace({ agentId: 'agent-new', task })).outcome).toBe('blocked');
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(task.metadata.cleanupReviewTarget).toEqual(target);
   });
 
   // A resolve-and-merge follow-up's whole purpose is landing THIS branch, so the

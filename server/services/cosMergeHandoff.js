@@ -90,11 +90,153 @@ async function followUpRoster(task, policy) {
   const [{ resolveReviewLoopOptions }, { normalizeReviewers }] = await Promise.all([
     import('./codeReview.js'), import('../lib/validation.js'),
   ]);
-  const options = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers });
+  const metadata = { ...task.metadata };
+  if (isTruthyMeta(metadata.reviewLoopFollowUp)) {
+    for (const [key, saved] of Object.entries({ reviewers: 'reviewLoopReviewers', usernames: 'reviewLoopReviewerUsernames',
+      optionalReviewers: 'reviewLoopOptionalReviewers', reviewerMaxRounds: 'reviewLoopReviewerMaxRounds',
+      reviewStopMode: 'reviewLoopStopMode', reviewerModels: 'reviewLoopReviewerModels', reviewerEfforts: 'reviewLoopReviewerEfforts' })) {
+      if (Object.hasOwn(metadata, saved)) metadata[key] = metadata[saved];
+    }
+  }
+  const options = await resolveReviewLoopOptions(metadata, { normalize: normalizeReviewers });
   return {
     reviewers: options.reviewers, usernames: options.usernames,
     optionalReviewers: options.optionalReviewers, reviewerMaxRounds: options.reviewerMaxRounds,
+    reviewStopMode: options.reviewStopMode, reviewerModels: options.reviewerModels, reviewerEfforts: options.reviewerEfforts,
   };
+}
+
+/** Read-only target check shared by orphan review and its eventual workspace launch.
+ * This is permission to inspect one head, never merge admission or proof of review.
+ */
+export async function validateCleanupReviewTarget({ target, workspacePath, requireCheckout = false, launchTaskId = null }) {
+  if (!isPlainObject(target) || target.version !== 1 || !SHA_PATTERN.test(target.headSha || '')
+    || !target.branch || !target.repoPath || !target.repository) return 'review-target-invalid';
+  const pr = parsePullRequestUrl(target.prUrl);
+  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== target.repository
+    || repositoryKey(await getOriginInfo(workspacePath).catch(() => null)) !== target.repository) return 'review-repository-changed';
+  const local = await execGit(['rev-parse', '--verify', `refs/heads/${target.branch}^{commit}`], workspacePath).catch(() => null);
+  if (local?.stdout?.trim() !== target.headSha) return 'review-head-moved';
+  const repoSpec = githubRepoSpec({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` });
+  if (!repoSpec) return 'review-forge-unsupported';
+  const { getTaskById } = await import('./cosTaskStore.js');
+  const ownerTask = await getTaskById(target.ownerTaskId).catch(() => null);
+  if (!ownerTask || leavesPrForHuman(ownerTask) || isTruthyMeta(ownerTask.metadata?.readOnly)
+    || isTruthyMeta(ownerTask.metadata?.reviewLoopLeaveOpen)
+    || resolvePrCompletion(ownerTask.metadata) === PR_COMPLETIONS.LEAVE_OPEN
+    || resolvePrCompletion(ownerTask.metadata) !== target.prCompletion) return 'review-policy-held';
+  if (ownerTask.status !== 'completed' && !(ownerTask.id === launchTaskId && ['pending', 'in_progress'].includes(ownerTask.status))) return 'review-task-not-completed';
+  const { getAppById } = await import('./apps.js');
+  const app = ownerTask.metadata?.app ? await getAppById(ownerTask.metadata.app).catch(() => null) : null;
+  if (ownerTask.metadata?.app && (!app || !samePath(app.repoPath, target.repoPath))) return 'review-app-changed';
+  const options = await resolveForgeExecOptions(target.repoPath, { forgeAccount: app?.forgeAccount });
+  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', repoSpec,
+    '--json', 'number,state,isDraft,isCrossRepository,headRefName,headRefOid'], undefined,
+  { cwd: options.cwd, env: options.env }).catch(() => null);
+  const view = safeJSONParse(raw, null);
+  if (!isPlainObject(view) || view.number !== pr.number) return 'review-pr-unreadable';
+  if (view.state !== 'OPEN' || view.isDraft !== false || view.isCrossRepository !== false) return 'review-pr-held';
+  if (view.headRefName !== target.branch || view.headRefOid !== target.headSha) return 'review-head-moved';
+  if (requireCheckout) {
+    if (!await checkoutAtHead(workspacePath, target.branch, target.headSha, target.repository, repositoryKey)) return 'review-checkout-changed';
+    const status = await execGit(['status', '--porcelain=v1', '--untracked-files=all'], workspacePath).catch(() => null);
+    if (!status || status.stdout.trim()) return 'review-checkout-dirty';
+  }
+  // Policy is checked after the potentially slow forge/checkout reads as well:
+  // an operator hold arriving while those reads run must win before dispatch.
+  const currentOwnerTask = await getTaskById(target.ownerTaskId).catch(() => null);
+  if (!currentOwnerTask || currentOwnerTask.status !== ownerTask.status || currentOwnerTask.metadata?.app !== ownerTask.metadata?.app
+    || leavesPrForHuman(currentOwnerTask) || isTruthyMeta(currentOwnerTask.metadata?.readOnly)
+    || isTruthyMeta(currentOwnerTask.metadata?.reviewLoopLeaveOpen)
+    || resolvePrCompletion(currentOwnerTask.metadata) !== target.prCompletion) return 'review-policy-held';
+  if (launchTaskId) {
+    const launchTask = await getTaskById(launchTaskId).catch(() => null);
+    const saved = launchTask?.metadata?.cleanupReviewTarget;
+    if (!launchTask || !['pending', 'in_progress'].includes(launchTask.status) || leavesPrForHuman(launchTask)
+      || isTruthyMeta(launchTask.metadata?.readOnly) || isTruthyMeta(launchTask.metadata?.reviewLoopLeaveOpen)
+      || resolvePrCompletion(launchTask.metadata) === PR_COMPLETIONS.LEAVE_OPEN
+      || !isPlainObject(saved) || Object.keys(target).some(key => saved[key] !== target[key])) return 'review-launch-task-changed';
+  }
+  return null;
+}
+
+/** Resolve a genuinely missing required review without adopting a completed
+ * owner into merge admission. Ambiguous history and optional/no-review policies
+ * retain the branch; pending CI by itself never creates cognitive work.
+ */
+export async function inspectCompletedOwnerReview({ agentId = null, repoPath, branch, prUrl, headSha, worktreePath }) {
+  const held = reason => ({ disposition: 'held', reason });
+  const { readBranchCompletionPolicies, readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
+  if (!agents) return held('review-ownership-unreadable');
+  const scopes = agent => {
+    const m = agent.metadata || {};
+    return [m.worktreeBranch, m.jiraBranch, m.claimBranch, m.branchCompletionPolicy?.branch,
+      ...(Array.isArray(m.claimBranches) ? m.claimBranches : []), ...(Array.isArray(m.claimReleasedBranches) ? m.claimReleasedBranches : [])];
+  };
+  const owners = agents.filter(agent => samePath(agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath, repoPath) && scopes(agent).includes(branch));
+  if (owners.length !== 1 || (agentId && owners[0].id !== agentId)) return held('review-owner-ambiguous');
+  const agent = owners[0];
+  if (agent.status !== 'completed' || !agent.id || !agent.taskId || !Number.isFinite(Date.parse(agent.startedAt))
+    || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))) return held('review-owner-not-completed');
+  const { getTaskById, getTaskView } = await import('./cosTaskStore.js');
+  const task = await getTaskById(agent.taskId).catch(() => null);
+  if (!task || task.id !== agent.taskId || task.status !== 'completed') return held('review-task-not-completed');
+  const policy = resolvePrCompletion(task.metadata);
+  if (agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) return held('review-policy-held');
+  if (![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(policy) || leavesPrForHuman(task)
+    || isTruthyMeta(task.metadata?.readOnly) || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) return held('review-policy-held');
+  const policyHold = await readBranchCompletionHold({ repoPath, branch, prUrl, tip: headSha, agents });
+  if (policyHold !== (policy === PR_COMPLETIONS.REVIEW_THEN_MERGE ? 'pr-completion-review-required' : null)) return held('review-policy-unproven');
+  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  const repository = repositoryKey(await getOriginInfo(repoPath).catch(() => null));
+  const app = await resolveHandoffApp(task, agent, repository, repositoryKey);
+  if (!app) return held('review-app-unresolved');
+  const recordedWorkspace = agent.metadata?.workspacePath || agent.workspacePath;
+  const claimCutsCheckout = isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || Boolean(agent.metadata?.claimBranch);
+  // Claim/swarm parents register the source workspace, then bind their child
+  // branches. That source path is not a claim checkout ownership receipt.
+  if (!worktreePath || samePath(worktreePath, repoPath)) return held('review-checkout-not-private');
+  if (recordedWorkspace && !samePath(recordedWorkspace, worktreePath)
+    && !(claimCutsCheckout && samePath(recordedWorkspace, repoPath))) return held('review-checkout-owner-mismatch');
+  const recordedPr = agent.metadata?.branchCompletionPolicy?.prUrl || agent.metadata?.reviewLoopMergeTarget?.url;
+  if (recordedPr && prIdentity(recordedPr) !== prIdentity(prUrl)) return held('review-owner-pr-mismatch');
+  const target = { version: 1, repository, repoPath, branch, prUrl, headSha, worktreePath,
+    ownerId: agent.id, ownerStartedAt: agent.startedAt, ownerTaskId: task.id, prCompletion: policy };
+  const invalid = await validateCleanupReviewTarget({ target, workspacePath: worktreePath, requireCheckout: true });
+  if (invalid) return held(invalid);
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const live = await readClaimOwnershipAgents().catch(() => null);
+  const ownerReason = claimCheckoutOwnerReason({ branchName: branch, holderPath: worktreePath, sourceWorkspace: repoPath, agents: live });
+  if (ownerReason) return held(ownerReason);
+  const queue = await getTaskView({ kind: 'queue' }).catch(() => null);
+  if (!queue || !Array.isArray(queue.user?.tasks) || !Array.isArray(queue.cos?.tasks)) return held('review-successors-unreadable');
+  const successor = [...queue.user.tasks, ...queue.cos.tasks].find(row => row.id !== task.id && row.status !== 'completed'
+    && (prIdentity(row.metadata?.reviewLoopPRUrl) === prIdentity(prUrl)
+      || prIdentity(row.metadata?.cleanupReviewTarget?.prUrl) === prIdentity(prUrl)));
+  if (successor) {
+    const bound = successor.metadata?.cleanupReviewTarget;
+    if (isPlainObject(bound) && Object.keys(target).every(key => bound[key] === target[key])
+      && ['pending', 'in_progress'].includes(successor.status)) {
+      return { disposition: 'join-existing', reason: 'review-successor-exists', taskId: successor.id, agentId: agent.id, reviewTarget: target };
+    }
+    return held('review-successor-exists');
+  }
+  const { readPendingMergePrs } = await import('./prWatcher.js');
+  const handoff = readPendingMergePrs(app).find(entry => prIdentity(entry.prUrl) === prIdentity(prUrl) && entry.prBranch === branch
+    && entry.handoff?.headSha === headSha && entry.handoff?.agentId === agent.id && entry.handoff?.taskId === task.id
+    && entry.handoff?.startedAt === agent.startedAt && entry.handoff?.repository === repository && entry.handoff?.receiptId);
+  if (handoff) return { disposition: 'join-existing', reason: 'review-handoff-exists', appId: app.id };
+  if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return { ...held('review-not-required'), agentId: agent.id, originalTask: task,
+    roster: await followUpRoster(task, policy), reviewTarget: target };
+  const roster = await followUpRoster(task, PR_COMPLETIONS.REVIEW_THEN_MERGE);
+  if (!roster.reviewers?.some(reviewer => !roster.optionalReviewers?.includes(reviewer))) return held('review-required-roster-unproven');
+  const review = await readReviewEvidence(worktreePath);
+  if (review.status === 'unreadable') return held('review-evidence-unreadable');
+  if (reviewEvidenceAccepted(review, headSha, PR_COMPLETIONS.REVIEW_THEN_MERGE, roster)) return { ...held('review-recorded-handoff-missing'), agentId: agent.id, originalTask: task, roster, reviewTarget: target };
+  return { disposition: 'review-required', reason: 'required-review-missing', agentId: agent.id, originalTask: task, roster, reviewTarget: target };
 }
 
 /**

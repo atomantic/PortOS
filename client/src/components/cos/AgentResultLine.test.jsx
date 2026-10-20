@@ -100,3 +100,17 @@ it('keeps input rejection history visible after a corrected scanner execution co
   expect(screen.queryByText('Input rejected before scanner launch')).not.toBeInTheDocument();
   expect(screen.getByText('Input rejections: 1 · Last: paths item 3 — path-not-found')).toBeInTheDocument();
 });
+
+
+it('does not promote historical cleanup process success to verified cleanup', () => {
+  const agent = { result: { success: true }, metadata: { recoveryOrigin: { subsystem: 'repository-cleanup' } } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.getByText('Cleanup unverified/pending')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified' } } }} />);
+  expect(screen.getByText(/Cleanup already absent; preservation unverified/)).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'verified' } } }} />);
+  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+});

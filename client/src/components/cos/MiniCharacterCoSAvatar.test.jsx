@@ -25,6 +25,8 @@ vi.mock('@react-three/fiber', () => ({
   useFrame: vi.fn(),
   useThree: vi.fn(() => ({ invalidate: vi.fn() })),
 }));
+// Drei ships a CommonJS entry that pulls in three.cjs (THREE_CJS_DEPRECATED); the Canvas is stubbed, so the controls are never rendered.
+vi.mock("@react-three/drei", () => ({ OrbitControls: () => null }));
 
 let reduceMotionPreference = false;
 vi.mock('../../hooks/usePrefersReducedMotion', () => ({

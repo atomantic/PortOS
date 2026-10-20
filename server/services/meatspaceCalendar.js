@@ -186,7 +186,7 @@ export function computeActivityBudgets(deathDate, activities) {
 // === File I/O ===
 
 async function loadActivities() {
-  return readJSONFile(ACTIVITIES_FILE, { activities: [] }, { strict: true });
+  return readJSONFile(ACTIVITIES_FILE, { activities: null }, { strict: true });
 }
 
 async function saveActivities(data) {
@@ -220,7 +220,7 @@ const DEFAULT_EVENTS = [
 ];
 
 async function loadEvents() {
-  return readJSONFile(EVENTS_FILE, { events: [] }, { strict: true });
+  return readJSONFile(EVENTS_FILE, { events: null }, { strict: true });
 }
 
 async function saveEvents(data) {
@@ -231,12 +231,12 @@ async function saveEvents(data) {
 
 export async function getLifeEvents() {
   const data = await loadEvents();
-  return data.events.length > 0 ? data.events : DEFAULT_EVENTS;
+  return Array.isArray(data.events) ? data.events : DEFAULT_EVENTS;
 }
 
 export async function addLifeEvent(event) {
   const data = await loadEvents();
-  if (data.events.length === 0) {
+  if (!Array.isArray(data.events)) {
     data.events = [...DEFAULT_EVENTS];
   }
   const newEvent = { id: randomUUID(), ...event };
@@ -248,7 +248,7 @@ export async function addLifeEvent(event) {
 
 export async function updateLifeEvent(id, updates) {
   const data = await loadEvents();
-  if (data.events.length === 0) {
+  if (!Array.isArray(data.events)) {
     data.events = [...DEFAULT_EVENTS];
   }
   const idx = data.events.findIndex(e => e.id === id);
@@ -261,7 +261,7 @@ export async function updateLifeEvent(id, updates) {
 
 export async function removeLifeEvent(id) {
   const data = await loadEvents();
-  if (data.events.length === 0) {
+  if (!Array.isArray(data.events)) {
     data.events = [...DEFAULT_EVENTS];
   }
   const idx = data.events.findIndex(e => e.id === id);
@@ -288,7 +288,7 @@ export async function getCalendarData() {
 
   // Load activities
   const data = await loadActivities();
-  const activities = data.activities.length > 0 ? data.activities : DEFAULT_ACTIVITIES;
+  const activities = Array.isArray(data.activities) ? data.activities : DEFAULT_ACTIVITIES;
   const budgets = computeActivityBudgets(deathDate, activities);
 
   // Load life events
@@ -302,19 +302,19 @@ export async function getCalendarData() {
     grid,
     budgets,
     events,
-    activitiesConfigured: data.activities.length > 0,
+    activitiesConfigured: Array.isArray(data.activities),
   };
 }
 
 export async function getActivities() {
   const data = await loadActivities();
-  return data.activities.length > 0 ? data.activities : DEFAULT_ACTIVITIES;
+  return Array.isArray(data.activities) ? data.activities : DEFAULT_ACTIVITIES;
 }
 
 export async function addActivity(activity) {
   const data = await loadActivities();
   // If using defaults, seed with defaults first
-  if (data.activities.length === 0) {
+  if (!Array.isArray(data.activities)) {
     data.activities = [...DEFAULT_ACTIVITIES];
   }
   data.activities.push(activity);
@@ -324,7 +324,7 @@ export async function addActivity(activity) {
 
 export async function updateActivity(index, updates) {
   const data = await loadActivities();
-  if (data.activities.length === 0) {
+  if (!Array.isArray(data.activities)) {
     data.activities = [...DEFAULT_ACTIVITIES];
   }
   if (index < 0 || index >= data.activities.length) {
@@ -337,7 +337,7 @@ export async function updateActivity(index, updates) {
 
 export async function removeActivity(index) {
   const data = await loadActivities();
-  if (data.activities.length === 0) {
+  if (!Array.isArray(data.activities)) {
     data.activities = [...DEFAULT_ACTIVITIES];
   }
   if (index < 0 || index >= data.activities.length) {

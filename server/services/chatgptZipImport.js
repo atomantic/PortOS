@@ -154,21 +154,29 @@ const UNSAFE_MEMBER_WARNING = '⚠️ ChatGPT import: skipped a ZIP member with 
 // recognized — the caller then falls back to the friendly name / `.bin`).
 const streamAssetToFile = (entry, filePath, max, budget) => new Promise((resolve, reject) => {
   const outPromise = createWriteStreamGuarded(filePath);
-  let out = null;
   const head = [];
   let headLen = 0;
   let size = 0;
   let done = false;
-  const fail = (err) => { if (done) return; done = true; out?.destroy(); reject(err); };
+  // Reject only after the write stream has CLOSED. The caller unlinks the
+  // `.part` once this task settles; rejecting first lets the async open land
+  // after that unlink (re-creating the file) or leaves the fd open so Windows
+  // still lists the file (#12701).
+  const fail = (err) => {
+    if (done) return;
+    done = true;
+    outPromise
+      .then((stream) => {
+        if (stream.closed) return undefined;
+        return new Promise((closed) => { stream.once('close', closed); stream.destroy(); });
+      })
+      .catch(() => {})
+      .then(() => reject(err));
+  };
   outPromise.then((stream) => {
-    // `sink` can already have failed (and destroyed `out`, which was still
-    // null at that point) before this resolves — the fd it just opened would
-    // otherwise never be closed. Destroy it immediately rather than wiring it
-    // into a promise that already settled.
-    if (done) { stream.destroy(); return; }
-    out = stream;
-    out.on('error', fail);
-    out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
+    if (done) return;
+    stream.on('error', fail);
+    stream.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
   }).catch(fail);
   const sink = new Writable({
     async write(chunk, _enc, cb) {
@@ -260,6 +268,9 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('error', onErr)
       .pipe(parser)
       .on('entry', (entry) => {
+        // An entry the parser emits after the failure would start a task the
+        // cleanup's `allSettled(inFlight)` snapshot never waits for.
+        if (settled) { entry.autodrain(); return; }
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path) || IS_CONVO_JSON(path) || (IS_DAT(path) && isSafeDatMember(path))) {
           try { archiveBudget.addEntry(); } catch (err) { onErr(err); return; }

@@ -3,13 +3,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false }));
+const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true } }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
   try { return await work(); } finally { f.publicationActive = false; }
 }) }));
-vi.mock('./cos.js', () => ({ getConfig: async () => ({}), updateTask: async () => ({ ok: true }) }));
+vi.mock('./cos.js', () => ({ getConfig: async () => ({}), updateTask: vi.fn(async () => f.updateResult) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn(() => f.registerGate),
   updateAgent: vi.fn(),
@@ -55,6 +55,7 @@ import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { updateTask } from './cos.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 
@@ -71,6 +72,7 @@ beforeEach(() => {
   setUseRunner(false);
   f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
+  f.updateResult = { ok: true };
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
 });
 
@@ -111,6 +113,19 @@ describe('dispatchAgentRun ownership window', () => {
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+
+  it.each([{ error: 'write refused' }, { statusChanged: true }])('never starts a recovered reviewer when its initial pin consumption was not persisted: %j', async result => {
+    f.updateResult = result;
+    f.prep.cleanupReviewPinConsumed = true;
+    const context = newContext();
+    context.task = { ...task, metadata: { cleanupReviewTarget: undefined, cleanupReviewLaunchEvidence: { headSha: 'a'.repeat(40) }, totalSpawnCount: '2' } };
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(registerAgent).toHaveBeenCalledOnce();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user');
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist reviewed-head launch admission'));
+    expect(f.publicationActive).toBe(false);
   });
 
   it('releases the agent when workspace prep blocks the dispatch', async () => {
