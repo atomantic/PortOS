@@ -587,6 +587,23 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  * @returns {Promise<string|null>} the fork remote's name, or null
  */
 async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
+  const remoteName = await pointForkRemote(sourceWorkspace, forkHead, branchName);
+  if (!remoteName) return null;
+
+  await execGit(['fetch', remoteName, branchName], sourceWorkspace).catch(err => {
+    console.log(`⚠️ Fork fetch of ${remoteName}/${branchName} failed: ${err.message}`);
+  });
+  // Verify rather than trust the fetch's exit code: a fetch that reported
+  // success but left no remote-tracking ref would otherwise send `worktree add`
+  // at a start point git resolves somewhere else entirely.
+  const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => r.exitCode === 0)
+    .catch(() => false);
+  return refExists ? remoteName : null;
+}
+
+/** Add or re-point the deterministic fork remote; its name, or null. */
+async function pointForkRemote(sourceWorkspace, forkHead, branchName) {
   const coordinates = normalizeForkHead(forkHead);
   if (!coordinates) return null;
   const remoteName = forkRemoteName(coordinates.ownerLogin);
@@ -608,17 +625,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
     });
     if (!pointed) return null;
   }
-
-  await execGit(['fetch', remoteName, branchName], sourceWorkspace).catch(err => {
-    console.log(`⚠️ Fork fetch of ${remoteName}/${branchName} failed: ${err.message}`);
-  });
-  // Verify rather than trust the fetch's exit code: a fetch that reported
-  // success but left no remote-tracking ref would otherwise send `worktree add`
-  // at a start point git resolves somewhere else entirely.
-  const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0)
-    .catch(() => false);
-  return refExists ? remoteName : null;
+  return remoteName;
 }
 
 /** `err.code` when a pinned attach finds the branch tip is not the reviewed commit. */
@@ -630,44 +637,50 @@ function requirePinnedHeadSha(value) {
   return sha;
 }
 
-async function resolveCommit(sourceWorkspace, ref) {
-  const result = await execGit(['rev-parse', '--verify', `${ref}^{commit}`], sourceWorkspace, { ignoreExitCode: true });
-  return result.exitCode === 0 ? (result.stdout || '').trim() : null;
+function pinnedHeadMoved(branchName, pinnedHead, actual) {
+  const err = new Error(`Cannot attach worktree to ${branchName}: the branch is ${actual ? `at ${actual}` : 'gone'}, not the reviewed head ${pinnedHead}`);
+  err.code = PINNED_HEAD_MOVED;
+  err.actualHeadSha = actual || null;
+  return err;
 }
 
 /**
- * Refuse a pinned attach unless the freshly fetched remote tip IS the reviewed commit, and
- * unless resetting an existing local branch to it loses nothing (equal or a
- * fast-forward). The pin exists because the attached code is then executed.
+ * Attach `branchName` from `remote` at exactly `pinnedHead`, the commit that was
+ * reviewed — the attached code is then executed, so nothing else may land.
+ *
+ * The tip comes from the remote itself (`ls-remote`), never a cached tracking
+ * ref, and a branch the remote no longer has is a moved head too. The fetch
+ * names its destination so the tracking ref cannot stay stale under a narrow
+ * refspec. The checkout uses the SHA, so a ref update after the check cannot
+ * swap code in; an existing local branch is reset to it only as a fast-forward.
  */
-async function assertPinnedAttachable(sourceWorkspace, branchName, remote, pinnedHead, localExists) {
-  // A cached remote-tracking ref can still name the reviewed commit after the
-  // contributor moved or deleted the branch, so the tip must come from a fetch
-  // that succeeded now; a failed fetch refuses the attach.
-  await execGit(['fetch', remote, branchName], sourceWorkspace);
-  const startPoint = `${remote}/${branchName}`;
-  const remoteTip = await resolveCommit(sourceWorkspace, startPoint);
-  if (remoteTip !== pinnedHead) {
-    const err = new Error(`Cannot attach worktree to ${branchName}: ${startPoint} is at ${remoteTip || 'an unreadable commit'}, not the reviewed head ${pinnedHead}`);
-    err.code = PINNED_HEAD_MOVED;
-    err.actualHeadSha = remoteTip;
-    throw err;
-  }
-  if (!localExists) return;
-  const localTip = await resolveCommit(sourceWorkspace, branchName);
-  if (localTip === pinnedHead) return;
-  const fastForward = localTip && await execGit(['merge-base', '--is-ancestor', localTip, pinnedHead], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0)
-    .catch(() => false);
-  if (!fastForward) {
-    throw new Error(`Cannot attach worktree to ${branchName}: the local branch has commits that are not on the reviewed head ${pinnedHead}; refusing to reset it`);
-  }
-}
+async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remote, pinnedHead, localExists) {
+  const listed = await execGit(['ls-remote', '--exit-code', remote, `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true });
+  // `--exit-code` answers 2 for "no such ref"; anything else non-zero is a
+  // transport failure, which proves nothing about the branch.
+  if (listed.exitCode === 2) throw pinnedHeadMoved(branchName, pinnedHead, null);
+  if (listed.exitCode !== 0) throw new Error(`Cannot attach worktree to ${branchName}: could not read ${remote}: ${(listed.stderr || '').trim()}`);
+  const remoteTip = (listed.stdout || '').trim().split(/\s+/)[0];
+  if (remoteTip !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, remoteTip);
 
-async function setPinnedUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, startPoint) {
-  await execGit(['branch', `--set-upstream-to=${startPoint}`, branchName], sourceWorkspace).catch(async (err) => {
-    // Without it a plain `git push` has no destination, and a fork head must
-    // never fall back to origin — undo rather than hand over that checkout.
+  const trackingRef = `refs/remotes/${remote}/${branchName}`;
+  await execGit(['fetch', remote, `+refs/heads/${branchName}:${trackingRef}`], sourceWorkspace);
+  const fetched = (await execGit(['rev-parse', '--verify', `${trackingRef}^{commit}`], sourceWorkspace)).stdout.trim();
+  if (fetched !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, fetched);
+
+  if (localExists) {
+    const fastForward = await execGit(['merge-base', '--is-ancestor', branchName, pinnedHead], sourceWorkspace, { ignoreExitCode: true })
+      .then(r => r.exitCode === 0)
+      .catch(() => false);
+    if (!fastForward) {
+      throw new Error(`Cannot attach worktree to ${branchName}: the local branch has commits that are not on the reviewed head ${pinnedHead}; refusing to reset it`);
+    }
+  }
+
+  await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, pinnedHead], sourceWorkspace);
+  // A SHA start point records no upstream. Without one a plain `git push` has no
+  // destination, and a fork head must never fall back to origin — undo instead.
+  await execGit(['branch', `--set-upstream-to=${remote}/${branchName}`, branchName], sourceWorkspace).catch(async (err) => {
     await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
       label: `Undoing pinned worktree add for ${branchName} after its upstream could not be set`,
       log: 'all',
@@ -703,7 +716,7 @@ async function setPinnedUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreeP
  * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
- * @param {string} options.expectedHeadSha - Pin for `existingBranch`: the remote tip must be exactly this commit (screened code that will be executed), else the attach throws with `err.code === PINNED_HEAD_MOVED`. The worktree is checked out at the SHA itself; a local branch is reset to it only when that is a fast-forward.
+ * @param {string} options.expectedHeadSha - Pin for `existingBranch`: attach only when the remote branch (the fork's, when `forkHead` is given) is exactly this commit, read live from the remote; otherwise throw with `err.code === PINNED_HEAD_MOVED`. The checkout is at the SHA itself, and a local branch is reset to it only as a fast-forward.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
  * @param {boolean} options.linkDependencies - Link source dependencies unless explicitly false
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
@@ -748,19 +761,21 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     const branchName = options.existingBranch;
     const pinnedHead = options.expectedHeadSha ? requirePinnedHeadSha(options.expectedHeadSha) : null;
     const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
-    // A pinned attach never trusts the local branch: it must prove the REMOTE
-    // tip is the reviewed commit, so it always resolves through a remote ref.
-    if (localExists && !pinnedHead) {
+    if (pinnedHead) {
+      // Never the local branch, and with fork coordinates only the fork: a
+      // same-named origin branch (a fork PR opened from `main`) is a different one.
+      const remote = normalizeForkHead(options.forkHead)
+        ? await pointForkRemote(sourceWorkspace, options.forkHead, branchName)
+        : 'origin';
+      if (!remote) throw new Error(`Cannot attach worktree to ${branchName}: the fork remote could not be configured`);
+      await attachPinnedHead(sourceWorkspace, worktreePath, branchName, remote, pinnedHead, !!localExists);
+    } else if (localExists) {
       await addWorktreeWithRetry(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
     } else {
-      // No local copy (or a pinned attach) — we need a remote ref. If `git fetch`
-      // failed AND the remote ref isn't available, fail loudly rather than emit a
-      // confusing "couldn't find branch" git error.
-      // A pinned attach with fork coordinates resolves ONLY through the fork: the
-      // reviewed head lives there, and a same-named origin branch (a fork PR
-      // opened from `main`) is a different branch.
-      const pinnedToFork = !!pinnedHead && !!normalizeForkHead(options.forkHead);
-      const remoteExists = !pinnedToFork && await execGit(['rev-parse', '--verify', `origin/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+      // No local copy — we need a remote ref. If `git fetch` failed AND the
+      // remote ref isn't available, fail loudly rather than emit a confusing
+      // "couldn't find branch" git error.
+      const remoteExists = await execGit(['rev-parse', '--verify', `origin/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
         .then((r) => r.exitCode === 0)
         .catch(() => false);
       // Third and last resolve step: a FORK PR's head lives in the contributor's
@@ -770,24 +785,17 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
       // error below rather than a new code path (#6064).
       const forkRemote = remoteExists ? null : await ensureForkRemote(sourceWorkspace, options.forkHead, branchName);
       if (!remoteExists && !forkRemote) {
-        const missing = localExists ? 'its pinned head needs a remote ref, but' : 'branch missing locally and';
-        throw new Error(`Cannot attach worktree to ${branchName}: ${missing} ${pinnedToFork ? 'the fork head' : `origin/${branchName}`} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
+        throw new Error(`Cannot attach worktree to ${branchName}: branch missing locally and origin/${branchName} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
       }
       // The start point decides the branch's upstream, and on the fork path that
       // is the whole point: tracking `<fork-remote>/<branch>` is what sends a
       // later `git push` to the CONTRIBUTOR's fork. Tracking origin here would
       // push their commits into the upstream repository instead — the #4172
       // failure mode, one remote over.
-      const remote = forkRemote || 'origin';
-      const startPoint = `${remote}/${branchName}`;
-      if (pinnedHead) await assertPinnedAttachable(sourceWorkspace, branchName, remote, pinnedHead, !!localExists);
+      const startPoint = forkRemote ? `${forkRemote}/${branchName}` : `origin/${branchName}`;
       // Use -B (force-create) so we don't fail if a stale local ref exists.
       // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
-      // A pinned attach checks out the verified SHA itself, not the ref, so a
-      // fetch landing between the check and the add cannot swap the code in.
-      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, pinnedHead || startPoint], sourceWorkspace);
-      // A SHA start point records no upstream; restore the one the ref would have.
-      if (pinnedHead) await setPinnedUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, startPoint);
+      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, startPoint], sourceWorkspace);
       if (forkRemote) console.log(`🍴 Attached ${branchName} from fork remote ${forkRemote} (no origin/${branchName})`);
     }
     // Re-attaching a branch a PREVIOUS run created — which, before #4172, may

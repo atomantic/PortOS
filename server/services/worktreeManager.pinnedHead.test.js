@@ -64,6 +64,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree pinned to a reviewed hea
     expect(existsSync(join(PATHS.worktrees, 'agent-moved'))).toBe(false);
   });
 
+  // A deleted branch is a moved head: it gets the same refusal and hand-back.
   it('refuses when only a stale remote-tracking ref still names the reviewed commit', async () => {
     const reviewed = await publish(sandbox.repo, 'origin', BRANCH, 'reviewed.txt');
     // The branch is deleted upstream (not via this checkout, which would drop
@@ -72,7 +73,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree pinned to a reviewed hea
     await execGit(['branch', '-D', BRANCH], sandbox.origin);
 
     await expect(createWorktree('agent-stale', sandbox.repo, 'task-stale', { existingBranch: BRANCH, expectedHeadSha: reviewed }))
-      .rejects.toThrow();
+      .rejects.toMatchObject({ code: PINNED_HEAD_MOVED });
     expect(existsSync(join(PATHS.worktrees, 'agent-stale'))).toBe(false);
   });
 
