@@ -562,6 +562,20 @@ async function bootDaemon(state) {
   // set to `execute` and the daemon is not paused.
   // The handoff follow-up poll (prWatcher.followUpHandoffReceipt) shares the
   // gate and is cancelled with the daemon.
+  // Existing retirement journals must recover even when branch-reconcile is
+  // disabled or every agent slot is occupied. The service reuses its exact cut;
+  // it never goes through normal agent/worktree admission.
+  const { INITIALIZED_RECOVERY_INTERVAL_MS, sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
+  scheduleEvent({
+    id: 'cos-initialized-retirement-recovery',
+    type: 'interval',
+    intervalMs: INITIALIZED_RECOVERY_INTERVAL_MS,
+    handler: async () => {
+      await sweepInitializedCheckoutRecoveries(pendingMergeSweepBlocked)
+        .catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
+    },
+    metadata: { description: 'Resume verified initialized retirement journals' },
+  });
   const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
   setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({
@@ -661,6 +675,7 @@ async function teardownDaemon() {
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-pending-merge-sweep');
+  cancelEvent('cos-initialized-retirement-recovery');
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 

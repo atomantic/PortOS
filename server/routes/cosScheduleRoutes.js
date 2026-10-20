@@ -314,7 +314,8 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
   res.json(result);
 }));
 
-// Explicit operator capability; automatic cleanup retains its initialized-module guard.
+// Initial retirement remains explicit. Only existing proof-bound journals can be
+// continued by the deterministic daemon; ordinary cleanup keeps its module guard.
 router.post('/schedule/branch-reconcile/initialized-checkouts/review', asyncHandler(async (req, res) => {
   const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.strict(), req.body);
   const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');

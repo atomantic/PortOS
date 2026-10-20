@@ -1496,12 +1496,14 @@ describe('cos.js source — priority + capacity invariants', () => {
     const sweepIdx = evalFn.indexOf('sweepPendingMergePrs()');
     expect(sweepIdx, 'evaluateTasks must invoke sweepPendingMergePrs').toBeGreaterThan(-1);
 
-    // The gate is the `if (...)` immediately preceding the sweep call.
-    const gateIdx = evalFn.lastIndexOf('if (', sweepIdx);
-    const gate = evalFn.slice(gateIdx, sweepIdx);
-    expect(gate, 'the merge sweep must stay gated on !paused').toMatch(/!\s*paused/);
-    expect(gate, 'the merge sweep must also gate on auto-run being in execute mode')
-      .toMatch(/getDomainMode\(\s*state\.config\s*,\s*'cos'\s*\)\s*===\s*'execute'/);
+    // Nested recovery callbacks can have their own `if` before this call. Find
+    // the pause/execute gate itself and prove the merge call is inside its body,
+    // rather than treating the nearest textual `if` as the enclosing gate.
+    const gateIdx = evalFn.search(/if\s*\(\s*!\s*paused\s*&&\s*getDomainMode\(\s*state\.config\s*,\s*'cos'\s*\)\s*===\s*'execute'\s*\)/);
+    expect(gateIdx, 'the merge sweep must have a combined pause/execute gate').toBeGreaterThan(-1);
+    const gateBody = extractFnBody(evalFn, gateIdx);
+    expect(gateBody, 'the merge sweep must remain inside the pause/execute gate')
+      .toContain('sweepPendingMergePrs()');
 
     // …and it must still run before the agent-slot early-return, or a full agent
     // roster wedges the merge queue (the reason it is not folded into the tiers).
