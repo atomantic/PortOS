@@ -541,7 +541,9 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     for (let i = 1; i < path.length - 1; i += 1) {
       const char = path[i];
       if (char !== '\\') {
-        bytes.push(...Buffer.from(char));
+        const codePoint = String.fromCodePoint(path.codePointAt(i));
+        bytes.push(...Buffer.from(codePoint));
+        i += codePoint.length - 1;
         continue;
       }
       const escaped = path[++i];

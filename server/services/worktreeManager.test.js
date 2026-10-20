@@ -240,6 +240,8 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     const lockfile = classifyWorktreeDirt(' M "my app/package-lock.json"\n');
     expect(lockfile.lockfileOnly).toBe(true);
     expect(lockfile.lockfilePaths).toEqual(['my app/package-lock.json']);
+    const emojiPath = classifyWorktreeDirt(' M "my 😀 app/package-lock.json"');
+    expect(emojiPath.lockfilePaths).toEqual(['my 😀 app/package-lock.json']);
 
     expect(classifyWorktreeDirt('?? ".portos-public-review/"').clean).toBe(true);
     expect(classifyWorktreeDirt('?? "PORTOS_PUBLIC_REVIEW_INPUT.json"').clean).toBe(true);
