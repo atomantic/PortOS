@@ -677,6 +677,18 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:call:attach');
+    // Idle and dialing frames never start a turn. Barge-in is a property of
+    // an in-flight reply, so the call has to be listening first.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
 
     let capturedSignal;
     let releaseFirstTurn;
@@ -744,6 +756,17 @@ describe('voice:call:audio frame alignment', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:call:attach');
+    // The handler drops frames unless the call is listening or speaking, so
+    // alignment has to be observed on a live call — an idle push never happens.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
     return socket;
   };
 
@@ -802,5 +825,95 @@ describe('voice:call:audio frame alignment', () => {
 
     expect(pushed).toHaveLength(1);
     expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
+  });
+});
+
+describe('voice:call:audio does not run a turn unless the call is up', () => {
+  // Same frame contract as the capture tests: ~20 ms at 16 kHz, loud enough
+  // to clear RMS 0.015, and long enough over 14 frames to clear the 250 ms
+  // minimum. 36 silent frames clear the 700 ms trailing-silence endpoint.
+  const FRAME_SAMPLES = 320;
+  const loudFrame = () => {
+    const frame = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i += 1) frame[i] = Math.round(Math.sin(i / 8) * 20000);
+    return frame;
+  };
+  const silentFrame = () => new Int16Array(FRAME_SAMPLES);
+  const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+
+  const burst = (socket) => {
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+  };
+
+  let probe;
+
+  beforeEach(() => {
+    __resetCallSession();
+    runTurn.mockClear();
+    probe = vi.fn(async () => ({ state: 'dialing' }));
+    __setCallSessionDeps({
+      probe,
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+  });
+
+  afterEach(() => __resetCallSession());
+
+  const attach = async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:call:attach');
+    return socket;
+  };
+
+  it('never calls runTurn for speech while a host is attached and no call is up', async () => {
+    const socket = await attach();
+    expect(getCallState().state).toBe('idle');
+
+    burst(socket);
+    await flushMicrotasks();
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(getCallState().state).toBe('idle');
+
+    // Audio buffered while idle must not complete once the far end connects.
+    await startCall();
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it('never calls runTurn while dialing, and stays dialing until the probe sees a connect', async () => {
+    const socket = await attach();
+    await startCall();
+    expect(getCallState().state).toBe('dialing');
+
+    burst(socket);
+    await flushMicrotasks();
+    await pollCall();
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(getCallState().state).toBe('dialing');
+
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    // Silence alone must not finish speech that arrived while the line was ringing.
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).not.toHaveBeenCalled();
+
+    burst(socket);
+    await flushMicrotasks();
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(getCallState().state).toBe('listening');
   });
 });

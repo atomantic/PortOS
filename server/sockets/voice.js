@@ -563,6 +563,15 @@ export const registerVoiceHandlers = (socket) => {
       const view = toInt16Samples(pcm);
 
       if (asCallHost) {
+        // The host page streams from attach until the tab closes, including
+        // while idle and while the far end is still ringing. Only a connected
+        // turn may endpoint into runTurn; drop everything else and reset so
+        // audio buffered before connect cannot finish as the first utterance.
+        const phase = getCallState().state;
+        if (phase !== 'listening' && phase !== 'speaking') {
+          call.endpointer = createCallEndpointer();
+          return;
+        }
         const utterance = call.endpointer.push(view);
         // Barge-in: the caller talking over a reply cancels it, exactly as
         // pressing the widget's interrupt does.

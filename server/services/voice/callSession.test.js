@@ -36,6 +36,7 @@ import {
   endCall,
   getCallContext,
   getCallState,
+  markListening,
   markSpeaking,
   noteCallerSpeech,
   pollCall,
@@ -112,6 +113,47 @@ describe('FaceTime call session', () => {
     probe.mockResolvedValue({ state: 'connected' });
     await pollCall();
     expect(getCallState()).toMatchObject({ state: 'listening', active: true });
+  });
+
+  it('does not let markSpeaking or markListening leave dialing', async () => {
+    // Ringback used to be promoted straight to speaking, so the opening line
+    // fired before anyone answered. Dialing now waits for the probe.
+    attachHost(socket());
+    probe.mockResolvedValue({ state: 'dialing' });
+    await startCall();
+
+    expect(markSpeaking().state).toBe('dialing');
+    expect(markListening().state).toBe('dialing');
+    await pollCall();
+    expect(getCallState().state).toBe('dialing');
+
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+    expect(markSpeaking().state).toBe('speaking');
+    expect(markListening().state).toBe('listening');
+  });
+
+  it('does not hang up a long ring as caller silence, and starts that clock at pickup', async () => {
+    attachHost(socket());
+    probe.mockResolvedValue({ state: 'dialing' });
+    await startCall({ openingLine: 'Hi' });
+
+    clock += SILENCE_HANGUP_MS + 1_000;
+    await pollCall();
+    expect(getCallState()).toMatchObject({ state: 'dialing', active: true });
+
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    clock += SILENCE_HANGUP_MS - 1_000;
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    clock += 2_000;
+    await pollCall();
+    expect(getCallState().endedReason).toBe('caller-silent');
   });
 
   it('refuses a second call while one is up', async () => {
