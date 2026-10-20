@@ -174,7 +174,9 @@ describe('local making-of compilation', () => {
         longestEncodingMs = Math.max(longestEncodingMs, elapsed);
       });
     });
-    const report = status => console.log(`⏱️ Making-of graphics ${status}: phase=${phase} phaseMs=${Math.round(performance.now() - phaseStarted)} totalMs=${Math.round(performance.now() - started)} encodes=${encoded} encodingMs=${Math.round(encodingMs)} longestEncodingMs=${Math.round(longestEncodingMs)} activeEncodes=${activeEncodings.size} oldestEncodeMs=${Math.round(activeEncodings.size ? performance.now() - Math.min(...[...activeEncodings].map(operation => operation.started)) : 0)}`);
+    // CI intentionally silences console methods; this fixed synthetic numeric
+    // projection must reach stderr even when PORTOS_TEST_QUIET=1.
+    const report = status => process.stderr.write(`⏱️ Making-of graphics ${status}: phase=${phase} phaseMs=${Math.round(performance.now() - phaseStarted)} totalMs=${Math.round(performance.now() - started)} encodes=${encoded} encodingMs=${Math.round(encodingMs)} longestEncodingMs=${Math.round(longestEncodingMs)} activeEncodes=${activeEncodings.size} oldestEncodeMs=${Math.round(activeEncodings.size ? performance.now() - Math.min(...[...activeEncodings].map(operation => operation.started)) : 0)}\n`);
     const heartbeat = setInterval(() => report('pending'), 5000);
     onTestFinished(() => { clearInterval(heartbeat); encodingSpy.mockRestore(); report('finished'); });
     const measured = async (name, run) => {
