@@ -287,6 +287,28 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
   });
 
+  it('announces a pre-split store conversion and names where the replaced store was kept', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'pending', parkedAs: null }],
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'converted', parkedAs: 'brain/people.pre-restore-example' }],
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/keeps brain\/people in an older single-file format.*pre-restore/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'File restore complete — 1 file(s) restored. Converted older-format data; the replaced stores were kept as brain/people.pre-restore-example',
+    ));
+  });
+
   it('shows no migration warning for a gap that is empty or unknown', async () => {
     mockRestoreBackup
       .mockResolvedValueOnce({ changedFiles: ['cos/quota-burn.json'], ledgerGap: { count: 0, names: [] } })
