@@ -172,6 +172,10 @@ export async function initSharing({ io: socketIo } = {}) {
   return result;
 }
 
+// Resolves once tracked peer-sync background work (peer:online walks, debounced
+// pushes) has settled. Call after shutdownSharing() and before closing the DB pool.
+export { drainBackgroundOperations as drainPeerSyncOperations } from './peerSubscriptions.js';
+
 export async function shutdownSharing() {
   await shutdownAllWatchers();
   stopMediaLibrarySweep();

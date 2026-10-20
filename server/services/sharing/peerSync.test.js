@@ -265,6 +265,7 @@ import {
   peerSyncEvents,
   __resetForTests,
   __drainForTests,
+  uninstallPeerSyncListener,
 } from './peerSync.js';
 
 import { buildPushPayload, __resetPushFailureLogForTests } from './peerSyncPush.js';
@@ -1473,6 +1474,38 @@ describe('peerSync', () => {
       instanceEvents.emit('peer:online', peer);
       await __drainForTests();
       expect(pushCalls()).toBe(afterFirst);
+    });
+
+    it('shutdown mid-walk stops pushing the remaining subscriptions and logs nothing (#12585)', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }]);
+      vi.mocked(getUniverse).mockImplementation(async (id) => ({ id }));
+      // Initial pushes fail so every sub is still unpushed when the walk starts.
+      vi.mocked(peerFetch).mockResolvedValue(null);
+      for (const id of ['u1', 'u2', 'u3']) await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: id });
+      await __drainForTests();
+
+      // Shutdown lands while the first retry push is in flight; the later pushes
+      // would hit a closed pool in production.
+      vi.mocked(peerFetch).mockReset();
+      vi.mocked(peerFetch).mockImplementation(async () => {
+        uninstallPeerSyncListener();
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await retryPendingPushesForPeer('peer-a');
+        expect(vi.mocked(peerFetch)).toHaveBeenCalledTimes(1);
+        expect(result.pushed).toBe(1);
+        // A walk that starts after shutdown does nothing at all.
+        expect(await retryPendingPushesForPeer('peer-a')).toEqual({ walked: 0, pushed: 0 });
+        expect(vi.mocked(peerFetch)).toHaveBeenCalledTimes(1);
+        expect(errorSpy).not.toHaveBeenCalled();
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
     });
 
     it('returns {walked: 0, pushed: 0} when the peer has no subscriptions', async () => {
