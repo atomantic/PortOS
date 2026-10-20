@@ -346,7 +346,10 @@ export function requestMaterialization(path, options = {}) {
   // check above and this reservation.
   if (retryAfterExit) {
     pendingDownloads.set(path, child);
-    lastRequestAt.set(path, Date.now());
+    const now = Date.now();
+    // Sweep expired entries so a vault walk over many distinct paths can't grow the map unbounded.
+    for (const [p, at] of lastRequestAt) if (now - at >= REQUEST_COOLDOWN_MS) lastRequestAt.delete(p);
+    lastRequestAt.set(path, now);
   }
   // Release only the entry THIS child owns (see the map's comment above). A no-op
   // for an untracked (pin) request, which was never added to the set.
