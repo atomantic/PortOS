@@ -234,4 +234,36 @@ describe('streamed uploads', () => {
     // The same text under a non-media extension never reaches ffmpeg.
     expect((await post(buildApp(), 'playlist-notes.txt', playlist)).status).toBe(200);
   });
+
+  // ffmpeg strips a leading ID3v2 tag before probing, so a playlist behind a tag
+  // is read as HLS; the disk window after the tag must be complete wherever the
+  // tag ends relative to the first 1 MiB read.
+  it('refuses a playlist behind an ID3v2 tag on either side of the first probe window and accepts binary audio there', async () => {
+    const MiB = 1 << 20;
+    const withTag = (tagLength, payload) => {
+      const header = Buffer.alloc(10);
+      header.write('ID3');
+      header[3] = 3;
+      const size = tagLength - 10;
+      header[6] = (size >> 21) & 0x7f;
+      header[7] = (size >> 14) & 0x7f;
+      header[8] = (size >> 7) & 0x7f;
+      header[9] = size & 0x7f;
+      return Buffer.concat([header, Buffer.alloc(tagLength - 10), payload]);
+    };
+    const playlist = Buffer.from('#EXTM3U\n#EXTINF:2.0,\n../private/clip.mp4\n#EXT-X-ENDLIST\n');
+    const audio = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00, 0x00]), Buffer.alloc(4096, 0x41)]);
+    const upload = (bytes) => request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('tagged.mp3', bytes));
+
+    // One byte short of the boundary leaves only '#' of the playlist inside the first read.
+    for (const tagLength of [MiB - 1, MiB, MiB + 4096]) {
+      const res = await upload(withTag(tagLength, playlist));
+      expect(res.status, `tag length ${tagLength}`).toBe(400);
+      expect(res.body.code).toBe('INVALID_FILE_TYPE');
+    }
+    for (const tagLength of [MiB - 1, MiB + 4096]) {
+      expect((await upload(withTag(tagLength, audio))).status, `tag length ${tagLength}`).toBe(200);
+    }
+  });
 });

@@ -28,8 +28,10 @@ function assertNotMediaManifest(buffer) {
 }
 
 /**
- * `assertNotMediaManifest` over a file on disk: its leading window, plus the
- * window after an ID3v2 tag too long to fit in it.
+ * `assertNotMediaManifest` over a file on disk: its leading window, plus a
+ * full window after an ID3v2 tag. A tag ending inside a full leading window
+ * leaves only a fragment of the following manifest in it, so the post-tag
+ * window is read whenever the leading read filled its buffer.
  */
 export async function assertFileNotMediaManifest(path) {
   const handle = await open(path, 'r');
@@ -41,7 +43,7 @@ export async function assertFileNotMediaManifest(path) {
   const windows = await (async () => {
     const head = await readWindow(0);
     const tagLength = id3v2TagLength(head);
-    return tagLength >= head.length && head.length === MEDIA_MANIFEST_PROBE_BYTES ? [head, await readWindow(tagLength)] : [head];
+    return tagLength > 0 && head.length === MEDIA_MANIFEST_PROBE_BYTES ? [head, await readWindow(tagLength)] : [head];
   })().finally(() => handle.close());
   for (const window of windows) assertNotMediaManifest(window);
 }
