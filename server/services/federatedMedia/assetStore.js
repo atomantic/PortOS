@@ -44,6 +44,15 @@ import {
   federatedMediaAssetOwner,
 } from '../../lib/federatedMediaWire.js';
 
+// Bounds on what an admitted peer can keep staged. The TTL only limits how
+// long bytes live, not how many arrive within it, so without these an uploader
+// that never submits a job can fill the volume. Per-caller keeps one peer from
+// crowding out the others; the total bounds the directory regardless of how
+// many peers are admitted.
+export const FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT = 64;
+export const FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES = 256 * 1024 * 1024;
+export const FEDERATED_MEDIA_ASSET_TOTAL_MAX_BYTES = 1024 * 1024 * 1024;
+
 const reject = (message, code, status = 400, context) => {
   throw new ServerError(message, { status, code, ...(context ? { context } : {}) });
 };
@@ -110,10 +119,11 @@ export async function findFederatedMediaAsset(callerId, assetId, { now = Date.no
  * @param {string} args.mimeType - Declared Content-Type.
  * @param {string} args.declaredSha256 - Caller's X-Content-SHA256 header.
  * @param {Buffer} args.body
+ * @param {object[]} [args.jobs] - live queue jobs, so the upload-time sweep keeps pinned inputs
  */
 export const storeFederatedMediaAsset = (args) => maintenance.run('media-input', 'Federated input upload', () => storeAsset(args));
 
-async function storeAsset({ callerId, mimeType, declaredSha256, body }) {
+async function storeAsset({ callerId, mimeType, declaredSha256, body, jobs = [] }) {
   if (!FEDERATED_MEDIA_ASSET_MIME_TYPES.includes(mimeType)) {
     reject(
       `Unsupported conditioning image type: ${mimeType || 'none'}`,
@@ -149,27 +159,7 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body }) {
 
   const assetId = federatedMediaAssetId(callerId, sha256);
   const path = join(PATHS.federatedMediaInbox, assetFilename(assetId, mimeType));
-  // Already staged? The bytes are identical by construction (the name IS the
-  // digest), so a replay only needs its TTL refreshed — one utimes rather than
-  // rewriting up to 32 MiB to change a timestamp.
-  //
-  // atomicWrite (temp + rename) on the miss, not a plain writeFile: this file's
-  // NAME asserts a digest that findFederatedMediaAsset trusts without re-hashing,
-  // so a torn write would leave a file claiming a hash its bytes do not have —
-  // and the runner would render from a truncated image. It ensures the directory
-  // itself, so no separate ensureDir.
-  const existing = await lstat(path).catch(() => null);
-  if (existing?.isFile() && existing.size === body.length) {
-    await utimes(path, new Date(), new Date());
-  } else {
-    await atomicWrite(path, body).catch((error) => {
-      // The shared writer may have left an unknown temporary sibling, or
-      // suppressed a cleanup error. Keep this admission unsettled rather than
-      // claiming the input boundary is drained after an uncertain write.
-      maintenance.markCurrentUnsettled();
-      throw error;
-    });
-  }
+  await admitAndStage(callerId, path, body, jobs);
   return {
     wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
     assetId,
@@ -178,6 +168,78 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body }) {
     mimeType,
     expiresAt: expiresAtFor(Date.now()),
   };
+}
+
+// Quota scan + write must be one critical section: concurrent uploads would
+// otherwise each see free capacity and jointly overshoot the caps.
+let admissionQueue = Promise.resolve();
+const admitAndStage = (callerId, path, body, jobs) => {
+  const run = admissionQueue.then(() => stageAsset(callerId, path, body, jobs));
+  admissionQueue = run.catch(() => {});
+  return run;
+};
+
+// Already staged? The bytes are identical by construction (the name IS the
+// digest), so a replay only needs its TTL refreshed — one utimes rather than
+// rewriting up to 32 MiB, and it adds nothing so it is exempt from the quota.
+//
+// atomicWrite (temp + rename) on the miss, not a plain writeFile: this file's
+// NAME asserts a digest that findFederatedMediaAsset trusts without re-hashing,
+// so a torn write would leave a file claiming a hash its bytes do not have.
+async function stageAsset(callerId, path, body, jobs) {
+  const existing = await lstat(path).catch(() => null);
+  if (existing?.isFile() && existing.size === body.length) {
+    await utimes(path, new Date(), new Date());
+    return;
+  }
+  // Expired files are removed first so they never count against the caller.
+  await sweepFederatedMediaAssets({ jobs, force: true }).catch((error) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
+  });
+  await enforceAssetQuota(callerId, body.length);
+  await atomicWrite(path, body).catch((error) => {
+    // The shared writer may have left an unknown temporary sibling, or
+    // suppressed a cleanup error. Keep this admission unsettled rather than
+    // claiming the input boundary is drained after an uncertain write.
+    maintenance.markCurrentUnsettled();
+    throw error;
+  });
+}
+
+async function enforceAssetQuota(callerId, incomingBytes) {
+  const ownerPrefix = `${federatedMediaAssetOwner(callerId)}-`;
+  // Fail closed: only a missing directory/entry (not yet created, or swept
+  // mid-scan) is safe to treat as empty; any other error refuses the upload.
+  const ignoreMissing = (error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  };
+  const entries = (await readdir(PATHS.federatedMediaInbox).catch(ignoreMissing)) || [];
+  const infos = await Promise.all(entries.map(async (name) => ({
+    name,
+    info: await lstat(join(PATHS.federatedMediaInbox, name)).catch(ignoreMissing),
+  })));
+  let totalBytes = 0;
+  let callerCount = 0;
+  let callerBytes = 0;
+  for (const { name, info } of infos) {
+    if (!info?.isFile()) continue;
+    totalBytes += info.size;
+    if (name.startsWith(ownerPrefix)) {
+      callerCount += 1;
+      callerBytes += info.size;
+    }
+  }
+  const over = callerCount + 1 > FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT
+    || callerBytes + incomingBytes > FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES
+    || totalBytes + incomingBytes > FEDERATED_MEDIA_ASSET_TOTAL_MAX_BYTES;
+  if (over) {
+    reject('Conditioning image storage quota exceeded; wait for staged inputs to expire', 'MEDIA_PROVIDER_ASSET_QUOTA', 429, {
+      maxCount: FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT,
+      maxBytes: FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES,
+    });
+  }
 }
 
 /**
