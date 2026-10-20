@@ -23,6 +23,24 @@ describe('createSingleFlight', () => {
     expect(await b).toBe('value');
   });
 
+  it('exclusive mode queues a different key behind the in-flight call instead of overlapping it', async () => {
+    const sf = createSingleFlight({ exclusive: true });
+    const events = [];
+    let release;
+    const slow = () => { events.push('a:start'); return new Promise(r => { release = r; }); };
+
+    const a = sf.run('a', slow);
+    const joined = sf.run('a', slow);
+    const b = sf.run('b', async () => { events.push('b:start'); return 'b'; });
+    await tick();
+    expect(events).toEqual(['a:start']);
+
+    release('a');
+    expect(await joined).toBe(await a);
+    expect(await b).toBe('b');
+    expect(events).toEqual(['a:start', 'b:start']);
+  });
+
   it('runs separate fns for distinct keys', async () => {
     const sf = createSingleFlight();
     const calls = [];

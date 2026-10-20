@@ -834,6 +834,39 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
     expect(calls).toContain('brew services stop ollama')
   })
 
+  // A second concurrent `brew services start` fails on the already-loaded job,
+  // and the recovery's bootout stops the daemon the first wake just started.
+  it('shares one service start between concurrent wakes', async () => {
+    const state = { up: false }
+    const body = { version: '0.24.0' }
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (!state.up) throw new Error('ECONNREFUSED')
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+    }))
+    let startAttempts = 0
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services start ollama') {
+        startAttempts++
+        state.up = true
+        return cb(null, { stdout: '', stderr: '' })
+      }
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama started testuser ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist\n', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+
+    const { ensureRunning } = await loadManager()
+    const [first, second] = await Promise.all([
+      ensureRunning({ preferPersistent: true }),
+      ensureRunning({ preferPersistent: true }),
+    ])
+
+    expect(startAttempts).toBe(1)
+    expect(first).toMatchObject({ success: true, persistent: true })
+    expect(second).toBe(first)
+  })
+
   it('does NOT bootout/retry when start fails for an unrelated reason', async () => {
     stubReachable()
     let startAttempts = 0
