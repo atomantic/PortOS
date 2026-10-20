@@ -21,50 +21,68 @@ contract: nobody needs to edit these files by hand. With it gone, nothing about
 the data fits a file better than a table, and the repo already requires every
 install and federated peer to run PostgreSQL.
 
-## Step one: completed-task archive (this change)
+## What shipped
 
-- Table `cos_task_archive (source, task_id, description, completed_at, archived_at,
-  task jsonb)`, key `(source, task_id COLLATE "C")`. `COLLATE "C"` matches the
-  JavaScript code-unit order every consumer already uses for newest-id-first paging.
-- `archiveCompletedTasks()` in the 15-minute CoS health check moves a completed
-  task out of the file when it is at least 3 days past its stamp (undated = oldest)
-  AND beyond the newest 100 completed per queue, at most 300 per queue per tick.
-  Archive write first (idempotent), then the file rewrite, all under the same
-  state lock as every task write: a crash leaves a duplicate, never a loss.
-- Reads fall through when the file misses: completed-history pages (merged across
-  file window and archive, file copy wins), `completedCount`, a selected archived
-  task in the queue view, `getTaskById`/`findTaskWithSource`, `deleteTask`.
-- Consumers audited for old-completed reads: `screenshotsGc` ignores terminal tasks;
-  the PR-reviewer-failure lookup only needs a recent marker; `character.syncTaskXP`
-  would lose XP for a task archived before a sync, so it also reads archived
-  summaries (id + description, no prompt bodies).
-- Federation: the archive is machine-local. Peers advertise and merge only their
-  own files; `mergePeerTasks` drops an incoming completed task this machine already
-  archived so a peer cannot resurrect it.
-- No migration or seed. The table is additive; the first sweeps drain the existing
-  backlog (300 per queue per tick, ~90 minutes for a ~1,600-task queue). Backup is
-  the Postgres dump.
+Step one was an interim completed-task archive (`cos_task_archive`). Once hand
+editing was ruled out, keeping a second table beside the Markdown files made no
+sense, so the end state replaced it: ONE table, no files.
 
-## Step two: the open queue (next)
+- `cos_tasks` (one row per task, key `(source, task_id COLLATE "C")`) and
+  `cos_task_lists` (a per-queue write version).
+- A task is stored in its **stored form**: the old Markdown round-trip's
+  normalization (`lib/cosTaskRows.js#storedForm`). Many consumers handle scalar
+  metadata read back as strings; storing anything else would have changed their
+  behavior as a side effect. Typed metadata is a separate cleanup.
+- `position` is a fractional tie-break inside a status+priority, so insertion
+  anywhere is a midpoint and a reorder rewrites only the moved rows
+  (`assignPositions`, longest-increasing-run).
+- Callers read the **working set**: open tasks, completed in the last 3 days, and
+  the newest 100 completed. Older history is reached by id and by paged
+  `view=completed`; nothing loads it wholesale. No sweep is needed, because the
+  working set is a query, not a file that has to be trimmed.
+- The store's cache is validated by the queue version (one single-row read) and
+  updated in place by its own writes. A save is `planListSave`: diff the list
+  against the stored working set, write only changed rows in one transaction.
+- Concurrent writers are still serialized by the CoS state lock; the win is that
+  a write is a few rows instead of the whole file, and no reader parses anything.
+- The file watcher and its routes, socket forwards, client listeners and config
+  keys are gone. It was not running on installs that start the CoS at boot, and
+  the store's own `tasks:changed` event was always the real signal.
 
-- Per-row storage for open tasks, replacing whole-file read-modify-write: concurrent
-  agents update their own row instead of queueing on one file.
-- Writers emit `tasks:*` events at the write; `taskWatcher.js` (chokidar over both
-  files, snapshot diffing) and the file-stamp parse cache go away.
-- `mergePeerTasks` / `buildCosTasksPayload` keep their claim-aware per-task LWW
-  semantics over rows.
-- Migration imports both configured Markdown sources without losing task metadata
-  or order, retains a recovery copy of each file, and gates on the presence of the
-  input (the files), never on the absence of the output.
-- The Markdown files become a one-time import input only.
+## Upgrading existing installs
+
+Data standards are updated by migration, not carried as runtime fallbacks:
+
+- **018** imports the Markdown files (at the location the install's CoS config
+  named, else the defaults), folds in `cos_task_archive` and drops it, verifies
+  every parsed task landed as a row, and bumps the queue versions. It is
+  input-gated and ships no seed.
+- **019**, which runs only after 018 has committed, renames each file to
+  `<name>.imported` (the recovery copy) and drops the retired config keys.
+- `data.reference/` no longer ships the two files.
+
+Rolling back to a release that reads the Markdown files finds no files; restore
+them from `*.imported` first.
+
+## Follow-ups (not in this change)
+
+- Agent status and activity still contend on `data/cos/state.json` (one 4 MB
+  file, one lock). Moving it is a separate design.
+- True per-row concurrency (dropping the state lock around task writes) now
+  becomes possible and is a separate change.
+- Typed metadata (stop round-tripping scalars through strings) would let the
+  `isTruthyMeta`-style helpers retire.
 
 ## Verification
 
-- Store tests cover the sweep (age floor, newest-N floor, oldest-first under the
-  limit, idempotence, crash between archive and rewrite), the fall-through reads,
-  delete, and the no-resurrection merge; each was checked to fail with its behavior
-  removed. The file backend is covered in `cosTaskArchive.test.js`, the Postgres
-  backend in `cosTaskArchive.db.test.js` (`npm run test:db`).
-- After deployment: `data/TASKS.md` / `COS-TASKS.md` shrink to the open queue plus
-  the recent window; steady-state server RSS and the `readTaskFile` clone volume
-  drop; the Tasks page still pages through full history.
+- `lib/cosTaskRows.test.js`: stored form, working-set rule, position assignment,
+  save planning. `services/_cosTaskRepositoryContract.js` runs the same
+  assertions against the in-memory backend and, in `npm run test:db`, PostgreSQL.
+- `services/cosTaskStore.test.js`: cache behavior (hit, in-place update, version
+  reload, cold-read coalescing, overlapping read and write), views, unique ids,
+  history older than the working set, peer merge, and the interleaved-writer races.
+- Migrations 018/019: unit tests over real fixture files, plus a real-PostgreSQL
+  test (CI) that imports a 230-task queue with awkward text, folds the archive
+  table, and checks every task byte-for-byte.
+- After deployment: `data/*.md` are gone (kept as `*.imported`), the queues read
+  the same, and `readTaskFile` clone volume and server RSS stay low.

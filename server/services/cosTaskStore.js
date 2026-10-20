@@ -5,9 +5,9 @@ import { getSkipReason } from './cosTaskClaim.js';
  * CoS Task Store Module
  *
  * Task CRUD + queue persistence extracted from cos.js. Owns the read/write
- * round-trip to the user (TASKS.md) and internal (COS-TASKS.md) task files:
- * parsing, grouping, dedup, and the `tasks:changed` event emissions that drive
- * the scheduler. The request → record mapping (ID generation, metadata
+ * round-trip to the user and internal task queues (`cos_tasks`, through
+ * `cosTaskRepository.js`): the cached working set, row-diff saves, grouping,
+ * dedup, and the `tasks:changed` event emissions that drive the scheduler. The request → record mapping (ID generation, metadata
  * normalization) is `cosTaskIntake.js`, kept in parity with the request schema.
  *
  * Self-contained — it emits `tasks:changed` rather than calling the scheduler
@@ -18,12 +18,8 @@ import { getSkipReason } from './cosTaskClaim.js';
 
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
-import { readFile, stat } from 'fs/promises';
-import { atomicWrite } from '../lib/fileUtils.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
-import { existsSync } from 'fs';
-import { join } from 'path';
-import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
+import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
 import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema, validateRequest } from '../lib/validation.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -34,12 +30,13 @@ import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
-import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
+import { loadState, withStateLock } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
-import { archiveTasks, countArchivedTasks, deleteArchivedTask, getArchivedIds, getArchivedTask, listArchivedTasks } from './cosTaskArchive.js';
+import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
+import { compareRows, planListSave } from '../lib/cosTaskRows.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
@@ -161,71 +158,51 @@ function isContentEdit(updates, existingMetadata = {}) {
   return false;
 }
 
-// ── Parsed-task cache (issue #3497) ─────────────────────────────────────────
+// ── Working-set cache ───────────────────────────────────────────────────────
 //
 // `getUserTasks`/`getCosTasks`/`getTaskById` run on every daemon evaluation
-// tick, scheduler sweep, and agent state update, and each call used to do a
-// full `readFile` + regex-heavy `parseTasksMarkdown` of a `COS-TASKS.md` that
-// grows to hundreds of tasks carrying prompt bodies and JSON metadata strings.
-// Cache the parsed array per file so an unchanged file costs one `stat` plus a
-// structured clone instead of a read + full parse.
+// tick, scheduler sweep, and agent state update. A queue's WORKING SET (every
+// open task plus recently completed ones, see lib/cosTaskRows.js) is loaded once
+// per queue version and shared: an unchanged queue costs one single-row version
+// read plus a structured clone instead of a query over the rows.
 //
-// Concurrent API/daemon readers share the read/parse operation for each stamp.
-// Otherwise a cold cache multiplies whole-file strings and parsed task arrays
-// by the number of readers (#12225). Correctness rests on two signals:
+// Concurrent readers share the load for a version (#12225), so a cold cache does
+// not multiply the working set by the number of readers. Correctness rests on:
 //
-//   1. The stamp (`mtimeMs` + `size`) catches writes this module did NOT make —
-//      a user editing `TASKS.md` in an editor, a restore, a peer's direct write.
-//   2. Every write through `writeTaskFile` DROPS the entry before AND after the
-//      write, including reads started while the rename was pending. mtime can
-//      be as coarse as one second on some filesystems, so a write-then-read in
-//      the same tick must not depend on the stamp having moved.
-const parsedTaskCache = new Map(); // filePath -> generation { stamp, snapshot? }
-const taskSnapshotReads = createSingleFlight();
-
-// `null` = could not stat (missing/unreadable) → do not cache, distinct from a
-// legitimately empty file, which stamps normally and caches its empty parse.
-const taskFileStamp = async (filePath) => {
-  const stats = await stat(filePath).catch(() => null);
-  return stats ? `${stats.mtimeMs}:${stats.size}` : null;
-};
+//   1. The queue version, bumped by every write in the same transaction, so a
+//      write this process did NOT make is noticed on the next read.
+//   2. Our own writes replace the cached entry only when the version moved by
+//      exactly one (nobody else wrote in between); otherwise they drop it.
+const snapshotCache = new Map(); // source -> { version, snapshot }
+const snapshotLoads = createSingleFlight();
 
 // Private snapshots never leave this module: list readers clone the array,
 // while ID lookups clone only the matching task. Both share invalidation.
-async function readTaskSnapshot(filePath) {
-  // Every caller checks external edits before joining a flight: a new writer
-  // must not consume a read that captured the file before an editor's change.
-  const stamp = await taskFileStamp(filePath);
-  let generation = parsedTaskCache.get(filePath);
-  if (!generation || generation.stamp !== stamp) {
-    generation = { stamp };
-    parsedTaskCache.set(filePath, generation);
-  }
-  // The entry identity is the flight key: invalidation detaches older reads
-  // without letting them repopulate the cache or capture post-write callers.
-  return taskSnapshotReads.run(generation, async () => {
-    if (stamp && generation.snapshot) return generation.snapshot;
-
-    const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
-    if (parsedTaskCache.get(filePath) === generation) {
-      if (stamp) generation.snapshot = snapshot;
-      else parsedTaskCache.delete(filePath);
+// `rows` keeps each task's stored position for the next save's diff.
+async function readTaskSnapshot(source) {
+  const version = await readTaskListVersion(source);
+  const cached = snapshotCache.get(source);
+  if (cached?.version === version) return cached.snapshot;
+  return snapshotLoads.run(`${source}:${version}`, async () => {
+    const loaded = await loadTaskWorkingSet(source);
+    const snapshot = { rows: loaded.rows, tasks: loaded.rows.map((row) => row.task) };
+    if (!snapshotCache.get(source) || snapshotCache.get(source).version <= loaded.version) {
+      snapshotCache.set(source, { version: loaded.version, snapshot });
     }
     return snapshot;
   });
 }
 
-async function readTaskFile(filePath) {
-  return structuredClone((await readTaskSnapshot(filePath)).tasks);
+async function readTaskFile(source) {
+  return structuredClone((await readTaskSnapshot(source)).tasks);
 }
 
-async function findTaskInFile(filePath, taskId) {
-  if (!existsSync(filePath)) return null;
-  const snapshot = await readTaskSnapshot(filePath);
+async function findTaskInFile(source, taskId) {
+  const snapshot = await readTaskSnapshot(source);
   if (!snapshot.byId) {
     snapshot.byId = new Map();
     for (const task of snapshot.tasks) {
-      // Preserve Array.find's first-match behavior for hand-edited duplicate IDs.
+      // Preserve Array.find's first-match behavior for duplicate IDs.
       if (!snapshot.byId.has(task.id)) snapshot.byId.set(task.id, task);
     }
   }
@@ -234,57 +211,51 @@ async function findTaskInFile(filePath, taskId) {
 }
 
 /**
- * Write task markdown, dropping the now-stale parse for that file. Every write
- * path in this module goes through here — see invalidation signal 2 above.
+ * Persist the queue as `tasks`: diff against the stored working set and write
+ * only the rows that changed, in one transaction. Every write path in this
+ * module goes through here. Resolves to whether anything was written.
  */
-async function writeTaskFile(filePath, markdown) {
-  parsedTaskCache.delete(filePath);
-  // Temp-file + rename, never an in-place truncate: TASKS.md is the user's whole
-  // task list, and a plain writeFile killed mid-write (PM2 restart, crash, full
-  // disk) leaves it empty or half-written — which parses as "no tasks" and is
-  // then persisted by the next write.
-  await atomicWrite(filePath, markdown).finally(() => parsedTaskCache.delete(filePath));
+async function writeTaskList(source, tasks) {
+  const snapshot = await readTaskSnapshot(source);
+  const cached = snapshotCache.get(source);
+  const plan = planListSave({ previous: snapshot.rows, next: tasks, source });
+  if (plan.upserts.length === 0 && plan.deletes.length === 0) return false;
+  const version = await applyTaskListSave(source, plan);
+
+  const positions = new Map(snapshot.rows.map((row) => [row.task.id, row.position]));
+  for (const { task, position } of plan.upserts) positions.set(task.id, position);
+  if (cached?.snapshot === snapshot && version === cached.version + 1) {
+    const rows = plan.saved.map((task) => ({ task, position: positions.get(task.id) })).sort(compareRows);
+    snapshotCache.set(source, { version, snapshot: { rows, tasks: rows.map((row) => row.task) } });
+  } else {
+    snapshotCache.delete(source);
+  }
+  return true;
 }
 
-/** Test hook: forget every cached parse. */
+/** Test hook: forget every cached working set. */
 export function __resetTaskCache() {
-  parsedTaskCache.clear();
+  snapshotCache.clear();
 }
 
 /**
- * Get user tasks from TASKS.md
+ * Get user tasks
  */
-export async function getUserTasks(tasksFilePath = null) {
-  const state = await loadState();
-  const filePath = tasksFilePath || join(ROOT_DIR, state.config.userTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { tasks: [], grouped: groupTasksByStatus([]), file: filePath, exists: false, type: 'user' };
-  }
-
-  const tasks = await readTaskFile(filePath);
-  const grouped = groupTasksByStatus(tasks);
-
-  return { tasks, grouped, file: filePath, exists: true, type: 'user' };
+export async function getUserTasks() {
+  const tasks = await readTaskFile('user');
+  return { tasks, grouped: groupTasksByStatus(tasks), type: 'user' };
 }
 
 /**
- * Get CoS internal tasks from COS-TASKS.md
+ * Get CoS internal tasks
  */
-export async function getCosTasks(tasksFilePath = null) {
-  const state = await loadState();
-  const filePath = tasksFilePath || join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { tasks: [], grouped: groupTasksByStatus([]), file: filePath, exists: false, type: 'internal' };
-  }
-
-  const tasks = await readTaskFile(filePath);
+export async function getCosTasks() {
+  const tasks = await readTaskFile('internal');
   const grouped = groupTasksByStatus(tasks);
   const autoApproved = getAutoApprovedTasks(tasks);
   const awaitingApproval = getAwaitingApprovalTasks(tasks);
 
-  return { tasks, grouped, file: filePath, exists: true, type: 'internal', autoApproved, awaitingApproval };
+  return { tasks, grouped, type: 'internal', autoApproved, awaitingApproval };
 }
 
 /**
@@ -298,37 +269,30 @@ export async function getAllTasks() {
 // ── Bounded task views (#9677) ──────────────────────────────────────────────
 //
 // `GET /api/cos/tasks` returns the open queue plus at most one page of completed
-// history, yet `getAllTasks()` structured-clones every archived prompt body from
-// BOTH sources first. These readers select from the private snapshot and clone
-// only what the response carries. Nothing returned here aliases the cache.
+// history, yet `getAllTasks()` structured-clones the whole working set (recent
+// completed prompt bodies included) from BOTH queues first. These readers select
+// from the private snapshot, or page completed history straight from the table,
+// and clone only what the response carries. Nothing returned here aliases the cache.
 const COMPLETED_FIRST_PAGE = 25;
-const byIdDesc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+const SOURCES = ['user', 'internal'];
 const isCompleted = (task) => task.status === 'completed';
 
-// Per-snapshot derivations, dropped with the snapshot on any stamp/write change.
+// Per-snapshot derivations, dropped with the snapshot on any version change.
 function snapshotPartitions(snapshot) {
   if (!snapshot.partitions) {
     const open = [];
     const completed = [];
     for (const task of snapshot.tasks) (isCompleted(task) ? completed : open).push(task);
-    completed.sort(byIdDesc);
     snapshot.partitions = { open, completed };
   }
   return snapshot.partitions;
 }
 
-async function resolveSourceFile(type) {
-  const { config } = await loadState();
-  const filePath = join(ROOT_DIR, type === 'internal' ? config.cosTasksFile : config.userTasksFile);
-  return existsSync(filePath) ? filePath : null;
-}
-
 // Shape of getUserTasks()/getCosTasks() over an already-selected task subset.
-// Callers pass CLONED tasks; grouped/derived lists share those clones. A missing
-// file keeps getCosTasks()'s shape: no derived lists.
-function sourceShape(type, filePath, tasks, { exists = true } = {}) {
-  const shape = { tasks, grouped: groupTasksByStatus(tasks), file: filePath, exists, type };
-  if (type === 'internal' && exists) {
+// Callers pass CLONED tasks; grouped/derived lists share those clones.
+function sourceShape(type, tasks) {
+  const shape = { tasks, grouped: groupTasksByStatus(tasks), type };
+  if (type === 'internal') {
     shape.autoApproved = getAutoApprovedTasks(tasks);
     shape.awaitingApproval = getAwaitingApprovalTasks(tasks);
   }
@@ -336,36 +300,42 @@ function sourceShape(type, filePath, tasks, { exists = true } = {}) {
 }
 
 /**
+ * One page of completed history from ONE queue, newest id first, straight from
+ * the table. `nextCursor` is the last id of a full page when more remain.
+ */
+async function pageCompleted(type, { cursor = null, limit }) {
+  const rows = await pageCompletedTasks(type, { before: cursor, limit: limit + 1 });
+  const items = rows.slice(0, limit);
+  return { items, total: await countCompletedTasks(type), nextCursor: rows.length > limit ? items[limit - 1].id : null };
+}
+
+/**
  * Open queue (every non-completed task, plus the `selected` historical task)
- * for both sources. `completedCount` carries the archived total.
+ * for both queues. `completedCount` carries the completed total.
  */
 async function readQueueView(selected) {
   const read = async (type) => {
-    const filePath = await resolveSourceFile(type);
-    const archivedCount = await countArchivedTasks(type);
-    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: archivedCount };
-    const snapshot = await readTaskSnapshot(filePath);
-    const { open, completed } = snapshotPartitions(snapshot);
+    const snapshot = await readTaskSnapshot(type);
+    const { open } = snapshotPartitions(snapshot);
     const refs = selected === undefined ? open : snapshot.tasks.filter((task) => !isCompleted(task) || task.id === selected);
     const tasks = structuredClone(refs);
-    // A selected historical task that has aged out of the file lives in the archive.
+    // A selected historical task older than the working set is fetched by id.
     if (selected !== undefined && !refs.some((task) => task.id === selected)) {
-      const archived = await getArchivedTask(selected, type);
-      if (archived) tasks.push(archived.task);
+      const stored = await getStoredTask(selected, type);
+      if (stored) tasks.push(stored.task);
     }
-    return { ...sourceShape(type, filePath, tasks), completedCount: completed.length + archivedCount };
+    return { ...sourceShape(type, tasks), completedCount: await countCompletedTasks(type) };
   };
   const [user, cos] = await Promise.all([read('user'), read('internal')]);
   return { user, cos };
 }
 
-/** Open queue plus the first completed page; completed history stays archived. */
+/** Open queue plus the first completed page; the rest of the history stays in the table. */
 async function readBareView() {
   const read = async (type) => {
-    const filePath = await resolveSourceFile(type);
-    const { open, completed } = filePath ? snapshotPartitions(await readTaskSnapshot(filePath)) : { open: [], completed: [] };
-    const page = await pageCompleted(type, completed, { limit: COMPLETED_FIRST_PAGE });
-    const shape = sourceShape(type, filePath, [...structuredClone(open), ...page.items], { exists: Boolean(filePath) });
+    const { open } = snapshotPartitions(await readTaskSnapshot(type));
+    const page = await pageCompleted(type, { limit: COMPLETED_FIRST_PAGE });
+    const shape = sourceShape(type, [...structuredClone(open), ...page.items]);
     // Completed rows leave `grouped`; only the page inside `tasks` carries them.
     return { ...shape, grouped: { ...shape.grouped, completed: [] }, completedCount: page.total, completedNextCursor: page.nextCursor };
   };
@@ -373,51 +343,20 @@ async function readBareView() {
   return { user, cos };
 }
 
-/**
- * One page of completed history from ONE source, newest id first, merged from
- * the file's recent window and the archive. A task caught between archive and
- * file removal exists in both; the file copy wins. `completedRefs` are snapshot
- * references (newest first); only the returned page is cloned.
- */
-async function pageCompleted(type, completedRefs, { cursor = null, limit }) {
-  const fileRemaining = cursor ? completedRefs.filter((task) => task.id < cursor) : completedRefs;
-  const filePage = fileRemaining.slice(0, limit + 1);
-  const fileIds = new Set(filePage.map((task) => task.id));
-  const archivedPage = (await listArchivedTasks(type, { before: cursor, limit: limit + 1 })).filter((task) => !fileIds.has(task.id));
-  const merged = [...filePage, ...archivedPage].sort(byIdDesc).slice(0, limit + 1);
-  const items = merged.slice(0, limit);
-  const total = completedRefs.length + await countArchivedTasks(type);
-  return {
-    items: items.map((task) => (fileIds.has(task.id) ? structuredClone(task) : task)),
-    total,
-    nextCursor: merged.length > limit ? items[limit - 1].id : null,
-  };
-}
-
 /** One page of completed history from ONE source, newest id first. */
 async function readCompletedView({ source, cursor, limit }) {
-  const type = source === 'internal' ? 'internal' : 'user';
-  const filePath = await resolveSourceFile(type);
-  const completed = filePath ? snapshotPartitions(await readTaskSnapshot(filePath)).completed : [];
-  return pageCompleted(type, completed, { cursor, limit });
+  return pageCompleted(source === 'internal' ? 'internal' : 'user', { cursor, limit });
 }
 
 /**
- * Legacy limit/offset window over each queue's tasks: the file's tasks in file
- * order, then the archived completed tasks newest id first. The slice and scalar
- * metadata only.
+ * Legacy limit/offset window over each queue's working set, in queue order. The
+ * slice and scalar metadata only; completed history older than the working set
+ * pages through the `completed` view.
  */
 async function readWindowView({ offset, limit }) {
   const read = async (type) => {
-    const filePath = await resolveSourceFile(type);
-    const fileTasks = filePath ? (await readTaskSnapshot(filePath)).tasks : [];
-    const fileSlice = structuredClone(fileTasks.slice(offset, offset + limit));
-    const archivedWanted = limit - fileSlice.length;
-    const archived = archivedWanted > 0
-      ? await listArchivedTasks(type, { offset: Math.max(0, offset - fileTasks.length), limit: archivedWanted })
-      : [];
-    const total = fileTasks.length + await countArchivedTasks(type);
-    return { meta: { file: filePath, exists: Boolean(filePath), type }, tasks: [...fileSlice, ...archived], total };
+    const { tasks } = await readTaskSnapshot(type);
+    return { meta: { type }, tasks: structuredClone(tasks.slice(offset, offset + limit)), total: tasks.length };
   };
   const [user, cos] = await Promise.all([read('user'), read('internal')]);
   return {
@@ -432,9 +371,9 @@ async function readWindowView({ offset, limit }) {
  *   - 'queue'     { selected? } open tasks (+ the selected historical one) + completedCount
  *   - 'bare'      open tasks + first completed page (+ completedCount/completedNextCursor)
  *   - 'completed' { source, cursor?, limit } one source's page → { items, total, nextCursor }
- *   - 'window'    { offset, limit } legacy slice → { user, cos, totals }
+ *   - 'window'    { offset, limit } legacy slice of the working set → { user, cos, totals }
  * Sources come back unsettled for the spawn window; `getAllTasks()` stays the raw
- * truth for scheduler readers and `view=full`.
+ * truth (the working set) for scheduler readers and `view=full`.
  */
 export async function getTaskView({ kind, ...options }) {
   if (kind === 'queue') return readQueueView(options.selected);
@@ -445,16 +384,13 @@ export async function getTaskView({ kind, ...options }) {
 }
 
 /**
- * Lightweight live-activity input. Derive once per task-file snapshot, so a
+ * Lightweight live-activity input. Derive once per queue version, so a
  * three-second poll never clones prompts or groups completed history.
  * Keep duplicates and source order, matching getAllTasks() counting semantics.
  */
 export async function getPendingTaskIds() {
-  const { config } = await loadState();
-  const sources = await Promise.all([config.userTasksFile, config.cosTasksFile].map(async (file) => {
-    const filePath = join(ROOT_DIR, file);
-    if (!existsSync(filePath)) return [];
-    const snapshot = await readTaskSnapshot(filePath);
+  const sources = await Promise.all(SOURCES.map(async (source) => {
+    const snapshot = await readTaskSnapshot(source);
     snapshot.pendingIds ??= snapshot.tasks.filter(task => task.status === 'pending').map(task => task.id);
     return snapshot.pendingIds;
   }));
@@ -464,15 +400,12 @@ export async function getPendingTaskIds() {
 
 /**
  * Telemetry reads only diagnostics-bearing records, never full prompts or
- * grouped history. Derive per snapshot and reuse the task cache's internal-write
- * and external-edit invalidation; clone the projection to keep it private.
+ * grouped history. Derive per snapshot and reuse the cache's write invalidation;
+ * clone the projection to keep it private.
  */
 export async function getTaskDiagnostics() {
-  const { config } = await loadState();
-  const sources = await Promise.all([config.userTasksFile, config.cosTasksFile].map(async (file) => {
-    const filePath = join(ROOT_DIR, file);
-    if (!existsSync(filePath)) return [];
-    const snapshot = await readTaskSnapshot(filePath);
+  const sources = await Promise.all(SOURCES.map(async (source) => {
+    const snapshot = await readTaskSnapshot(source);
     snapshot.diagnosticTasks ??= snapshot.tasks.filter(task => {
       const diagnostics = task.metadata?.diagnostics;
       return diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics);
@@ -488,13 +421,11 @@ export async function getTaskDiagnostics() {
 /**
  * Approval-state view of the internal queue for pollers that need the awaiting
  * list or the auto-approved count, not the whole queue. `getCosTasks()` clones
- * every archived prompt body to answer the same question. Derived once per
+ * every working-set prompt body to answer the same question. Derived once per
  * snapshot; only the first `limit` awaiting tasks are cloned.
  */
 export async function getCosApprovalView({ limit = Infinity } = {}) {
-  const filePath = await resolveSourceFile('internal');
-  if (!filePath) return { awaitingApproval: [], autoApprovedCount: 0 };
-  const snapshot = await readTaskSnapshot(filePath);
+  const snapshot = await readTaskSnapshot('internal');
   snapshot.approval ??= {
     awaiting: getAwaitingApprovalTasks(snapshot.tasks),
     autoApprovedCount: getAutoApprovedTasks(snapshot.tasks).length,
@@ -517,18 +448,17 @@ export const getTasks = getUserTasks;
  * is what a client merging it into a list it already holds needs.
  */
 export async function findTaskWithSource(taskId) {
-  const { config } = await loadState();
   // Keep user-first precedence, including legacy/custom IDs. Do not infer the
   // source from a prefix or prepare grouped copies of both queues for one ID.
-  const userTask = await findTaskInFile(join(ROOT_DIR, config.userTasksFile), taskId);
+  const userTask = await findTaskInFile('user', taskId);
   if (userTask) return { task: userTask, source: 'user' };
 
-  const cosTask = await findTaskInFile(join(ROOT_DIR, config.cosTasksFile), taskId);
+  const cosTask = await findTaskInFile('internal', taskId);
   if (cosTask) return { task: cosTask, source: 'internal' };
 
-  // Completed history older than the file window lives in the archive.
-  const archived = await getArchivedTask(taskId);
-  return archived ? { task: archived.task, source: archived.source } : null;
+  // Completed history older than the working set is fetched by id.
+  const stored = await getStoredTask(taskId);
+  return stored ? { task: stored.task, source: stored.source } : null;
 }
 
 // Legacy shape: the source overwrites the record's `taskType`. Callers that
@@ -536,6 +466,15 @@ export async function findTaskWithSource(taskId) {
 export async function getTaskById(taskId) {
   const found = await findTaskWithSource(taskId);
   return found ? { ...found.task, taskType: found.source } : null;
+}
+
+async function uniqueTaskId(source, id, tasks) {
+  const taken = async (candidate) => tasks.some((task) => task.id === candidate) || Boolean(await getStoredTask(candidate, source));
+  if (!await taken(id)) return id;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${id}-dup${suffix}`;
+    if (!await taken(candidate)) return candidate;
+  }
 }
 
 /**
@@ -552,23 +491,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
+  const tasks = await readTaskFile(taskType);
 
-  // Read existing tasks or start fresh
-  let tasks = [];
-  if (existsSync(filePath)) {
-    tasks = await readTaskFile(filePath);
-  }
-
-  // One state lock covers BOTH task files: manual and autonomous producers
+  // One state lock covers BOTH queues: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
   const newWorkIdentity = developmentWorkIdentity(taskData);
   if (newWorkIdentity) {
-    const otherPath = join(ROOT_DIR, taskType === 'user' ? state.config.cosTasksFile : state.config.userTasksFile);
-    const other = existsSync(otherPath) ? await readTaskFile(otherPath) : [];
+    const other = await readTaskFile(taskType === 'user' ? 'internal' : 'user');
     const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId
       && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData)
       // Targeted claims and the backlog drain coexist in either admission order.
@@ -637,6 +566,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     console.error(`❌ Task id ${newTask.id} uses an unregistered prefix — it will be read back as task-${newTask.id}. Register the prefix in lib/taskParser.js`);
   }
 
+  // Ids are the row key and are minted from the clock, so two tasks created in the
+  // same millisecond collide. Suffix `-dup2`, `-dup3`, ... as the Markdown reader
+  // always did, but checked against every stored task, not just the working set.
+  if (newTask?.id) {
+    const id = await uniqueTaskId(taskType, newTask.id, tasks);
+    if (id !== newTask.id) newTask = { ...newTask, id };
+  }
+
   // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
   // BOTH branches — the raw path is how the generator, the reference-watch
   // analysis, and the repo-study filer queue their pre-built tasks, and they
@@ -679,10 +616,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     tasks.push(newTask);
   }
 
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeTaskFile(filePath, markdown);
+  await writeTaskList(taskType, tasks);
 
   // cos.js init listens for this event. For user tasks it fires
   // tryImmediateSpawn so the task starts instantly if slots are available,
@@ -833,33 +767,20 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
 
 // Caller holds withStateLock, including its status and ownership decision.
 async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    console.log(`⚠️ updateTask: file not found for ${taskId} (taskType=${taskType}, path=${filePath})`);
-    return { error: 'Task file not found' };
-  }
-
-  let tasks = await readTaskFile(filePath);
+  const tasks = await readTaskFile(taskType);
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
-  // A history item the archive sweep moved out of the file can still be edited or
-  // reopened: pull it back, apply the update, and drop the archive row only once
-  // the file write lands. An early return below leaves the archive untouched.
-  let restoredFromArchive = false;
+  // A history item older than the working set can still be edited or reopened:
+  // fetch it by id into the list being saved; the save upserts its row in place.
   if (taskIndex === -1) {
-    const archived = await getArchivedTask(taskId, taskType);
-    if (archived) {
-      tasks.push(archived.task);
+    const stored = await getStoredTask(taskId, taskType);
+    if (stored) {
+      tasks.push(stored.task);
       taskIndex = tasks.length - 1;
-      restoredFromArchive = true;
     }
   }
   if (taskIndex === -1) {
-    console.log(`⚠️ updateTask: task ${taskId} not found in ${filePath} (taskType=${taskType}, parsed ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
+    console.log(`⚠️ updateTask: task ${taskId} not found in the ${taskType} queue (working set of ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
     return { error: 'Task not found' };
   }
 
@@ -989,11 +910,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
 
   tasks[taskIndex] = updatedTask;
 
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeTaskFile(filePath, markdown);
-  if (restoredFromArchive) await deleteArchivedTask(taskId, taskType);
+  await writeTaskList(taskType, tasks);
 
   // `transition.action` distinguishes the two flips that must WAKE the scheduler
   // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
@@ -1074,37 +991,26 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
 export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const { changed, count, merged } = await withStateLock(async () => {
-    const state = await loadState();
-    const filePath = taskType === 'user'
-      ? join(ROOT_DIR, state.config.userTasksFile)
-      : join(ROOT_DIR, state.config.cosTasksFile);
+    const localTasks = await readTaskFile(taskType);
 
-    const localTasks = existsSync(filePath)
-      ? await readTaskFile(filePath)
-      : [];
-
-    // A peer's file still holds completed tasks this machine has archived; merging
-    // them back would resurrect history the sweep already moved out of the file.
+    // A peer still advertises completed tasks this machine already holds in
+    // history; merging them in would pull them back into the working set.
     const remoteCompletedIds = remoteTasks.filter((task) => task?.status === 'completed').map((task) => task.id);
-    const archivedIds = await getArchivedIds(taskType, remoteCompletedIds);
-    const incoming = archivedIds.size === 0
+    const knownCompleted = await getCompletedTaskIds(taskType, remoteCompletedIds);
+    const incoming = knownCompleted.size === 0
       ? remoteTasks
-      : remoteTasks.filter((task) => !(task?.status === 'completed' && archivedIds.has(task.id)));
+      : remoteTasks.filter((task) => !(task?.status === 'completed' && knownCompleted.has(task.id)));
 
     const merged = mergeTaskLists(localTasks, incoming, { now });
 
-    const includeApprovalFlags = taskType === 'internal';
-    const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
-    const mergedMarkdown = generateTasksMarkdown(merged, includeApprovalFlags);
     // Nothing the peer sent changed our state — skip the write (and the event that would
     // wake the scheduler). `merged` is still returned so the post-lock LI-verdict consume
     // (#2779) can run even on a no-op sweep — durability requires it (an old peer that
     // stored a terminal verdict before upgrading, or a crash before a prior consume, leaves
     // the task terminal with the merge producing no change, so a changed-only consume would
     // never catch up). Re-offering is cheap: the consumer is a durable no-op after the first.
-    if (mergedMarkdown === localMarkdown) return { changed: false, merged };
+    if (!await writeTaskList(taskType, merged)) return { changed: false, merged };
 
-    await writeTaskFile(filePath, mergedMarkdown);
     cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
     return { changed: true, count: merged.length, merged };
   });
@@ -1136,30 +1042,11 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
 export async function deleteTask(taskId, taskType = 'user') {
   validateRequest(cosTaskTypeSchema, taskType);
   return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
-
-  let deletedFromFile = false;
-  if (existsSync(filePath)) {
-    const tasks = await readTaskFile(filePath);
-    if (tasks.some(t => t.id === taskId)) {
-      const includeApprovalFlags = taskType === 'internal';
-      await writeTaskFile(filePath, generateTasksMarkdown(tasks.filter(t => t.id !== taskId), includeApprovalFlags));
-      deletedFromFile = true;
-    }
-  }
-
-  // The archive copy goes too: during the sweep's archive-then-rewrite window a
-  // task lives in both stores, and a file-only delete would leave it in history.
-  const deletedFromArchive = await deleteArchivedTask(taskId, taskType);
-  if (!deletedFromFile && !deletedFromArchive) {
-    return { error: existsSync(filePath) ? 'Task not found' : 'Task file not found' };
-  }
-
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
-  return { success: true, taskId };
+    // One row delete, whether the task is in the working set or old history. It
+    // bumps the queue version, which is what makes the next read reload.
+    if (await deleteStoredTask(taskId, taskType) === 0) return { error: 'Task not found' };
+    cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
+    return { success: true, taskId };
   });
 }
 
@@ -1172,9 +1059,7 @@ export async function deleteTask(taskId, taskType = 'user') {
 export async function reconcileLegacyForgeMaintenanceTasks({ instanceId, now = Date.now() } = {}) {
   return withStateLock(async () => {
     const state = await loadState();
-    const filePath = join(ROOT_DIR, state.config.cosTasksFile);
-    if (!existsSync(filePath)) return { recovered: 0, retired: 0 };
-    const tasks = await readTaskFile(filePath);
+    const tasks = await readTaskFile('internal');
     let recovered = 0;
     let retired = 0;
     const resetApps = new Set();
@@ -1364,83 +1249,15 @@ export async function sweepResolvedFailureTasks({
   return { reaped, staleBlocks, investigations };
 }
 
-// ── Completed-task archive ──────────────────────────────────────────────────
-//
-// TASKS.md / COS-TASKS.md grew to tens of MB because every finished task keeps
-// its full prompt, and every full-queue read clones all of it. Completed tasks
-// past the recent window move to `cos_task_archive`; the files keep the open
-// queue plus that window, which is what dedup, retry bookkeeping and the PR
-// reviewer-failure lookup actually consult.
-const ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
-const ARCHIVE_KEEP_NEWEST = 100;
-// Bounds how long one sweep holds the state lock; a first run over a large
-// backlog drains across several ticks.
-const ARCHIVE_SWEEP_LIMIT = 300;
-
-// Undated tasks sort as oldest: they predate the stamps current writers add.
-const completionStamp = (task) => {
-  const stamp = Date.parse(task.metadata?.completedAt || task.metadata?.updatedAt || '');
-  return Number.isFinite(stamp) ? stamp : 0;
-};
-
-/** Completed tasks old enough, and beyond the newest few, to leave the file. Oldest first. */
-function selectArchivable(tasks, { now, afterMs, keepNewest, limit }) {
-  const completed = tasks.filter(isCompleted).sort((a, b) => completionStamp(b) - completionStamp(a) || byIdDesc(a, b));
-  return completed
-    .slice(keepNewest)
-    .filter((task) => completionStamp(task) <= now - afterMs)
-    .reverse()
-    .slice(0, limit);
-}
-
-/**
- * Move aged completed tasks out of the task files into the archive. The archive
- * write lands first and is idempotent, so a crash before the file rewrite leaves
- * a harmless duplicate that the next sweep removes. Runs under the same lock as
- * every task write.
- */
-export async function archiveCompletedTasks({
-  now = Date.now(),
-  afterMs = ARCHIVE_AFTER_MS,
-  keepNewest = ARCHIVE_KEEP_NEWEST,
-  limit = ARCHIVE_SWEEP_LIMIT,
-} = {}) {
-  let archived = 0;
-  for (const type of ['user', 'internal']) {
-    archived += await withStateLock(async () => {
-      const filePath = await resolveSourceFile(type);
-      if (!filePath) return 0;
-      const snapshot = await readTaskSnapshot(filePath);
-      const selected = selectArchivable(snapshot.tasks, { now, afterMs, keepNewest, limit });
-      if (selected.length === 0) return 0;
-      await archiveTasks(type, structuredClone(selected));
-      const leaving = new Set(selected.map((task) => task.id));
-      await writeTaskFile(filePath, generateTasksMarkdown(snapshot.tasks.filter((task) => !leaving.has(task.id)), type === 'internal'));
-      cosEvents.emit('tasks:changed', { type, action: 'archived' });
-      return selected.length;
-    });
-  }
-  if (archived > 0) console.log(`🗄️ Archived ${archived} completed task(s) out of the task files`);
-  return { archived };
-}
-
 /**
  * Reorder user tasks based on an array of task IDs
  */
 export async function reorderTasks(taskIds) {
   return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = join(ROOT_DIR, state.config.userTasksFile);
+  const tasks = await readTaskFile('user');
 
-  if (!existsSync(filePath)) {
-    return { error: 'Task file not found' };
-  }
-
-  const tasks = await readTaskFile(filePath);
-
-  // Create a map of tasks by ID for quick lookup. parseTasksMarkdown guarantees
-  // unique ids (it suffixes any duplicate it encounters), so this Map can't
-  // silently collapse colliding tasks and drop them on write-back.
+  // Create a map of tasks by ID for quick lookup. Ids are the row key, so this
+  // Map can't silently collapse colliding tasks and drop them on write-back.
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   // Reorder based on the provided order
@@ -1458,9 +1275,7 @@ export async function reorderTasks(taskIds) {
     reorderedTasks.push(task);
   }
 
-  // Write back to file
-  const markdown = generateTasksMarkdown(reorderedTasks, false);
-  await writeTaskFile(filePath, markdown);
+  await writeTaskList('user', reorderedTasks);
 
   cosEvents.emit('tasks:changed', { type: 'user', action: 'reordered' });
   return { success: true, order: reorderedTasks.map(t => t.id) };
@@ -1476,28 +1291,17 @@ export async function reorderTasks(taskIds) {
  */
 export async function approveTask(taskId, { now = Date.now() } = {}) {
   return withStateLock(async () => {
-  const state = await loadState();
-
   // Both queues, internal first. A USER row can hold too: a row the parser had
   // to RECOVER is withheld from the unattended spawn and now persists that hold
   // as `| APPROVAL |` (#7300, #7367). Without a release path here that row is a
   // zombie — pending forever, with nothing in the product able to clear it —
   // which is a worse outcome than the evaporating hold it replaced.
-  const queues = [
-    { taskType: 'internal', filePath: join(ROOT_DIR, state.config.cosTasksFile) },
-    { taskType: 'user', filePath: join(ROOT_DIR, state.config.userTasksFile) },
-  ].filter(({ filePath }) => existsSync(filePath));
-
-  if (queues.length === 0) {
-    return { error: 'CoS task file not found' };
-  }
-
   let found = null;
-  for (const queue of queues) {
-    const tasks = await readTaskFile(queue.filePath);
+  for (const taskType of ['internal', 'user']) {
+    const tasks = await readTaskFile(taskType);
     const taskIndex = tasks.findIndex(t => t.id === taskId);
     if (taskIndex !== -1) {
-      found = { ...queue, tasks, taskIndex };
+      found = { taskType, tasks, taskIndex };
       break;
     }
   }
@@ -1506,7 +1310,7 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
     return { error: 'Task not found' };
   }
 
-  const { taskType, filePath, tasks, taskIndex } = found;
+  const { taskType, tasks, taskIndex } = found;
 
   if (!tasks[taskIndex].approvalRequired) {
     return { error: 'Task does not require approval' };
@@ -1523,9 +1327,7 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
     metadata: { ...tasks[taskIndex].metadata, updatedAt: new Date(now).toISOString() }
   };
 
-  // Write back to file
-  const markdown = generateTasksMarkdown(tasks, taskType === 'internal');
-  await writeTaskFile(filePath, markdown);
+  await writeTaskList(taskType, tasks);
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'approved', task: tasks[taskIndex] });
 

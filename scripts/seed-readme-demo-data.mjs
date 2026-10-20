@@ -45,9 +45,11 @@ const writeJson = (relativePath, value) => {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 };
 
-// The task store resolves configured files relative to PATHS.root. Keep these
-// paths relative to the checkout so PORTOS_DATA_ROOT still points at the
-// disposable root when the server runs from this repository.
+// The task queues live in PostgreSQL. These Markdown files are the input of
+// db-migration 018, which imports them into whichever database the demo server
+// uses on its first boot; the migration resolves configured files relative to
+// PATHS.root, so keep these paths relative to the checkout and PORTOS_DATA_ROOT
+// still points at the disposable root when the server runs from this repository.
 const userTasksFile = relative(repoRoot, join(dataRoot, 'TASKS.md'));
 const cosTasksFile = relative(repoRoot, join(dataRoot, 'COS-TASKS.md'));
 

@@ -342,17 +342,26 @@ CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
   archive_date TEXT
 );
 
--- Machine-local archive of completed CoS tasks moved out of TASKS.md /
--- COS-TASKS.md. Full task records (prompt bodies included) live in `task`;
--- `description` is a light projection. Never enters federation payloads.
-CREATE TABLE IF NOT EXISTS cos_task_archive (
+-- The CoS task queues, one row per task. `task` is the task in its stored form;
+-- the other columns are the projections the queries need (open queue, history
+-- paging, queue order, recent-completed window). cos_task_lists.version bumps on
+-- every write so a cached read can detect change. Machine-local, never federated.
+CREATE TABLE IF NOT EXISTS cos_tasks (
   source TEXT NOT NULL CHECK (source IN ('user', 'internal')),
   task_id TEXT COLLATE "C" NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  priority_value INTEGER NOT NULL DEFAULT 2,
+  position DOUBLE PRECISION NOT NULL,
   completed_at TIMESTAMPTZ,
-  archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  description TEXT NOT NULL DEFAULT '',
   task JSONB NOT NULL,
   PRIMARY KEY (source, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cos_tasks_open ON cos_tasks (source, status) WHERE status <> 'completed';
+CREATE INDEX IF NOT EXISTS idx_cos_tasks_completed ON cos_tasks (source, completed_at DESC NULLS LAST, task_id DESC) WHERE status = 'completed';
+CREATE TABLE IF NOT EXISTS cos_task_lists (
+  source TEXT PRIMARY KEY CHECK (source IN ('user', 'internal')),
+  version BIGINT NOT NULL DEFAULT 0
 );
 
 -- Auto-update updated_at and sync_sequence on content/metadata changes.

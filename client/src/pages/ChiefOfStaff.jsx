@@ -555,27 +555,9 @@ export default function ChiefOfStaff() {
     };
     socket.on('cos:status', handleCosStatus);
 
-    const handleTasksUserChanged = (data) => {
-      if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, user: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
-      else refreshQueue();
-    };
-    socket.on('cos:tasks:user:changed', handleTasksUserChanged);
-
-    // System (COS-TASKS.md) tasks change on their own file-watcher event, and
-    // scheduled/on-demand CoS work IS an internal task — so without this handler
-    // a freshly queued scheduled task only appeared once explicit refresh or reconnect came
-    // around. Same full-list payload as the user event, so swap it in directly.
-    const handleTasksCosChanged = (data) => {
-      if (!needsTasks) return;
-      if (data?.tasks) setTasks(prev => ({ ...prev, cos: { ...data, tasks: data.tasks.filter(task => task.status !== 'completed' || task.id === selectedTaskRef.current), completedCount: data.tasks.filter(task => task.status === 'completed').length } }));
-      else refreshQueue();
-    };
-    socket.on('cos:tasks:cos:changed', handleTasksCosChanged);
-
     // The store's own per-mutation event, which fires the instant a task is added
-    // or its status flips — ahead of the debounced file watcher above. It carries
-    // one task rather than the list, and also fires for writes with nothing to
+    // or its status flips. It carries one task rather than the list, and also
+    // fires for writes with nothing to
     // show here (every running task's federation lease heartbeat), so it drives
     // one coalesced queue refresh rather than a fetch per event. This is what
     // collapses the pending→in_progress lag: 'cos:agent:spawned' fires BEFORE
@@ -713,8 +695,6 @@ export default function ChiefOfStaff() {
       handleAppsChanged.cancel();
       handleProvidersChanged.cancel();
       socket.off('cos:status', handleCosStatus);
-      socket.off('cos:tasks:user:changed', handleTasksUserChanged);
-      socket.off('cos:tasks:cos:changed', handleTasksCosChanged);
       socket.off('cos:tasks:changed', handleTaskMutation);
       socket.off('cos:agent:spawned', handleAgentSpawned);
       socket.off('cos:agent:updated', handleAgentUpdated);

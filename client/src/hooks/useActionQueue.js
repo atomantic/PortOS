@@ -8,7 +8,7 @@ import { ACTION_QUEUE_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/ev
 // invalidations only; source records are always re-read from this install.
 const EVENTS = [
   'connect', 'brain:classified', 'brain:threads:changed',
-  'cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:agent:completed',
+  'cos:tasks:changed', 'cos:agent:completed',
   'cos:memory:approval-needed', 'cos:memory:approved', 'cos:memory:rejected', 'cos:agent:feedback',
   'messages:changed', 'messages:draft:created', 'messages:draft:sent',
   'backup:started', 'backup:completed', 'backup:failed',

@@ -493,6 +493,7 @@ export * from './streamJsonParser.js';
 export * from './taskParser.js';
 export * from './taskGenerationOverrides.js';
 export * from './cosTaskPrompt.js';
+export * from './cosTaskRows.js';
 export * from './taskPauseHold.js';
 export * from './taskBlockCategories.js';
 export * from './taskRequeue.js';

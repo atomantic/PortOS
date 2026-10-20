@@ -40,7 +40,7 @@ const comparableSnapshot = (snapshot) => {
   };
 };
 
-const RESOURCE_EVENTS = ['cos:day:changed', 'cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed', 'cos:agents:changed', 'cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:learning:changed'];
+const RESOURCE_EVENTS = ['cos:day:changed', 'cos:tasks:changed', 'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed', 'cos:agents:changed', 'cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:learning:changed'];
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard

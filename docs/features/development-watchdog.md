@@ -39,7 +39,7 @@ failed evidence need no resolution agent.
 The latest receipt and 24 historical receipts use the existing machine-local
 CoS runtime state, not a new record store. A bounded current-PR dispatch ledger
 survives restarts and prevents repeated resolution of unchanged evidence. Queue
-admission shares structured work identity across user/internal task files and
+admission shares structured work identity across the user/internal task queues and
 existing scheduler/manual follow-up producers. Untargeted claims reserve their
 app's issue lane. Full-sync peers participate in ownership reads; unrelated
 peers do not block the scan. Failed or capped participating-peer and forge reads

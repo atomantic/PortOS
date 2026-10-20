@@ -581,8 +581,6 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
   } = ctx;
   const { canSpawn, trackSpawn, emitSpawn, isOwned = () => false, onDefer = async () => {} } = adapter;
 
-  if (!cosTaskData.exists) return [];
-
   // A task already spawning or admitted this cycle is not a candidate: letting
   // it reach the gates would record a capacity/cooldown deferral for work that
   // is already running.
@@ -1053,7 +1051,7 @@ export async function evaluateTasks(options) {
   }
 
   // Emit awaiting approval count if any
-  if (cosTaskData.exists && cosTaskData.awaitingApproval?.length > 0) {
+  if (cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
     cosEvents.emit('evaluation', {
       message: 'Tasks awaiting approval',

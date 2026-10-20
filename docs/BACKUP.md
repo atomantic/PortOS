@@ -351,7 +351,7 @@ a snapshot as a complete recovery point.
 
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 
-The dump includes the machine-local `cos_pending_agent_feedback` reference index, the `cos_task_archive` completed-task history (the only copy once a task leaves `TASKS.md` / `COS-TASKS.md`), and `review_queue_triage` presentation markers. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.
+The dump includes the machine-local `cos_pending_agent_feedback` reference index, the `cos_tasks` CoS task queues and their completed-task history (the Markdown task files were retired into it and kept as `*.imported`), and `review_queue_triage` presentation markers. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.
 
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 

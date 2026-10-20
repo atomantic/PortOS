@@ -16,8 +16,9 @@ Index of plans other docs point at:
   resource suites in pregate, and the pregate attestation CI honors.
 
 - [2026-10-20 — CoS task queue to PostgreSQL](./2026-10-20-cos-task-queue-to-postgres.md):
-  why `TASKS.md` / `COS-TASKS.md` outgrew their files, the completed-task archive
-  (step one) and the per-row open queue that replaces the file watcher (step two).
+  why `TASKS.md` / `COS-TASKS.md` outgrew their files, the single `cos_tasks`
+  table that replaced them (and the interim archive), and the migrations that
+  bring existing installs to it.
 
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,

@@ -17,12 +17,6 @@ export function useCosTaskUpdates(onTaskUpdate) {
       if (task) onTaskUpdateRef.current?.(task);
     };
     const handleTaskChanged = event => emitTaskUpdate(event?.task);
-    const handleTaskListChanged = event => {
-      for (const task of event?.tasks || []) emitTaskUpdate(task);
-    };
-    const handleTaskCompleted = event => {
-      for (const task of event?.tasks || []) emitTaskUpdate(task);
-    };
     const handleAgentSpawned = agent => {
       if (agent?.taskId) emitTaskUpdate({ id: agent.taskId, status: 'in_progress' });
     };
@@ -36,15 +30,11 @@ export function useCosTaskUpdates(onTaskUpdate) {
     };
 
     socket.on('cos:tasks:changed', handleTaskChanged);
-    socket.on('cos:tasks:user:changed', handleTaskListChanged);
-    socket.on('cos:tasks:user:completed', handleTaskCompleted);
     socket.on('cos:agent:spawned', handleAgentSpawned);
     socket.on('cos:agent:completed', handleAgentCompleted);
 
     return () => {
       socket.off('cos:tasks:changed', handleTaskChanged);
-      socket.off('cos:tasks:user:changed', handleTaskListChanged);
-      socket.off('cos:tasks:user:completed', handleTaskCompleted);
       socket.off('cos:agent:spawned', handleAgentSpawned);
       socket.off('cos:agent:completed', handleAgentCompleted);
     };

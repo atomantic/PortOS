@@ -21,7 +21,7 @@ import { commissionsDdl } from './commissions.js';
 import { userActionsDdl } from './userActions.js';
 import { reviewQueueTriageDdl } from './reviewQueueTriage.js';
 import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
-import { cosTaskArchiveDdl } from './cosTaskArchive.js';
+import { cosTasksDdl } from './cosTasks.js';
 import { aiGraphDdl } from './aiGraph.js';
 import { peerExecutionDdl } from './peerExecution.js';
 import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
@@ -51,7 +51,7 @@ export {
   userActionsDdl,
   reviewQueueTriageDdl,
   cosAgentFeedbackDdl,
-  cosTaskArchiveDdl,
+  cosTasksDdl,
   aiGraphDdl,
   peerExecutionDdl,
   catalogDdl,
@@ -92,7 +92,7 @@ export function buildUpgradeDdl() {
     ...userActionsDdl,
     ...reviewQueueTriageDdl,
     ...cosAgentFeedbackDdl,
-    ...cosTaskArchiveDdl,
+    ...cosTasksDdl,
     ...aiGraphDdl,
     ...peerExecutionDdl,
   ];

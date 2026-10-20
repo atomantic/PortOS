@@ -14,8 +14,9 @@ import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { removeByMetadata } from './notifications.js';
-import { readFile } from 'fs/promises';
-import { atomicWrite } from '../lib/fileUtils.js';
+import * as repository from './cosTaskRepository.js';
+const actualRepository = await vi.importActual('./cosTaskRepository.js');
+import { planListSave } from '../lib/cosTaskRows.js';
 
 vi.mock('./prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
 import { persistPrWatcherState } from './prWatcher.js';
@@ -24,15 +25,12 @@ import { LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js
 vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn().mockResolvedValue(1) }));
 
 const mock = vi.hoisted(() => ({
-  files: new Map(),
-  // Mocked mtimes for the parsed-task cache (#3497). Each mocked write bumps the
-  // path's stamp; a test that wants to simulate an EXTERNAL edit sets it itself.
-  mtimes: new Map(),
-  // Counts real parses so the cache tests can prove a hit did no work.
-  parseCalls: 0,
-  // When set, atomicWrite rejects with it (a write that dies before the rename).
-  atomicFailure: null,
+  // When set, the next repository write rejects with it (a save that dies before commit).
+  writeFailure: null,
+  // Called with the source after each committed write; a truthy return clears it.
   afterWrite: null,
+  // Counts real working-set loads so the cache tests can prove a hit did no work.
+  loads: 0,
   state: null,
   events: [],
   // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
@@ -40,64 +38,28 @@ const mock = vi.hoisted(() => ({
   reviewDefaults: { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' },
   reviewCalls: [],
   // Captures cross-peer LI execution verdicts consumed by mergePeerTasks (#2779).
-  liVerdicts: [],
-  // In-memory stand-in for the cos_task_archive table, per source.
-  archive: { user: new Map(), internal: new Map() }
+  liVerdicts: []
 }));
 
-// existsSync is driven by the in-memory file map; readFileSync stays real so
-// the source-level regression guards below can read cosTaskStore.js off disk.
-vi.mock('fs', async (importOriginal) => {
+// The real in-memory repository, wrapped so tests can count loads, fail a save,
+// or run a hook right after a committed write (the old file-write seams).
+vi.mock('./cosTaskRepository.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    existsSync: (p) => mock.files.has(p)
-  };
-});
-
-// Task files are written through atomicWrite (temp file + rename). The mock
-// applies the same in-memory write the fs/promises writeFile mock used to, and
-// `mock.atomicFailure` lets a test simulate the write dying before the rename.
-vi.mock('../lib/fileUtils.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    atomicWrite: vi.fn(async (p, content) => {
-      if (mock.atomicFailure) throw mock.atomicFailure;
-      mock.files.set(p, content);
-      mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
-      // Lets a test mutate the file between two reaper flips (snapshot race).
-      if (mock.afterWrite && mock.afterWrite(p)) mock.afterWrite = null;
-    })
-  };
-});
-
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async (p) => {
-    if (!mock.files.has(p)) throw new Error(`ENOENT: ${p}`);
-    return mock.files.get(p);
-  }),
-  // The parsed-task cache stamps on mtimeMs + size, so the mock must model both.
-  stat: vi.fn(async (p) => {
-    if (!mock.files.has(p)) throw new Error(`ENOENT: ${p}`);
-    return { mtimeMs: mock.mtimes.get(p) || 0, size: mock.files.get(p).length };
-  })
-}));
-
-// Counts parseTasksMarkdown calls (cache-hit assertions) while keeping every
-// other taskParser export real — the store's whole read path depends on them.
-vi.mock('../lib/taskParser.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    parseTasksMarkdown: (content) => { mock.parseCalls += 1; return actual.parseTasksMarkdown(content); }
+    loadTaskWorkingSet: vi.fn(async (...args) => { mock.loads += 1; return actual.loadTaskWorkingSet(...args); }),
+    applyTaskListSave: vi.fn(async (source, plan) => {
+      if (mock.writeFailure) throw mock.writeFailure;
+      const version = await actual.applyTaskListSave(source, plan);
+      if (mock.afterWrite && await mock.afterWrite(source)) mock.afterWrite = null;
+      return version;
+    }),
   };
 });
 
 vi.mock('./cosState.js', async () => ({
   loadState: vi.fn(async () => mock.state),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
-  ROOT_DIR: '/root'
 }));
 
 vi.mock('./cos.js', () => ({
@@ -106,34 +68,6 @@ vi.mock('./cos.js', () => ({
   getTaskById: (...args) => getTaskById(...args),
   updateTask: (...args) => updateTask(...args),
 }));
-
-// The archive adapter is a PostgreSQL/JSON store; this suite mocks the filesystem
-// wholesale, so it gets an in-memory table with the same ordering and `before`
-// cursor semantics as the real adapter.
-vi.mock('./cosTaskArchive.js', () => {
-  const sources = ['user', 'internal'];
-  const byIdDesc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-  return {
-    archiveTasks: vi.fn(async (source, tasks) => { for (const task of tasks) mock.archive[source].set(task.id, task); }),
-    getArchivedTask: vi.fn(async (taskId, source = null) => {
-      for (const candidate of source ? [source] : sources) {
-        if (mock.archive[candidate].has(taskId)) return { source: candidate, task: structuredClone(mock.archive[candidate].get(taskId)) };
-      }
-      return null;
-    }),
-    getArchivedIds: vi.fn(async (source, ids) => new Set(ids.filter((id) => mock.archive[source].has(id)))),
-    listArchivedTasks: vi.fn(async (source, { before = null, offset = 0, limit = 25 } = {}) => [...mock.archive[source].values()]
-      .filter((task) => before == null || task.id < before).sort(byIdDesc).slice(offset, offset + limit).map((task) => structuredClone(task))),
-    countArchivedTasks: vi.fn(async (source) => mock.archive[source].size),
-    listArchivedSummaries: vi.fn(async () => sources.flatMap((source) => [...mock.archive[source].values()]
-      .map((task) => ({ source, id: task.id, description: task.description || '' })))),
-    deleteArchivedTask: vi.fn(async (taskId, source = null) => {
-      let removed = false;
-      for (const candidate of source ? [source] : sources) removed = mock.archive[candidate].delete(taskId) || removed;
-      return removed;
-    }),
-  };
-});
 
 vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn(),
@@ -179,7 +113,6 @@ import {
   isReapableBlockedFailure,
   isReapableInvestigation,
   sweepResolvedFailureTasks,
-  archiveCompletedTasks,
   findTaskWithSource,
   reconcileLegacyForgeMaintenanceTasks,
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
@@ -191,22 +124,25 @@ import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
-const USER_FILE = join('/root', 'TASKS.md');
-const COS_FILE = join('/root', 'COS-TASKS.md');
+const baseState = () => ({ agents: {} });
 
-const baseState = () => ({
-  config: { userTasksFile: 'TASKS.md', cosTasksFile: 'COS-TASKS.md' }
-});
+// Test-side access to what is stored, bypassing the store's cache and the
+// failure/after-write hooks above (they wrap only the store's own saves).
+const seed = async (source, tasks) => {
+  const { rows } = await actualRepository.loadTaskWorkingSet(source);
+  const plan = planListSave({ previous: rows, next: tasks, source });
+  await actualRepository.applyTaskListSave(source, plan);
+  __resetTaskCache();
+};
+const stored = async (source) => (await actualRepository.loadTaskWorkingSet(source)).rows.map((row) => row.task);
 
 beforeEach(() => {
-  mock.atomicFailure = null;
+  mock.writeFailure = null;
   mock.afterWrite = null;
-  mock.files = new Map();
-  mock.mtimes = new Map();
-  mock.archive = { user: new Map(), internal: new Map() };
-  mock.parseCalls = 0;
-  // The parse cache is module-level state; a leftover entry from the previous
-  // test would answer for a path this test just re-created from scratch.
+  mock.loads = 0;
+  // Both the repository's backend and the store's cache are module-level state;
+  // a leftover entry from the previous test would answer for tasks it never created.
+  actualRepository.__resetCosTaskRepository();
   __resetTaskCache();
   mock.state = baseState();
   mock.events = [];
@@ -329,18 +265,15 @@ describe('cosTaskStore.updateTask expectedStatus', () => {
 });
 
 describe('cosTaskStore.getUserTasks / getCosTasks', () => {
-  it('returns an empty, non-existent result when the file is missing', async () => {
+  it('returns an empty result for an empty queue', async () => {
     const result = await getUserTasks();
-    expect(result.exists).toBe(false);
     expect(result.tasks).toEqual([]);
     expect(result.type).toBe('user');
-    expect(result.file).toBe(USER_FILE);
   });
 
-  it('parses an existing user task file', async () => {
+  it('returns an added user task in stored form', async () => {
     await addTask({ description: 'do a thing', priority: 'HIGH' }, 'user');
     const result = await getUserTasks();
-    expect(result.exists).toBe(true);
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].description).toBe('do a thing');
     expect(result.tasks[0].priority).toBe('HIGH');
@@ -356,24 +289,26 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
   });
 });
 
-// Parsed-task cache (#3497). The daemon's evaluation tick re-reads both task
-// files many times a minute; these pin that an unchanged file is parsed once,
-// that every invalidation signal fires, and that a cached read can never leak a
+// Working-set cache (#3497). The daemon's evaluation tick re-reads both queues
+// many times a minute; these pin that an unchanged queue is loaded once, that
+// every invalidation signal fires, and that a cached read can never leak a
 // caller's in-place mutations into the next reader.
-describe('cosTaskStore parsed-task cache (#3497)', () => {
-  it('reads telemetry without cloning prompts and keeps metrics fresh after task writes and external edits', async () => {
+describe('cosTaskStore working-set cache (#3497)', () => {
+  const gate = () => Promise.withResolvers();
+  const task = (n, extra = {}) => ({ id: `task-example-${String(n).padStart(4, '0')}`, description: `Example task ${n}`, status: 'pending', priority: 'MEDIUM', priorityValue: 2, approvalRequired: false, autoApproved: true, metadata: {}, ...extra });
+
+  it('reads telemetry without cloning prompts and keeps metrics fresh after task writes and out-of-band changes', async () => {
     const now = Date.parse('2026-07-09T12:00:00Z');
     expect(await getTaskDiagnostics()).toEqual([]);
-    const tasks = Array.from({ length: 300 }, (_, index) => ({
-      id: `task-${index}`, description: `Example task ${index}`, status: 'pending', priority: 'MEDIUM',
+    const tasks = Array.from({ length: 300 }, (_, index) => task(index, {
       metadata: {
         prompt: 'Example prompt. '.repeat(512),
         updatedAt: '2026-07-09T11:00:00Z',
         ...(index % 30 === 0 ? { diagnostics: { tier: 1, category: 'config', observedAt: '2026-07-09T10:00:00Z' } } : {})
       }
     }));
-    mock.files.set(USER_FILE, generateTasksMarkdown(tasks.slice(0, 150)));
-    mock.files.set(COS_FILE, generateTasksMarkdown(tasks.slice(150)));
+    await seed('user', tasks.slice(0, 150));
+    await seed('internal', tasks.slice(150));
     const { user, cos } = await getAllTasks();
     const expected = aggregateAutoFixDiagnostics([...user.tasks, ...cos.tasks], { now });
     const clone = vi.spyOn(globalThis, 'structuredClone');
@@ -381,25 +316,24 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     const projectedBytes = JSON.stringify(clone.mock.calls[0][0]).length;
     expect(projectedBytes).toBeLessThan(JSON.stringify([...user.tasks, ...cos.tasks]).length / 100);
     expect(clone.mock.calls[0][0]).toHaveLength(10);
-    const parses = mock.parseCalls;
+    const loads = mock.loads;
     const projection = await getTaskDiagnostics();
     projection[0].metadata.diagnostics.tier = 99;
     expect(await getAutoFixMetrics({ now })).toEqual(expected);
-    expect(mock.parseCalls).toBe(parses);
+    expect(mock.loads).toBe(loads);
     clone.mockRestore();
 
-    await updateTask('task-0', { status: 'completed' }, 'user');
+    await updateTask('task-example-0000', { status: 'completed' }, 'user');
     expect((await getAutoFixMetrics({ now })).overall.resolved).toBe(1);
-    mock.files.set(COS_FILE, mock.files.get(COS_FILE).replace('- [ ]', '- [x]'));
-    mock.mtimes.set(COS_FILE, 5000);
+    await seed('internal', (await stored('internal')).map((t, i) => (i === 0 ? { ...t, status: 'completed' } : t)));
     expect((await getAutoFixMetrics({ now })).overall.resolved).toBe(2);
-    mock.files.delete(USER_FILE);
+    await seed('user', []);
     expect((await getAutoFixMetrics({ now })).total).toBe(5);
-    mock.files.set(COS_FILE, '');
+    await seed('internal', []);
     expect((await getAutoFixMetrics({ now })).total).toBe(0);
   });
 
-  it('projects pending IDs without cloning task payloads and refreshes after writes and external edits', async () => {
+  it('projects pending IDs without cloning task payloads and refreshes after writes and out-of-band changes', async () => {
     expect(await getPendingTaskIds()).toEqual([]);
     const user = await addTask({ description: 'Example user task' }, 'user');
     const internal = await addTask({ description: 'Example internal task' }, 'internal');
@@ -407,18 +341,17 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     const ids = await getPendingTaskIds();
     expect(ids).toEqual([user.id, internal.id]);
     ids.push('caller-only');
-    const parses = mock.parseCalls;
+    const loads = mock.loads;
     expect(await getPendingTaskIds()).toEqual([user.id, internal.id]);
-    expect(mock.parseCalls).toBe(parses);
+    expect(mock.loads).toBe(loads);
     expect(clone).not.toHaveBeenCalled();
     clone.mockRestore();
 
     await updateTask(user.id, { status: 'completed' }, 'user');
     expect(await getPendingTaskIds()).toEqual([internal.id]);
-    mock.files.set(COS_FILE, mock.files.get(COS_FILE).replace('- [ ]', '- [x]'));
-    mock.mtimes.set(COS_FILE, mock.mtimes.get(COS_FILE) + 5000);
+    await seed('internal', (await stored('internal')).map((t) => ({ ...t, status: 'completed' })));
     expect(await getPendingTaskIds()).toEqual([]);
-    mock.files.delete(USER_FILE);
+    await seed('user', []);
     expect(await getPendingTaskIds()).toEqual([]);
   });
 
@@ -445,68 +378,76 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     expect((await getCosApprovalView({ limit: 10 })).awaitingApproval).toHaveLength(3);
   });
 
-  it('serves a cached parse while the file is unchanged', async () => {
+  it('serves a cached working set while the queue version is unchanged', async () => {
     await addTask({ description: 'cached thing' }, 'user');
-    mock.parseCalls = 0;
+    __resetTaskCache();
+    mock.loads = 0;
 
     const first = await getUserTasks();
-    expect(mock.parseCalls).toBe(1);
+    expect(mock.loads).toBe(1);
 
     const second = await getUserTasks();
-    expect(mock.parseCalls).toBe(1); // no re-parse — the file did not move
+    expect(mock.loads).toBe(1); // no reload — the queue did not change
     expect(second.tasks).toEqual(first.tasks);
   });
 
-  it('coalesces concurrent task views after cold and externally changed files', async () => {
+  it('keeps its cache current across the store\'s own writes without reloading', async () => {
+    await addTask({ description: 'original' }, 'user');
+    const created = (await getUserTasks()).tasks[0];
+    mock.loads = 0;
+
+    await updateTask(created.id, { description: 'rewritten' }, 'user');
+    await addTask({ description: 'second' }, 'user');
+    expect((await getUserTasks()).tasks.map((t) => t.description).sort()).toEqual(['rewritten', 'second']);
+    expect(mock.loads).toBe(0);
+  });
+
+  it('coalesces concurrent task views after cold and out-of-band changed queues', async () => {
     await addTask({ description: 'user task' }, 'user');
     await addTask({ description: 'internal task' }, 'internal');
     __resetTaskCache();
-    mock.parseCalls = 0;
-    vi.mocked(readFile).mockClear();
+    mock.loads = 0;
 
     const views = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
-    expect(mock.parseCalls).toBe(2);
-    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(mock.loads).toBe(2);
     views[0].user.tasks[0].description = 'caller mutation';
     expect(views[1].user.tasks[0].description).toBe('user task');
 
-    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('user task', 'edited task'));
-    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+    await seed('user', (await stored('user')).map((t) => ({ ...t, description: 'edited task' })));
+    mock.loads = 0;
     const changed = await Promise.all(Array.from({ length: 24 }, () => getTaskView({ kind: 'bare' })));
-    expect(mock.parseCalls).toBe(3);
-    expect(readFile).toHaveBeenCalledTimes(3);
+    expect(mock.loads).toBe(2);
     expect(changed.every(view => view.user.tasks[0].description === 'edited task')).toBe(true);
   });
 
-  it('retries shared read failures on the next task view request', async () => {
+  it('retries shared load failures on the next task view request', async () => {
     await addTask({ description: 'readable again' }, 'user');
     __resetTaskCache();
-    vi.mocked(readFile).mockClear().mockRejectedValueOnce(new Error('temporary read failure'));
+    vi.mocked(repository.loadTaskWorkingSet).mockClear().mockRejectedValueOnce(new Error('temporary read failure'));
     const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => getUserTasks()));
     expect(attempts.every(result => result.status === 'rejected' && result.reason.message === 'temporary read failure')).toBe(true);
-    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(repository.loadTaskWorkingSet).toHaveBeenCalledTimes(1);
     expect((await getUserTasks()).tasks[0].description).toBe('readable again');
-    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(repository.loadTaskWorkingSet).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves an external edit when an update starts after an older read captured the file', async () => {
+  it('preserves an out-of-band change when an update starts after an older read captured the queue', async () => {
     const created = await addTask({ description: 'original', metadata: { context: 'before edit' } }, 'user');
     __resetTaskCache();
-    const oldContent = mock.files.get(USER_FILE);
-    const reading = Promise.withResolvers();
-    const finishRead = Promise.withResolvers();
-    vi.mocked(readFile).mockImplementationOnce(async () => {
+    const older = await actualRepository.loadTaskWorkingSet('user');
+    const reading = gate();
+    const finishRead = gate();
+    vi.mocked(repository.loadTaskWorkingSet).mockImplementationOnce(async () => {
       reading.resolve();
       await finishRead.promise;
-      return oldContent;
+      return older;
     });
     const olderRead = getUserTasks();
     await reading.promise;
-    mock.files.set(USER_FILE, oldContent.replace('before edit', 'external edit'));
-    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 1000);
+    await seed('user', older.rows.map((row) => ({ ...row.task, metadata: { ...row.task.metadata, context: 'external edit' } })));
 
     const update = updateTask(created.id, { description: 'API edit' }, 'user');
-    // Releasing the old read must not make a newer update overwrite the editor.
+    // Releasing the old read must not make a newer update overwrite the other writer.
     finishRead.resolve();
     expect((await olderRead).tasks[0].metadata.context).toBe('before edit');
     expect((await update).metadata.context).toBe('external edit');
@@ -518,81 +459,48 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
   it('keeps a read overlapping a write from capturing or poisoning post-write readers', async () => {
     const created = await addTask({ description: 'original' }, 'user');
     await getUserTasks();
-    const originalContent = mock.files.get(USER_FILE);
-    const originalMtime = mock.mtimes.get(USER_FILE);
-    const writing = Promise.withResolvers();
-    const finishWrite = Promise.withResolvers();
-    const originalWrite = vi.mocked(atomicWrite).getMockImplementation();
-    vi.mocked(atomicWrite).mockImplementationOnce(async (...args) => {
+    const before = await actualRepository.loadTaskWorkingSet('user');
+    const writing = gate();
+    const finishWrite = gate();
+    vi.mocked(repository.applyTaskListSave).mockImplementationOnce(async (source, plan) => {
       writing.resolve();
       await finishWrite.promise;
-      await originalWrite(...args);
-      // A length-neutral edit on a coarse-mtime filesystem has the same stamp.
-      mock.files.set(USER_FILE, originalContent.replace('original', 'REWRITTN'));
-      mock.mtimes.set(USER_FILE, originalMtime);
+      return actualRepository.applyTaskListSave(source, plan);
     });
     const write = updateTask(created.id, { description: 'REWRITTN' }, 'user');
     await writing.promise;
 
-    const reading = Promise.withResolvers();
-    const finishRead = Promise.withResolvers();
-    vi.mocked(readFile).mockImplementationOnce(async () => {
+    // A reader that misses the cache while the write is still uncommitted loads the old rows.
+    __resetTaskCache();
+    const reading = gate();
+    const finishRead = gate();
+    vi.mocked(repository.loadTaskWorkingSet).mockImplementationOnce(async () => {
       reading.resolve();
       await finishRead.promise;
-      return originalContent;
+      return before;
     });
     const overlappingRead = getUserTasks();
     await reading.promise;
     finishWrite.resolve();
     await write;
-    // This must neither join the old flight nor consume its eventual snapshot.
+    // Post-write readers must neither join the old load nor consume its eventual snapshot.
     expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
     finishRead.resolve();
     expect((await overlappingRead).tasks[0].description).toBe('original');
     expect((await getUserTasks()).tasks[0].description).toBe('REWRITTN');
   });
 
-  it('re-parses after an external edit bumps mtime', async () => {
+  it('reloads after an out-of-band write bumps the queue version', async () => {
     await addTask({ description: 'first' }, 'user');
     await getUserTasks();
-    mock.parseCalls = 0;
+    mock.loads = 0;
 
-    // Simulate an out-of-band write (user editing TASKS.md, a restore, a peer).
-    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('first', 'edited outside the store'));
-    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 5000);
+    await seed('user', (await stored('user')).map((t) => ({ ...t, description: 'edited outside the store' })));
+    mock.loads = 0;
 
     const after = await getUserTasks();
-    expect(mock.parseCalls).toBe(1);
+    expect(mock.loads).toBe(1);
     expect(after.tasks[0].description).toBe('edited outside the store');
-  });
-
-  it('re-parses after a write through the store even when the stamp has not moved', async () => {
-    await addTask({ description: 'original' }, 'user');
-    const created = (await getUserTasks()).tasks[0]; // primes the cache
-
-    // Snapshot the EXACT stamp the cache is now holding, so it can be restored
-    // byte-for-byte after the write below.
-    const cachedContent = mock.files.get(USER_FILE);
-    const cachedMtime = mock.mtimes.get(USER_FILE);
-
-    await updateTask(created.id, { description: 'original' }, 'user');
-
-    // Put back content of the identical LENGTH ('original' and 'REWRITTN' are
-    // both 8 chars) at the identical mtime, so `mtimeMs:size` is bit-for-bit
-    // what the cached entry carries. The stamp check therefore cannot save this
-    // read — only writeTaskFile having dropped the entry itself can. Restoring
-    // a different-length string instead would move `size`, the stamp would
-    // differ anyway, and this test would pass with the write-side invalidation
-    // deleted. That matters because the length-neutral rewrite is the COMMON
-    // production case (a status flip, an `updatedAt` restamp), and on a
-    // coarse-mtime filesystem two writes inside one tick stamp identically.
-    mock.files.set(USER_FILE, cachedContent.replace('original', 'REWRITTN'));
-    mock.mtimes.set(USER_FILE, cachedMtime);
-    mock.parseCalls = 0;
-
-    const after = await getUserTasks();
-    expect(mock.parseCalls).toBe(1);
-    expect(after.tasks[0].description).toBe('REWRITTN');
   });
 
   it('invalidates on deleteTask so the removed task never comes back cached', async () => {
@@ -645,15 +553,15 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
     id: `task-${type}-${String(n).padStart(4, '0')}`, description: `Example ${type} task ${n}`, status, priority: 'MEDIUM',
     metadata: { prompt: status === 'completed' ? PROMPT : 'Open prompt.' }, ...extra
   });
-  const seed = (completedPerSource = 60) => {
-    const archived = (type) => Array.from({ length: completedPerSource }, (_, n) => row(type, n, 'completed'));
-    mock.files.set(USER_FILE, generateTasksMarkdown([
-      row('user', 1000, 'pending'), ...archived('user'), row('user', 1001, 'in_progress'), row('user', 1002, 'blocked'),
-    ]));
-    mock.files.set(COS_FILE, generateTasksMarkdown([
-      row('cos', 1000, 'pending', { approvalRequired: false, autoApproved: true }), ...archived('cos'),
+  const seedViews = async (completedPerSource = 60) => {
+    const completed = (type) => Array.from({ length: completedPerSource }, (_, n) => row(type, n, 'completed'));
+    await seed('user', [
+      row('user', 1000, 'pending'), ...completed('user'), row('user', 1001, 'in_progress'), row('user', 1002, 'blocked'),
+    ]);
+    await seed('internal', [
+      row('cos', 1000, 'pending', { approvalRequired: false, autoApproved: true }), ...completed('cos'),
       row('cos', 1001, 'pending', { approvalRequired: true, autoApproved: false }),
-    ]));
+    ]);
   };
   const desc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
   const withSpy = async (fn) => {
@@ -665,8 +573,8 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
     } finally { clone.mockRestore(); }
   };
 
-  it('bare view equals the raw store minus archived rows beyond the first page, and clones only that page', async () => {
-    seed();
+  it('bare view equals the raw store minus completed rows beyond the first page, and clones only the open queue', async () => {
+    await seedViews();
     const raw = await getAllTasks();
     const { result, cloned } = await withSpy(() => getTaskView({ kind: 'bare' }));
     for (const key of ['user', 'cos']) {
@@ -679,14 +587,12 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
         ...(key === 'cos' ? { autoApproved: all.autoApproved, awaitingApproval: all.awaitingApproval } : {}),
       });
     }
-    const rawBytes = JSON.stringify(raw).length;
-    // 2 sources x (4 open + 25 page) of 120 rows: well under half the raw payload.
-    expect(cloned).toBeLessThan(rawBytes * 0.3);
-    console.log(`bounded bare clone: ${cloned} of ${rawBytes} bytes`);
+    // The completed page is read straight from the table; only the few open rows are cloned.
+    expect(cloned).toBeLessThan(JSON.stringify(raw).length * 0.05);
   });
 
-  it('queue view clones no archived prompt unless one is selected, then exactly that row', async () => {
-    seed();
+  it('queue view clones no completed prompt unless one is selected, then exactly that row', async () => {
+    await seedViews();
     const raw = await getAllTasks();
     const queue = await withSpy(() => getTaskView({ kind: 'queue' }));
     expect(queue.result.user.tasks.map(t => t.id)).toEqual(['task-user-1000', 'task-user-1001', 'task-user-1002']);
@@ -697,21 +603,21 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
     expect(JSON.stringify(queue.result)).not.toContain('Archived prompt body');
 
     const picked = await getTaskView({ kind: 'queue', selected: 'task-user-0007' });
-    // File order is kept: the selected archived row stays where the file put it.
+    // Queue order is kept: the selected completed row stays where the queue puts it.
     expect(picked.user.tasks.map(t => t.id)).toEqual(raw.user.tasks.filter(t => t.status !== 'completed' || t.id === 'task-user-0007').map(t => t.id));
     expect(picked.user.grouped.completed.map(t => t.id)).toEqual(['task-user-0007']);
     expect(picked.user.tasks.find(t => t.id === 'task-user-0007')).toEqual(raw.user.tasks.find(t => t.id === 'task-user-0007'));
     expect(picked.cos.tasks.every(t => t.status !== 'completed')).toBe(true);
   });
 
-  it('completed view reads one source, pages by cursor, and clones just the page', async () => {
-    seed();
+  it('completed view reads one source, pages by cursor, and clones nothing from the cache', async () => {
+    await seedViews();
     const raw = await getAllTasks();
     const expectedIds = raw.cos.tasks.filter(t => t.status === 'completed').sort(desc).map(t => t.id);
     const first = await withSpy(() => getTaskView({ kind: 'completed', source: 'internal', limit: 10 }));
     expect(first.result.items.map(t => t.id)).toEqual(expectedIds.slice(0, 10));
     expect(first.result).toMatchObject({ total: 60, nextCursor: expectedIds[9] });
-    expect(first.cloned).toBeLessThan(JSON.stringify(raw.cos.tasks).length / 5);
+    expect(first.cloned).toBe(0);
     const next = await getTaskView({ kind: 'completed', source: 'internal', limit: 10, cursor: first.result.nextCursor });
     expect(next.items.map(t => t.id)).toEqual(expectedIds.slice(10, 20));
     const tail = await getTaskView({ kind: 'completed', source: 'user', limit: 100, cursor: 'task-user-0003' });
@@ -719,29 +625,47 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
     expect(tail.items.map(t => t.id)).toEqual(['task-user-0002', 'task-user-0001', 'task-user-0000']);
   });
 
-  it('window view slices in file order with true totals and scalar metadata only', async () => {
-    seed();
+  it('serves completed history older than the working set by page, count and selection', async () => {
+    await seedViews(130);
+    // Undated completed tasks count as oldest: the working set keeps the newest 100 by id.
+    const { user } = await getAllTasks();
+    expect(user.tasks.filter(t => t.status === 'completed')).toHaveLength(100);
+    expect(user.tasks.some(t => t.id === 'task-user-0000')).toBe(false);
+
+    const oldest = await getTaskView({ kind: 'completed', source: 'user', limit: 100, cursor: 'task-user-0030' });
+    expect(oldest.items.map(t => t.id)).toEqual(Array.from({ length: 30 }, (_, n) => `task-user-${String(29 - n).padStart(4, '0')}`));
+    expect(oldest.total).toBe(130);
+    expect(oldest.items[0].metadata.prompt).toBe(PROMPT);
+
+    const picked = await getTaskView({ kind: 'queue', selected: 'task-user-0002' });
+    expect(picked.user.completedCount).toBe(130);
+    expect(picked.user.tasks.find(t => t.id === 'task-user-0002')).toMatchObject({ status: 'completed', metadata: { prompt: PROMPT } });
+    expect((await getTaskView({ kind: 'bare' })).user.completedNextCursor).toBe('task-user-0105');
+  });
+
+  it('window view slices the working set in queue order with true totals and scalar metadata only', async () => {
+    await seedViews();
     const raw = await getAllTasks();
     const { result, cloned } = await withSpy(() => getTaskView({ kind: 'window', offset: 2, limit: 3 }));
-    expect(result.user).toEqual({ file: USER_FILE, exists: true, type: 'user', tasks: raw.user.tasks.slice(2, 5) });
+    expect(result.user).toEqual({ type: 'user', tasks: raw.user.tasks.slice(2, 5) });
     expect(result.cos.tasks).toEqual(raw.cos.tasks.slice(2, 5));
     expect(result.totals).toEqual({ user: raw.user.tasks.length, cos: raw.cos.tasks.length });
     expect(cloned).toBeLessThan(JSON.stringify(raw).length / 10);
   });
 
-  it('missing files keep the getUserTasks/getCosTasks shape', async () => {
+  it('empty queues keep the getUserTasks/getCosTasks shape', async () => {
     const raw = await getAllTasks();
     const bare = await getTaskView({ kind: 'bare' });
-    expect(bare.user).toMatchObject({ tasks: [], exists: false, type: 'user', completedCount: 0, completedNextCursor: null });
-    expect(bare.cos.autoApproved).toBeUndefined();
-    expect(raw.cos.autoApproved).toBeUndefined();
+    expect(bare.user).toMatchObject({ tasks: [], type: 'user', completedCount: 0, completedNextCursor: null });
+    expect(bare.cos.autoApproved).toEqual([]);
+    expect(raw.cos.autoApproved).toEqual([]);
     expect((await getTaskView({ kind: 'queue' })).cos.completedCount).toBe(0);
     expect(await getTaskView({ kind: 'completed', source: 'user', limit: 5 })).toEqual({ items: [], total: 0, nextCursor: null });
     expect((await getTaskView({ kind: 'window', offset: 0, limit: 5 })).totals).toEqual({ user: 0, cos: 0 });
   });
 
-  it('never leaks the cache: caller mutation, internal writes and same-size external edits', async () => {
-    seed(30);
+  it('never leaks the cache: caller mutation, internal writes and out-of-band changes', async () => {
+    await seedViews(30);
     const first = await getTaskView({ kind: 'bare' });
     first.user.tasks[0].description = 'mutated in place';
     first.user.tasks.push({ id: 'ghost' });
@@ -761,15 +685,11 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
     expect(written.user.tasks.map(t => t.id)).toEqual(['task-user-1001', 'task-user-1002']);
     expect(written.user.completedCount).toBe(31);
 
-    // External same-size edit with a moved stamp (a peer/editor flips a status).
-    const text = mock.files.get(USER_FILE);
-    mock.files.set(USER_FILE, text.replace('- [~] #task-user-1001', '- [x] #task-user-1001'));
-    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 5000);
+    // Out-of-band change (another writer flips a status): the version bump drops the snapshot.
+    await seed('user', (await stored('user')).map(t => (t.id === 'task-user-1001' ? { ...t, status: 'completed' } : t)));
     const external = await getTaskView({ kind: 'queue' });
     expect(external.user.tasks.map(t => t.id)).toEqual(['task-user-1002']);
     expect(external.user.completedCount).toBe(32);
-    mock.files.delete(USER_FILE);
-    expect((await getTaskView({ kind: 'bare' })).user.exists).toBe(false);
   });
 });
 
@@ -800,39 +720,36 @@ describe('cosTaskStore.getAllTasks / getTasks / getTaskById', () => {
   });
 
   it('looks up one task without cloning either backlog, and isolates returned metadata', async () => {
-    const { generateTasksMarkdown } = await import('../lib/taskParser.js');
     const tasks = Array.from({ length: 1000 }, (_, index) => ({
       id: `task-${index}`, description: `Example task ${index}`, status: 'pending',
       priority: 'MEDIUM', metadata: { prompt: 'Example prompt', reviewers: ['codex'] }
     }));
-    mock.files.set(USER_FILE, generateTasksMarkdown(tasks));
+    await seed('user', tasks);
+    mock.loads = 0;
     const clone = vi.spyOn(globalThis, 'structuredClone');
     const found = await getTaskById('task-999');
     expect(clone.mock.calls.map(([value]) => value.id)).toEqual(['task-999']);
     clone.mockRestore();
     found.metadata.reviewers.push('changed');
     expect((await getTaskById('task-999')).metadata.reviewers).toEqual(['codex']);
-    expect(mock.parseCalls).toBe(1);
+    expect(mock.loads).toBe(1);
   });
 
-  it('preserves user-first and first-duplicate precedence with custom paths and IDs', async () => {
-    mock.state.config = { userTasksFile: 'custom/user.md', cosTasksFile: 'custom/system.md' };
-    const { generateTasksMarkdown } = await import('../lib/taskParser.js');
+  it('prefers the user queue when both queues hold the id, and falls back to the internal one', async () => {
     const task = { id: 'sys-legacy', description: 'first', status: 'pending', priority: 'HIGH', metadata: {} };
-    mock.files.set(join('/root', 'custom/user.md'), generateTasksMarkdown([task, { ...task, description: 'duplicate' }]));
-    mock.files.set(join('/root', 'custom/system.md'), generateTasksMarkdown([{ ...task, description: 'internal' }]));
+    await seed('user', [task]);
+    await seed('internal', [{ ...task, description: 'internal' }]);
     expect(await getTaskById(task.id)).toMatchObject({ description: 'first', taskType: 'user' });
-    mock.files.delete(join('/root', 'custom/user.md'));
+    await deleteTask(task.id, 'user');
     expect(await getTaskById(task.id)).toMatchObject({ description: 'internal', taskType: 'internal' });
   });
 
-  it('invalidates the ID index after store mutations, external edits, and deletion', async () => {
+  it('invalidates the ID index after store mutations, out-of-band changes, and deletion', async () => {
     await addTask({ id: 'task-index', description: 'before' }, 'user');
     expect((await getTaskById('task-index')).description).toBe('before');
     await updateTask('task-index', { description: 'after' }, 'user');
     expect((await getTaskById('task-index')).description).toBe('after');
-    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('after', 'external'));
-    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 5000);
+    await seed('user', (await stored('user')).map((t) => ({ ...t, description: 'external' })));
     expect((await getTaskById('task-index')).description).toBe('external');
     await deleteTask('task-index', 'user');
     expect(await getTaskById('task-index')).toBeNull();
@@ -853,11 +770,11 @@ describe('cosTaskStore.addTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'added' && e.payload.type === 'user')).toBe(true);
   });
 
-  it('keeps the existing task list intact and surfaces the error when the file write fails', async () => {
+  it('keeps the existing task list intact and surfaces the error when the save fails', async () => {
     await addTask({ description: 'survivor', id: 'task-survivor' }, 'user');
-    mock.atomicFailure = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    mock.writeFailure = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
     await expect(addTask({ description: 'lost write', id: 'task-lost' }, 'user')).rejects.toThrow('ENOSPC');
-    mock.atomicFailure = null;
+    mock.writeFailure = null;
     expect((await getUserTasks()).tasks.map(t => t.id)).toEqual(['task-survivor']);
   });
 
@@ -2131,11 +2048,6 @@ describe('cosTaskStore.updateTask', () => {
     expect(updated.metadata.context).toBeUndefined();
   });
 
-  it('returns an error object when the file is missing', async () => {
-    const result = await updateTask('task-x', { status: 'completed' }, 'user');
-    expect(result.error).toBe('Task file not found');
-  });
-
   it('returns an error object when the task id is absent', async () => {
     await addTask({ description: 'present' }, 'user');
     const result = await updateTask('task-missing', { status: 'completed' }, 'user');
@@ -2149,15 +2061,15 @@ describe('cosTaskStore collection selection', () => {
     ['update', () => updateTask('sys-example', { description: 'Unexpected edit' }, 'cos')],
     ['delete', () => deleteTask('sys-example', ['user', 'internal'])],
     ['merge', () => mergePeerTasks('cos', [{ id: 'sys-example', description: 'Unexpected peer edit' }])],
-  ])('rejects an invalid %s selector without changing either task file', async (_name, mutate) => {
+  ])('rejects an invalid %s selector without changing either task queue', async (_name, mutate) => {
     await addTask({ description: 'User task', id: 'task-example' });
     await addTask({ description: 'Internal task', id: 'sys-example', approvalRequired: true }, 'internal');
-    const before = new Map(mock.files);
+    const before = [await stored('user'), await stored('internal')];
     mock.events = [];
 
     await expect(mutate()).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
 
-    expect(mock.files).toEqual(before);
+    expect([await stored('user'), await stored('internal')]).toEqual(before);
     expect(mock.events).toEqual([]);
   });
 });
@@ -2213,30 +2125,27 @@ describe('cosTaskStore.approveTask', () => {
     expect((await approveTask('sys-auto')).error).toBe('Task does not require approval');
   });
 
-  it('returns an error when the cos task file is missing', async () => {
-    expect((await approveTask('sys-x')).error).toBe('CoS task file not found');
+  it('returns an error when the task is in neither queue', async () => {
+    expect((await approveTask('sys-x')).error).toBe('Task not found');
   });
 
-  it('releases a USER row the parser withheld, so the hold is not a zombie', async () => {
-    // A row the parser had to RECOVER is withheld from the unattended spawn and
-    // now persists that hold in TASKS.md (#7300, #7367). Nothing else in the
-    // product can clear it: `updateTask` carries the flags through untouched, so
-    // without this the row stays pending forever.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    mock.files.set(USER_FILE, '# Tasks\n\n## Pending\n- [ ] #task-held | URGENT | legacy user row\n  - prompt: payload\n');
-    mock.mtimes.set(USER_FILE, 1);
+  it('releases a USER row that holds for approval, so the hold is not a zombie', async () => {
+    // A user row the importer had to RECOVER is withheld from the unattended spawn
+    // and keeps that hold (#7300, #7367). Nothing else in the product can clear it:
+    // `updateTask` carries the flags through untouched, so without this the row
+    // stays pending forever.
+    await seed('user', [{ id: 'task-held', description: 'legacy user row', status: 'pending', priority: 'URGENT', approvalRequired: true, autoApproved: false, metadata: { prompt: 'payload' } }]);
 
     const held = (await getUserTasks()).tasks[0];
     expect(held.approvalRequired).toBe(true);
 
     const approved = await approveTask('task-held');
-    warn.mockRestore();
 
     expect(approved.approvalRequired).toBe(false);
     expect(approved.autoApproved).toBe(true);
     expect(approved.metadata.prompt).toBe('payload');
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'approved' && e.payload.type === 'user')).toBe(true);
-    // And the release is persisted: the rewritten row carries no hold.
+    // And the release is persisted: the stored row carries no hold.
     __resetTaskCache();
     expect((await getUserTasks()).tasks[0].approvalRequired).toBe(false);
   });
@@ -2247,11 +2156,11 @@ describe('cosTaskStore.approveTask', () => {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STORE_SRC = realReadFileSync(join(__dirname, 'cosTaskStore.js'), 'utf-8');
 
-describe('parsed-task cache — no bypass (source guards, #3497)', () => {
-  // Everything outside the cache accessors. Any fs call the rest of the
-  // module makes to the task files is a bypass by definition.
+describe('working-set cache — no bypass (source guards, #3497)', () => {
+  // Everything outside the cache accessors. Any direct repository load or save
+  // the rest of the module makes is a bypass by definition.
   const ACCESSOR_START = 'async function readTaskSnapshot';
-  const ACCESSOR_END = '/** Test hook: forget every cached parse. */';
+  const ACCESSOR_END = '/** Test hook: forget every cached working set. */';
   const outsideAccessors = (() => {
     const start = STORE_SRC.indexOf(ACCESSOR_START);
     const end = STORE_SRC.indexOf(ACCESSOR_END);
@@ -2262,31 +2171,30 @@ describe('parsed-task cache — no bypass (source guards, #3497)', () => {
   })();
 
   it('locates the cache accessors it is guarding', () => {
-    // If this fails the two guards below are vacuous — the anchors drifted.
+    // If this fails the guards below are vacuous — the anchors drifted.
     expect(outsideAccessors, `anchors "${ACCESSOR_START}" / "${ACCESSOR_END}" not found in order`).not.toBeNull();
   });
 
-  it('every task-file read goes through the snapshot cache', () => {
-    // A read path calling readFile + parseTasksMarkdown directly still works,
-    // but pays the full parse the cache exists to avoid and skips the
-    // copy-on-read that keeps a caller's in-place mutations out of the cache.
-    const bypasses = outsideAccessors.filter(line => /\breadFile\(/.test(line));
-    expect(bypasses, `direct readFile call(s): ${bypasses.join(' | ')}`).toEqual([]);
+  it('every working-set read goes through the snapshot cache', () => {
+    // A read path calling the repository directly still works, but skips the
+    // version check, the shared load, and the copy-on-read that keeps a caller's
+    // in-place mutations out of the cache.
+    const bypasses = outsideAccessors.filter(line => /\b(loadTaskWorkingSet|readTaskListVersion)\(/.test(line));
+    expect(bypasses, `direct repository read(s): ${bypasses.join(' | ')}`).toEqual([]);
   });
 
-  it('writeTaskFile persists through atomicWrite, never an in-place fs writeFile', () => {
-    // An in-place truncate killed mid-write leaves TASKS.md empty/half-written,
-    // which parses as "no tasks" and is persisted by the next write.
-    expect(STORE_SRC).toMatch(/import \{ atomicWrite \} from '\.\.\/lib\/fileUtils\.js'/);
-    expect(STORE_SRC).not.toMatch(/import \{[^}]*\bwriteFile\b[^}]*\} from 'fs\/promises'/);
+  it('every list save goes through writeTaskList', () => {
+    // A save calling the repository directly leaves the cached working set
+    // stale until its version is next checked, and skips the diff that keeps a
+    // one-field change a one-row write.
+    const bypasses = outsideAccessors.filter(line => /\bapplyTaskListSave\(/.test(line));
+    expect(bypasses, `direct applyTaskListSave call(s): ${bypasses.join(' | ')}`).toEqual([]);
   });
 
-  it('every task-file write goes through writeTaskFile', () => {
-    // A write calling writeFile directly leaves the previous parse cached, and
-    // mtime granularity is too coarse to be relied on to catch it — the next
-    // read would serve pre-write tasks.
-    const bypasses = outsideAccessors.filter(line => /\b(writeFile|atomicWrite)\(/.test(line));
-    expect(bypasses, `direct writeFile/atomicWrite call(s): ${bypasses.join(' | ')}`).toEqual([]);
+  it('writeTaskList persists a row diff, never the whole queue', () => {
+    const code = STORE_SRC.split('\n').filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*')).join('\n');
+    expect(code).toMatch(/planListSave\(\{ previous: snapshot\.rows, next: tasks, source \}\)/);
+    expect(code).not.toMatch(/generateTasksMarkdown|parseTasksMarkdown|atomicWrite/);
   });
 });
 
@@ -2338,12 +2246,11 @@ describe('cosTaskStore.mergePeerTasks', () => {
   it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
-    const writeSpy = (await import('../lib/fileUtils.js')).atomicWrite;
-    writeSpy.mockClear();
+    vi.mocked(repository.applyTaskListSave).mockClear();
     const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
     const res = await mergePeerTasks('user', remote, { now: NOW });
     expect(res).toEqual({ changed: false });
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(repository.applyTaskListSave).not.toHaveBeenCalled();
     expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
   });
 
@@ -2623,11 +2530,12 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       }
       // After the first flip lands, the user revives the second target (Resume
       // → in_progress). Its flip was planned from the pre-revive snapshot.
-      mock.afterWrite = (p) => {
-        if (p !== USER_FILE) return false;
+      mock.afterWrite = async (source) => {
+        if (source !== 'user') return false;
         // Revive whichever target the sweep has not flipped yet.
-        mock.files.set(p, mock.files.get(p).replace(/^(- )\[!\](.*#task-race)/m, '$1[~]$2'));
-        mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+        const tasks = await stored('user');
+        const target = tasks.find(task => task.status === 'blocked' && task.id.startsWith('task-race'));
+        await seed('user', tasks.map(task => (task === target ? { ...task, status: 'in_progress' } : task)));
         return true;
       };
       const res = await sweepResolvedFailureTasks({ now: NOW });
@@ -2654,12 +2562,10 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       // The first user-queue flip lands before the investigation's planned
       // internal-queue flip. Resume the origin in that gap; the investigation
       // must be checked against this fresh origin state, not the sweep snapshot.
-      mock.afterWrite = (path) => {
-        if (path !== USER_FILE) return false;
-        const tasks = parseTasksMarkdown(mock.files.get(path));
-        tasks.find(task => task.id === 'task-race-origin').status = 'pending';
-        mock.files.set(path, generateTasksMarkdown(tasks));
-        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+      mock.afterWrite = async (source) => {
+        if (source !== 'user') return false;
+        const tasks = await stored('user');
+        await seed('user', tasks.map(task => (task.id === 'task-race-origin' ? { ...task, status: 'pending' } : task)));
         return true;
       };
 
@@ -2678,14 +2584,13 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
           status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
         }, 'user', { now: NOW });
       }
-      mock.afterWrite = (path) => {
-        if (path !== USER_FILE) return false;
+      mock.afterWrite = async (source) => {
+        if (source !== 'user') return false;
         // Model a fresh failure or user-decision hold after the snapshot, with
         // the same status as before. The completed first row stays untouched.
-        const tasks = parseTasksMarkdown(mock.files.get(path));
-        tasks.find(task => task.status === 'blocked').metadata[key] = value;
-        mock.files.set(path, generateTasksMarkdown(tasks));
-        mock.mtimes.set(path, (mock.mtimes.get(path) || 0) + 1000);
+        const tasks = await stored('user');
+        const held = tasks.find(task => task.status === 'blocked');
+        await seed('user', tasks.map(task => (task === held ? { ...task, metadata: { ...task.metadata, [key]: value } } : task)));
         return true;
       };
       expect(await sweepResolvedFailureTasks({ now: NOW })).toMatchObject({ reaped: 1, staleBlocks: 1 });
@@ -2971,10 +2876,11 @@ it('round-trips the server-owned audit disposition contract through persisted ta
   expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: '1', fileIssues: 'false' });
 });
 
-// Completed-task archive. TASKS.md / COS-TASKS.md keep the open queue plus a recent
-// window of completed tasks; older completed tasks move to the archive with their
-// full records. The fake archive above mirrors the real adapter's contract.
-describe('cosTaskStore completed-task archive', () => {
+// Completed history older than the working set. The queues are rows in one table:
+// open tasks and recent/newest completed ones are the working set every poller
+// reads; the rest stays reachable by id and by paged history, and must keep working
+// for edit, reopen, delete and peer merge without being pulled back wholesale.
+describe('cosTaskStore completed history older than the working set', () => {
   const DAY = 86_400_000;
   const CLOCK = Date.parse('2026-10-20T12:00:00Z');
   const id = (n) => `task-example-${String(n).padStart(4, '0')}`;
@@ -2983,161 +2889,79 @@ describe('cosTaskStore completed-task archive', () => {
     metadata: { updatedAt: new Date(CLOCK - ageDays * DAY).toISOString(), prompt: `Prompt body ${n}.` }, ...extra,
   });
   const pending = (n) => ({ id: id(n), description: `Example task ${n}`, status: 'pending', priority: 'MEDIUM', metadata: {} });
-  const writeUser = (tasks) => mock.files.set(USER_FILE, generateTasksMarkdown(tasks));
-  const fileIds = (file = USER_FILE) => parseTasksMarkdown(mock.files.get(file)).map((task) => task.id);
-  const archiveIds = (source = 'user') => [...mock.archive[source].keys()].sort();
+  // 105 completed tasks, ids 1..105, ages 200 days (id 1) to 96 days (id 105): the
+  // newest 100 by completion stay in the working set; ids 1..5 are older history.
+  const seedHistory = async () => {
+    const history = Array.from({ length: 105 }, (_, index) => done(index + 1, 200 - index));
+    await seed('user', [pending(900), ...history]);
+  };
+  const inWorkingSet = async (taskId) => (await getUserTasks()).tasks.some((task) => task.id === taskId);
 
-  describe('archiveCompletedTasks', () => {
-    it('moves only completed tasks past both the age and newest-N floor, with their full records', async () => {
-      writeUser([pending(1), done(2, 10), done(3, 9), done(4, 8), done(5, 1), done(6, 0)]);
-      // keepNewest 1 leaves the 1-day-old task rank-eligible, so only the age floor keeps it.
-      const res = await archiveCompletedTasks({ now: CLOCK, keepNewest: 1 });
-      expect(res).toEqual({ archived: 3 });
-      expect(archiveIds()).toEqual([id(2), id(3), id(4)]);
-      expect(mock.archive.user.get(id(2)).metadata.prompt).toBe('Prompt body 2.');
-      expect(fileIds().sort()).toEqual([id(1), id(5), id(6)]);
-      expect(mock.events.some((e) => e.name === 'tasks:changed' && e.payload.action === 'archived')).toBe(true);
-    });
-
-    it('keeps the newest completed tasks however old they are, and treats undated tasks as oldest', async () => {
-      writeUser([done(1, 30), done(2, 20), done(3, 10), done(4, 5), { ...done(5, 0), metadata: {} }]);
-      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 4 })).toEqual({ archived: 1 });
-      expect(archiveIds()).toEqual([id(5)]);
-    });
-
-    it('drains the oldest first under the per-sweep limit and is idempotent once drained', async () => {
-      writeUser([done(1, 40), done(2, 30), done(3, 20), done(4, 10), done(5, 5)]);
-      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0, limit: 2 })).toEqual({ archived: 2 });
-      expect(archiveIds()).toEqual([id(1), id(2)]);
-      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0, limit: 10 })).toEqual({ archived: 3 });
-      expect(fileIds()).toEqual([]);
-      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).toEqual({ archived: 0 });
-    });
-
-    it('leaves a duplicate, never a loss, when the file rewrite dies after the archive write', async () => {
-      writeUser([done(1, 10), done(2, 9)]);
-      mock.atomicFailure = new Error('disk full');
-      await expect(archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).rejects.toThrow('disk full');
-      expect(archiveIds()).toEqual([id(1), id(2)]);
-      expect(fileIds().sort()).toEqual([id(1), id(2)]);
-      mock.atomicFailure = null;
-      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).toEqual({ archived: 2 });
-      expect(fileIds()).toEqual([]);
-      expect(archiveIds()).toEqual([id(1), id(2)]);
-    });
-
-    it('does nothing when a task file does not exist', async () => {
-      expect(await archiveCompletedTasks({ now: CLOCK })).toEqual({ archived: 0 });
-    });
+  it('keeps the oldest completed tasks out of the working set but reachable by id', async () => {
+    await seedHistory();
+    expect(await inWorkingSet(id(1))).toBe(false);
+    expect(await inWorkingSet(id(5))).toBe(false);
+    expect(await inWorkingSet(id(6))).toBe(true);
+    expect(await getTaskById(id(1))).toMatchObject({ id: id(1), status: 'completed', taskType: 'user', metadata: { prompt: 'Prompt body 1.' } });
+    expect(await findTaskWithSource(id(1))).toMatchObject({ source: 'user' });
+    expect(await getTaskById(id(999))).toBeNull();
   });
 
-  describe('reads fall through to the archive', () => {
-    const seedSplit = () => {
-      // Archive holds the oldest ids, the file holds the recent window.
-      for (const n of [1, 2, 3, 4]) mock.archive.user.set(id(n), done(n, 20));
-      writeUser([pending(9), done(5, 1), done(6, 1), done(7, 0)]);
-    };
-
-    it('pages completed history across the file window and the archive, newest id first', async () => {
-      seedSplit();
-      const first = await getTaskView({ kind: 'completed', source: 'user', limit: 5 });
-      expect(first.items.map((task) => task.id)).toEqual([id(7), id(6), id(5), id(4), id(3)]);
-      expect(first.total).toBe(7);
-      expect(first.nextCursor).toBe(id(3));
-      const second = await getTaskView({ kind: 'completed', source: 'user', cursor: first.nextCursor, limit: 5 });
-      expect(second.items.map((task) => task.id)).toEqual([id(2), id(1)]);
-      expect(second.nextCursor).toBeNull();
-    });
-
-    it('counts archived history in the queue and bare views, and returns a selected archived task', async () => {
-      seedSplit();
-      const queue = await getTaskView({ kind: 'queue', selected: id(2) });
-      expect(queue.user.completedCount).toBe(7);
-      expect(queue.user.tasks.map((task) => task.id).sort()).toEqual([id(2), id(9)]);
-      expect(queue.user.tasks.find((task) => task.id === id(2)).metadata.prompt).toBe('Prompt body 2.');
-      const bare = await getTaskView({ kind: 'bare' });
-      expect(bare.user.completedCount).toBe(7);
-      expect(bare.user.completedNextCursor).toBeNull();
-      expect(bare.user.tasks.map((task) => task.id)).toHaveLength(8);
-    });
-
-    it('finds an archived task by id, preferring the file copy and the user queue', async () => {
-      seedSplit();
-      const found = await findTaskWithSource(id(2));
-      expect(found).toMatchObject({ source: 'user', task: { id: id(2), status: 'completed' } });
-      expect(await getTaskById(id(2))).toMatchObject({ id: id(2), taskType: 'user' });
-      mock.archive.user.set(id(5), { ...done(5, 20), description: 'stale archived copy' });
-      expect((await getTaskById(id(5))).description).toBe('Example task 5');
-      expect(await getTaskById(id(99))).toBeNull();
-    });
-
-    it('deletes an archived task and reports an unknown one as not found', async () => {
-      seedSplit();
-      expect(await deleteTask(id(2), 'user')).toEqual({ success: true, taskId: id(2) });
-      expect(archiveIds()).toEqual([id(1), id(3), id(4)]);
-      expect(await deleteTask(id(2), 'user')).toEqual({ error: 'Task not found' });
-    });
+  it('reopens an old completed task in place: the edit applies, it joins the working set, no second row appears', async () => {
+    await seedHistory();
+    const result = await updateTask(id(1), { status: 'pending', description: 'Reopened task' }, 'user', { now: CLOCK });
+    expect(result).toMatchObject({ id: id(1), status: 'pending', description: 'Reopened task' });
+    expect(await inWorkingSet(id(1))).toBe(true);
+    expect((await getTaskView({ kind: 'completed', source: 'user', limit: 200 })).total).toBe(104);
+    expect(mock.events.some((e) => e.name === 'tasks:changed' && e.payload.type === 'user')).toBe(true);
   });
 
-  describe('archived tasks stay usable', () => {
-    it('reopens an archived task: pulls it back into the file, applies the edit, and drops the archive row', async () => {
-      mock.archive.user.set(id(1), done(1, 20));
-      writeUser([pending(2)]);
-      const result = await updateTask(id(1), { status: 'pending', description: 'Reopened task' }, 'user', { now: CLOCK });
-      expect(result).toMatchObject({ id: id(1), status: 'pending', description: 'Reopened task' });
-      expect(fileIds().sort()).toEqual([id(1), id(2)]);
-      expect(archiveIds()).toEqual([]);
-      expect(mock.events.some((e) => e.name === 'tasks:changed' && e.payload.type === 'user')).toBe(true);
-    });
-
-    it('keeps the archive row when the update is refused before the file write', async () => {
-      mock.archive.user.set(id(1), done(1, 20));
-      writeUser([pending(2)]);
-      const result = await updateTask(id(1), { status: 'pending' }, 'user', { now: CLOCK, expectedStatus: 'blocked' });
-      expect(result).toMatchObject({ statusChanged: true });
-      expect(archiveIds()).toEqual([id(1)]);
-      expect(fileIds()).toEqual([id(2)]);
-    });
-
-    it('still reports an id that is in neither store as not found', async () => {
-      writeUser([pending(2)]);
-      expect(await updateTask(id(9), { status: 'pending' }, 'user', { now: CLOCK })).toEqual({ error: 'Task not found' });
-    });
-
-    it('deletes both copies of a task caught between the archive write and the file rewrite', async () => {
-      mock.archive.user.set(id(1), done(1, 20));
-      writeUser([pending(2), done(1, 20)]);
-      expect(await deleteTask(id(1), 'user')).toEqual({ success: true, taskId: id(1) });
-      expect(fileIds()).toEqual([id(2)]);
-      expect(archiveIds()).toEqual([]);
-    });
-
-    it('deletes an archived task even when its task file is gone', async () => {
-      mock.archive.user.set(id(1), done(1, 20));
-      expect(await deleteTask(id(1), 'user')).toEqual({ success: true, taskId: id(1) });
-      expect(await deleteTask(id(1), 'user')).toEqual({ error: 'Task file not found' });
-    });
-
-    it('windows by offset across the file tasks, then the archive newest first, with a combined total', async () => {
-      for (const n of [1, 2, 3, 4]) mock.archive.user.set(id(n), done(n, 20));
-      writeUser([pending(9), done(5, 1)]);
-      const first = await getTaskView({ kind: 'window', offset: 0, limit: 3 });
-      expect(first.user.tasks.map((task) => task.id)).toEqual([id(9), id(5), id(4)]);
-      expect(first.totals.user).toBe(6);
-      const second = await getTaskView({ kind: 'window', offset: 3, limit: 5 });
-      expect(second.user.tasks.map((task) => task.id)).toEqual([id(3), id(2), id(1)]);
-      const fileOnly = await getTaskView({ kind: 'window', offset: 0, limit: 1 });
-      expect(fileOnly.user.tasks.map((task) => task.id)).toEqual([id(9)]);
-    });
+  it('leaves an old completed task untouched when its update is refused', async () => {
+    await seedHistory();
+    expect(await updateTask(id(1), { status: 'pending' }, 'user', { now: CLOCK, expectedStatus: 'blocked' })).toMatchObject({ statusChanged: true });
+    expect((await getTaskById(id(1))).status).toBe('completed');
+    expect(await updateTask(id(999), { status: 'pending' }, 'user', { now: CLOCK })).toEqual({ error: 'Task not found' });
   });
 
-  it('does not let a peer resurrect a completed task this machine archived', async () => {
-    mock.archive.user.set(id(1), done(1, 20));
-    writeUser([pending(2)]);
+  it('deletes an old completed task and reports an unknown one as not found', async () => {
+    await seedHistory();
+    expect(await deleteTask(id(1), 'user')).toEqual({ success: true, taskId: id(1) });
+    expect(await getTaskById(id(1))).toBeNull();
+    expect((await getTaskView({ kind: 'completed', source: 'user', limit: 200 })).total).toBe(104);
+    expect(await deleteTask(id(1), 'user')).toEqual({ error: 'Task not found' });
+    expect(mock.events.filter((e) => e.payload?.action === 'deleted')).toHaveLength(1);
+  });
+
+  it('does not let a peer overwrite or re-introduce completed history this machine already holds', async () => {
+    await seedHistory();
     const wire = (task) => ({ id: task.id, taskType: 'user', status: task.status, priority: task.priority, description: task.description, metadata: task.metadata });
-    const res = await mergePeerTasks('user', [wire(done(1, 20)), wire(done(3, 1)), wire(pending(4))], { now: CLOCK });
+    const res = await mergePeerTasks('user', [wire({ ...done(1, 200), description: 'Peer copy' }), wire(done(2000, 1)), wire(pending(2001))], { now: CLOCK });
     expect(res.changed).toBe(true);
-    // The archived completion stays out; an unarchived completion and a new open task still adopt.
-    expect(fileIds().sort()).toEqual([id(2), id(3), id(4)]);
+    expect((await getTaskById(id(1))).description).toBe('Example task 1');
+    expect(await inWorkingSet(id(1))).toBe(false);
+    // A completion this machine has never seen, and a new open task, still arrive.
+    expect(await inWorkingSet(id(2000))).toBe(true);
+    expect(await inWorkingSet(id(2001))).toBe(true);
+  });
+
+  it('mints a unique id when a new task collides with a stored one, in the working set or in history', async () => {
+    await seedHistory();
+    const inHistory = await addTask({ description: 'Collides with history', id: id(1) }, 'user', { raw: true });
+    expect(inHistory.id).toBe(`${id(1)}-dup2`);
+    const again = await addTask({ description: 'Collides again', id: id(1) }, 'user', { raw: true });
+    expect(again.id).toBe(`${id(1)}-dup3`);
+    const live = await addTask({ description: 'Collides with an open task', id: id(900) }, 'user', { raw: true });
+    expect(live.id).toBe(`${id(900)}-dup2`);
+    expect((await getTaskById(id(1))).description).toBe('Example task 1');
+    const ids = (await getUserTasks()).tasks.map((task) => task.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('stores two tasks created in the same millisecond as two tasks', async () => {
+    const now = Date.parse('2026-10-20T12:00:00Z');
+    const first = await addTask({ description: 'First of a burst' }, 'user', { now });
+    const second = await addTask({ description: 'Second of a burst' }, 'user', { now });
+    expect(second.id).not.toBe(first.id);
+    expect((await getUserTasks()).tasks.map((task) => task.description).sort()).toEqual(['First of a burst', 'Second of a burst']);
   });
 });

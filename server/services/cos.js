@@ -4,7 +4,7 @@ import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.j
 /**
  * Chief of Staff (CoS) Service
  *
- * Manages the autonomous agent manager that watches TASKS.md,
+ * Manages the autonomous agent manager that works the task queues,
  * spawns sub-agents, and orchestrates task completion.
  *
  * Decomposed modules:
@@ -88,12 +88,12 @@ export { generateReport, getReport, getTodayReport, listReports, listBriefings, 
 import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
 export { runHealthCheck, getHealthStatus };
 
-// Task store: CRUD + queue persistence (TASKS.md / COS-TASKS.md). Imported for
+// Task store: CRUD + queue persistence (the `cos_tasks` queues). Imported for
 // internal use by evaluateTasks/dequeueNextTask/generators and re-exported for
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks, archiveCompletedTasks } from './cosTaskStore.js';
+import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { getPendingTaskIds } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instanceIdentity.js';
@@ -480,13 +480,8 @@ async function bootDaemon(state) {
       if (swept.reaped > 0) {
         emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
       }
-      // Completed tasks past the recent window leave the task files for the
-      // archive table; the files stay small enough for every poller to read.
-      await archiveCompletedTasks().catch((err) => {
-        console.warn(`⚠️ archiveCompletedTasks failed: ${err?.message || err}`);
-      });
     },
-    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper + completed-task archive' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
   // Performance summary (10 min)
@@ -979,13 +974,8 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
     }
   };
 
-  if (userTaskData.exists) {
-    await processOrphanedTasks(userTaskData.grouped.in_progress || []);
-  }
-
-  if (cosTaskData.exists) {
-    await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
-  }
+  await processOrphanedTasks(userTaskData.grouped.in_progress || []);
+  await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
 }
 
 /**
@@ -1240,7 +1230,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
 /**
  * Event-driven task dequeue — the primary way tasks get spawned.
  *
- * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
+ * Triggered by: agent:completed, tasks:changed, status:resumed
  * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
  * through the priority tiers in order (same tiers/numbering as evaluateTasks;
  * evaluateTasks' queue-regeneration step is
@@ -1694,10 +1684,6 @@ export async function init() {
       .catch(err => console.error(`❌ Critical-health recovery check failed: ${err.message}`));
   });
 
-  cosEvents.on('tasks:user:added', () => {
-    if (isDaemonRunning()) scheduleDequeue();
-  });
-
   // Changing the investigation override can make an already-queued held task
   // eligible. Re-run the normal dequeue so autonomy, budgets, leases, and
   // capacity remain the same as for every other system task.
@@ -1709,10 +1695,6 @@ export async function init() {
       import('./developmentWatchdog.js').then(({ runDevelopmentWatchdog }) => runDevelopmentWatchdog({ source: 'configuration' }))
         .catch(err => console.error(`❌ Development watchdog configuration reconciliation failed: ${err.message}`));
     }
-  });
-
-  cosEvents.on('tasks:cos:added', () => {
-    if (isDaemonRunning()) scheduleDequeue();
   });
 
   cosEvents.on('task:on-demand-requested', () => {

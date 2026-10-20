@@ -796,7 +796,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // #1650, part of epic #1561). NOT a record kind — it's the wire contract for
   // the task payload a full-sync peer advertises at GET /api/peer-sync/cos-tasks.
   // Unlike the immutable, append-only `cosHistory` archives (pure byte
-  // replication), the task files (data/COS-TASKS.md / data/TASKS.md) are mutated
+  // replication), the task queues (`cos_tasks`, both sources) are mutated
   // live by BOTH peers and carry `claimedBy`/`claimedAt`/`leaseExpiresAt` (#1563),
   // so they ride a claim-aware per-task LWW merge (syncCosTasksFromPeer →
   // cosTaskStore.mergePeerTasks), not the asset path. The receiver reads the

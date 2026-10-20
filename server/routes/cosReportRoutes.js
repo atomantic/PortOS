@@ -5,7 +5,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as cos from '../services/cos.js';
-import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -114,11 +113,6 @@ router.get('/scripts/:name', asyncHandler(async (req, res) => {
   }
   res.json(script);
 }));
-
-// GET /api/cos/watcher - Get watcher status
-router.get('/watcher', (req, res) => {
-  res.json(taskWatcher.getWatcherStatus());
-});
 
 // GET /api/cos/app-activity - Get per-app activity data
 router.get('/app-activity', asyncHandler(async (req, res) => {

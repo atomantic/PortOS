@@ -442,14 +442,14 @@ export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, regi
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {
-  if (!['cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:tasks:changed'].includes(event)) {
+  if (event !== 'cos:tasks:changed') {
     broadcastToSet(cosSubscribers, event, data);
     return;
   }
   for (const socket of cosSubscribers) {
     if (!socket.connected) { cosSubscribers.delete(socket); continue; }
-    const completedChanged = event === 'cos:tasks:changed' && (data?.task?.status === 'completed'
-      || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action));
+    const completedChanged = data?.task?.status === 'completed'
+      || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action);
     socket.emit(event, socket.cosTaskLists === 'invalidate'
       ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}) } : data);
   }
@@ -516,10 +516,6 @@ function setupCosEventForwarding() {
   // transition. Forward the task itself so focused views can update one row
   // without waiting for the file watcher to rebuild the entire task list.
   cosEvents.on('tasks:changed', (data) => broadcastToCos('cos:tasks:changed', data));
-  cosEvents.on('tasks:user:changed', (data) => broadcastToCos('cos:tasks:user:changed', data));
-  cosEvents.on('tasks:user:added', (data) => broadcastToCos('cos:tasks:user:added', data));
-  cosEvents.on('tasks:user:completed', (data) => broadcastToCos('cos:tasks:user:completed', data));
-  cosEvents.on('tasks:cos:changed', (data) => broadcastToCos('cos:tasks:cos:changed', data));
 
   cosEvents.on('maintenance:updated', (data) => broadcastToCos('cos:maintenance:updated', data));
 
@@ -565,7 +561,6 @@ function setupCosEventForwarding() {
   cosEvents.on('feature-agent:run-complete', (data) => broadcastToCos('cos:feature-agent:run-complete', data));
 
   // Watcher events
-  cosEvents.on('watcher:started', (data) => broadcastToCos('cos:watcher:started', data));
   cosEvents.on('watcher:stopped', (data) => broadcastToCos('cos:watcher:stopped', data));
 
   // A user-initiated on-demand "Run" that produced no task — the client toasts
@@ -735,7 +730,7 @@ function setupPeerAgentEventForwarding() {
 function setupReviewEventForwarding() {
   // Global invalidations reach the bell/dashboard even without a CoS room
   // subscription. They carry no record payload and are never peer-forwarded.
-  for (const event of ['tasks:changed', 'tasks:user:changed', 'tasks:cos:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
+  for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
     cosEvents.on(event, () => {
       if (ioInstance) ioInstance.emit('review:queue:changed');
     });

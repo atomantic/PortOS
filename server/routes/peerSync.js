@@ -196,8 +196,8 @@ router.get('/cos-history-manifest', asyncHandler(async (req, res) => {
 // a full-sync peer can run a claim-aware per-task merge into its own task files.
 //
 // Returns `{ schemaVersion, listHash, tasks: [{ id, taskType, status, priority,
-// description, metadata, ... }] }` over the user (TASKS.md) + internal
-// (COS-TASKS.md) backlogs. Unlike the cos-history archives this is a MERGE
+// description, metadata, ... }] }` over the user + internal task
+// queues' working sets. Unlike the cos-history archives this is a MERGE
 // source, not byte replication — the task metadata carries claim/lease fields
 // (#1563) the receiver respects so a peer's fresh claim is never clobbered.
 // Unauthenticated like every peer-sync route (Tailnet-only per the threat model);
