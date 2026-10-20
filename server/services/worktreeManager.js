@@ -1973,7 +1973,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     .then(r => r.stdout.trim())
     .catch(() => '');
 
-  const protectedBranches = new Set(['main', 'master', 'dev', 'develop', 'release', defaultBranch]);
+  const protectedBranches = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
   // An empty allowlist is how worktreeOwnershipReason spells "no location check"
   // (see includeUnmanagedTrees above for what that gives up).
@@ -2127,7 +2127,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
 
     const branchName = wt.branch.replace(/^refs\/heads\//, '');
     const defaultBranch = await getDefaultBranch(parentRepo, { strict: true }).catch(() => null);
-    if (!defaultBranch || ['main', 'master', 'dev', 'develop', 'release', defaultBranch].includes(branchName)) continue;
+    if (!defaultBranch || PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) continue;
     const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout).catch(() => null);
     if (status === null || !classifyWorktreeDirt(status).clean) continue;
     const target = await resolveMergeTarget(parentRepo, defaultBranch);
