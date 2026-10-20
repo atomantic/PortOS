@@ -4,9 +4,11 @@ import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 // ── Mock router — capture navigate calls, no real Router needed ────────────────
 const mockNavigate = vi.hoisted(() => vi.fn());
-vi.mock('react-router', () => ({
+vi.mock('react-router', async (importOriginal) => ({
+  ...(await importOriginal()),
   useNavigate: () => mockNavigate,
 }));
+import { MemoryRouter, useLocation } from 'react-router';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
 const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }));
@@ -53,7 +55,16 @@ const PROVIDERS = {
   ],
 };
 
-const renderTab = async (overrides = {}) => {
+let currentSearch = '';
+const LocationProbe = () => { currentSearch = useLocation().search; return null; };
+const mountTab = (entry = '/?show=all') => render(
+  <MemoryRouter initialEntries={[entry]}>
+    <LocationProbe />
+    <AutomationTab appId="app-1" appName="MyApp" />
+  </MemoryRouter>
+);
+
+const renderTab = async (overrides = {}, entry) => {
   api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: overrides });
   api.getCosSchedule.mockResolvedValue(SCHEDULE);
   api.getCosStatus.mockResolvedValue({ paused: false });
@@ -61,8 +72,8 @@ const renderTab = async (overrides = {}) => {
   api.getCosJobs.mockResolvedValue({ jobs: [] });
   api.getSettings.mockResolvedValue({ timezone: 'UTC' });
   api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
-  render(<AutomationTab appId="app-1" appName="MyApp" />);
-  await screen.findByText('layered-intelligence');
+  mountTab(entry);
+  await screen.findByRole('group', { name: 'Task visibility' });
   // Drain the remaining mount fetches (CustomTasksSection's getCosJobs etc.)
   // inside act — the schedule findByText above can win before they land.
   await act(async () => {});
@@ -116,7 +127,7 @@ describe('AutomationTab per-app options', () => {
     api.getProviders.mockResolvedValue(PROVIDERS);
     api.getCosJobs.mockResolvedValue({ jobs: [] });
     api.getSettings.mockResolvedValue({ timezone: 'UTC' });
-    const { container } = render(<AutomationTab appId="app-1" appName="MyApp" />);
+    const { container } = mountTab();
     await screen.findByText('layered-intelligence');
     await act(async () => {});
 
@@ -275,5 +286,51 @@ describe('AutomationTab per-app options', () => {
       { taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, simplify: false } },
       { silent: true }
     ));
+  });
+});
+
+describe('AutomationTab task visibility filter', () => {
+  const cardOrder = () => ['layered-intelligence', 'app-improvement', 'security']
+    .map(t => [t, screen.queryByText(t)])
+    .filter(([, el]) => el)
+    .sort(([, a], [, b]) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+    .map(([t]) => t);
+
+  it('opens on the switched-on tasks when any are on, and keeps the full count on All', async () => {
+    await renderTab({ security: { enabled: true } }, '/');
+    expect(cardOrder()).toEqual(['security']);
+    expect(screen.getByRole('button', { name: 'On for this app (1)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'All (3)' })).toBeInTheDocument();
+  });
+
+  it('opens on All when nothing is switched on', async () => {
+    await renderTab({}, '/');
+    expect(cardOrder()).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'All (3)' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('lists switched-on tasks first on All, then alphabetical', async () => {
+    await renderTab({ security: { enabled: true } }, '/?show=all');
+    expect(cardOrder()).toEqual(['security', 'app-improvement', 'layered-intelligence']);
+  });
+
+  it('keeps show and q in the URL, dropping each at its default', async () => {
+    await renderTab({ security: { enabled: true } }, '/');
+    fireEvent.click(screen.getByRole('button', { name: 'All (3)' }));
+    expect(currentSearch).toBe('?show=all');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'app' } });
+    expect(currentSearch).toBe('?show=all&q=app');
+    expect(cardOrder()).toEqual(['app-improvement']);
+    fireEvent.click(screen.getByRole('button', { name: 'On for this app (1)' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: '' } });
+    expect(currentSearch).toBe('');
+  });
+
+  it('shows a zero-match empty state that resets to all tasks', async () => {
+    await renderTab({ security: { enabled: true } }, '/?q=zzz');
+    expect(screen.getByText(/No tasks match/)).toHaveTextContent('“On for this app” and “zzz”');
+    fireEvent.click(screen.getByRole('button', { name: 'Show all tasks' }));
+    expect(currentSearch).toBe('?show=all');
+    expect(cardOrder()).toHaveLength(3);
   });
 });
