@@ -344,6 +344,7 @@ describe('pregate hidden-content invocation', () => {
     const heartbeat = join(scratch, 'heartbeat');
     write('scripts/scan-diff-hidden-content.js', `
       import { spawn } from 'child_process';
+      import { existsSync } from 'fs';
       const straggler = spawn(process.execPath, ['-e', "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
         + " setInterval(() => require('fs').appendFileSync(process.env.FIXTURE_HEARTBEAT, '.'), 10);"], { stdio: 'ignore' });
       const launched = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
@@ -353,7 +354,12 @@ describe('pregate hidden-content invocation', () => {
       };
       process.on('SIGINT', settle);
       process.on('SIGTERM', settle);
-      setTimeout(() => console.log('fixture-stage-ready ' + JSON.stringify([process.pid, straggler.pid, launched.pid])), 200);
+      // Ready only once the straggler is provably writing.
+      const ready = setInterval(() => {
+        if (!existsSync(process.env.FIXTURE_HEARTBEAT)) return;
+        clearInterval(ready);
+        console.log('fixture-stage-ready ' + JSON.stringify([process.pid, straggler.pid, launched.pid]));
+      }, 10);
       setInterval(() => {}, 1000);
     `);
     const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
@@ -377,13 +383,16 @@ describe('pregate hidden-content invocation', () => {
       }
     });
     try {
-      // `exit`, not `close`: a surviving descendant would hold the pipes open.
+      const closed = new Promise((resolve) => npm.once('close', resolve));
       const result = await new Promise((resolve, reject) => {
         npm.once('error', reject);
         npm.once('exit', (status, exitSignal) => resolve({ status, signal: exitSignal }));
       });
+      // Liveness at `exit` is the contract. Output is read after `close`, which
+      // a surviving descendant holding the pipes would delay, hence the bound.
       expect(owned).toHaveLength(3);
       expect(owned.filter(alive)).toEqual([]);
+      await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5000))]);
       expect(result.status === null ? result.signal : result.status).not.toBe(0);
       expect(stderr).toMatch(new RegExp(`stage="hidden-content scan" owner_pid=\\d+ child_pid=${owned[0]} received_signal=${signal}`));
       expect(stderr).toContain(`stage="hidden-content scan" cancelled by ${signal}; its process group has exited.`);

@@ -750,17 +750,17 @@ async function main() {
     finishedAt: new Date().toISOString(),
   });
   writePregateReport(REPO_ROOT, report);
+  // Synchronous: a piped stderr is written asynchronously, and the self-signal
+  // below would drop these lines before they flush.
   if (tree !== null && !report.treeStable) {
-    console.warn(`⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.`);
+    writeSync(2, `⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.\n`);
   }
+  if (failure) writeSync(2, `${failure}\n📄 Receipt: ${PREGATE_REPORT_PATH}\n`);
+  else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
 
   owner.release();
-  if (failure) {
-    console.error(failure);
-    console.error(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
-  }
   // Every owned group has settled and the receipt is written; end the way the
-  // caller's signal asked. A signal after the last stage leaves its truthful receipt.
+  // caller's signal asked.
   if (owner.signal) process.kill(process.pid, owner.signal);
   if (failure) process.exit(exitCode);
 
