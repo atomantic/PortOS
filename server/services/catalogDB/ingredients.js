@@ -343,8 +343,7 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
   const result = await query(
     `UPDATE catalog_ingredients
         SET deleted = false, deleted_at = NULL,
-            type = $2, name = $3, payload = $4::jsonb, tags = $5,
-            updated_at = NOW()
+            type = $2, name = $3, payload = $4::jsonb, tags = $5
       WHERE id = $1 AND deleted = true
       RETURNING *`,
     [id, type, String(name).trim(), JSON.stringify(storedPayload), tags || []],

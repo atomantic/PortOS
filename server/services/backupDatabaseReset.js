@@ -13,10 +13,11 @@ export async function getDatabaseResetPlan() {
   const names = (pattern) => [...new Set([...ddl.matchAll(pattern)].map(match => match[1]))];
   const tables = names(/CREATE TABLE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
   // Recognize only the signatures currently shipped by the schema: trigger
-  // functions without arguments and the catalog resolver's named TEXT input.
+  // functions without arguments, the catalog resolver's named TEXT input and
+  // the catalog change clock's named TIMESTAMPTZ input (#12500).
   // Unsupported future declarations remain excluded and fail preflight closed.
-  const functions = names(/CREATE OR REPLACE FUNCTION ([a-z_][a-z_0-9]*\((?:[a-z_][a-z_0-9]* TEXT)?\))/g)
-    .map(signature => `public.${signature.replace(/\([a-z_][a-z_0-9]* TEXT\)/, '(text)')}`);
+  const functions = names(/CREATE OR REPLACE FUNCTION ([a-z_][a-z_0-9]*\((?:[a-z_][a-z_0-9]* (?:TEXT|TIMESTAMPTZ))?\))/g)
+    .map(signature => `public.${signature.replace(/\([a-z_][a-z_0-9]* (TEXT|TIMESTAMPTZ)\)/, (_, type) => `(${type.toLowerCase()})`)}`);
   const views = names(/CREATE OR REPLACE VIEW ([a-z_][a-z_0-9]*)/g);
   const sequences = names(/CREATE SEQUENCE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
   const literals = values => values.map(value => `'${value}'`).join(', ');
