@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { __resetUsageClaims } from './usageReconciler.js';
+import { __resetUsageClaims, pruneUsageClaims, readMeasuredUsage, snapshotUsageClaims } from './usageReconciler.js';
 import { scanHistoricalUsage } from './usageBackfillWorker.js';
 
 let root;
@@ -95,6 +95,27 @@ describe('historical usage worker', () => {
     const result = await scanHistoricalUsage({ runsDir: root, home });
     expect(result.total).toBe(0);
     expect(result.corrections).toEqual([]);
+  });
+  it('does not re-bill a message the live path claimed, even after a prune', async () => {
+    const window = { startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z' };
+    const live = await readMeasuredUsage({ workspacePath: workspace, ...window, family: 'claude', home });
+    expect(live?.tokensOut).toBe(200);
+    // A prune inside the retention bound keeps the claim for the hand-off.
+    pruneUsageClaims(Date.parse(window.endTime) + 60 * 60 * 1000);
+    const claimsSeed = snapshotUsageClaims();
+    // The worker thread starts from its own empty copy of the ledger.
+    __resetUsageClaims();
+    await writeRun('run-overlapping-history', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:02:00.000Z',
+      endTime: '2026-07-01T10:12:00.000Z'
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home, claimsSeed });
+    expect(result.corrections).toEqual([]);
+    expect(result.claimsSnapshot.claimedMessages).toEqual(claimsSeed.claimedMessages);
   });
 });
 
