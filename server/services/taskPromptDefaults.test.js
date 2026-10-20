@@ -1021,6 +1021,8 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(phase1b).toContain('issue view "${EPIC}"');
     expect(phase1b).not.toMatch(/issue view "\$\{EPIC\}" --comments/);
     expect(phase1b).toContain('--arg me "$ME"');
+    // A pinned epic may skip Phase 1, so the block resolves the account itself.
+    expect(phase1b).toContain('ME="${ME:-$(');
   });
 
   it('treats GitLab as a public-forge boundary while leaving the JIRA prompt unchanged', () => {

@@ -112,7 +112,8 @@ export const PROMPT_VERSIONS = {
 // v39 (claim-issue) / v35 (gitlab) / v22 (jira): an optional reviewer (~opt) failure/timeout/provider error never sets review-blocked and does not prevent merge.
 // Revalidate current need and project alignment before claims, contributor handoff or epic splits.
 // Guard each merge attempt and stop on uncertain readback (#12273).
-// Epic decomposition reads only the owner's own comments, never the public thread.
+// Epic decomposition reads only the owner's own comments, never the public
+// thread, resolving the account itself so a pinned epic still finds them.
 PROMPT_VERSIONS['claim-issue'] = 44;
 PROMPT_VERSIONS['claim-issue-gitlab'] = 38;
 // Accepted review findings require resolution regardless of severity.
