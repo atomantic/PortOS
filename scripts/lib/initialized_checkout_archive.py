@@ -1338,6 +1338,36 @@ def verify_live_resolution_cache(path, expected):
         os.close(fd)
 
 
+def shared_ref_advertisement_changed(common, expected, observed):
+    """Only info/refs is generated data; every sibling remains a control.
+
+    Local recovery plumbing does not consume this dumb-transport advertisement
+    and never rewrites it. Its original bytes/provenance remain in the exact
+    archive; atomic Git regeneration may replace the live file and provenance.
+    """
+    old, current = ({row['path']: row for row in rows} for rows in (expected, observed))
+    if old.keys() != current.keys() or not {'', 'refs'} <= old.keys():
+        return False
+    if old['']['kind'] != 'directory' or {k: v for k, v in old[''].items() if k != 'mtimeNs'} != {
+            k: v for k, v in current[''].items() if k != 'mtimeNs'}:
+        return False
+    before, after = old['refs'], current['refs']
+    variable = {'bytes', 'sha256', 'mtimeNs', 'filesystemIdentity', 'xattrs'}
+    if (before['kind'] != 'file' or after['kind'] != 'file'
+            or 'hardlinkGroup' in before or 'hardlinkGroup' in after
+            or max(before['bytes'], after['bytes']) > 16 * 1024 ** 2
+            or {k: v for k, v in before.items() if k not in variable} != {
+                k: v for k, v in after.items() if k not in variable}
+            or {k: v for k, v in before['xattrs'].items() if k != 'com.apple.provenance'} != {
+                k: v for k, v in after['xattrs'].items() if k != 'com.apple.provenance'}):
+        return False
+    if any(old[name] != current[name] for name in old.keys() - {'', 'refs'}):
+        return False
+    if manifest(common / 'info', True) != observed:
+        fail('shared-ref-advertisement-observation-changed')
+    return True
+
+
 def verify_common_metadata(saved, mutable_shared, root=None):
     facts = saved['facts']
     common = safe_path(facts['commonGitDir'])
@@ -1350,9 +1380,9 @@ def verify_common_metadata(saved, mutable_shared, root=None):
                 verify_live_resolution_cache(common / name, expected)
                 continue
             observed = manifest(common / name, True)
-            if observed != expected and not (
-                    name == 'config' and mutable_shared
-                    and unrelated_tracking_changes(root, saved, common, expected, observed)):
+            if observed != expected and not (mutable_shared and (
+                    (name == 'config' and unrelated_tracking_changes(root, saved, common, expected, observed))
+                    or (name == 'info' and shared_ref_advertisement_changed(common, expected, observed)))):
                 fail('common-store-changed:' + name)
     if sorted(p.name for p in common.iterdir() if p.name in COMMON_PARTS and p.name not in mutable_shared) != sorted(
             name for name in facts['sources']['common'] if name not in mutable_shared):

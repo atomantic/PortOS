@@ -1176,6 +1176,7 @@ class NativeArchive(unittest.TestCase):
         self.git(self.repo, 'config', 'branch.other/finished.remote', 'origin')
         self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/finished')
         self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/second')
+        self.git(self.repo, 'update-server-info')
         request = self.quarantine_resumption_fixture()
         archived = self.txn / 'archive/common/config'
         archived_bytes = archived.read_bytes()
@@ -1185,6 +1186,8 @@ class NativeArchive(unittest.TestCase):
         self.git(self.repo, 'update-ref', 'refs/heads/other/active', active_head)
         self.git(self.repo, 'config', 'branch.other/active.remote', 'origin')
         self.git(self.repo, 'config', 'branch.other/active.merge', 'refs/heads/other/active')
+        self.git(self.repo, 'update-server-info')
+        current_info = archive.manifest(self.repo / '.git/info', True)
         (conflict / 'thisimage').write_text('concurrent conflict\n')
         (conflict / 'postimage').write_text('new resolution\n')
         (conflict / 'preimage').unlink()
@@ -1199,6 +1202,7 @@ class NativeArchive(unittest.TestCase):
         self.assertTrue(archive.resume_quarantine(request)['moved'])
         self.assertTrue(archive.verify_completed_quarantine(request)['verified'])
         self.assertEqual(archive.manifest(self.repo / '.git/config', True), current)
+        self.assertEqual(archive.manifest(self.repo / '.git/info', True), current_info)
         self.assertEqual(archive.manifest(cache, True), current_cache)
         archived_cache = self.txn / 'archive/common/rr-cache' / ('a' * 40)
         self.assertEqual((archived_cache / 'preimage').read_text(), 'old conflict\n')
@@ -1210,6 +1214,42 @@ class NativeArchive(unittest.TestCase):
         # Ordinary preservation still demands exact common metadata.
         with self.assertRaisesRegex(RuntimeError, 'common-store-changed'):
             archive.verify_common_metadata(saved, set(), self.txn)
+
+    def test_generated_ref_advertisement_keeps_controls_security_and_archive_strict(self):
+        self.git(self.repo, 'update-server-info')
+        request = self.quarantine_resumption_fixture()
+        info = self.repo / '.git/info'
+        self.git(self.repo, 'branch', 'other/advertised')
+        self.git(self.repo, 'update-server-info')
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        control = info / 'exclude'
+        original, stamp = control.read_bytes(), control.stat()
+        control.write_bytes(original + b'new-policy\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        control.write_bytes(original)
+        os.utime(control, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        mode = info.stat().st_mode & 0o777
+        os.chmod(info, mode ^ 0o040)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        os.chmod(info, mode)
+        advertisement = info / 'refs'
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.portos.fixture', 'unknown metadata', str(advertisement)], check=True)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        subprocess.run(['/usr/bin/xattr', '-d', 'com.portos.fixture', str(advertisement)], check=True)
+        retained = self.scratch / 'retained-advertisement'
+        advertisement.rename(retained)
+        advertisement.symlink_to(retained)
+        with self.assertRaisesRegex(RuntimeError, 'git-administration-symlink'):
+            archive.verify_quarantine_resumption(request)
+        advertisement.unlink()
+        retained.rename(advertisement)
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        (self.txn / 'archive/common/info/refs').write_text('tampered\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-archive-changed:info'):
+            archive.verify_quarantine_resumption(request)
 
     def test_shared_resolution_cache_recovery_keeps_archive_root_and_structure_strict(self):
         cache = self.repo / '.git/rr-cache'
