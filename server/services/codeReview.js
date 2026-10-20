@@ -58,7 +58,7 @@ import {
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
 import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
-import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
+import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|too many requests|\b(?:HTTP(?:\/[\d.]+)?|status[_ ]?code|status|code|error)\W{0,3}(?:429|402)\b|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|credit balance (?:is )?too low|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
@@ -430,18 +430,20 @@ export function pickCodeReviewDefaults(settings) {
  * Cached so the per-agent-completion fallback (`finalizeAgent`) doesn't pay
  * a `readFile + JSON.parse + stripStoreKeys` round-trip on every sweep —
  * during a busy CoS evaluation that's dozens of redundant disk reads. The
- * cache invalidates on any `settings:updated` event so the panel's save
- * takes effect immediately without a restart.
+ * cache invalidates on `settings:updated`; the metadata check also observes
+ * reviewer health written by the local review bridge in another process.
  */
 let cachedSettings = null
 let cachedDefaults = null
 let cachedDefaultsExpiresAt = Infinity
 settingsEvents.on('settings:updated', () => { cachedSettings = null; cachedDefaults = null })
+settingsEvents.on('settings:invalidated', () => { cachedSettings = null; cachedDefaults = null })
 
 /** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
 export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cachedDefaults = null }
 
 export async function getCodeReviewDefaults() {
+  await refreshSettingsIfChangedOnDisk()
   const now = Date.now()
   if (cachedDefaults && now < cachedDefaultsExpiresAt) return cachedDefaults
   if (!cachedSettings) cachedSettings = await getSettings()

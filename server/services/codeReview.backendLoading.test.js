@@ -3,6 +3,7 @@ import { mockJsonResponse } from '../lib/testHelper.js';
 
 vi.mock('./settings.js', () => ({
   getSettings: async () => ({}),
+  refreshSettingsIfChangedOnDisk: vi.fn(),
   settingsEvents: { on: vi.fn() },
 }));
 vi.mock('./lmStudioManager.js', () => { throw new Error('Manager unavailable'); });

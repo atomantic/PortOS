@@ -35,6 +35,7 @@ vi.mock('../services/settings.js', async () => {
   const settingsEvents = new EventEmitter();
   return {
     settingsEvents,
+    refreshSettingsIfChangedOnDisk: vi.fn(),
     getSettings: vi.fn(async () => ({ ...store })),
     getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { ...store } })),
     updateSettings: vi.fn(async (patch) => {
