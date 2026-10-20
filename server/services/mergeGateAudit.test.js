@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // run's recorded lease history and the task queue are injected; the audit,
 // the watch sweep and the pure assessment run for real.
 const f = vi.hoisted(() => ({
-  agent: null, apps: new Map(), tasks: [], prs: [], checks: [], held: null,
+  agent: null, apps: new Map(), tasks: [], prs: [], checks: [], statuses: [], held: null, addTaskFailures: 0,
 }));
 
 const execGhMock = vi.fn();
@@ -24,9 +24,11 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./cosMergeAdmission.js', () => ({ repositoryKey: (origin) => `${origin.host}/${origin.fullName}`.toLowerCase() }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: async (_id, patch) => { f.agent = { ...f.agent, metadata: { ...f.agent.metadata, ...patch.metadata } }; return f.agent; },
+  getAgentRecord: async () => f.agent,
 }));
 // addTask's real dedupe is first-line + app against open tasks; mirror it.
 const addTaskMock = vi.fn(async (data) => {
+  if (f.addTaskFailures > 0) { f.addTaskFailures -= 1; throw new Error('queue unavailable'); }
   const open = f.tasks.find((task) => task.description.split('\n')[0] === data.description.split('\n')[0] && task.app === data.app);
   if (open) return { ...open, duplicate: true };
   const created = { id: `task-${f.tasks.length + 1}`, ...data };
@@ -65,12 +67,18 @@ beforeEach(() => {
   f.held = null;
   f.prs = [{ number: 7, url: PR_URL, headRefOid: HEAD, mergedAt: MERGED_AT, baseRefName: 'main' }];
   f.checks = [check()];
+  f.statuses = [];
+  f.addTaskFailures = 0;
   addTaskMock.mockClear();
   notifyMock.mockClear();
   appendRunEventMock.mockClear();
   execGhMock.mockReset().mockImplementation(async (args) => {
     if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(f.prs);
-    if (args[0] === 'api') return f.checks.map((c) => JSON.stringify(c)).join('\n');
+    if (args[0] === 'api') {
+      const rows = args.some((arg) => String(arg).includes('/status')) ? f.statuses : f.checks;
+      if (rows === null) throw new Error('forge down');
+      return rows.map((c) => JSON.stringify(c)).join('\n');
+    }
     throw new Error('unexpected forge read');
   });
 });
@@ -142,7 +150,8 @@ describe('post-merge gate audit', () => {
     // lease on record and a check still reporting in progress must not flag it.
     f.held = null;
     f.agent.metadata = { ...f.agent.metadata, mergeGateAudits: [],
-      mergeHandoffReceipts: [{ receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z' }] };
+      mergeHandoffReceipts: [{ receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z',
+        coordinatorMergedAt: MERGED_AT }] };
     f.checks = [check({ status: 'in_progress', conclusion: null, completed_at: null })];
     expect(await run()).toMatchObject({ violations: 0 });
 
@@ -151,16 +160,52 @@ describe('post-merge gate audit', () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it('leaves a run alone when the forge cannot be read or the run is not a claim', async () => {
-    f.checks = null;
-    execGhMock.mockImplementation(async (args) => {
-      if (args[0] === 'pr') return JSON.stringify(f.prs);
-      throw new Error('forge down');
-    });
-    // Unreadable checks are no verdict on the checks rule; the missing lease still is.
-    expect(await run()).toMatchObject({ audited: 0, violations: 1 });
-    expect(f.tasks).toEqual([]);
+  it('still flags a run that merged around the queue after handing the head to the coordinator', async () => {
+    // A bare handoff receipt (no coordinator merge recorded) proves nothing about who merged.
+    f.agent.metadata.mergeHandoffReceipts = [{ receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z' }];
+    expect(await run()).toMatchObject({ violations: 1 });
+    expect(f.agent.metadata.mergeGateViolations[0].codes).toEqual(['no-admission-lease']);
+  });
 
+  it('flags a merge made on an expired lease and counts failing commit statuses and ignores post-merge runs', async () => {
+    f.agent.metadata.mergeAdmissionHistory = [lease({ acquiredAt: '2026-10-20T02:05:00Z', releasedAt: '2026-10-20T02:17:00Z' })];
+    f.checks = [
+      check(),
+      // A push workflow on the merge commit was never something the merge could wait for.
+      check({ name: 'post-merge deploy', started_at: '2026-10-20T02:30:00Z', status: 'in_progress', conclusion: null, completed_at: null }),
+    ];
+    f.statuses = [{ name: 'ci/legacy', status: 'completed', conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' }];
+    await run();
+    expect(f.agent.metadata.mergeGateViolations).toEqual([expect.objectContaining({
+      codes: ['no-admission-lease', 'checks-not-green-at-merge'], notGreenAtMerge: ['ci/legacy'],
+    })]);
+    expect(f.tasks).toHaveLength(1);
+  });
+
+  it('keeps an audit the forge could not answer and completes it from the durable sweep', async () => {
+    f.statuses = null;
+    expect(await run()).toMatchObject({ audited: 0, violations: 0, unresolved: true });
+    expect(f.agent.metadata.mergeGateViolations).toBeUndefined();
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([expect.objectContaining({ kind: 'audit', agentId: 'agent-1' })]);
+
+    f.statuses = [];
+    expect(await sweepMergeGateWatches()).toMatchObject({ remaining: 0 });
+    expect(f.agent.metadata.mergeGateViolations).toHaveLength(1);
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([]);
+  });
+
+  it('retries a recovery task the queue refused instead of dropping it', async () => {
+    f.checks = [check({ conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' })];
+    f.addTaskFailures = 1;
+    await run();
+    expect(f.tasks).toEqual([]);
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([expect.objectContaining({ headSha: HEAD })]);
+
+    expect(await sweepMergeGateWatches()).toMatchObject({ recovered: 1, remaining: 0 });
+    expect(f.tasks).toHaveLength(1);
+  });
+
+  it('skips a run that is not a claim', async () => {
     f.agent.metadata.claimBranches = [];
     expect(await run()).toMatchObject({ skipReason: 'not-a-claim-run' });
   });

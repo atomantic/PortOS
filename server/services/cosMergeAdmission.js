@@ -333,6 +333,29 @@ export async function recordMergeHandoffReceipt({ agentId, receipt }) {
   }, 'handoff-receipt');
 }
 
+/**
+ * Record that the pending-merge coordinator itself merged the head a receipt
+ * names. Only the coordinator's own merge call writes this; a PR that merely
+ * turns up MERGED (the run merged it around the queue) leaves the receipt
+ * unmarked, so the post-merge gate audit still sees that merge.
+ *
+ * @returns {Promise<{ marked: true }|{ marked?: false, reason: string }>}
+ */
+export async function markMergeHandoffMerged({ agentId, receiptId, headSha }) {
+  return transaction(async (state, save) => {
+    const agent = state.agents[agentId];
+    const receipts = Array.isArray(agent?.metadata?.mergeHandoffReceipts) ? agent.metadata.mergeHandoffReceipts : [];
+    if (!receipts.some((receipt) => receipt?.receiptId === receiptId && receipt.headSha === headSha)) {
+      return { marked: false, reason: 'receipt-unknown' };
+    }
+    const coordinatorMergedAt = new Date().toISOString();
+    state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, mergeHandoffReceipts: receipts.map((receipt) =>
+      (receipt?.receiptId === receiptId ? { ...receipt, coordinatorMergedAt } : receipt)) } };
+    await save(state);
+    return { marked: true };
+  }, 'handoff-merged');
+}
+
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
 export async function claimMergeAdmission({ agentId, action, token, outcome }) {
   return transaction(async (state, save, measure) => {

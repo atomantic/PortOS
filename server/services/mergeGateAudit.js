@@ -43,16 +43,29 @@ const auditKey = (pr) => `${pr.number}@${String(pr.headRefOid).toLowerCase()}`;
 const watchKey = (repository, headSha) => `${repository}#${String(headSha).toLowerCase()}`;
 const readWatches = (app) => readList(app?.mergeGateWatches).filter((watch) => isPlainObject(watch) && watch.key);
 
-/** The check runs of `headSha`, or null when the forge could not be read. */
-async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha }) {
+// Commit statuses (CI that reports through the status API rather than check
+// runs) are mapped onto the check-run shape. A status has no start time worth
+// trusting: its `created_at` moves when the context flips pending to success.
+const CHECK_RUN_JQ = '.check_runs[] | {name, status, conclusion, started_at, completed_at}';
+const STATUS_JQ = '.statuses[] | {name: .context, status: (if .state == "pending" then "in_progress" else "completed" end), conclusion: (if .state == "error" then "failure" else .state end), completed_at: .updated_at}';
+
+async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
   const raw = await execGh([
-    'api', '--hostname', githubApiHost(origin.host), '--paginate',
-    `repos/${origin.fullName}/commits/${headSha}/check-runs?per_page=100`,
-    '--jq', '.check_runs[] | {name, status, conclusion, completed_at}',
+    'api', '--hostname', githubApiHost(origin.host), '--paginate', path, '--jq', jq,
   ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
   if (raw === null) return null;
-  const runs = String(raw).split('\n').map((line) => line.trim()).filter(Boolean).map((line) => safeJSONParse(line, null));
-  return runs.every(isPlainObject) ? runs : null;
+  const rows = String(raw).split('\n').map((line) => line.trim()).filter(Boolean).map((line) => safeJSONParse(line, null));
+  return rows.every(isPlainObject) ? rows : null;
+}
+
+/** The check runs and commit statuses of `headSha`, or null when either could not be read. */
+async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha }) {
+  const base = `repos/${origin.fullName}/commits/${headSha}`;
+  const [runs, statuses] = await Promise.all([
+    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-runs?per_page=100`, jq: CHECK_RUN_JQ }),
+    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/status?per_page=100`, jq: STATUS_JQ }),
+  ]);
+  return runs && statuses ? [...runs, ...statuses] : null;
 }
 
 async function readMergedPrs({ repoSpec, forgeExec, branch, since }) {
@@ -159,7 +172,7 @@ async function recordViolation(agent, watch, violations, checkNames) {
  * @param {string} params.agentId
  * @param {object|null} params.task - the CoS task
  * @param {object|null} params.agentState - the persisted agent record
- * @returns {Promise<{ audited: number, violations: number, skipReason?: string }>}
+ * @returns {Promise<{ audited: number, violations: number, unresolved?: boolean, skipReason?: string }>}
  */
 export async function auditClaimMergeGate({ agentId, task, agentState }) {
   const metadata = agentState?.metadata || {};
@@ -182,26 +195,27 @@ export async function auditClaimMergeGate({ agentId, task, agentState }) {
   const audited = new Set(readList(metadata.mergeGateAudits));
   const newAudits = [];
   const found = [];
-  let unreadable = false;
+  let unresolved = false;
   for (const branch of branches) {
     const prs = await readMergedPrs({ repoSpec, forgeExec, branch, since });
-    if (prs === null) { unreadable = true; continue; }
+    if (prs === null) { unresolved = true; continue; }
     for (const pr of prs.filter((candidate) => !audited.has(auditKey(candidate)))) {
       const headSha = String(pr.headRefOid).toLowerCase();
       const checks = await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha });
+      // No verdict without readable evidence; the durable sweep retries the audit.
+      if (checks === null) { unresolved = true; continue; }
       const heldLease = await readHeldLease({ ...agentState, id: agentId }, repository);
       const verdict = assessMergeGate({
         repository, headSha, mergedAt: pr.mergedAt, checks, heldLease,
         receipts: readList(metadata.mergeHandoffReceipts),
         history: [...readList(metadata.mergeAdmissionHistory), ...(metadata.lastMergeAdmission ? [metadata.lastMergeAdmission] : [])],
       });
-      // An unreadable check list is no verdict on the checks rule; retry on a later pass.
-      if (checks !== null) newAudits.push(auditKey(pr));
+      newAudits.push(auditKey(pr));
       if (verdict.violations.length === 0) continue;
       found.push({ pr, headSha, verdict });
     }
   }
-  if (unreadable) emitLog('info', `🚦 Merge-gate audit for ${agentId} could not read every claim branch's PRs`, { agentId });
+  if (unresolved) await persistPendingAudit({ agentId, taskId: agentState?.taskId ?? null, app });
 
   const violationRecords = [];
   for (const { pr, headSha, verdict } of found) {
@@ -226,7 +240,20 @@ export async function auditClaimMergeGate({ agentId, task, agentState }) {
       ...(violationRecords.length ? { mergeGateViolations: [...readList(metadata.mergeGateViolations), ...violationRecords].slice(-LIST_LIMIT) } : {}),
     } }).catch((err) => emitLog('warn', `🚦 Could not record merge-gate audit on ${agentId}: ${err.message}`, { agentId }));
   }
-  return { audited: newAudits.length, violations: found.length };
+  return { audited: newAudits.length, violations: found.length, unresolved };
+}
+
+// The forge could not be read: keep the audit as work for the durable sweep
+// rather than losing the run's only chance of being checked.
+async function persistPendingAudit({ agentId, taskId, app }) {
+  if (!app) {
+    emitLog('warn', `🚦 Merge-gate audit for ${agentId} could not read the forge and has no app to retry under`, { agentId });
+    return;
+  }
+  const key = `audit:${agentId}`;
+  await mutateWatches(app.id, (existing) => (existing.some((entry) => entry.key === key) ? existing
+    : [...existing, { key, kind: 'audit', agentId, taskId, flaggedAt: new Date().toISOString() }]))
+    .catch((err) => emitLog('warn', `🚦 Could not queue a merge-gate audit retry for ${agentId}: ${err.message}`, { agentId }));
 }
 
 // Already-failed checks queue the recovery now; checks still running arm a watch
@@ -234,11 +261,13 @@ export async function auditClaimMergeGate({ agentId, task, agentState }) {
 // branch is not red.
 async function watchFlaggedHead(watch, checks, app) {
   if (checks.failing.length > 0) {
-    await fileRecoveryTask(watch, checks.failing, app)
-      .catch((err) => emitLog('warn', `🚦 Merge-gate recovery for PR #${watch.prNumber} not queued: ${err.message}`, { agentId: watch.agentId }));
-    return;
-  }
-  if (checks.settled) return;
+    // A failed queue write keeps the watch, so the sweep retries it.
+    const queued = await fileRecoveryTask(watch, checks.failing, app).then(() => true, (err) => {
+      emitLog('warn', `🚦 Merge-gate recovery for PR #${watch.prNumber} not queued: ${err.message}`, { agentId: watch.agentId });
+      return false;
+    });
+    if (queued) return;
+  } else if (checks.settled) return;
   await mutateWatches(app.id, (existing) => (existing.some((entry) => entry.key === watch.key) ? existing : [...existing, watch]))
     .catch((err) => emitLog('warn', `🚦 Could not watch flagged head of PR #${watch.prNumber}: ${err.message}`, { agentId: watch.agentId }));
   scheduleWatchPolls(app.id);
@@ -271,6 +300,20 @@ export function __cancelMergeGatePolls() {
 
 let sweepInFlight = null;
 
+// True once the audit ran to a verdict. A run whose record is gone cannot be
+// audited again; the entry waits out its TTL like any other unreadable evidence.
+async function retryPendingAudit(watch, app) {
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const agentState = await getAgentRecord(watch.agentId).catch(() => null);
+  if (!agentState) return false;
+  const result = await auditClaimMergeGate({ agentId: watch.agentId, task: { id: watch.taskId, metadata: { app: app.id } }, agentState })
+    .catch((err) => {
+      emitLog('warn', `🚦 Merge-gate audit retry for ${watch.agentId} failed: ${err.message}`, { agentId: watch.agentId });
+      return { unresolved: true };
+    });
+  return !result.unresolved;
+}
+
 async function sweepApp(app) {
   const watches = readWatches(app);
   if (watches.length === 0) return { checked: 0, recovered: 0, remaining: 0 };
@@ -282,8 +325,12 @@ async function sweepApp(app) {
   let recovered = 0;
   for (const watch of watches) {
     if (Date.now() - Date.parse(watch.flaggedAt) >= MERGE_GATE_WATCH_TTL_MS) {
-      emitLog('info', `🚦 Dropping merge-gate watch for PR #${watch.prNumber}: checks did not settle in time`, { agentId: watch.agentId });
+      emitLog('warn', `🚦 Dropping merge-gate ${watch.kind === 'audit' ? `audit of ${watch.agentId}: the forge stayed unreadable` : `watch for PR #${watch.prNumber}: checks did not settle`} in time`, { agentId: watch.agentId });
       settledKeys.add(watch.key);
+      continue;
+    }
+    if (watch.kind === 'audit') {
+      if (await retryPendingAudit(watch, app)) settledKeys.add(watch.key);
       continue;
     }
     const checks = classifyHeadChecks(await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha: watch.headSha }), watch.mergedAt);

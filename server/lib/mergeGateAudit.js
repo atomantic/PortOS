@@ -16,9 +16,10 @@ export const MERGE_GATE_VIOLATIONS = Object.freeze({
 // Lease timestamps are local, `mergedAt` is the forge's clock; tolerate drift
 // without letting a merge made well outside the hold pass as covered.
 export const LEASE_CLOCK_SKEW_MS = 30 * 1000;
-// A legacy `lastMergeAdmission` records only its release time. Agent leases hold
-// at most 5 minutes (`AGENT_LEASE_MAX_HOLD_MS`), so that bounds when it began.
-const LEGACY_LEASE_WINDOW_MS = 5 * 60 * 1000;
+// Agent leases hold at most 5 minutes (`AGENT_LEASE_MAX_HOLD_MS`): past that a
+// holder must re-acquire, so a merge later than this is not covered. It also
+// bounds when a legacy `lastMergeAdmission` (release time only) began.
+const LEASE_MAX_HOLD_MS = 5 * 60 * 1000;
 
 const GREEN_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 const RED_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure']);
@@ -35,7 +36,7 @@ const time = (value) => {
  * read, and no verdict is possible. An empty list is a repository with no CI on
  * that head, which has nothing to wait for.
  *
- * @param {Array<{name?: string, status?: string, conclusion?: string|null, completed_at?: string|null}>|null} checks
+ * @param {Array<{name?: string, status?: string, conclusion?: string|null, started_at?: string|null, completed_at?: string|null}>|null} checks
  * @param {string} mergedAt
  * @returns {{ readable: boolean, notGreenAtMerge: string[], failing: string[], settled: boolean }}
  */
@@ -51,6 +52,10 @@ export function classifyHeadChecks(checks, mergedAt) {
     const conclusion = String(check?.conclusion || '').toLowerCase();
     if (!completed) settled = false;
     if (completed && RED_CONCLUSIONS.has(conclusion)) failing.push(name);
+    // A run created after the merge (a push workflow on the merge commit, a manual
+    // rerun) was never something the merge could have waited for.
+    const startedMs = time(check?.started_at);
+    if (startedMs !== null && mergedMs !== null && startedMs > mergedMs + LEASE_CLOCK_SKEW_MS) continue;
     const completedMs = time(check?.completed_at);
     const greenBeforeMerge = completed && GREEN_CONCLUSIONS.has(conclusion)
       && mergedMs !== null && completedMs !== null && completedMs <= mergedMs;
@@ -63,7 +68,7 @@ export function classifyHeadChecks(checks, mergedAt) {
 function leaseInterval(entry) {
   const releasedMs = time(entry?.releasedAt);
   if (releasedMs === null) return null;
-  const acquiredMs = time(entry?.acquiredAt) ?? releasedMs - LEGACY_LEASE_WINDOW_MS;
+  const acquiredMs = time(entry?.acquiredAt) ?? releasedMs - LEASE_MAX_HOLD_MS;
   return { repository: entry?.repository, outcome: entry?.outcome, acquiredMs, releasedMs };
 }
 
@@ -81,12 +86,13 @@ function leaseCoversMerge({ repository, mergedAt, history = [], heldLease = null
   if (mergedMs === null) return false;
   if (heldLease?.repository === repository) {
     const acquiredMs = time(heldLease.acquiredAt);
-    if (acquiredMs !== null && acquiredMs <= mergedMs + LEASE_CLOCK_SKEW_MS) return true;
+    if (acquiredMs !== null && acquiredMs <= mergedMs + LEASE_CLOCK_SKEW_MS && mergedMs <= acquiredMs + LEASE_MAX_HOLD_MS + LEASE_CLOCK_SKEW_MS) return true;
   }
   return history.some((entry) => {
     const lease = leaseInterval(entry);
     return lease && lease.repository === repository && lease.outcome === 'merged'
-      && lease.acquiredMs <= mergedMs + LEASE_CLOCK_SKEW_MS && lease.releasedMs >= mergedMs - LEASE_CLOCK_SKEW_MS;
+      && lease.acquiredMs <= mergedMs + LEASE_CLOCK_SKEW_MS && lease.releasedMs >= mergedMs - LEASE_CLOCK_SKEW_MS
+      && mergedMs <= lease.acquiredMs + LEASE_MAX_HOLD_MS + LEASE_CLOCK_SKEW_MS;
   });
 }
 
@@ -94,14 +100,15 @@ function leaseCoversMerge({ repository, mergedAt, history = [], heldLease = null
  * Judge one merged claim PR.
  *
  * A head the pending-merge coordinator merged under its own admission is never
- * flagged: the receipt recorded at handoff names exactly the head it may merge,
- * and it merges only once every check is green.
+ * flagged. Only a receipt the coordinator marked `coordinatorMergedAt` when its
+ * own merge call succeeded counts: a bare handoff proves nothing about who
+ * merged, and a run that merged around the queue leaves its receipt unmarked.
  *
  * @param {object} input
  * @param {string} input.repository
  * @param {string} input.headSha
  * @param {string} input.mergedAt
- * @param {Array<{headSha?: string}>} [input.receipts] handoff receipts recorded on the run
+ * @param {Array<{headSha?: string, coordinatorMergedAt?: string}>} [input.receipts] handoff receipts recorded on the run
  * @param {Array<object>} [input.history]
  * @param {object|null} [input.heldLease]
  * @param {Array<object>|null} input.checks check runs of the merged head; null when unreadable
@@ -110,7 +117,7 @@ function leaseCoversMerge({ repository, mergedAt, history = [], heldLease = null
 export function assessMergeGate({ repository, headSha, mergedAt, receipts = [], history = [], heldLease = null, checks }) {
   const classification = classifyHeadChecks(checks, mergedAt);
   const head = String(headSha || '').toLowerCase();
-  if (receipts.some((receipt) => String(receipt?.headSha || '').toLowerCase() === head)) {
+  if (receipts.some((receipt) => receipt?.coordinatorMergedAt && String(receipt.headSha || '').toLowerCase() === head)) {
     return { exempt: true, violations: [], checks: classification };
   }
   const violations = [];

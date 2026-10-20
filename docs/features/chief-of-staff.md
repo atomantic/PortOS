@@ -88,11 +88,15 @@ Admission and "merge on green" are prompt rules; an agent with `gh` access can
 still merge around them. When a claim run finishes, `mergeGateAudit.js` (hung
 off the post-cleanup audit in `agentWorktreeCleanup.js`) lists the PRs merged
 from the run's bound claim branches and flags each one that either held no
-admission lease at `mergedAt` or had a check on the merged head that was not
-completed-green before it. The lease evidence is `mergeAdmissionHistory` on the
+admission lease at `mergedAt` (within the 5-minute hold) or had a check run or
+commit status on the merged head that was not completed-green before it (runs
+created after the merge are ignored). The lease evidence is `mergeAdmissionHistory` on the
 run (each release records its `acquiredAt`/`releasedAt`) plus a lease it still
-holds. A head named by a `mergeHandoffReceipts` entry — recorded when the run
-handed it to the pending-merge coordinator — is never flagged.
+holds. A head the pending-merge coordinator merged itself is never flagged: the
+coordinator marks the run's `mergeHandoffReceipts` entry (`coordinatorMergedAt`)
+when its own merge call succeeds, so a run that handed a head off and then merged
+around the queue is still caught. An audit whose forge reads fail is kept as an
+`audit` entry in `mergeGateWatches` and retried by the sweep.
 
 A violation is written to the run (`mergeGateViolations`), the run-events ledger
 (`run.merge-gate-violation`) and a notification. If the flagged head's checks
