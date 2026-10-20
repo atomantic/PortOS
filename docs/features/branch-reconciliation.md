@@ -99,6 +99,14 @@ The native backend preserves file bytes, permissions, ownership, timestamps,
 ACLs, xattrs, supported flags, empty directories, hard links and symlink targets
 without following symlink dependencies. It retains original identity evidence;
 only the standalone copy's Git pointers are rewritten to its isolated stores.
+An OS-added `com.apple.provenance` attribute on a copy is retained and recorded
+with its exact hash; changed existing attributes, missing attributes and other
+additions still refuse preservation. No provenance or quarantine attribute is
+removed or rewritten. Original and quarantined metadata stay exact. Every later
+archive verification or move is bound to the exact manifest hash journaled after
+preservation. If that journal write is interrupted before any move, status
+exposes an unverified-archive hold and a digest for source-verified cancellation;
+it does not infer a preservation proof from the retained manifest.
 Shared/external/nested module stores, alternates, promisor dependencies, active
 Git operations, insufficient space and unsupported metadata hold the operation.
 A full parent store copy and a second standalone restore require bounded free

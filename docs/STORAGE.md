@@ -1042,7 +1042,13 @@ checkout retirement. Version 1 immutable numbered JSON steps form a SHA-256
 linked journal; each step and containing directory is fsynced. The directory is
 0700 and journal/native manifests are 0600. `archive/` preserves original bytes
 and metadata, `restore/` holds a proven standalone checkout and Git stores, and
-`quarantine/` retains whole original directories. `execution.lock` and
+`quarantine/` retains whole original directories. Native manifest version 2 records
+per-path hashes for OS-added `com.apple.provenance` on copies only; original
+attributes cannot change or disappear. Archive additions must keep their exact
+recorded hashes, and the final standalone manifest remains exact. The preservation
+proof journals the SHA-256 of the exact manifest bytes; later native reads verify
+that binding, including when an edited manifest claims an older version. Version 1
+archives retain their original strict comparison. `execution.lock` and
 `backend.lock` serialize service executors and surviving native commands. These
 are private archives, excluded from federation and never seeded, migrated into
 PostgreSQL, expired or automatically purged. No existing-record migration is
