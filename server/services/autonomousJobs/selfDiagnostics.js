@@ -210,7 +210,7 @@ const MALFORMED_LABEL = /^(?:model:[^ ]+|effort:[^ ]+|planner:[^ ]+|plan|tests|b
  * string as one CLI argument. A label is deleted only after both issue and PR
  * searches succeed and report no usage; any ambiguous read is fail-closed.
  */
-export async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } = {}) {
+async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } = {}) {
   const { code, stdout, stderr } = await exec('gh', ['label', 'list', '--limit', '500', '--json', 'name'], { cwd })
   if (code !== 0) {
     console.warn(`⚠️ Self-diagnostics: could not list labels for pruning: ${stderr.trim()}`)

@@ -6,7 +6,6 @@ import {
   buildDiagnosticsIssueTitle,
   buildDiagnosticsIssueBody,
   findMonitoringIssue,
-  pruneMalformedLabels,
   runSelfDiagnostics,
   MONITORING_LABEL,
   NEEDS_ATTENTION_LABEL,
@@ -173,6 +172,9 @@ function makeExec(routes) {
 }
 
 const argsHave = (...needles) => (args) => needles.every(n => args.includes(n))
+const argsHaveIssueListWithoutLabel = args => argsHave('issue', 'list')(args) && !args.includes('--label')
+const argsHaveIssueLabel = args => argsHave('issue', 'list', '--label')(args)
+const argsHavePrLabel = args => argsHave('pr', 'list', '--label')(args)
 
 // The forge-reachability gate (#3358), injected so the suite never spawns the
 // real `gh api rate_limit` probe — a machine whose gh IS blocked (exactly the
@@ -236,8 +238,16 @@ describe('findMonitoringIssue', () => {
 })
 
 describe('pruneMalformedLabels', () => {
+  const invokeHandler = exec => runSelfDiagnostics({
+    forgeGate: okForge,
+    loadLearning: async () => ({ byTaskType: {} }),
+    exec,
+    now: () => '2026-07-12T00:00:00.000Z'
+  })
+
   it('deletes only unreferenced malformed names and leaves legitimate spaced labels alone', async () => {
     const exec = makeExec([
+      { match: argsHaveIssueListWithoutLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHave('label', 'list'), result: { code: 0, stdout: JSON.stringify([
         { name: 'good first issue' },
         { name: 'help wanted' },
@@ -249,34 +259,35 @@ describe('pruneMalformedLabels', () => {
         { name: 'effort:medium --color 76C7C7' },
         { name: 'security 0366D6 Proposed from a security audit' }
       ]) } },
-      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
-      { match: argsHave('pr', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
+      { match: argsHavePrLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHave('label', 'delete'), result: { code: 0, stdout: '' } }
     ])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    const result = await pruneMalformedLabels({ exec })
-    expect(result).toEqual({ pruned: 3, skipped: 0 })
+    await invokeHandler(exec)
     const deleted = exec.mock.calls.filter(([, args]) => args.includes('delete')).map(([, args]) => args[2])
     expect(deleted).toEqual(['model:light D4C5F9', 'effort:medium --color 76C7C7', 'security 0366D6 Proposed from a security audit'])
+    expect(log).toHaveBeenCalledWith('🧹 Pruned 3 malformed labels')
+    log.mockRestore()
   })
 
   it('keeps malformed labels used by either an issue or a pull request', async () => {
     const exec = makeExec([
+      { match: argsHaveIssueListWithoutLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHave('label', 'list'), result: { code: 0, stdout: JSON.stringify([
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium 76C7C7' }
       ]) } },
-      { match: argsHave('issue', 'list', 'model:light D4C5F9'), result: { code: 0, stdout: '[{"number":12}]' } },
-      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
-      { match: argsHave('pr', 'list', 'model:light D4C5F9'), result: { code: 0, stdout: '[]' } },
-      { match: argsHave('pr', 'list', 'effort:medium 76C7C7'), result: { code: 0, stdout: '[{"number":34}]' } },
-      { match: argsHave('pr', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: args => argsHaveIssueLabel(args) && args.includes('model:light D4C5F9'), result: { code: 0, stdout: '[{"number":12}]' } },
+      { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
+      { match: args => argsHavePrLabel(args) && args.includes('model:light D4C5F9'), result: { code: 0, stdout: '[]' } },
+      { match: args => argsHavePrLabel(args) && args.includes('effort:medium 76C7C7'), result: { code: 0, stdout: '[{"number":34}]' } },
       { match: argsHave('label', 'delete'), result: { code: 0, stdout: '' } }
     ])
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await pruneMalformedLabels({ exec })
-    expect(result).toEqual({ pruned: 0, skipped: 2 })
+    await invokeHandler(exec)
     expect(exec.mock.calls.some(([, args]) => args.includes('delete'))).toBe(false)
     expect(warn).toHaveBeenCalledTimes(2)
     expect(warn.mock.calls.map(([line]) => line)).toEqual(expect.arrayContaining([
@@ -288,28 +299,29 @@ describe('pruneMalformedLabels', () => {
 
   it('fails closed when either usage check fails', async () => {
     const exec = makeExec([
+      { match: argsHaveIssueListWithoutLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHave('label', 'list'), result: { code: 0, stdout: '[{"name":"model:light D4C5F9"}]' } },
-      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
-      { match: argsHave('pr', 'list'), result: { code: 1, stdout: '', stderr: 'unavailable' } }
+      { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
+      { match: argsHavePrLabel, result: { code: 1, stdout: '', stderr: 'unavailable' } }
     ])
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await pruneMalformedLabels({ exec })
-    expect(result).toEqual({ pruned: 0, skipped: 1 })
+    await invokeHandler(exec)
     expect(exec.mock.calls.some(([, args]) => args.includes('delete'))).toBe(false)
     warn.mockRestore()
   })
 
   it('skips comma-containing labels because gh label filters split on commas', async () => {
     const exec = makeExec([{
+      match: argsHaveIssueListWithoutLabel, result: { code: 0, stdout: '[]' }
+    }, {
       match: argsHave('label', 'list'),
       result: { code: 0, stdout: '[{"name":"security 0366D6 Audit, high risk"}]' }
     }])
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await pruneMalformedLabels({ exec })
-    expect(result).toEqual({ pruned: 0, skipped: 1 })
-    expect(exec.mock.calls.some(([, args]) => args.includes('issue') || args.includes('pr') || args.includes('delete'))).toBe(false)
+    await invokeHandler(exec)
+    expect(exec.mock.calls.some(([, args]) => args.includes('security 0366D6 Audit, high risk') || args.includes('delete'))).toBe(false)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot safely verify comma-containing'))
     warn.mockRestore()
   })
