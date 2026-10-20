@@ -81,7 +81,7 @@ vi.mock('../lib/gitRemote.js', async (importActual) => ({
   readOriginRemoteUrl: vi.fn(async () => null),
 }));
 
-import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
 import { generateTaskFromJob } from './autonomousJobs/skillTemplates.js';
 import { buildLightContextPrompt } from './agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from './taskTypeHooks.js';
@@ -110,8 +110,10 @@ const makeApp = (overrides = {}) => ({
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
 
 /** The ordinary scheduled lane. */
-const generate = (taskType, options = {}) =>
-  generateManagedAppImprovementTaskForType(taskType, makeApp(), STATE, options);
+const generate = async (taskType, options = {}) => {
+  const prepared = await prepareManagedAppImprovementTask(taskType, makeApp(), STATE, options);
+  return prepared.task;
+};
 
 /**
  * The FINAL text an agent sees: the rendered mission plus the operating
@@ -164,7 +166,7 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: false, openPR: true, useWorktree: true } });
     promptTemplate.body = 'Reviewers: {reviewers}';
-    const task = await generateManagedAppImprovementTaskForType('security', makeApp({ defaultPrCompletion: appPolicy }), STATE, { skipPreconditions: true });
+    const { task } = await prepareManagedAppImprovementTask('security', makeApp({ defaultPrCompletion: appPolicy }), STATE, { skipPreconditions: true });
     expect(task.metadata.prCompletion).toBe(expectedPolicy);
     expect(task.description).toContain(`Reviewers: ${reviewers}`);
   });
