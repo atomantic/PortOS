@@ -55,7 +55,7 @@ describe('Git service publication fencing', () => {
     await expect(ensureLatest(plain)).resolves.toMatchObject({ success: true, skipped: 'not-a-repo' });
     await expect(ensureLatest(join(fixture.scratch, 'missing'))).rejects.toThrow();
     await writeFile(join(plain, '.git'), 'gitdir: missing-administration\n');
-    await expect(ensureLatest(plain)).rejects.toThrow('not a git repository');
+    await expect(ensureLatest(plain)).rejects.toThrow(/not a git repository|gitfile does not point to a valid repository/);
   });
 
   it('preserves both checkout indexes, contents and refs while a linked-checkout retirement is reserved', async () => {
