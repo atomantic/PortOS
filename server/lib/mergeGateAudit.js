@@ -110,16 +110,19 @@ function leaseCoversMerge({ repository, mergedAt, history = [], heldLease = null
  * @param {string} input.repository
  * @param {string} input.headSha
  * @param {string} input.mergedAt
- * @param {Array<{headSha?: string, coordinatorMergedAt?: string}>} [input.receipts] handoff receipts recorded on the run
+ * @param {string} input.prUrl the audited PR; a head can back several PRs (main and a release branch)
+ * @param {Array<{prUrl?: string, headSha?: string, coordinatorMergedAt?: string}>} [input.receipts] handoff receipts recorded on the run
  * @param {Array<object>} [input.history]
  * @param {object|null} [input.heldLease]
  * @param {Array<object>|null} input.checks check runs of the merged head; null when unreadable
  * @returns {{ exempt: boolean, violations: Array<{code: string, message: string}>, checks: ReturnType<typeof classifyHeadChecks> }}
  */
-export function assessMergeGate({ repository, headSha, mergedAt, receipts = [], history = [], heldLease = null, checks }) {
+export function assessMergeGate({ repository, prUrl, headSha, mergedAt, receipts = [], history = [], heldLease = null, checks }) {
   const classification = classifyHeadChecks(checks, mergedAt);
   const head = String(headSha || '').toLowerCase();
-  if (receipts.some((receipt) => receipt?.coordinatorMergedAt && String(receipt.headSha || '').toLowerCase() === head)) {
+  const pr = String(prUrl || '').toLowerCase();
+  if (receipts.some((receipt) => receipt?.coordinatorMergedAt && String(receipt.prUrl || '').toLowerCase() === pr
+    && String(receipt.headSha || '').toLowerCase() === head)) {
     return { exempt: true, violations: [], checks: classification };
   }
   const violations = [];

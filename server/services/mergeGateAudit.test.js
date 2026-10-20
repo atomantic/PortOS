@@ -169,6 +169,12 @@ describe('post-merge gate audit', () => {
     expect(f.agent.metadata.mergeGateViolations[0].codes).toEqual(['no-admission-lease']);
   });
 
+  it('does not let a coordinator receipt for one PR exempt another PR sharing its head', async () => {
+    f.agent.metadata.mergeHandoffReceipts = [{ receiptId: 'receipt-1', prUrl: 'https://github.com/example/repo/pull/8', headSha: HEAD,
+      acceptedAt: '2026-10-20T02:10:00Z', coordinatorMergedAt: MERGED_AT }];
+    expect(await run()).toMatchObject({ violations: 1 });
+  });
+
   it('flags a merge made on an expired lease and counts failing commit statuses and ignores post-merge runs', async () => {
     f.agent.metadata.mergeAdmissionHistory = [lease({ acquiredAt: '2026-10-20T02:05:00Z', releasedAt: '2026-10-20T02:17:00Z' })];
     f.checks = [

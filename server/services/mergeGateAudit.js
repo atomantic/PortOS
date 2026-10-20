@@ -213,7 +213,7 @@ export async function auditClaimMergeGate({ agentId, task, agentState }) {
       if (checks === null) { unresolved = true; continue; }
       const heldLease = await readHeldLease({ ...agentState, id: agentId }, repository);
       const verdict = assessMergeGate({
-        repository, headSha, mergedAt: pr.mergedAt, checks, heldLease,
+        repository, prUrl: pr.url, headSha, mergedAt: pr.mergedAt, checks, heldLease,
         receipts: readList(metadata.mergeHandoffReceipts),
         history: [...readList(metadata.mergeAdmissionHistory), ...(metadata.lastMergeAdmission ? [metadata.lastMergeAdmission] : [])],
       });
