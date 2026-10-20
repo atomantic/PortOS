@@ -146,8 +146,12 @@ const SERVER_SECRET_ENV_PATTERNS = [
   /^(ANTHROPIC|OPENAI|GEMINI|XAI|GROK|KIMI|MOONSHOT|CURSOR|NVIDIA|OPENROUTER|CIVITAI|HF)_[A-Z_]*(API_KEY|AUTH_TOKEN|TOKEN)$/,
 ];
 
-const isServerSecretEnvKey = (key, keep) => !keep.includes(key)
-  && (SERVER_SECRET_ENV_KEYS.has(key) || SERVER_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(key)));
+// Matched case-insensitively: Windows treats `PgPassword` as `PGPASSWORD`.
+const isServerSecretEnvKey = (key, keep) => {
+  const name = key.toUpperCase();
+  return !keep.some((kept) => kept.toUpperCase() === name)
+    && (SERVER_SECRET_ENV_KEYS.has(name) || SERVER_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(name)));
+};
 
 /** Names present in `env` that `withoutServerSecretsEnv` would remove. */
 export function serverSecretEnvKeys(env = process.env, { keep = [] } = {}) {

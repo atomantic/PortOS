@@ -210,7 +210,7 @@ describe('withoutServerSecretsEnv', () => {
     PATH: '/usr/bin', HOME: '/home/example', NODE_ENV: 'production', PORT: '5555',
     PRIVACY_VAULT_KEY: 'k', PGPASSWORD: 'p', PGHOST: 'h', PGDATABASE: 'd',
     PORTOS_API_TOKEN: 't', ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o', GEMINI_API_KEY: 'g',
-    DATABASE_URL: 'app-owned', STRIPE_KEY: 'app-owned', PGP_NOTE: 'not a libpq var',
+    PgPassword: 'mixed-case', DATABASE_URL: 'app-owned', STRIPE_KEY: 'app-owned', PGP_NOTE: 'not a libpq var',
   };
 
   it('drops the vault key, PG*, PortOS tokens and provider keys but keeps ordinary variables', () => {
