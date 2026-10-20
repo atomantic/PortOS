@@ -51,25 +51,29 @@ export const exitCodeForOutcome = (outcome) => SETUP_EXIT_CODES[outcome] ?? SETU
 // headers (BuildKit `#N [stage x/y] …`, classic builder `Step x/y : …`).
 export const isBuildStepLine = (line) => /^#\d+ \[[^\]]+\]/.test(line) || /^Step \d+\/\d+ :/.test(line);
 
+/** Bounded ring buffer size for lines not shown in non-verbose build mode. */
+export const BUILD_LINE_BUFFER_LIMIT = 40;
+
 const mark = (ok) => (ok ? '✅' : '❌');
 
-function printStatus(status) {
+function printStatus(status, { log = console.log, warn = console.warn } = {}) {
+  if (!status) return;
   const { docker, image, smoke, runtime } = status;
-  const dockerLine = !docker.installed ? 'not installed'
+  const dockerLine = !docker?.installed ? 'not installed'
     : !docker.running ? `installed, engine not reachable${docker.error ? ` (${docker.error})` : ''}`
       : `${docker.serverVersion} (${docker.os}/${docker.arch})`;
-  console.log(`${mark(docker.running)} Docker: ${dockerLine}`);
-  const imageLine = !image ? `${runtime.image} not built`
-    : `${runtime.image}${image.sizeBytes ? ` (${Math.round(image.sizeBytes / 1e6)} MB)` : ''}${image.current ? '' : ` — stale (built for ${image.runtimeVersion || 'an unknown version'})`}`;
-  console.log(`${mark(image?.current)} Image: ${imageLine}`);
+  log(`${mark(docker?.running)} Docker: ${dockerLine}`);
+  const imageLine = !image ? `${runtime?.image ?? 'supercollider'} not built`
+    : `${runtime?.image ?? 'supercollider'}${image.sizeBytes ? ` (${Math.round(image.sizeBytes / 1e6)} MB)` : ''}${image.current ? '' : ` — stale (built for ${image.runtimeVersion || 'an unknown version'})`}`;
+  log(`${mark(image?.current)} Image: ${imageLine}`);
   const smokeLine = !smoke ? 'not run'
     : !smoke.current ? `stale (last run ${smoke.checkedAt} against a different image/runtime/policy)`
-      : smoke.ok ? `passed ${smoke.checkedAt} — ${smoke.measurement.durationMs} ms, ${smoke.measurement.channels} ch, ${smoke.measurement.sampleRate} Hz, peak ${smoke.measurement.peak}`
+      : smoke.ok ? `passed ${smoke.checkedAt} — ${smoke.measurement?.durationMs} ms, ${smoke.measurement?.channels} ch, ${smoke.measurement?.sampleRate} Hz, peak ${smoke.measurement?.peak}`
         : `failed ${smoke.checkedAt}: ${smoke.error}`;
-  console.log(`${mark(smoke?.current && smoke.ok)} Render probe: ${smokeLine}`);
-  const log = status.ready ? console.log : console.warn;
-  log(`${status.ready ? '🎛️' : '⚠️'} ${status.message}`);
-  if (status.action) log(`👉 ${status.action}`);
+  log(`${mark(smoke?.current && smoke.ok)} Render probe: ${smokeLine}`);
+  const msgLog = status.ready ? log : warn;
+  msgLog(`${status.ready ? '🎛️' : '⚠️'} ${status.message}`);
+  if (status.action) msgLog(`👉 ${status.action}`);
 }
 
 function ask(question) {
@@ -85,26 +89,53 @@ async function confirmBuild({ yes }) {
   return false;
 }
 
-async function main() {
-  const options = parseSuperColliderSetupArgs(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2), io = {}) {
+  const log = io.log ?? console.log;
+  const error = io.error ?? console.error;
+  const warn = io.warn ?? console.warn;
+  const setupRuntime = io.setupSuperColliderRuntime ?? setupSuperColliderRuntime;
+  const getStatus = io.getSuperColliderStatus ?? getSuperColliderStatus;
+  const options = parseSuperColliderSetupArgs(argv);
   if (options.status) {
-    const status = await getSuperColliderStatus();
-    if (options.json) console.log(JSON.stringify(status, null, 2));
-    else printStatus(status);
-    return;
+    const status = await getStatus();
+    if (options.json) log(JSON.stringify(status, null, 2));
+    else printStatus(status, { log, warn });
+    return { outcome: status.ready ? 'ready' : status.state, status };
   }
-  console.log('🎛️ SuperCollider runtime setup');
-  const result = await setupSuperColliderRuntime({
+  log('🎛️ SuperCollider runtime setup');
+  const retainedLines = [];
+  const result = await setupRuntime({
     rebuild: options.rebuild,
-    confirmBuild: () => confirmBuild(options),
-    onLine: (line) => { if (options.verbose || isBuildStepLine(line)) console.log(`   ${line}`); },
+    confirmBuild: io.confirmBuild ?? (() => confirmBuild(options)),
+    onLine: (line) => {
+      if (options.verbose || isBuildStepLine(line)) {
+        log(`   ${line}`);
+      } else {
+        retainedLines.push(line);
+        if (retainedLines.length > BUILD_LINE_BUFFER_LIMIT) {
+          retainedLines.shift();
+        }
+      }
+    },
   });
-  if (result.built) console.log('✅ Image built');
-  else if (result.outcome === 'ready' || result.outcome === 'smoke-failed') console.log('✅ Image already current — skipped the build');
-  if (result.probed) console.log(`${result.status.ready ? '✅' : '❌'} Synthetic render probe ${result.status.ready ? 'passed' : 'failed'}`);
-  if (result.outcome === 'build-failed') console.error(`❌ Image build failed: ${result.error}`);
-  printStatus(result.status);
-  process.exitCode = exitCodeForOutcome(result.outcome);
+  if (result.built) log('✅ Image built');
+  else if (result.outcome === 'ready' || result.outcome === 'smoke-failed') log('✅ Image already current — skipped the build');
+  if (result.probed) log(`${result.status?.ready ? '✅' : '❌'} Synthetic render probe ${result.status?.ready ? 'passed' : 'failed'}`);
+  if (result.outcome === 'build-failed') {
+    error(`❌ Image build failed: ${result.error}`);
+    if (!options.verbose) {
+      for (const line of retainedLines) {
+        error(`   ${line}`);
+      }
+      error('👉 Re-run with --verbose for the full build log');
+    }
+  }
+  printStatus(result.status, { log, warn });
+  const exitCode = exitCodeForOutcome(result.outcome);
+  if (io.setExitCode !== false) {
+    process.exitCode = exitCode;
+  }
+  return { ...result, exitCode };
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
