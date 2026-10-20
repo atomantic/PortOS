@@ -94,6 +94,7 @@ export async function createSchedule(scheduleData) {
     enabled: scheduleData.enabled === true,
     lastRun: null,
     runCount: 0,
+    rolledIntervalMs: null,
     createdAt: now,
     updatedAt: now
   };
@@ -128,6 +129,13 @@ export async function updateSchedule(id, updates) {
       createdAt: data.schedules[id].createdAt,
       updatedAt: new Date().toISOString()
     };
+
+    if (cleanUpdates.schedule) {
+      schedule.rolledIntervalMs = null;
+      if (schedule.schedule) {
+        schedule.schedule.rolledIntervalMs = null;
+      }
+    }
 
     data.schedules[id] = schedule;
     return data;
@@ -185,7 +193,7 @@ export async function toggleSchedule(id, enabled) {
  */
 async function activateSchedule(id, schedule) {
   // Don't double-activate
-  if (activeSchedules.has(id)) {
+  if (activeSchedules.has(id) && eventScheduler.getEvent(activeSchedules.get(id))) {
     return;
   }
 
@@ -214,11 +222,29 @@ async function activateSchedule(id, schedule) {
   } else if (schedule.schedule.type === 'interval') {
     eventConfig.type = 'interval';
     eventConfig.intervalMs = schedule.schedule.intervalMs;
+    if (schedule.lastRun) {
+      eventConfig.lastRunAt = schedule.lastRun;
+    }
   } else if (schedule.schedule.type === 'random') {
     // For random, use interval with randomized timing
     eventConfig.type = 'interval';
     const { minMs, maxMs } = schedule.schedule.randomWindow;
-    eventConfig.intervalMs = minMs + Math.random() * (maxMs - minMs);
+    let intervalMs = schedule.rolledIntervalMs ?? schedule.schedule?.rolledIntervalMs;
+    if (!intervalMs || intervalMs < minMs || intervalMs > maxMs) {
+      intervalMs = minMs + Math.random() * (maxMs - minMs);
+      await store.mutate((data) => {
+        if (data.schedules[id]) {
+          data.schedules[id].rolledIntervalMs = intervalMs;
+          if (data.schedules[id].schedule) {
+            data.schedules[id].schedule.rolledIntervalMs = intervalMs;
+          }
+        }
+      });
+    }
+    eventConfig.intervalMs = intervalMs;
+    if (schedule.lastRun) {
+      eventConfig.lastRunAt = schedule.lastRun;
+    }
   }
 
   eventScheduler.schedule(eventConfig);
@@ -296,6 +322,10 @@ async function executeScheduledAction(scheduleId) {
     if (data.schedules[scheduleId]) {
       data.schedules[scheduleId].lastRun = now;
       data.schedules[scheduleId].runCount = (data.schedules[scheduleId].runCount || 0) + 1;
+      data.schedules[scheduleId].rolledIntervalMs = null;
+      if (data.schedules[scheduleId].schedule) {
+        data.schedules[scheduleId].schedule.rolledIntervalMs = null;
+      }
     }
   });
 
