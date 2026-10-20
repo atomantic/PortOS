@@ -1449,7 +1449,9 @@ export async function mergeBranch(dir, branchName) {
  * @returns {Promise<boolean>}
  */
 export async function hasBranchMergeEvidence(dir, branch, target) {
-  if (!branch || !target || branch === target) return false;
+  // Equal immutable commits prove inclusion; equal symbolic branch names do
+  // not prove that a feature branch landed anywhere else.
+  if (!branch || !target || (branch === target && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(branch))) return false;
 
   const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true })
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
@@ -1736,6 +1738,113 @@ const WORKTREE_HOLD_REASONS = {
 };
 const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || reason || 'checked out in a worktree';
 
+async function prepareRemoteRetirement(dir, defaultBranch) {
+  // A remote name resolves differently for fetch and push (and can change
+  // while cleanup awaits). Require one identical endpoint and use its captured
+  // URL for every read/write. Equivalent-looking aliases need explicit review.
+  const [fetchUrls, pushUrls] = await Promise.all([
+    execGitSafe(['remote', 'get-url', '--all', 'origin'], dir),
+    execGitSafe(['remote', 'get-url', '--push', '--all', 'origin'], dir),
+  ]);
+  const fetchEndpoints = fetchUrls.stdout.trim().split(/\r?\n/).filter(Boolean);
+  const pushEndpoints = pushUrls.stdout.trim().split(/\r?\n/).filter(Boolean);
+  if (fetchUrls.exitCode !== 0 || pushUrls.exitCode !== 0
+      || fetchEndpoints.length !== 1 || pushEndpoints.length !== 1
+      || fetchEndpoints[0] !== pushEndpoints[0]) {
+    return { reason: 'fetch and push must identify one identical remote endpoint' };
+  }
+  const remoteUrl = fetchEndpoints[0];
+  // origin/HEAD and a caller's remembered default can outlive a forge default
+  // change. Establish the advertised default before any refresh or retirement.
+  const advertised = await execGitSafe(['ls-remote', '--symref', '--', remoteUrl, 'HEAD'], dir);
+  const symrefs = advertised.stdout.split(/\r?\n/).filter(line => line.startsWith('ref: '));
+  const defaultMatch = symrefs.length === 1 ? /^ref: (refs\/heads\/.+)\tHEAD$/.exec(symrefs[0]) : null;
+  if (advertised.exitCode !== 0 || !defaultMatch) return { reason: 'default-branch-unverified' };
+  if (defaultMatch[1] !== `refs/heads/${defaultBranch}`) return { reason: 'default-branch-changed' };
+  // A stale local default or an unsuccessful fetch never authorizes deletion.
+  const fetched = await execGitSafe(['fetch', '--prune', '--', remoteUrl, '+refs/heads/*:refs/remotes/origin/*'], dir, { ignoreExitCode: true });
+  if (fetched.exitCode !== 0) return { reason: 'remote default could not be refreshed' };
+  const targetRef = `refs/heads/${defaultBranch}`;
+  const targetHead = await execGitSafe(['ls-remote', '--heads', '--', remoteUrl, targetRef], dir);
+  const targetMatch = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)$/.exec(targetHead.stdout.trim());
+  const targetSha = targetMatch?.[1];
+  if (targetHead.exitCode !== 0 || targetMatch?.[2] !== targetRef
+      || (await execGitSafe(['rev-parse', '--verify', `${targetSha}^{commit}`], dir)).exitCode !== 0) {
+    return { reason: 'remote default head unavailable' };
+  }
+  return { remoteUrl, targetSha, defaultBranch };
+}
+
+// Fresh local refs, upstream aliases and actual holders all retain the remote
+// recovery ref. Re-read immediately before the leased push, inside the same
+// ownership fence used to register managed claims.
+async function remoteRetirementLocalHold(dir, name) {
+  const [refs, trees] = await Promise.all([
+    execGitSafe(['for-each-ref', '--format=%(refname:short)%09%(upstream:short)', 'refs/heads/'], dir),
+    listWorktrees(dir).catch(() => null),
+  ]);
+  if (refs.exitCode !== 0 || !Array.isArray(trees)) return 'local ownership unavailable';
+  if (refs.stdout.split(/\r?\n/).some(line => {
+    const [branch, upstream] = line.split('\t');
+    return branch === name || upstream === `origin/${name}`;
+  })) return 'local branch or upstream still exists';
+  if (trees.some(tree => tree.branch === `refs/heads/${name}` || tree.branch === name)) return 'checked out in a worktree';
+  return null;
+}
+
+async function retireMergedRemoteHead(dir, name, context, { excludeBranches } = {}) {
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  if (PROTECTED_BRANCHES.includes(name) || name === context.defaultBranch || name === 'HEAD') return { reason: 'protected branch' };
+  const ref = `refs/heads/${name}`;
+  if ((await execGitSafe(['check-ref-format', ref], dir)).exitCode !== 0) return { reason: 'invalid branch name' };
+  return withClaimOwnershipLock(async () => {
+    const hold = async tip => {
+      const exclusions = typeof excludeBranches === 'function' ? await excludeBranches() : excludeBranches;
+      if (exclusions?.has(name)) return 'used by an active agent';
+      const agents = await readClaimOwnershipAgents();
+      const owner = claimCheckoutOwnerReason({ branchName: name, holderPath: null, sourceWorkspace: dir, agents });
+      if (owner) return owner;
+      if (tip) {
+        const policy = await readBranchCompletionHold({ repoPath: dir, branch: name, tip, retirement: true });
+        if (policy) return policy;
+      }
+      return remoteRetirementLocalHold(dir, name);
+    };
+    const initialHold = await hold();
+    if (initialHold) return { reason: initialHold };
+    const head = await execGitSafe(['ls-remote', '--heads', '--', context.remoteUrl, ref], dir);
+    const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)$/.exec(head.stdout.trim());
+    if (head.exitCode !== 0 || !match || match[2] !== ref) return { reason: 'head unavailable or already removed' };
+    if (!await hasBranchMergeEvidence(dir, match[1], context.targetSha)) return { reason: 'current head is not merged' };
+    const finalHold = await hold(match[1]);
+    if (finalHold) return { reason: finalHold };
+    const removed = await execGitSafe(['push', `--force-with-lease=${ref}:${match[1]}`, '--', context.remoteUrl, `:${ref}`], dir, { ignoreExitCode: true });
+    return removed.exitCode === 0 ? { deleted: true } : { reason: 'head changed or deletion failed', failed: true };
+  });
+}
+
+/** Retire only explicitly selected remote candidates, preserving any fresh local
+ * ownership. The candidate scan grants no deletion authority: endpoint, default,
+ * current head, merge proof and claim/completion gates are established here.
+ */
+export async function deleteMergedRemoteBranches(dir, names, { defaultBranch, excludeBranches } = {}) {
+  const selected = [...new Set(names)];
+  if (!selected.length) return { deleted: [], skipped: [] };
+  const base = defaultBranch || (await getRepoBranches(dir)).baseBranch || 'main';
+  const context = await prepareRemoteRetirement(dir, base);
+  if (context.reason) return { deleted: [], skipped: selected.map(branch => ({ branch, reason: context.reason })) };
+  const deleted = [];
+  const skipped = [];
+  for (const branch of selected) {
+    const result = await retireMergedRemoteHead(dir, branch, context, { excludeBranches });
+    if (result.deleted) deleted.push(branch);
+    else skipped.push({ branch, reason: result.reason });
+  }
+  return { deleted, skipped };
+}
+
 /**
  * Delete all merged branches (local and remote) in one operation.
  * Skips the `PROTECTED_BRANCHES` set (see `../lib/gitArgs.js`), the current branch,
@@ -1754,22 +1863,18 @@ const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || reason |
  */
 export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null } = {}) {
   const { cleanupMerged } = await import('./branchReconcile.js');
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
-  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
-  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
-  const target = `refs/remotes/origin/${defaultBranch}`;
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   const skipped = [];
   const records = new Map();
-  // A stale local default or an unsuccessful fetch never authorizes deletion.
-  const fetched = await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
-  if (fetched.exitCode !== 0) return { deleted: [], skipped: ['cleanup (remote default could not be refreshed)'], defaultBranch };
+  const context = await prepareRemoteRetirement(dir, defaultBranch);
+  if (context.reason) return { deleted: [], skipped: [`cleanup (${context.reason})`], defaultBranch };
+  const { targetSha } = context;
   const branches = await execGitSafe(['branch', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
   if (branches.exitCode !== 0) return { deleted: [], skipped: ['cleanup (local branches unavailable)'], defaultBranch };
   const local = new Set(branches.stdout.trim().split('\n').filter(Boolean));
-  const remote = await execGitSafe(['branch', '-r', '--merged', target, '--format=%(refname:short)'], dir, { ignoreExitCode: true });
+  const remote = await execGitSafe(['branch', '-r', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
   if (remote.exitCode !== 0) return { deleted: [], skipped: ['cleanup (remote merge evidence unavailable)'], defaultBranch };
   const remoteNames = remote.stdout.trim().split('\n').filter(ref => ref.startsWith('origin/')).map(ref => ref.slice(7));
   const names = new Set([...local, ...remoteNames]);
@@ -1780,7 +1885,7 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
     const record = { name, local: null, remote: null };
     records.set(name, record);
     if (local.has(name)) {
-      const retired = await cleanupMerged(dir, target, [{ branch: name }], { activeAgentIds });
+      const retired = await cleanupMerged(dir, targetSha, [{ branch: name }], { activeAgentIds });
       if (retired.cleaned.includes(name)) record.local = 'deleted';
       else {
         for (const hold of retired.skipped) skipped.push(`${name} (local: ${worktreeHoldReason(hold.reason)}${hold.detail ? `: ${hold.detail}` : ''})`);
@@ -1790,23 +1895,12 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
       }
     }
     if (!remoteNames.includes(name)) continue;
-    // Binding and cleanup share the same fence. Snapshot exclusions are only an
-    // extra hold; the authoritative owner and completion policy are read afresh.
-    await withClaimOwnershipLock(async () => {
-      const agents = await readClaimOwnershipAgents();
-      const owner = claimCheckoutOwnerReason({ branchName: name, holderPath: null, sourceWorkspace: dir, agents });
-      if (owner) { skipped.push(`${name} (remote: ${owner})`); return; }
-      const ref = `refs/heads/${name}`;
-      const head = await execGitSafe(['ls-remote', '--heads', 'origin', ref], dir, { ignoreExitCode: true });
-      const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)\n?$/.exec(head.stdout.trim());
-      if (head.exitCode !== 0 || !match || match[2] !== ref) { skipped.push(`${name} (remote: head unavailable or already removed)`); return; }
-      const policy = await readBranchCompletionHold({ repoPath: dir, branch: name, tip: match[1], retirement: true });
-      if (policy) { skipped.push(`${name} (remote: ${policy})`); return; }
-      if (!await hasBranchMergeEvidence(dir, match[1], target)) { skipped.push(`${name} (remote: current head is not merged)`); return; }
-      const removed = await execGitSafe(['push', `--force-with-lease=${ref}:${match[1]}`, 'origin', `:${ref}`], dir, { ignoreExitCode: true });
-      record.remote = removed.exitCode === 0 ? 'deleted' : 'failed';
-      if (removed.exitCode !== 0) skipped.push(`${name} (remote: head changed or deletion failed)`);
-    });
+    const removed = await retireMergedRemoteHead(dir, name, context, { excludeBranches });
+    if (removed.deleted) record.remote = 'deleted';
+    else {
+      if (removed.failed) record.remote = 'failed';
+      skipped.push(`${name} (remote: ${removed.reason})`);
+    }
   }
   return { deleted: [...records.values()].filter(row => row.local === 'deleted' || row.remote === 'deleted'), skipped, defaultBranch };
 }

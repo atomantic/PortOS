@@ -117,19 +117,28 @@ repair the exact existing backlink rather than minting another merge authority.
 Missing tasks, unreadable state, active owners and explicit leave-open policy
 never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
+Routine reconciliation retains superseded but unmerged branches. Their separate
+backup-and-retire workflow requires explicit `reapSuperseded: true`; merged cleanup
+does not enable it.
+
 The Git page's merged badge is a display hint. Delete merged branches and
 completion cleanup use the same retirement path: resolve the current checkout,
 re-read ownership and policy, verify the exact commit's merge evidence, archive
-and verify ignored content and private Git evidence, then compare-and-delete
-the unchanged local ref. Remote deletion uses an exact-head lease after a fresh
-remote read. Recovery refs retain original commit objects even for a squash
+and verify ignored content, private Git evidence and reflog-only commit objects.
+Local ref retirement uses Git’s checked-out-branch guard and an exact-head lease
+inside the worktree creation queue. Remote deletion binds its fresh proof and
+exact-head lease to one captured, matching fetch/push endpoint. Recovery refs retain original commit objects even for a squash
 merge without a checkout. Cleanup reports locked, dirty, active, unmanaged,
 unverified manual claim, changed-head and archive-failure holds explicitly.
 An absent live registry entry alone cannot waive a manual claim hold; a
-completed recorded owner is required. Initialized submodules currently retain
+successful completion receipt bound to the current checkout path, head and
+filesystem incarnation is required. Older records cannot release a reused claim. Initialized submodules currently retain
 the checkout because their complete content is not supported by the archive.
 A held merged receipt names a recovery task when policy and source ownership
-permit it; intentional human handoffs stay with their existing owner.
+permit it; intentional human handoffs stay with their existing owner. The recovery
+task prepares preservation prerequisites; the coordinator makes one final retirement
+attempt after that task completes. A further refusal remains held with its reason
+and recovery task, without creating a loop.
 
 ### Pending-merge handoff (#12247)
 

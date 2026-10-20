@@ -218,6 +218,18 @@ export async function completeAgent(agentId, result = {}) {
       return state.agents[agentId];
     }
 
+    // Capture while the state lock still protects this run's active bindings.
+    // A later audit must never turn an old branch name into checkout authority.
+    const agent = state.agents[agentId];
+    let completedCheckouts;
+    if (agent.metadata?.claimPicksOwnBranch) {
+      completedCheckouts = [];
+      if (result.success === true) {
+        const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+        completedCheckouts = await captureCompletedCheckouts(agent, { success: true }).catch(() => []);
+      }
+    }
+
     state.agents[agentId] = {
       ...state.agents[agentId],
       status: 'completed',
@@ -231,6 +243,7 @@ export async function completeAgent(agentId, result = {}) {
       ...(result.success && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
         ? { metadata: { ...state.agents[agentId].metadata, repoStateVerification: { status: 'pending' } } } : {}),
     };
+    if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };
 
     if (result.success) {
       state.stats.tasksCompleted++;

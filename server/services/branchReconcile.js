@@ -16,18 +16,16 @@ import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
  * classifier. We never author-filter — every machine shares one GitHub login, so
  * authorship can't distinguish machines; local-branch existence can.
  *
- * The one thing that DOES look at the remote is the orphan sweep
- * (`reapOrphanedRemotes`), and it stays peer-safe by only ever deleting a remote
- * branch whose work is already merged into the default branch — a state in which
- * no machine, ours or a peer's, can lose anything. An unmerged remote-only branch
- * is reported, never touched.
+ * The orphan sweep (`reapOrphanedRemotes`) checks remote branches through the
+ * endpoint-bound Git cleanup action. A scan alone cannot authorize deletion:
+ * another install may advance a branch after the scan.
  */
 
 import { buildAutoMergeHandoffInstructions } from '../lib/mergeGateContract.js';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
-import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteBranch } from './git.js';
+import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus } from './worktreeManager.js';
 import { isAgentWorktreeId, isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
@@ -795,8 +793,8 @@ export function partitionRemoteOrphans(remoteHeads, localBranches, { defaultBran
 }
 
 /**
- * Sweep `origin` for branches nothing local points at, and reap the ones whose
- * work is already merged into the default branch.
+ * Report or retire `origin` branches nothing local points at. Retirement shares
+ * the endpoint-bound Git cleanup action and its fresh ownership gates.
  *
  * PEER SAFETY. This is the only part of reconcile that looks at the remote, and
  * a federated peer's in-progress branch looks exactly like an orphan from here —
@@ -812,16 +810,13 @@ export function partitionRemoteOrphans(remoteHeads, localBranches, { defaultBran
  * unresolvable SHA (a branch this clone has never fetched) is `unknown`, which
  * fails closed to report-only.
  *
- * DEFAULTS TO REPORT-ONLY. `git push origin --delete` reaches off this machine to
- * a shared forge and cannot be undone from here, so it stays opt-in per the same
- * reasoning the superseded ledger uses for worktrees: automate the analysis, keep
- * the destructive step a decision someone made on purpose. Callers that have not
- * asked for `reap: true` get an unchanged, side-effect-free cycle.
+ * `reap` opts in to endpoint-bound retirement of this scan's candidates only.
+ * The shared helper refreshes the default and rechecks the remote head, local
+ * holders, live owners and completion policy before an exact leased push.
  *
  * @param {string} repoPath
  * @param {string} defaultBranch
- * @param {{ reap?: boolean }} [opts] - `reap: true` actually deletes the merged
- *   orphans; the default reports them under reason `reap-disabled`.
+ * @param {{ reap?: boolean }} [opts] - deletes verified merged orphans when enabled
  * @returns {Promise<{reaped:string[], reported:{branch:string,reason:string}[], remoteUnavailable?:boolean}>}
  */
 export async function reapOrphanedRemotes(repoPath, defaultBranch, { reap = false } = {}) {
@@ -838,6 +833,7 @@ export async function reapOrphanedRemotes(repoPath, defaultBranch, { reap = fals
   const orphans = partitionRemoteOrphans(remoteHeads, localBranches, { defaultBranch });
   const reaped = [];
   const reported = [];
+  const candidates = [];
   for (const { branch, sha } of orphans) {
     const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, sha, defaultBranch).catch(() => false);
     if (!hasMergeEvidence) {
@@ -848,14 +844,12 @@ export async function reapOrphanedRemotes(repoPath, defaultBranch, { reap = fals
       reported.push({ branch, reason: 'reap-disabled' });
       continue;
     }
-    const result = await deleteBranch(repoPath, branch, { remote: true }).catch((err) => ({ error: err.message }));
-    const outcome = result?.results?.remote;
-    if (result?.error || (outcome && outcome.startsWith('failed'))) {
-      reported.push({ branch, reason: `remote-delete-failed: ${result.error || outcome}` });
-      continue;
-    }
-    reaped.push(branch);
-    console.log(`🔀 branch-reconcile: reaped merged orphan ${RECONCILED_REMOTE}/${branch}`);
+    candidates.push(branch);
+  }
+  if (candidates.length) {
+    const retired = await deleteMergedRemoteBranches(repoPath, candidates, { defaultBranch });
+    reaped.push(...retired.deleted);
+    reported.push(...retired.skipped);
   }
   // Report-only is silent work unless it says so — without this line a merged
   // orphan is detected every cycle and never surfaces anywhere a human looks.
@@ -1363,15 +1357,15 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
   const policyHold = await readPolicyHold();
   if (policyHold) return { ok: false, reason: policyHold };
   let preservation = null;
-  let expectedHead = null;
+  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return { ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' };
   if (mergedRetirement) {
     // Completion audits may know only the branch. Resolve its actual holder,
     // and pin merge evidence to its current commit rather than the scan's flag.
     const holders = await listWorktrees(repoPath).catch(() => null);
     if (!holders) return { ok: false, reason: 'worktree-ownership-unreadable' };
     const holder = holders.find(wt => wt.branch === `refs/heads/${b.branch}`);
-    expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '') || !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return { ok: false, reason: 'not-merged-on-recheck' };
+    if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return { ok: false, reason: 'not-merged-on-recheck' };
     if (b.worktreePath && b.worktreePath !== holder?.path) return { ok: false, reason: 'worktree-holder-changed' };
     if (holder?.path === repoPath) return { ok: false, reason: 'currently-checked-out' };
     b = { ...b, worktreePath: holder?.path || null, worktreeLocked: holder?.locked || false };
@@ -1410,10 +1404,10 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
       // Registry absence cannot prove a manual CLI or external task finished.
       // Require a recorded completed owner before waiving its claim hold.
-      const completed = records?.some(agent => agent.status === 'completed'
-        && typeof agent.metadata?.sourceWorkspace === 'string' && resolve(agent.metadata.sourceWorkspace) === resolve(repoPath)
-        && [agent.metadata.worktreeBranch, ...(Array.isArray(agent.metadata.claimBranches) ? agent.metadata.claimBranches : []),
-          ...(Array.isArray(agent.metadata.claimReleasedBranches) ? agent.metadata.claimReleasedBranches : [])].includes(b.branch));
+      const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
+      const completed = records && await hasCompletedCheckoutEvidence(records, {
+        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+      });
       if (!completed) return { ok: false, reason: records ? 'claim-completion-unverified' : 'claim-ownership-unreadable' };
     }
     const tree = (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
@@ -1426,7 +1420,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
   if (prepared?.error) return { ok: false, reason: prepared.error };
   if (b.worktreePath) {
     const verifyRemoval = async (holder) => {
-      if (!holder || holder.branch !== `refs/heads/${b.branch}`) return 'worktree-holder-changed';
+      if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
       if (claimOwners !== undefined) {
         const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
         const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
@@ -1434,6 +1428,14 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       }
       const policyHold = await readPolicyHold();
       if (policyHold) return policyHold;
+      if (mergedRetirement && allowLiveClaim && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
+        const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+        const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
+        const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
+        if (!records || !await hasCompletedCheckoutEvidence(records, {
+          repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+        })) return 'claim-completion-unverified';
+      }
       const dirty = await isWorktreeDirty(b.worktreePath);
       if (dirty === null) return 'worktree-status-unavailable';
       if (requireCleanWorktree && dirty) return 'worktree-dirty';
@@ -1447,24 +1449,25 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
   }
   const latestPolicyHold = await readPolicyHold();
   if (latestPolicyHold) return { ok: false, reason: latestPolicyHold };
+  if (claimOwners !== undefined) {
+    const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
+    const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
+    if (reason) return { ok: false, reason };
+  }
+  const holders = await listWorktrees(repoPath).catch(() => null);
+  if (!holders || holders.some(wt => wt.branch === `refs/heads/${b.branch}`)) return { ok: false, reason: 'branch-has-new-holder' };
   if (mergedRetirement) {
-    const holders = await listWorktrees(repoPath).catch(() => null);
-    if (!holders || holders.some(wt => wt.branch === `refs/heads/${b.branch}`)) return { ok: false, reason: 'branch-has-new-holder' };
     if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return { ok: false, reason: 'not-merged-on-recheck' };
     // A squash/rebase-equivalent branch can contain unique commit objects even
     // without a checkout. Keep an immutable recovery ref before retiring it.
     const backupRef = `refs/portos/completed/${expectedHead}`;
     const backup = await execGit(['update-ref', backupRef, expectedHead], repoPath, { ignoreExitCode: true }).catch(() => null);
     if (backup?.exitCode !== 0) return { ok: false, reason: 'recovery-ref-failed' };
-    const deleted = await execGit(['update-ref', '-d', `refs/heads/${b.branch}`, expectedHead], repoPath, { ignoreExitCode: true }).catch(() => null);
-    return deleted?.exitCode === 0 ? { ok: true, prepared, archiveDir: preservation?.archiveDir }
-      : { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
   }
-  const result = await deleteBranch(repoPath, b.branch, { local: true }).catch((err) => ({ error: err.message }));
-  if (result?.error || result?.results?.local?.startsWith?.('failed')) {
-    return { ok: false, reason: `delete-failed: ${result.error || result.results.local}` };
-  }
-  return { ok: true, prepared };
+  const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
+  const deleted = await deleteCompletedLocalBranch(repoPath, b.branch, expectedHead);
+  return deleted ? { ok: true, prepared, ...(preservation && { archiveDir: preservation.archiveDir }) }
+    : { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
 }
 
 /**
@@ -1599,8 +1602,16 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
         if (dirty) return 'worktree-dirty';
         return await isStillDetachedOnMerged(repoPath, tree.path, defaultBranch) ? null : 'worktree-head-changed';
       };
+      const current = (await listWorktrees(repoPath).catch(() => null))?.find(holder => holder.path === tree.path);
+      if (!current || current.head !== tree.head || current.branch) return { removed: false, reason: 'worktree-holder-changed' };
+      const initialHold = await verifyRemoval(current);
+      if (initialHold) return { removed: false, reason: initialHold };
+      const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+      const preservation = await preserveMergedCheckout(repoPath, current, defaultBranch).catch(error => ({ error }));
+      if (preservation.error) return { removed: false, reason: 'archive-failed' };
       return forceRemoveWorktreeDir(repoPath, tree.path, {
-        label: '🔀 branch-reconcile: remove detached worktree', log: 'all', verifyRemoval,
+        label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
+        verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
       });
     });
     if (!removal.removed) {
@@ -1613,19 +1624,17 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
 }
 
 /**
- * Full Tier-1 reconcile: gather → classify → clean up merged + verified-superseded.
+ * Full Tier-1 reconcile: gather → classify → clean up merged work.
+ * Superseded work is retained unless its separate backup-and-retire path is opted into.
  * Returns the in-flight set (branches needing an agent) for the scheduler to dispatch.
  *
  * @param {string} [repoPath=PATHS.root]
  * @param {{ cleanup?: boolean, reapSuperseded?: boolean, reapRemotes?: boolean, activeAgentIds?: Set<string> }} [opts] - when
  *   cleanup is false, merged branches are reported (in `skipped`, reason
- *   `cleanup-disabled`) but not deleted. `reapSuperseded` (defaults to `cleanup`)
- *   governs the separate destructive step for verified-superseded branches, whose
- *   work is NOT on the default branch and survives only as a backup — a caller
- *   whose "clean up merged branches" toggle never meant that turns it off
- *   explicitly. `reapRemotes` (default false) additionally deletes merged
- *   branches left on `origin` that nothing local points at; off, they are only
- *   reported — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
+ *   `cleanup-disabled`) but not deleted. `reapSuperseded` (default false)
+ *   explicitly opts into the separate destructive step for verified-superseded
+ *   branches, whose work is NOT on the default branch and survives only as a backup. `reapRemotes` (default false) reports merged remote orphans
+ *   using endpoint-bound retirement — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
  *   agent worktrees and any live worktree basename tokens supplied by the caller.
  *   `claimOwners` (`{ agents, readAgents? }`, the agent registry) adds the
  *   registered claim owners — see `resolveClaimOwnerReason`; a dispatching
@@ -1648,7 +1657,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = false, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
   if (claimOwners === undefined) claimOwners = { agents: await readClaimOwnershipAgents(), readAgents: readClaimOwnershipAgents };
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
@@ -1731,10 +1740,9 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // stays in-flight forever — re-analyzed at full cost on every recheck. Drop it
   // out of the actionable set on a cached verdict that still verifies (#3842).
   const { actionable: inFlight, superseded } = await applySupersededLedger(repoPath, allInFlight, defaultBranch);
-  // A verified-superseded branch is TERMINAL, so it is reaped here rather than
-  // reported: nothing else can ever retire it, and a report that survives every
-  // pass is how nine of them accumulated in this install. Backed up first, and
-  // held by the same protection gate as cleanupMerged — see reapSupersededBranches.
+  // A cached superseded verdict avoids repeated analysis but does not prove
+  // the branch merged. Retain it by default; an explicit caller opt-in uses the
+  // backup-first retirement path and the same owner/holder gates as merged work.
   const supersededReap = reapSuperseded
     ? await reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners })
     : { reaped: [], held: superseded, skipped: superseded.map((b) => ({ branch: b.branch, reason: 'reap-superseded-disabled' })) };

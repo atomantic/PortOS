@@ -1,3 +1,4 @@
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 /**
  * Agent Repo-State Verification
@@ -465,16 +466,16 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
  * `PR_UNMERGED` delegates to branch-reconcile's `driveToMerge`, which carries the
  * caveats a hand-written line loses: preserve the linked checkout (gh can implicitly delete a
  * branch checked out elsewhere), retry `--squash`/`--rebase` on "not allowed",
- * verify the GitHub auto-merge handoff, or remove the worktree after merging
+ * verify the exact-head server handoff, or remove the worktree after merging
  * before deleting the branch.
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
-    `Remove the leftover worktree: confirm it is clean ("git -C ${worktreePath} status --porcelain"), commit or discard anything found, then "git worktree remove ${worktreePath}" and "git worktree prune".`,
+    `Inspect the retained worktree ${worktreePath}. Preserve every unique tracked, untracked and ignored byte, verify its archive, and recheck live ownership before asking the shared retirement path to remove it. Never discard content or bypass a cleanup hold.`,
   [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName, base }) =>
-    `Delete the local branch once its work is on ${base}: "git branch -d ${branchName}" (use -D only after confirming the commits landed). Remove its worktree first — the delete fails while a worktree still has it checked out.`,
+    `Retire local branch ${branchName} only after fresh merge evidence against ${base}, archive verification and ownership checks. Let shared cleanup compare-and-delete its unchanged tip after the holder is safely retired.`,
   [REPO_STATE_ISSUES.REMOTE_BRANCH_PRESENT]: ({ branchName }) =>
-    `Delete the remote branch after confirming its work merged: "git push origin --delete ${branchName}".`,
+    `Re-read the exact remote ref for ${branchName}, prove that head merged, then delete only with an expected-head lease. Preserve any advanced or unreadable ref.`,
   [REPO_STATE_ISSUES.BRANCH_UNMERGED]: ({ base }) =>
     `The branch has commits that are NOT on ${base}. Decide whether they are still wanted: land them (open or merge a PR, or merge locally and resolve conflicts) before deleting anything. Do NOT delete this branch until its work is on ${base}.`,
   // Forge-aware: `driveToMerge` emits a `gh pr merge` procedure, which a GitLab
@@ -512,6 +513,8 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     '',
     'What diverged:',
     ...issues.map((i, n) => `${n + 1}. ${i.message}`),
+    '',
+    MANAGED_WORKTREE_CLEANUP_CONTRACT,
     '',
     'Finish the work, in this order:',
     ...issues.map((i, n) => `${n + 1}. ${REPO_STATE_REMEDIATIONS[i.code](ctx)}`),

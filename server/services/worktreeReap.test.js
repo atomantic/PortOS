@@ -10,7 +10,7 @@
  * Repos are copied from the shared `gitTestRepo.js` template. The whole file
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -26,7 +26,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
 afterAll(cleanupTempDataRoots);
 import { hasBranchMergeEvidence } from './git.js';
-import { reapMergedWorktrees } from './worktreeManager.js';
+import { reapMergedWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
@@ -70,6 +70,41 @@ async function initRepo() {
   const dir = (await execGit(['rev-parse', '--show-toplevel'], safePath)).stdout.trim() || safePath;
   return { dir, safePath };
 }
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => {
+  let dir;
+  beforeEach(async () => { ({ dir } = await initRepo()); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+
+  it('uses an exact-head lease and native holder refusal for a late attachment', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const path = join(dir, 'late-holder');
+    await execGit(['worktree', 'add', path, 'done'], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    await execGit(['worktree', 'remove', path], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
+  });
+
+  it('retains a branch that advanced after the merge proof', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    await commitFile(dir, 'new.txt', 'new work', 'new work');
+    const advanced = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['update-ref', 'refs/heads/done', advanced, head], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(advanced);
+  });
+
+  it('preserves the repository receiver deletion policy', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    await execGit(['config', 'receive.denyDeletes', 'true'], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+});
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
   let dir;

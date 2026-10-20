@@ -387,7 +387,9 @@ async function notifyPendingMergeTimeout(app, pending, reason, description = nul
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     priority: PRIORITY_LEVELS.HIGH,
     title: `Pending PR #${pending.prNumber} needs attention`,
-    description: description || `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`,
+    description: description || (readHandoffBinding(pending)
+      ? `PR polling needs attention after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}. PortOS retains its pending-merge receipt and continues checking for recovery.`
+      : `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`),
     link: pending.prUrl,
     metadata: { appId: app.id, pendingMergePrNumber: pending.prNumber }
   }).catch((err) => {
@@ -403,12 +405,13 @@ async function recoverHeldCleanup(app, entry, binding) {
   const { getTaskById } = await import('./cosTaskStore.js');
   if (entry.cleanup?.recoveryTaskId) {
     const task = await getTaskById(entry.cleanup.recoveryTaskId).catch(() => null);
-    return task?.status === 'completed' ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0 } } : entry;
+    return task?.status === 'completed' && !entry.cleanup.recoveryCompleted
+      ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
   }
   if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
   const { addTask } = await import('./cos.js');
   const task = await addTask({
-    description: `[Recovery] Finish retained checkout for ${entry.prBranch} in ${app.name || app.id}`,
+    description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
     app: app.id, priority: 'HIGH', isRecovery: true, useWorktree: false,
     metadata: { existingBranch: entry.prBranch, recoveryOrigin: { parentAgentId: binding.agentId,
       parentTaskId: binding.taskId, subsystem: 'repository-cleanup' } },
@@ -417,7 +420,7 @@ Repository: ${app.repoPath}
 Checkout: ${binding.worktreePath}
 Retained reason: ${entry.cleanup.reason}
 Archive: ${entry.cleanup.archiveDir || 'not yet verified'}
-Finish only this branch and checkout. Re-read live ownership, locks, head and completion policy. Preserve every unique tracked, untracked and ignored byte and verify recovery evidence before removal. Never infer inactivity from an absent process or missing registry entry. Do not reopen or merge the PR, change the primary checkout, bypass unmanaged-location guards, remove another agent’s lock, or discard content. If retirement is not authorized, retain the checkout and record the exact owner, blocker and next step.`,
+Repair preservation prerequisites for only this checkout, leaving final worktree/ref removal to its receipt coordinator. Do not delete the checkout or refs yourself. Re-read live ownership, locks, head and completion policy. Preserve every unique tracked, untracked and ignored byte and verify recovery evidence before removal. Never infer inactivity from an absent process or missing registry entry. Do not reopen or merge the PR, change the primary checkout, bypass unmanaged-location guards, remove another agent’s lock, or discard content. If retirement is not authorized, retain the checkout and record the exact owner, blocker and next step.`,
   }, 'user').catch(() => null);
   return task?.id ? { ...entry, cleanup: { ...entry.cleanup, recoveryTaskId: task.id } } : entry;
 }
@@ -440,7 +443,7 @@ async function finishMergedReceipt(app, entry, binding) {
   const attempts = (entry.cleanup?.attempts || 0) + 1;
   const reason = result.reason || result.branchRetainedReason || 'branch-retained';
   const requiresRecovery = CLEANUP_REQUIRES_RECOVERY.has(reason);
-  const cleanup = { status: requiresRecovery || attempts >= MAX_PENDING_MERGE_TICKS ? 'held' : 'pending',
+  const cleanup = { ...entry.cleanup, status: entry.cleanup?.recoveryCompleted || requiresRecovery || attempts >= MAX_PENDING_MERGE_TICKS ? 'held' : 'pending',
     reason, attempts, retryAt: Date.now() + PENDING_MERGE_SWEEP_INTERVAL_MS,
     ...(result.archiveDir ? { archiveDir: result.archiveDir } : {}) };
   if (!entry.cleanup || cleanup.status === 'held') {

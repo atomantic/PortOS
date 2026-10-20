@@ -29,6 +29,8 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
 
+vi.mock('./completedCheckoutEvidence.js', () => ({ captureCompletedCheckouts: vi.fn(async () => []) }));
+
 // Pass-through fs shim with opt-in failure injection, so one test can force the
 // archive's cross-filesystem fallback AND a failure partway through its copy.
 // Scoped to paths inside a `YYYY-MM-DD` bucket so the flat-dir writes that
@@ -95,6 +97,7 @@ import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
+import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './agentState.js';
 
 afterAll(cleanupTempDataRoots);
@@ -447,6 +450,7 @@ describe('completeAgent idempotence (#3384)', () => {
     emittedCompletions.length = 0;
     recordDomainUsage.mockClear();
     recordDomainUsage.mockImplementation(async () => {});
+    captureCompletedCheckouts.mockReset().mockResolvedValue([]);
     cosEvents.on('agent:completed', (agent) => emittedCompletions.push(agent));
   });
 
@@ -454,6 +458,37 @@ describe('completeAgent idempotence (#3384)', () => {
     fsFailures.dateBucketWritesFail = false;
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
     cosEvents.removeAllListeners('agent:completed');
+  });
+
+  it('archives checkout evidence captured while the successful claim still owns its bindings', async () => {
+    const agentId = 'claim-completion';
+    const receipt = { version: 1, agentId, branch: 'claim/issue-1' };
+    mockCosState.state.agents[agentId] = { id: agentId, status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { claimPicksOwnBranch: true, claimBranches: [receipt.branch] }, output: [] };
+    captureCompletedCheckouts.mockImplementationOnce(async agent => {
+      expect(agent.status).toBe('running');
+      expect(mockCosState.state.agents[agentId].status).toBe('running');
+      return [receipt];
+    });
+    const result = await completeAgent(agentId, { success: true });
+    expect(result.metadata.completedCheckouts).toEqual([receipt]);
+    const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, result.completedAt.slice(0, 10), agentId, 'metadata.json'), 'utf8'));
+    expect(archived.metadata.completedCheckouts).toEqual([receipt]);
+    await completeAgent(agentId, { success: true });
+    expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes without checkout authority when capture fails or the claim fails', async () => {
+    const agentId = 'claim-capture-failed';
+    mockCosState.state.agents[agentId] = { id: agentId, status: 'running', metadata: { claimPicksOwnBranch: true }, output: [] };
+    captureCompletedCheckouts.mockRejectedValueOnce(new Error('checkout unreadable'));
+    const result = await completeAgent(agentId, { success: true });
+    expect(result).toMatchObject({ status: 'completed', result: { success: true }, metadata: { completedCheckouts: [] } });
+    mockCosState.state.agents['claim-failed'] = { id: 'claim-failed', status: 'running',
+      metadata: { claimPicksOwnBranch: true, completedCheckouts: [{ stale: true }] }, output: [] };
+    const failed = await completeAgent('claim-failed', { success: false });
+    expect(failed.metadata.completedCheckouts).toEqual([]);
+    expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the first verdict when a duplicate completion arrives', async () => {

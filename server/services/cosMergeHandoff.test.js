@@ -63,6 +63,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...ar
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
+import { addTask } from './cos.js';
 
 const HEAD = 'a'.repeat(40);
 const PR_URL = 'https://github.com/example/repo/pull/7';
@@ -117,6 +118,7 @@ beforeEach(async () => {
   mergePrMock.mockReset().mockResolvedValue({ success: true });
   notifyMock.mockClear();
   followUpMock.mockClear();
+  addTask.mockClear();
 });
 
 describe('pending-merge handoff', () => {
@@ -193,6 +195,9 @@ describe('pending-merge handoff', () => {
     pending()[0].ticks = 11;
     await processPendingMergePrs(f.apps.get('app1'));
     expect(pending()[0].attention).toBe('forge-unreadable');
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('retains its pending-merge receipt and continues checking'),
+    }));
     await processPendingMergePrs(f.apps.get('app1'));
     expect(notifyMock).toHaveBeenCalledTimes(1);
     execGhMock.mockImplementation(forge);
@@ -211,12 +216,49 @@ describe('pending-merge handoff', () => {
     pending()[0].cleanup.retryAt = 0;
     await processPendingMergePrs(f.apps.get('app1'));
     expect(pending()[0].cleanup.recoveryTaskId).toBe('cleanup-recovery');
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('Prepare retained checkout'),
+      context: expect.stringContaining('Do not delete the checkout or refs yourself.'),
+    }), 'user');
     f.tasks['cleanup-recovery'] = { id: 'cleanup-recovery', status: 'completed' };
     await processPendingMergePrs(f.apps.get('app1'));
     cleanupMock.mockResolvedValue({ ok: true, branchDeleted: true });
     await processPendingMergePrs(f.apps.get('app1'));
     expect(pending()).toEqual([]);
   });
+
+  it.each(['retirement-submodule-not-uninitialized', 'active-owner'])(
+    'holds an unresolved completed recovery after one final retirement attempt: %s', async reason => {
+      await handedOff();
+      f.tasks['task-agent-1'].status = 'completed';
+      f.pr.state = 'MERGED';
+      cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+      await processPendingMergePrs(f.apps.get('app1'));
+      pending()[0].cleanup.retryAt = 0;
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()[0].cleanup.recoveryTaskId).toBe('cleanup-recovery');
+
+      f.tasks['cleanup-recovery'] = { id: 'cleanup-recovery', status: 'completed' };
+      await processPendingMergePrs(f.apps.get('app1'));
+      cleanupMock.mockResolvedValue({ ok: false, reason });
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()[0].cleanup).toMatchObject({
+        status: 'held', reason, recoveryTaskId: 'cleanup-recovery', recoveryCompleted: true,
+      });
+
+      // Completion is not proof of preservation. Later sweeps keep the same
+      // owner and refusal, even when the final attempt found a transient reason.
+      for (let sweep = 0; sweep < 2; sweep += 1) {
+        pending()[0].cleanup.retryAt = 0;
+        await processPendingMergePrs(f.apps.get('app1'));
+      }
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0].cleanup.status).toBe('held');
+      expect(cleanupMock).toHaveBeenCalledTimes(2);
+      expect(addTask).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('persists the verified binding and merges only that head once a concurrent lease releases, across a restart', async () => {
     const result = await handedOff();

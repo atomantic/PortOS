@@ -111,6 +111,41 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(path)).toBe(true);
   });
 
+  it('bundles reflog-only commits into a standalone recovery repository', async () => {
+    const path = join(external, 'reflog');
+    await execGit(['worktree', 'add', '-b', 'feature/reflog', path, 'main'], repo);
+    await writeFile(join(path, 'lost.txt'), 'recover this private commit');
+    await execGit(['add', 'lost.txt'], path);
+    await execGit(['commit', '-m', 'private recovery commit'], path);
+    const lost = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    await execGit(['reset', '--hard', 'main'], path);
+    const tree = { path, branch: 'refs/heads/feature/reflog', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toContain(lost);
+    const restored = join(scratch, 'restored');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['show', `${lost}:lost.txt`], restored)).stdout).toBe('recover this private commit');
+    expect(await saved.verify(tree)).toBe(null);
+  });
+
+  it('archives a missing checkout private index and staged contents before pruning', async () => {
+    const path = join(external, 'missing');
+    await execGit(['worktree', 'add', '-b', 'feature/missing', path, 'main'], repo);
+    await writeFile(join(path, 'staged.txt'), 'only in the private index');
+    await execGit(['add', 'staged.txt'], path);
+    const tree = { path, branch: 'refs/heads/feature/missing', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await rm(path, { recursive: true, force: true });
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await readFile(join(saved.archiveDir, 'index.diff'), 'utf8')).toContain('only in the private index');
+    expect(existsSync(join(saved.archiveDir, 'administration', 'gitdir', 'index'))).toBe(true);
+    expect(JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8')).captured.missingCheckout).toBe(true);
+    expect(await saved.verify(tree)).toBe(null);
+    await mkdir(path);
+    await expect(saved.verify(tree)).rejects.toThrow('missing-checkout-reappeared');
+  });
+
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
     // No newline: Windows core.autocrlf must not make this stat-only fixture

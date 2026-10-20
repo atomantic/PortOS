@@ -192,8 +192,10 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.useWorktree).toBe(false);
     // Remediation must be actionable without re-diagnosing, and must forbid
     // deleting unmerged work or touching a sibling agent's branch.
-    expect(payload.context).toContain(`git worktree remove ${WORKTREE}`);
-    expect(payload.context).toContain(`git branch -d ${BRANCH}`);
+    expect(payload.context).toContain(`Inspect the retained worktree ${WORKTREE}`);
+    expect(payload.context).toContain('Preserve every unique tracked, untracked and ignored byte');
+    expect(payload.context).toContain(`Retire local branch ${BRANCH} only after fresh merge evidence`);
+    expect(payload.context).not.toContain('git branch -D');
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
     expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-recovery-1', priority: 'high',
