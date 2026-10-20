@@ -109,6 +109,18 @@ async function tryReadJson(path) {
 }
 
 /**
+ * PM2 fork mode runs `node ProcessContainerFork.js`, which then imports this
+ * file. `argv[1]` is that container; the script PM2 was asked to run is
+ * `pm_exec_path`. Vitest's argv is not this file and does not set that
+ * variable, so importing the module under test does not bind a port.
+ */
+export function shouldStartSupervisor(moduleUrl, env = process.env, invokedPath = process.argv[1]) {
+  if (isDirectlyInvoked(moduleUrl, invokedPath)) return true;
+  const pmExec = env?.pm_exec_path;
+  return typeof pmExec === 'string' && pmExec.length > 0 && isDirectlyInvoked(moduleUrl, pmExec);
+}
+
+/**
  * Supervise one managed Chrome. `options.checkCdp` / `options.spawn` (and the
  * other overrides) exist so tests can run the loop without a real browser.
  * The health server is listening before the first launch, so a rejection is
@@ -591,14 +603,17 @@ export function createBrowserSupervisor(options = {}) {
   return { main, shutdown, ready, healthServer };
 }
 
-if (isDirectlyInvoked(import.meta.url)) {
+if (shouldStartSupervisor(import.meta.url)) {
   const supervisor = createBrowserSupervisor({
     exitProcess: (code) => process.exit(code),
     bindSignals: true,
   });
-  // A launch rejection used to escape `main()` and crash before /health
-  // listened. Keep the process up; the supervise loop retries.
+  // listenHealth is the only rejection main() lets out. The supervise loop
+  // retries launch failures itself. A taken health port has no loop to retry
+  // inside, and PM2's IPC channel would keep the caught error alive as a
+  // silent online process. Exit non-zero so PM2 restarts.
   supervisor.main().catch((err) => {
     console.error(`❌ Browser supervisor failed: ${err.message}`);
+    process.exit(1);
   });
 }

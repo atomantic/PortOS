@@ -1,6 +1,12 @@
+import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import { createServer } from 'http';
+import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBrowserSupervisor } from './server.js';
+import { createBrowserSupervisor, shouldStartSupervisor } from './server.js';
+
+const SERVER_MODULE_URL = new URL('./server.js', import.meta.url).href;
+const SERVER_PATH = fileURLToPath(SERVER_MODULE_URL);
 
 const LAUNCH_POLL_MS = 500;
 const CDP_UP = { webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser/fixture' };
@@ -51,6 +57,54 @@ async function readHealth(port) {
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   return { statusCode: response.status, body: await response.json() };
 }
+
+describe('browser supervisor entry', () => {
+  it('starts for a direct node launch and for PM2 fork mode, and not for an import', () => {
+    const container = '/opt/example/ProcessContainerFork.js';
+    expect(shouldStartSupervisor(SERVER_MODULE_URL, {}, SERVER_PATH)).toBe(true);
+    expect(shouldStartSupervisor(SERVER_MODULE_URL, { pm_exec_path: SERVER_PATH }, container)).toBe(true);
+    expect(shouldStartSupervisor(SERVER_MODULE_URL, {}, container)).toBe(false);
+    expect(shouldStartSupervisor(SERVER_MODULE_URL, { pm_exec_path: '/opt/example/other.js' }, container)).toBe(false);
+    expect(shouldStartSupervisor(SERVER_MODULE_URL, { pm_exec_path: '' }, container)).toBe(false);
+  });
+
+  it('exits non-zero when PM2 names this file and the health port is already taken', async () => {
+    const blocker = createServer();
+    await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+    const port = blocker.address().port;
+    try {
+      const child = spawn(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        `await import(${JSON.stringify(SERVER_MODULE_URL)})`,
+      ], {
+        env: {
+          ...process.env,
+          PORT: String(port),
+          pm_exec_path: SERVER_PATH,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const result = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          resolve({ code: 'timeout', stderr: '' });
+        }, 5000);
+        let stderr = '';
+        child.stderr.on('data', (chunk) => { stderr += chunk; });
+        child.on('exit', (code) => {
+          clearTimeout(timer);
+          resolve({ code, stderr });
+        });
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Browser supervisor failed');
+      expect(result.stderr).not.toMatch(/\/Users\/|\/home\//);
+    } finally {
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+  });
+});
 
 describe('browser Chrome supervise loop', () => {
   let logSpy;
