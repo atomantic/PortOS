@@ -311,7 +311,9 @@ export default function IssuesTab({ appId, appName }) {
   const [showSettings, setShowSettings] = useState(false);
   const runSettingsId = useId();
   // An invalid or active review override must never hide behind the collapsed summary.
-  const settingsForcedOpen = invalidReviewOverride || Object.keys(reviewOverrides).length > 0;
+  // Overrides only render (and apply) under review-then-merge, so only they can lock the panel open.
+  const settingsForcedOpen = prCompletion === 'review-then-merge'
+    && (invalidReviewOverride || Object.keys(reviewOverrides).length > 0);
   const settingsOpen = showSettings || settingsForcedOpen;
   useEffect(() => {
     setReviewOverrides({});
@@ -557,8 +559,8 @@ export default function IssuesTab({ appId, appName }) {
   const runSettingsSummary = [
     `Run with: ${[
       pickedProvider?.name || picker.selectedProviderId || 'Auto (default)',
-      picker.selectedModel || 'default model',
-      picker.effort || 'default effort',
+      picker.selectedModel || pickedProvider?.defaultModel || 'default model',
+      picker.effort || pickedProvider?.effort || 'default effort',
     ].join(' · ')}`,
     `After PR: ${prCompletionOption(prCompletion)?.label ?? prCompletion}`,
     reviewerCsv ? `Reviewers: ${reviewerCsv}` : null,
