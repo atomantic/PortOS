@@ -34,10 +34,13 @@ export default function ConfirmButtonPair({
   cancelAriaLabel,
   className = '',
   largeTouchTargets = false,
+  responsiveTouchTargets = false,
 }) {
   const confirmTone = TONES[tone] || TONES.error;
   const buttonSizeClass = largeTouchTargets
     ? 'min-h-[44px] min-w-[44px] justify-center'
+    : responsiveTouchTargets
+      ? 'min-h-[44px] min-w-[44px] justify-center sm:min-h-9 sm:min-w-0'
     : 'min-h-[36px]';
   // While in-flight, the confirm icon becomes a spinner and both buttons
   // disable; the label additionally swaps to the in-flight word ("Deleting")
