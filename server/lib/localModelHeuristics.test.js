@@ -166,6 +166,7 @@ describe('localModelHeuristics', () => {
         'gemma4:31b',
         'qwen3-vl:8b',
         'minicpm-v4.6:1b',
+        'nemotron-3.5-bolt',
       ]) {
         expect(isVisionModel(id), id).toBe(true);
       }
