@@ -121,14 +121,14 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
               {filteredProcesses.map(proc => (
                 <Fragment key={proc.pm_id}>
                   <tr className="hover:bg-port-border/20">
-                    <td className="px-4 py-3">
+                    <td className="px-1 py-3 sm:px-4">
                       <button
                         onClick={() => toggleExpand(proc.name)}
                         aria-expanded={expandedProcess === proc.name}
                         aria-label={`${expandedProcess === proc.name ? 'Collapse' : 'Expand'} details for ${proc.name}`}
-                        className="text-gray-400 hover:text-white transition-transform"
+                        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 text-gray-400 hover:text-white transition-transform"
                       >
-                        <span className={`inline-block transition-transform ${expandedProcess === proc.name ? 'rotate-90' : ''}`}>▶</span>
+                        <span className={`inline-block transition-transform ${expandedProcess === proc.name ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
                       </button>
                     </td>
                     <td className="px-4 py-3">
