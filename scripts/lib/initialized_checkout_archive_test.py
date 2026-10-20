@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,65 @@ class NativeArchive(unittest.TestCase):
         admission.mkdir(mode=0o700)
         (admission / 'writer.lock').write_text('owned service bookkeeping')
         self.assertEqual(archive.inspect(self.request), before)
+
+    def test_common_runtime_sockets_are_outside_capture_but_private_and_captured_sockets_hold(self):
+        facts = archive.inspect(self.request)
+        common = Path(facts['commonGitDir'])
+        private = Path(facts['privateGitDir'])
+        # Relative bind avoids Darwin's short AF_UNIX path limit. No daemon is
+        # started; sockets and stores belong exclusively to this fixture.
+        def bind(path):
+            listener = socket.socket(socket.AF_UNIX)
+            previous = Path.cwd()
+            try:
+                os.chdir(path.parent)
+                listener.bind(path.name)
+            finally:
+                os.chdir(previous)
+            self.addCleanup(listener.close)
+            return listener
+
+        excluded = (common / 'fsmonitor--daemon.ipc',
+                    common / 'modules/sub/fsmonitor--daemon.ipc')
+        for path in excluded:
+            bind(path)
+        socket_leases = [(path.lstat().st_ino, path.lstat().st_mode) for path in excluded]
+        self.assertEqual(archive.inspect(self.request), facts)
+        self.preserve()
+        self.assertTrue(archive.verify(self.request)['verified'])
+        self.assertFalse((self.txn / 'archive/common/fsmonitor--daemon.ipc').exists())
+        self.assertFalse((self.txn / 'archive/common/modules').exists())
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        self.assertEqual([(path.lstat().st_ino, path.lstat().st_mode) for path in excluded], socket_leases)
+
+        for path in (common / 'objects/fixture.ipc', common / 'refs/fixture.ipc',
+                     common / 'rr-cache', private / 'fixture.ipc',
+                     Path(facts['modules'][0]['gitDir']) / 'fixture.ipc'):
+            parent_stat = path.parent.stat()
+            listener = bind(path)
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'special-git-file-unsupported'):
+                    archive.inspect(self.request)
+                with self.assertRaisesRegex(RuntimeError, 'special-(git-)?file-unsupported'):
+                    archive.verify(self.request)
+            finally:
+                listener.close()
+                path.unlink()
+                os.utime(path.parent, ns=(parent_stat.st_atime_ns, parent_stat.st_mtime_ns))
+        # Shared operation and dependency guards must not disappear with the
+        # narrower payload walk, including locks outside COMMON_PARTS.
+        for relative, reason in (('index.lock', 'active-or-dependent-git-state'),
+                                 ('MERGE_HEAD', 'active-or-partial-git-state'),
+                                 ('objects/info/alternates', 'external-object-dependency')):
+            path = common / relative
+            path.write_text('held')
+            try:
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    archive.inspect(self.request)
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    archive.verify(self.request)
+            finally:
+                path.unlink()
 
     def test_restore_is_offline_and_preserves_staged_private_and_metadata(self):
         subprocess.run(['/usr/bin/xattr', '-w', 'fixture.attribute', 'preserved', str(self.work / 'ignored')], check=True)
