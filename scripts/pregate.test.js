@@ -55,6 +55,7 @@ const planWith = (overrides = {}) => ({
   smoke: false,
   promptHistory: false,
   linuxContainment: false,
+  supercolliderLive: false,
   ...overrides,
 });
 
@@ -933,6 +934,8 @@ describe('uncoveredSuites', () => {
       .toEqual([{ suite: 'windows', reason: 'a Windows runner has no local equivalent', remedy: UNCOVERED_SUITES.windows }]);
     expect(uncoveredSuites(planWith({ linuxContainment: true })))
       .toEqual([{ suite: 'linuxContainment', reason: 'needs a Linux host with bubblewrap namespaces', remedy: UNCOVERED_SUITES.linuxContainment }]);
+    expect(uncoveredSuites(planWith({ supercolliderLive: true })))
+      .toEqual([{ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive }]);
     expect(uncoveredSuites(planWith())).toEqual([]);
   });
 

@@ -42,18 +42,18 @@ describe('Dependabot maintainer release', () => {
     expect(ci.impact.indexOf('node scripts/ci-dependabot-admission.js'))
       .toBeLessThan(ci.impact.indexOf('node scripts/ci-base-sha.js'));
     expect(ci.impact).not.toContain('continue-on-error: true');
-    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment']) {
+    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment', 'supercollider-live']) {
       expect(ci[name]).toContain('needs: impact');
     }
     expect(ci.gate).toContain('if: always()');
     expect(ci.gate).toContain('CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}');
     expect(summarizeGateResults([{ job: 'impact', result: 'failure' }, { job: 'client', result: 'skipped' }]).verdict).toBe('failure');
-    const native = workflowJobs(workflow('supercollider-live')).native;
+    const native = ci['supercollider-live'];
     expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeGreaterThan(-1);
     expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeLessThan(native.indexOf('actions/setup-node@'));
-    for (const name of ['ci', 'supercollider-live']) {
-      expect(workflow(name)).not.toContain('pull_request_target:');
-      expect(workflow(name)).not.toMatch(/(?:contents|actions): write/);
-    }
+    expect(workflow('ci')).not.toContain('pull_request_target:');
+    expect(workflow('ci')).not.toMatch(/(?:contents|actions): write/);
+    expect(ci.gate).toContain('supercollider-live]');
+    expect(ci.gate).toContain('CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}');
   });
 });

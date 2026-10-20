@@ -141,7 +141,7 @@ After the push (and, when you open the pull request yourself, before
 `pregate` commit status on the pushed head, bound to the validated tree and
 naming the platform and Node it ran on, and the pull request's impact planner
 skips the stages it attests to (only stages that ran and passed; never
-Windows, Linux containment or the Node-minimum check; and, per stage, never
+Windows, Linux containment, SuperCollider live containment or the Node-minimum check; and, per stage, never
 one that a change `main` gained since the branch forked could reach). It
 refuses — saying what to rerun — when the receipt did not pass, the tree
 changed after pregate, the commit is not on the upstream remote yet, or

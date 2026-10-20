@@ -60,6 +60,7 @@ jobs:
       # when the diff reaches the job's import closure (scripts/ci-test-plan.js).
       prompt_history: ${{ steps.plan.outputs.prompt_history }}
       linux_containment: ${{ steps.plan.outputs.linux_containment }}
+      supercollider_live: ${{ steps.plan.outputs.supercollider_live }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -166,6 +167,7 @@ jobs:
           SLASHDO_MODE: ${{ steps.plan.outputs.slashdo }}
           PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
           LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
+          SUPERCOLLIDER_LIVE_MODE: ${{ steps.plan.outputs.supercollider_live }}
           NODE_MINIMUM_MODE: ${{ steps.node-minimum.outputs.run }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
@@ -189,6 +191,7 @@ jobs:
             echo "- Slashdo submodule: \`${SLASHDO_MODE}\`"
             echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
             echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
+            echo "- SuperCollider live containment: \`${SUPERCOLLIDER_LIVE_MODE}\`"
             echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
@@ -1219,10 +1222,131 @@ jobs:
         # the job is gated on those files' import closure.
         run: npm test --prefix server -- --run ../autofixer/sandbox.verify.test.js lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
 
+  supercollider-live:
+    name: SuperCollider native ${{ matrix.arch }}
+    needs: impact
+    # Path-gated by the impact planner's static import closure of the live
+    # suite and setup script, and part of CI Gate: a red run blocks the merge.
+    if: needs.impact.outputs.supercollider_live == 'true'
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    # Native runners only: emulation cannot prove either host's boundary.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            nodeArch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            nodeArch: arm64
+    runs-on: ${{ matrix.runner }}
+    # The product build has a 90-minute cap; reserve time for installs and the
+    # six real render/containment cases, including the bounded timeout case.
+    timeout-minutes: 120
+    env:
+      EXPECTED_DOCKER_ARCH: ${{ matrix.arch }}
+      EXPECTED_NODE_ARCH: ${{ matrix.nodeArch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Verify the native Docker host
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          const server = JSON.parse(execFileSync('docker', ['version', '--format', '{{json .Server}}'], { encoding: 'utf8' }));
+          assert.equal(process.platform, 'linux');
+          assert.equal(process.arch, process.env.EXPECTED_NODE_ARCH);
+          assert.equal(server.Os, 'linux');
+          assert.equal(server.Arch, process.env.EXPECTED_DOCKER_ARCH);
+          console.log(`Docker ${server.Version}: ${server.Os}/${server.Arch}; Node ${process.version}: ${process.arch}`);
+          NODE
+          task_data_root="$RUNNER_TEMP/portos-supercollider-live"
+          mkdir -p "$task_data_root"
+          touch "$task_data_root/.portos-disposable-root"
+          printf 'PORTOS_DATA_ROOT=%s\n' "$task_data_root" >> "$GITHUB_ENV"
+
+      - name: Install test dependencies without lifecycle scripts
+        run: |
+          npm ci --ignore-scripts
+          npm ci --ignore-scripts --prefix server
+
+      - name: Build and prove the shipped runtime
+        run: |
+          npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-first-setup.log"
+          cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
+
+      - name: Repeat setup and prove it skipped build and probe
+        run: |
+          npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-second-setup.log"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const firstLog = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-first-setup.log'), 'utf8');
+          const secondLog = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-second-setup.log'), 'utf8');
+          const before = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-first-evidence.json'), 'utf8');
+          const after = readFileSync(join(process.env.PORTOS_DATA_ROOT, 'data/supercollider/runtime-evidence.json'), 'utf8');
+          assert.match(firstLog, /^✅ Image built$/m);
+          assert.match(firstLog, /^✅ Synthetic render probe passed$/m);
+          assert.match(secondLog, /^✅ Image already current — skipped the build$/m);
+          assert.doesNotMatch(secondLog, /^✅ Image built$|^.*Synthetic render probe/m);
+          assert.equal(after, before, 'The second setup must retain the first probe evidence unchanged');
+          const evidence = JSON.parse(after);
+          assert.equal(evidence.ok, true);
+          assert.equal(evidence.platform.os, 'linux');
+          assert.equal(evidence.platform.arch, process.env.EXPECTED_DOCKER_ARCH);
+          console.log('Both setup runs passed; the second built no image and ran no probe.');
+          NODE
+
+      - name: Exercise real synthesis and containment
+        working-directory: server
+        env:
+          PORTOS_SUPERCOLLIDER_LIVE: '1'
+        run: npx --no-install vitest run services/superColliderRender.live.test.js
+
+      - name: Record the proven platform
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const evidence = JSON.parse(readFileSync(join(process.env.PORTOS_DATA_ROOT, 'data/supercollider/runtime-evidence.json'), 'utf8'));
+          const release = readFileSync('/etc/os-release', 'utf8');
+          const os = release.match(/^PRETTY_NAME="([^"]+)"$/m)?.[1] ?? 'Linux';
+          const lines = [
+            `### ${os} / ${evidence.platform.arch}`,
+            '',
+            `Docker Engine: ${evidence.platform.dockerVersion}`,
+            `Runtime: ${evidence.runtimeVersion}; containment policy: ${evidence.policyVersion}`,
+            `Image: ${evidence.imageId}`,
+            'Setup: first build and probe passed; second skipped both with unchanged evidence.',
+            'Live suite: all six synthesis and containment cases passed.',
+            '',
+          ];
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
+          for (const line of lines.filter(Boolean)) console.log(line);
+          NODE
+
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment]
+    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, supercollider-live]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1263,6 +1387,7 @@ jobs:
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
+          CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
 
   full-gate:

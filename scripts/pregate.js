@@ -79,6 +79,7 @@ export const UNCOVERED_SUITES = Object.freeze({
   smoke: 'npm run smoke',
   windows: 'CI is the only proof',
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
+  supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
 });
 
 /** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
@@ -120,6 +121,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'linuxContainment')) {
     uncovered.push({ suite: 'linuxContainment', reason: 'needs a Linux host with bubblewrap namespaces', remedy: UNCOVERED_SUITES.linuxContainment });
+  }
+  if (suiteSelected(plan, 'supercolliderLive')) {
+    uncovered.push({ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive });
   }
   return uncovered;
 }
@@ -641,6 +645,7 @@ async function main() {
     smoke: raw.smoke,
     promptHistory: raw.prompt_history,
     linuxContainment: raw.linux_containment,
+    supercolliderLive: raw.supercollider_live,
     suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
