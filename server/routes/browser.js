@@ -6,6 +6,7 @@ import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.j
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
+import { requestHasHostControl } from '../services/authGate.js';
 import * as browserService from '../services/browserService.js';
 
 const router = express.Router();
@@ -83,7 +84,15 @@ const updateConfigSchema = z.object({
 // GET /api/browser - Full browser status
 router.get('/', asyncHandler(async (req, res) => {
   const status = await getBrowserStatusSnapshot();
-  res.json(status);
+  // Page titles/URLs and saved filenames come from the signed-in profile; only
+  // a caller who may drive that profile (see HOST_CONTROL_ROUTES) sees them.
+  if (requestHasHostControl(req)) return res.json(status);
+  res.json({
+    ...status,
+    pages: [],
+    downloads: { ...status.downloads, files: [] },
+    contentRedacted: true,
+  });
 }));
 
 // GET /api/browser/config - Get browser config
