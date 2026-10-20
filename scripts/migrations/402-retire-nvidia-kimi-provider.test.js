@@ -63,8 +63,18 @@ describe('migration 402 — retire NVIDIA Kimi provider', () => {
     expect(readJson(providersPath).providers).toEqual({});
   });
 
+  // The shape every real upgrade presents: migration 357 runs first and stamps
+  // its `ultraModel: null` default on the preset.
+  it('removes the preset after migration 357 stamped its null ultra tier', async () => {
+    writeJson(providersPath, { providers: { 'nvidia-kimi': { ...shippedProvider(), ultraModel: null } } });
+
+    await expect(migration.up({ rootDir })).resolves.toEqual({ ok: true, reason: 'removed', removed: true });
+    expect(readJson(providersPath).providers).toEqual({});
+  });
+
   it('preserves enabled, keyed, renamed, selected, customized, or referenced records', async () => {
     const cases = [
+      { ultraModel: 'moonshotai/kimi-k2-thinking' },
       { enabled: true },
       { apiKey: 'nvapi-example' },
       { name: 'My NVIDIA Kimi' },

@@ -45,6 +45,10 @@ const comparableProvider = (provider) => {
   const comparable = Object.fromEntries(Object.entries(provider).filter(([key]) => !GRAPH_FIELDS.has(key)));
   if (!Object.hasOwn(comparable, 'fallbackProvider')) comparable.fallbackProvider = null;
   if (!Object.hasOwn(comparable, 'secretEnvVars')) comparable.secretEnvVars = [];
+  // Migration 357 stamps `ultraModel: null` on every provider that lacks one,
+  // and it runs first on every install that still carries this preset. That
+  // null is its no-pin default, not a user edit.
+  if (comparable.ultraModel === null) delete comparable.ultraModel;
   return comparable;
 };
 

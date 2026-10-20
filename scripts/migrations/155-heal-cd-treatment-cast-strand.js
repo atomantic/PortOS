@@ -38,6 +38,10 @@ export const ACCEPTED_OLD_MD5 = {
     '2ffa482e7bfb6fe8b7224505fedbf712', // pre-#1808 shipped, pre-imageStrength-knob (447d2b5e3 / 22a0aced0)
     '16d0ef6a7fd2533719a846019122ebee', // pre-#1808 shipped, post-imageStrength-knob (c68f38d09 / f04e3955c)
     '95b7685690ecfee4f682b0293b790277', // migration-148 partial: cast list inserted, per-scene cast field missed (the #2042 strand)
+    // Shipped v2.24–v2.26, and migration 148's complete output for the
+    // 16d0ef6a… body above: upgrades from v2.8–v2.26 reached this migration on
+    // it and were falsely reported as customized before 371 upgraded them.
+    'd940eadfb406ce584f0e244032f33382',
   ],
 };
 
