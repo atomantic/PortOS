@@ -279,9 +279,9 @@ export async function completeAgent(agentId, result = {}) {
     return completed;
   }
 
-  // Daily CoS budget accounting (#711): count only AUTONOMOUS runs (non-user
-  // tasks) — the same set the CoS auto-run gate withholds when over budget —
-  // toward the domain's actions/minutes ledger. Recorded outside the state lock
+  // Daily CoS budget accounting (#711): all non-user runs, including on-demand
+  // work that bypasses the auto-run mode gate and pause, count toward the
+  // domain's actions/minutes ledger. Recorded outside the state lock
   // (separate ledger file + write tail) so it never serializes against state.json.
   //
   // This MUST land before the `agent:completed` emit below: that event's handler
