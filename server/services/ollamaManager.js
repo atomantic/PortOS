@@ -38,6 +38,7 @@ import {
   OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, normalizeOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
+import { createSingleFlight } from '../lib/singleFlight.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 
@@ -98,8 +99,9 @@ let lastInstalledModelsError = null
 let lastCheckAt = null
 let _managedProcess = null
 let managedProcessPid = null
-// `{ signature, promise }` of the `startServer` spawn currently in flight.
-let startInFlight = null
+// Starts never overlap: two racing launches of one daemon kill or orphan each other.
+const startFlight = createSingleFlight({ exclusive: true })
+const ensureFlight = createSingleFlight({ exclusive: true })
 // What PortOS knows about the Ollama daemon that is up RIGHT NOW. Every field
 // describes ONE live process, so the whole record is written by `recordDaemon`
 // and dropped by `forgetDaemon` — "which env" and "which process" can never
@@ -453,17 +455,8 @@ async function terminateManagedProcess() {
  * @param {{ env?: Record<string, string> }} [options]
  * @returns {Promise<{ success: boolean, running?: boolean, alreadyRunning?: boolean, pid?: number, error?: string }>}
  */
-async function startServer({ env = null } = {}) {
-  const signature = envSignature(env)
-  while (startInFlight) {
-    if (startInFlight.signature === signature) return startInFlight.promise
-    await startInFlight.promise.catch(() => {})
-  }
-  const promise = spawnServer(env).finally(() => {
-    if (startInFlight?.promise === promise) startInFlight = null
-  })
-  startInFlight = { signature, promise }
-  return promise
+function startServer({ env = null } = {}) {
+  return startFlight.run(envSignature(env), () => spawnServer(env))
 }
 
 async function spawnServer(env) {
@@ -642,7 +635,15 @@ async function stopPersistentService() {
   }
 }
 
-async function ensureRunning({ preferPersistent = false } = {}) {
+// Single-flight like `startServer`: concurrent `brew services start` calls
+// trip the bootstrap-conflict recovery, whose bootout stops the daemon the
+// other caller just started.
+function ensureRunning({ preferPersistent = false } = {}) {
+  const persistent = Boolean(preferPersistent)
+  return ensureFlight.run(persistent, () => bringUp(persistent))
+}
+
+async function bringUp(preferPersistent) {
   if (await checkOllamaAvailable(true)) {
     return { success: true, running: true, alreadyRunning: true, service: await getServiceStatus().catch(() => null) }
   }

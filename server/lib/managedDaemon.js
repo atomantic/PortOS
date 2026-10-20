@@ -1,5 +1,6 @@
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
+import { createSingleFlight } from './singleFlight.js';
 
 /**
  * Shared plumbing for a local daemon PortOS runs as an optional PM2 process
@@ -352,13 +353,11 @@ export function createOnDemandDaemon({
    * live/saved state, not from the caller. The slot clears on settle, so a later
    * wake after another stop starts the daemon again.
    */
-  let wakeInFlight = null;
+  const wakes = createSingleFlight();
 
-  const ensureRunning = () => {
+  const ensureRunning = async () => {
     markUsed();
-    if (wakeInFlight) return wakeInFlight;
-    wakeInFlight = wake().finally(() => { wakeInFlight = null; });
-    return wakeInFlight;
+    return wakes.run('wake', wake);
   };
 
   const wake = async () => {
