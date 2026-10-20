@@ -20,7 +20,7 @@ const isFfmpegInputExtension = (ext) => /^(audio|video|image)\//.test(getMimeTyp
  * (see `detectMediaManifest`). Apply before persisting any upload a probe,
  * thumbnail or render may later read.
  */
-export function assertNotMediaManifest(buffer) {
+function assertNotMediaManifest(buffer) {
   const format = detectMediaManifest(buffer);
   if (format) {
     throw new ServerError(`File content is a ${format} playlist or manifest that references other files; upload the media itself`, { status: 400, code: 'INVALID_FILE_TYPE' });
