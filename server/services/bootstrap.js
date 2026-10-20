@@ -144,7 +144,7 @@ import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
-import { initSharing } from './sharing/index.js';
+import { initSharing, shutdownSharing, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
@@ -1091,8 +1091,12 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
 // How long an already-accepted ordinary API request may keep running after the
 // signal (#8323). Measured from the signal, so it overlaps the teardown steps
 // before the HTTP close rather than adding to them: the drain (5s) + HTTP close
-// grace (1s) + DB pool grace (3s) stays under the ceiling above.
+// grace (1s) + peer sync stop (1s) + DB pool grace (2.5s) stays under the ceiling above.
 const HTTP_DRAIN_WINDOW_MS = 5000;
+
+// Bound on stopping peer sync and settling its in-flight pushes before the DB
+// pool closes; drain + HTTP close + this + DB pool grace stay under the ceiling.
+const PEER_SYNC_STOP_GRACE_MS = 1000;
 
 /**
  * Wire SIGTERM/SIGINT to the graceful-shutdown state machine. Idempotent per
@@ -1254,12 +1258,21 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       else console.error(`❌ Media job queue flush failed: ${outcome.error}`);
     });
 
+    // Stop peer sync before the pool ends: a peer:online convergence walk still
+    // running would otherwise log one pool-ended stack per remaining subscription.
+    // Abandoning it is safe — the next boot's peer:online pass repeats it (#11750).
+    await withGrace('Peer sync', PEER_SYNC_STOP_GRACE_MS, ({ finish, finishWithError }) =>
+      shutdownSharing().then(() => drainPeerSyncOperations()).then(
+        () => finish(),
+        (err) => finishWithError('⚠️ Peer sync shutdown failed', err),
+      ));
+
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
       // otherwise stall shutdown until the force-exit timer.
-      await withGrace('DB pool', 3000, ({ finish, finishWithError }) =>
+      await withGrace('DB pool', 2500, ({ finish, finishWithError }) =>
         close().then(() => finish('✅ DB pool closed'), (err) => finishWithError('⚠️ DB pool close failed', err)));
     } else {
       console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
