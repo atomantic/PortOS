@@ -1,9 +1,10 @@
+import { pipeline } from 'stream';
 import { Router } from 'express';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import { uploadSingle } from '../lib/multipart.js';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry, createZipBudget, createZipByteLimit } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { healthIngestSchema, appleHealthLatestMetricsQuerySchema } from '../lib/appleHealthValidation.js';
@@ -19,9 +20,6 @@ import {
   getLatestMetricValues
 } from '../services/appleHealthQuery.js';
 
-// Polling interval and timeout for XML write-stream completion (ms)
-const XML_WRITE_POLL_INTERVAL_MS = 50;
-const XML_WRITE_TIMEOUT_MS = 5000;
 
 const isZip = (file) =>
   file.mimetype === 'application/zip' ||
@@ -125,7 +123,9 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
     extractDir = await fs.mkdtemp(join(tmpdir(), 'portos-apple-health-'));
     const xmlPath = join(extractDir, 'export.xml');
     let foundXml = false;
-    let xmlWriteFinished = false;
+    const clinicalBudget = createZipBudget();
+    const archiveBudget = createZipBudget();
+    const maxXmlBytes = Math.min(20 * 1024 ** 3, (await fs.stat(filePath)).size * 200);
     // Each clinical-record collect is async (entries stream through an inflate
     // pipeline), so track them and await all before resolving — otherwise
     // 'close' can fire and drop records whose buffers haven't finished.
@@ -160,19 +160,23 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
       src
         .pipe(parser)
         .on('entry', (entry) => {
+          try { archiveBudget.addEntry(); } catch (err) { settle(reject)(err); return; }
           if (entry.path === 'apple_health_export/export.xml' || entry.path === 'export.xml') {
+            if (foundXml) { settle(reject)(new ServerError('ZIP contains duplicate export.xml', { status: 400 })); return; }
             foundXml = true;
             xmlWriteStream = createWriteStream(xmlPath);
-            entry.pipe(xmlWriteStream)
-              .on('finish', () => { xmlWriteFinished = true; })
-              .on('error', settle(reject));
+            const counter = createZipByteLimit(maxXmlBytes);
+            clinicalReads.push(new Promise((res, rej) => {
+              pipeline(counter, xmlWriteStream, err => err ? rej(err) : res());
+            }).catch(settle(reject)));
+            entry.pipe(counter);
           } else if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
             // Buffer clinical record JSON files (~1-5KB each). parseZip() entries
             // aren't EventEmitters (no entry.on('data'/'end') — that throws), so
             // pipe into a collecting Writable via the shared helper (which applies
             // MAX_ZIP_MEMBER_BYTES) and track the read so 'close' can await it.
             clinicalReads.push(
-              collectZipEntry(entry)
+              collectZipEntry(entry, { budget: clinicalBudget })
                 .then((buf) => { clinicalJsons.push(buf.toString('utf-8')); })
                 .catch(settle(reject))
             );
@@ -182,13 +186,8 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
         })
         .on('close', () => {
           if (!foundXml) return settle(reject)(new ServerError('ZIP does not contain export.xml', { status: 400, code: 'BAD_REQUEST' }));
-          // Resolve once the XML write stream has flushed AND every clinical
-          // record collect has finished. XML completion is signaled via the
-          // polled flag; the clinical collects are awaited as promises.
-          const finalize = () => Promise.all(clinicalReads).then(settle(resolve));
-          if (xmlWriteFinished) return finalize();
-          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); clearTimeout(timer); finalize(); } }, XML_WRITE_POLL_INTERVAL_MS);
-          const timer = setTimeout(() => { clearInterval(check); finalize(); }, XML_WRITE_TIMEOUT_MS);
+          // parseZip waits for each consumer to flush before closing.
+          Promise.all(clinicalReads).then(settle(resolve), settle(reject));
         })
         .on('error', settle(reject));
     }).catch(async (err) => {

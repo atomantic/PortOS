@@ -35,7 +35,7 @@ import { join } from 'path';
 import { Writable } from 'stream';
 import { PATHS, getMimeType, ensureDir, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { isTopLevelEntryName } from '../lib/pathSafety.js';
-import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry, createZipBudget, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -216,9 +216,11 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
  * Assets are written to `data/brain/imports/assets/<assetId><ext>` and surfaced
  * at `/data/brain-imports/<assetId><ext>`.
  */
-export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets } = {}) {
+export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets, maxTotalBytes, maxEntries } = {}) {
   await ensureDir(assetDir);
 
+  const jsonBudget = createZipBudget({ maxTotalBytes, maxEntries });
+  const archiveBudget = createZipBudget({ maxEntries });
   const convoBuffers = [];          // { path, buffer }
   let assetNameMap = {};
   // assetId -> { datPath, tempPath, sniffedExt } recorded as each `.dat` streams
@@ -256,13 +258,14 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('error', onErr)
       .pipe(parser)
       .on('entry', (entry) => {
+        try { archiveBudget.addEntry(); } catch (err) { onErr(err); return; }
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path)) {
-          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, { maxBytes: MAX_MEMBER_BYTES, budget: jsonBudget })
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })
             .catch(onErr));
         } else if (IS_CONVO_JSON(path)) {
-          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, { maxBytes: MAX_MEMBER_BYTES, budget: jsonBudget })
             .then((buf) => { convoBuffers.push({ path, buffer: buf }); })
             .catch(onErr));
         } else if (IS_DAT(path)) {

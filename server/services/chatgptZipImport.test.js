@@ -55,6 +55,15 @@ describe('chatgptZipImport service', () => {
     return p;
   };
 
+  it.each([{ maxTotalBytes: 3 }, { maxEntries: 1 }])('rejects archive budget overflow and removes temporary assets: %j', async (limits) => {
+    const zipPath = await writeZip([
+      ['file-asset.dat', PNG], ['conversations.json', '[]'], ['conversations-1.json', '[]']
+    ]);
+    const assetDir = join(TMP, 'assets');
+    await expect(extractChatgptZip(zipPath, { assetDir, ...limits })).rejects.toMatchObject({ status: 413 });
+    expect(await readdir(assetDir)).toEqual([]);
+  });
+
   describe('sniffExtension', () => {
     it('detects png/jpeg/wav/pdf from magic bytes', () => {
       expect(sniffExtension(PNG)).toBe('.png');

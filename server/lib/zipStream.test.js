@@ -54,6 +54,51 @@ function collectEntries(zipBuf) {
 }
 
 describe('parseZip', () => {
+  it.each([false, true])('bounds upstream reads with a blocked consumer (descriptor=%s)', async (descriptor) => {
+    const zip = buildEntry('slow.bin', Buffer.alloc(2 * 1024 * 1024, 65));
+    let archive = zip;
+    if (descriptor) {
+      zip.writeUInt16LE(8, 6);
+      const footer = Buffer.alloc(16);
+      footer.writeUInt32LE(0x08074b50);
+      archive = Buffer.concat([zip, footer, buildEocd()]);
+    }
+    let produced = 0;
+    let release;
+    let blocked;
+    const firstWrite = new Promise(resolve => { blocked = resolve; });
+    const destination = new Writable({
+      highWaterMark: 1024,
+      write(_chunk, _enc, cb) {
+        if (!release) { release = cb; blocked(); } else cb();
+      }
+    });
+    const parser = parseZip();
+    parser.on('entry', entry => entry.pipe(destination));
+    const done = new Promise((resolve, reject) => {
+      parser.on('close', resolve);
+      parser.on('error', reject);
+    });
+    const source = new Readable({
+      highWaterMark: 16384,
+      read() {
+        if (produced === archive.length) { this.push(null); return; }
+        const end = Math.min(produced + 16384, archive.length);
+        const chunk = archive.subarray(produced, end);
+        produced = end;
+        this.push(chunk);
+      }
+    });
+    source.pipe(parser);
+    await firstWrite;
+    // Flush scheduled stream work without relying on elapsed-time sleeps.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(produced).toBeLessThan(512 * 1024);
+    release();
+    await done;
+    expect(produced).toBe(archive.length);
+  });
+
   it('parses a single stored entry', async () => {
     const data = Buffer.from('hello world');
     const zip = Buffer.concat([buildEntry('hello.txt', data), buildEocd()]);
@@ -400,6 +445,19 @@ describe('collectZipEntries', () => {
     await expect(
       collectZipEntries(join(dir, 'does-not-exist.zip'), { match: '.json', onMatch: () => {} }),
     ).rejects.toThrow();
+  });
+
+  it.each([
+    { maxTotalBytes: 5 },
+    { maxEntries: 1 }
+  ])('rejects many individually valid members over the archive budget: %j', async (limits) => {
+    const zipPath = await writeZip('aggregate.zip', Buffer.concat([
+      buildEntry('a.json', Buffer.from('{} ')),
+      buildEntry('b.json', Buffer.from('{} ')), buildEocd()
+    ]));
+    await expect(collectZipEntries(zipPath, {
+      match: '.json', onMatch: () => {}, ...limits
+    })).rejects.toMatchObject({ status: 413 });
   });
 
   it('resolves with no matches on a truncated archive whose central directory is cut off', async () => {

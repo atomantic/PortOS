@@ -13,8 +13,8 @@
 
 import { createInflateRaw } from 'zlib';
 import { createReadStream } from 'fs';
-import { EventEmitter } from 'events';
-import { PassThrough, Writable } from 'stream';
+import { PassThrough, Writable, Transform, pipeline } from 'stream';
+import { ServerError } from './errorHandler.js';
 
 // Local file header signature: PK\x03\x04
 const LOCAL_SIG = 0x04034b50;
@@ -28,19 +28,12 @@ const EOCD_SIG = 0x06054b50;
 const LOCAL_HEADER_SIZE = 30; // fixed portion (before variable-length name + extra)
 
 export function parseZip() {
-  const emitter = new EventEmitter();
   let buf = Buffer.alloc(0);
-  let closed = false;
 
   const sink = new Writable({
     write(chunk, _, cb) {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
-      processBuffer();
-      cb();
-    },
-    final(cb) {
-      if (!closed) { closed = true; emitter.emit('close'); }
-      cb();
+      processBuffer().then(() => cb(), cb);
     },
     destroy(err, cb) {
       // On abort (a consumer calls `parser.destroy()` to stop ingestion mid-ZIP),
@@ -57,15 +50,13 @@ export function parseZip() {
     }
   });
 
-  sink.on('error', err => emitter.emit('error', err));
-
   let state = 'HEADER'; // HEADER | ENTRY | SKIP_CENTRAL
   let currentEntry = null;
   let entryBytesRemaining = 0; // compressed size remaining; only used when !dataDescriptor
 
-  function processBuffer() {
-    while (true) {
-      if (state === 'SKIP_CENTRAL') return; // done with entries
+  async function processBuffer() {
+    while (!sink.destroyed) {
+      if (state === 'SKIP_CENTRAL') { buf = Buffer.alloc(0); return; } // done with entries
 
       if (state === 'HEADER') {
         if (buf.length < 4) return;
@@ -73,6 +64,7 @@ export function parseZip() {
 
         if (sig === CENTRAL_SIG || sig === EOCD_SIG) {
           state = 'SKIP_CENTRAL';
+          buf = Buffer.alloc(0);
           return;
         }
 
@@ -102,24 +94,23 @@ export function parseZip() {
 
         const passThrough = new PassThrough();
         let piped = false;
+        let complete;
+        const completion = new Promise(resolve => { complete = resolve; });
 
         const entry = {
           path: name,
           pipe(dest) {
             piped = true;
-            if (method === 8) {
-              const inflate = createInflateRaw();
-              // Forward inflate failures (corrupt deflate stream) to dest so a
-              // consumer awaiting completion rejects/errors instead of hanging.
-              inflate.on('error', (err) => dest.destroy(err));
-              passThrough.pipe(inflate).pipe(dest);
-            } else {
-              passThrough.pipe(dest);
-            }
+            const streams = method === 8 ? [passThrough, createInflateRaw(), dest] : [passThrough, dest];
+            pipeline(...streams, (err) => {
+              complete();
+              if (err && !sink.destroyed) sink.destroy(err);
+            });
             return dest;
           },
           autodrain() {
             piped = true;
+            passThrough.once('end', complete);
             passThrough.resume(); // discard
           }
         };
@@ -129,15 +120,15 @@ export function parseZip() {
           if (!piped) entry.autodrain();
         });
 
-        emitter.emit('entry', entry);
-
         if (dataDescriptor) {
-          currentEntry = { passThrough, method, name, dataDescriptor: true };
+          currentEntry = { passThrough, completion, method, name, dataDescriptor: true };
         } else {
-          currentEntry = { passThrough, method, name, dataDescriptor: false };
+          currentEntry = { passThrough, completion, method, name, dataDescriptor: false };
           entryBytesRemaining = compSize;
         }
         state = 'ENTRY';
+        sink.emit('entry', entry);
+        if (sink.destroyed) return;
       }
 
       if (state === 'ENTRY') {
@@ -161,27 +152,31 @@ export function parseZip() {
             // Flush safe bytes (keep last 16 for boundary overlap)
             const safe = buf.length - 16;
             if (safe > 0) {
-              currentEntry.passThrough.write(buf.slice(0, safe));
+              await writeEntry(buf.slice(0, safe));
               buf = buf.slice(safe);
             }
             return;
           }
 
-          currentEntry.passThrough.write(buf.slice(0, found));
+          // A descriptor may itself span input chunks.
+          if (buf.length < found + descLen) return;
+          await writeEntry(buf.slice(0, found));
           currentEntry.passThrough.end();
+          await currentEntry.completion;
           buf = buf.slice(found + descLen);
           currentEntry = null;
           state = 'HEADER';
 
         } else {
-          if (buf.length === 0) return;
+          if (buf.length === 0 && entryBytesRemaining > 0) return;
           const take = Math.min(entryBytesRemaining, buf.length);
-          currentEntry.passThrough.write(buf.slice(0, take));
+          await writeEntry(buf.slice(0, take));
           buf = buf.slice(take);
           entryBytesRemaining -= take;
 
           if (entryBytesRemaining === 0) {
             currentEntry.passThrough.end();
+            await currentEntry.completion;
             currentEntry = null;
             state = 'HEADER';
           } else {
@@ -192,9 +187,21 @@ export function parseZip() {
     }
   }
 
-  // Delegate EventEmitter interface to emitter so .pipe() syntax works
-  for (const m of ['on', 'once', 'off', 'emit', 'addListener', 'removeListener', 'removeAllListeners', 'listenerCount']) {
-    sink[m] = emitter[m].bind(emitter);
+  // Hold the input write callback until downstream capacity returns. Waiting
+  // for each entry's consumer at EOF also bounds simultaneous inflate pipelines.
+  async function writeEntry(chunk) {
+    const stream = currentEntry.passThrough;
+    if (!chunk.length || stream.destroyed || stream.writableEnded) return;
+    if (stream.write(chunk)) return;
+    await new Promise(resolve => {
+      const done = () => {
+        stream.off('drain', done);
+        stream.off('close', done);
+        resolve();
+      };
+      stream.once('drain', done);
+      stream.once('close', done);
+    });
   }
 
   return sink;
@@ -204,6 +211,40 @@ export function parseZip() {
 // against a pathological member exhausting RAM; consumers buffering arbitrary
 // archive members (chatgptZipImport, appleHealth clinical records) share it.
 export const MAX_ZIP_MEMBER_BYTES = 100 * 1024 * 1024;
+
+// Buffered JSON expands further when parsed; keep the archive budget modest.
+export const MAX_ZIP_TOTAL_BYTES = 256 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 10000;
+
+/** Share one budget across every selected member of an import. */
+export function createZipBudget({ maxTotalBytes = MAX_ZIP_TOTAL_BYTES, maxEntries = MAX_ZIP_ENTRIES } = {}) {
+  let bytes = 0;
+  let entries = 0;
+  return {
+    addEntry() {
+      if (++entries > maxEntries) throw new ServerError(`ZIP exceeds ${maxEntries} entry limit`, { status: 413 });
+    },
+    addBytes(count) {
+      bytes += count;
+      if (bytes > maxTotalBytes) throw new ServerError(`ZIP exceeds ${maxTotalBytes} total byte limit`, { status: 413 });
+    }
+  };
+}
+
+/** Count decompressed bytes before forwarding them to disk or another consumer. */
+export function createZipByteLimit(maxBytes, budget) {
+  let size = 0;
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      try {
+        size += chunk.length;
+        if (size > maxBytes) throw new ServerError(`ZIP member exceeds ${maxBytes} byte limit`, { status: 413 });
+        budget?.addBytes(chunk.length);
+        cb(null, chunk);
+      } catch (err) { cb(err); }
+    }
+  });
+}
 
 /**
  * Collect a single `parseZip()` entry's decompressed bytes into one Buffer.
@@ -219,21 +260,23 @@ export const MAX_ZIP_MEMBER_BYTES = 100 * 1024 * 1024;
  * next tick if nothing attaches a pipe/drain), and gather the returned promises
  * so the parser's `close` handler can `Promise.all` them before settling.
  */
-export function collectZipEntry(entry, maxBytes = MAX_ZIP_MEMBER_BYTES) {
+export function collectZipEntry(entry, options = {}) {
+  const { maxBytes = MAX_ZIP_MEMBER_BYTES, budget = createZipBudget(options) } =
+    typeof options === 'number' ? { maxBytes: options } : options;
   return new Promise((resolve, reject) => {
     const chunks = [];
-    let size = 0;
+    budget.addEntry();
     const sink = new Writable({
       write(chunk, _enc, cb) {
-        size += chunk.length;
-        if (size > maxBytes) { cb(new Error(`ZIP member exceeds ${maxBytes} byte limit`)); return; }
         chunks.push(chunk);
         cb();
       }
     });
     sink.on('finish', () => resolve(Buffer.concat(chunks)));
     sink.on('error', reject);
-    entry.pipe(sink);
+    const counter = createZipByteLimit(maxBytes, budget);
+    pipeline(counter, sink, err => { if (err) reject(err); });
+    entry.pipe(counter);
   });
 }
 
@@ -274,7 +317,10 @@ export function isZipUpload(file) {
  * pathological member can't exhaust RAM. Leaves the caller with ONLY its domain
  * match/parse logic.
  */
-export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_MEMBER_BYTES } = {}) {
+export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_MEMBER_BYTES,
+  maxTotalBytes = MAX_ZIP_TOTAL_BYTES, maxEntries = MAX_ZIP_ENTRIES } = {}) {
+  const budget = createZipBudget({ maxTotalBytes, maxEntries });
+  const archiveBudget = createZipBudget({ maxEntries });
   const test = typeof match === 'function' ? match : (name) => name.includes(match);
   const reads = [];
   return new Promise((resolve, reject) => {
@@ -293,10 +339,11 @@ export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_
     src
       .pipe(parser)
       .on('entry', (entry) => {
+        try { archiveBudget.addEntry(); } catch (err) { settle(reject)(err); return; }
         if (test(entry.path)) {
           const entryPath = entry.path;
           reads.push(
-            collectZipEntry(entry, maxBytes)
+            collectZipEntry(entry, { maxBytes, budget })
               .then((buf) => onMatch(buf, entryPath))
               .catch(settle(reject)),
           );
