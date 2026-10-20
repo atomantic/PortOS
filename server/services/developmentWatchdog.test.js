@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
+const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', fullName: 'atomantic/example', execOptions: [], nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), updateTask: async (id, updates, type, options) => {
@@ -11,7 +11,7 @@ vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks:
   return task;
 }, addTask: async task => { if (m.duplicate) return { id: 'existing', duplicate: true }; const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
 vi.mock('./instances.js', () => ({ getPeers: async () => m.peers }));
-vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: 'atomantic/example', repoSpec: 'github.com/atomantic/example', apiHost: 'github.com' } }) }));
+vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: m.fullName, repoSpec: `github.com/${m.fullName}`, apiHost: 'github.com' } }) }));
 vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => ({ pullRequests: ++m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false }) }));
 vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
 vi.mock('./cosTaskClaimWork.js', () => ({
@@ -33,7 +33,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   if (args[0] === m.invalidGhJsonOn) return 'not json';
   return JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] });
 }, getPullRequestState: async number => m.prStates[String(number)] || { status: 'unavailable', state: null } }));
-vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async (_path, options) => { m.execOptions.push(options); return {}; } }));
 vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: async () => ({ isTrusted: async () => true }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: m.branch }) }));
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: async () => { throw new Error('offline'); } }));
@@ -49,7 +49,7 @@ import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanc
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
   m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
@@ -212,6 +212,16 @@ it('keeps explicit live claim and open dependency evidence out of dispatch', asy
   m.prs = [{ ...orphan, headBranch: 'fix' }]; m.dependencies = [10];
   receipt = await runDevelopmentWatchdog({ force: true });
   expect(receipt.decisions[0].reason).toBe('open-dependency'); expect(m.adds).toEqual([]);
+});
+
+it.each(['atomantic/PortOS', 'Atomantic/PortOS'])('pins both watchdog forge lookups to upstream for %s', async fullName => {
+  m.fullName = fullName;
+  m.prs = [{ ...orphan, headBranch: 'fix' }];
+  m.dependencies = [10];
+
+  await runDevelopmentWatchdog({ force: true });
+
+  expect(m.execOptions.slice(0, 2).map(options => options?.forgeAccount)).toEqual(['atomantic', 'atomantic']);
 });
 
 it('treats a slashdo /do:next branch (next/issue-<num>) as a live external claim, not an orphan (#8161)', async () => {
