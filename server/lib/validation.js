@@ -2879,6 +2879,10 @@ export const initializedCheckoutRestoreSchema = initializedCheckoutTransactionSc
   journalDigest: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 
+export const initializedCheckoutBranchRetireSchema = initializedCheckoutRestoreSchema.extend({
+  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
+}).strict();
+
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });
 export const appTaskTypeOverrideBodySchema = z.object({

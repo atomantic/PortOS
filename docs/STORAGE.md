@@ -1056,3 +1056,10 @@ Unknown, interrupted and uncertain records block rather than age out. The native
 archive excludes this control subtree; it never excludes repository payload
 because it is ignored or untracked. Admission metadata is not part of the
 portable repository or peer synchronization.
+
+Initialized-checkout finalization receipts keep a compact, uncapped
+`branchReconcileOutcome.retirementReceiptIdentities` map alongside the bounded
+recent-retirements display list. Its keys hash the exact archive path and release
+identity; values preserve the original receipt timestamp. This operational
+recovery evidence prevents an interrupted journal replay from becoming fresh
+retirement evidence after the display row has aged out. It has no TTL purge.

@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { execFileSync, spawn as realSpawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-const delayed = vi.hoisted(() => ({ child: null }));
+const delayed = vi.hoisted(() => ({ child: null, failAfterRename: false }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, rename: async (...args) => {
+    await actual.rename(...args);
+    if (delayed.failAfterRename) { delayed.failAfterRename = false; throw new Error('release-result-lost'); }
+  } };
+});
 vi.mock('./childProcess.js', () => ({
   spawn: (command, args, options) => args[0] === 'fixture-delayed-mutation' ? delayed.child : realSpawn(command, args, options),
 }));
 import { execGit } from './execGit.js';
 import { _checkoutAdmission, withCheckoutPublication, reserveCheckoutRetirement,
-  withCheckoutReservation, releaseCheckoutReservation } from './checkoutRetirementAdmission.js';
+  withCheckoutReservation, releaseCheckoutReservation, readCheckoutReservation } from './checkoutRetirementAdmission.js';
 let repo;
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), 'checkout-admission-'));
@@ -88,4 +95,37 @@ describe('durable checkout admission', () => {
     expect((await _checkoutAdmission(repo)).admission.publications()).toMatchObject([{ uncertain: true }]);
     await expect(reserveCheckoutRetirement(repo, 'later-cut')).rejects.toThrow('checkout-retirement-reserved');
   });
+  it('retains the complete cut owner if release crashes after its atomic rename', async () => {
+    const cut = await reserveCheckoutRetirement(repo, 'released-cut');
+    delayed.failAfterRename = true;
+    await expect(releaseCheckoutReservation(cut)).rejects.toThrow('release-result-lost');
+    const released = (await readdir(cut.directory)).filter(name => name.startsWith('released-'));
+    expect(released).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(cut.directory, released[0], 'cut', 'owner.json'), 'utf8'))).toEqual(cut.owner);
+    expect((await _checkoutAdmission(repo)).admission.status().cut).toBeNull();
+    await withCheckoutPublication(repo, async () => {});
+  });
+  it('refuses reentry of a persisted uncertain cut after a timed-out child closes', async () => {
+    const cut = await reserveCheckoutRetirement(repo, 'uncertain-cut');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    child.pid = 12345; child.kill = vi.fn(); delayed.child = child;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const running = withCheckoutReservation(cut, async () => {
+      vi.useFakeTimers();
+      const pending = execGit(['fixture-delayed-mutation'], repo, { timeout: 20 });
+      started(); return pending;
+    });
+    const rejected = expect(running).rejects.toThrow('timed out');
+    await ready; await vi.advanceTimersByTimeAsync(20);
+    child.emit('close', null, 'SIGTERM'); await rejected; vi.useRealTimers();
+    const recovered = await readCheckoutReservation(repo, 'uncertain-cut');
+    const work = vi.fn();
+    await expect(withCheckoutReservation(recovered, work)).rejects.toThrow('checkout-retirement-reserved');
+    await expect(releaseCheckoutReservation(recovered)).rejects.toThrow('checkout-retirement-reserved');
+    expect(work).not.toHaveBeenCalled();
+    expect((await _checkoutAdmission(repo)).admission.status().cut).toMatchObject({ uncertain: true });
+  });
+
 });

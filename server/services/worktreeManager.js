@@ -1776,7 +1776,8 @@ async function removeIfStillOrphaned({ isOwned, branchName, holderPath, sourceWo
     if (isOwned()) return null;
     const agents = await readOwners();
     if (claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace, agents })) return null;
-    return remove();
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(sourceWorkspace, remove);
   });
 }
 

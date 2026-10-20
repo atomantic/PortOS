@@ -100,7 +100,7 @@ vi.mock('./agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: v
 // Stops the spawn immediately after the pre-prep gates. The two post-prep
 // gates (input materialization / snapshot load) override it per test.
 vi.mock('./agentWorkspacePrep.js', () => ({
-  prepareAgentWorkspace: vi.fn().mockResolvedValue({ outcome: 'blocked', reason: 'stop here' }),
+  prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => onPrepared({ outcome: 'blocked', reason: 'stop here' })),
 }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
@@ -218,12 +218,12 @@ const markerReleasedFor = (app) => vi.mocked(releaseAppReviewMarker).mock.calls
  * other case at, so the two post-prep gates are actually reached.
  */
 function reachPostPrepGates() {
-  vi.mocked(prepareAgentWorkspace).mockResolvedValue({
+  vi.mocked(prepareAgentWorkspace).mockImplementation(async ({ onPrepared }) => onPrepared({
     outcome: 'ready',
     workspacePath: join(TEMP_ROOT, 'workspace'),
     resolvedAppName: APP,
     worktreeInfo: null,
-  });
+  }));
   vi.mocked(materializePublicReviewInput).mockResolvedValue(true);
   vi.mocked(materializePublicReviewPatches).mockResolvedValue(true);
   vi.mocked(readPublicReviewInputSnapshot).mockResolvedValue({ pullRequests: [] });
@@ -247,7 +247,7 @@ beforeEach(() => {
   vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
     ok: true, provider: CLAUDE_TUI, selectedModel: 'sonnet', modelSelection: {},
   });
-  vi.mocked(prepareAgentWorkspace).mockResolvedValue({ outcome: 'blocked', reason: 'stop here' });
+  vi.mocked(prepareAgentWorkspace).mockImplementation(async ({ onPrepared }) => onPrepared({ outcome: 'blocked', reason: 'stop here' }));
 });
 
 afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));

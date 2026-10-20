@@ -1,3 +1,5 @@
+// These command-contract fixtures use synthetic repositories; real admission is exercised in git.publication.test.js.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_dir, work) => work() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const execGitMock = vi.hoisted(() => vi.fn());

@@ -303,9 +303,10 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   // A bundle keeps the original commit objects, merges included, which a
   // squash-merged branch would otherwise lose to garbage collection.
   const bundle = join(dir, 'commits.bundle');
-  // Private reflogs and operation files may name commits no longer reachable
-  // from HEAD. Preserve their objects too, not just text that later GC would
-  // make useless. Unknown/missing recovery objects hold the checkout.
+  // Private refs and operation files can name any Git object: ort's AUTO_MERGE
+  // names a tree containing conflict-resolution evidence, not a commit.
+  // Named bundle roots preserve their reachable objects too. Unknown/missing
+  // recovery objects still hold the checkout.
   const recoveryHeads = new Set([tree.head]);
   for (const file of administration.files) {
     if (file.path === 'git-indirection' || /\/(index|gitdir|commondir|locked)$/.test(file.path)) continue;
@@ -320,7 +321,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   try {
     for (const head of recoveryHeads) {
       const type = (await git(['cat-file', '-t', head], repoPath)).trim();
-      if (type !== 'commit') throw new Error('private recovery object is not a commit');
+      if (!['commit', 'tree', 'blob', 'tag'].includes(type)) throw new Error('private recovery object has an unsupported type');
       const ref = `${namespace}/${head}`;
       await git(['update-ref', ref, head, ''], repoPath);
       recoveryRefs.push({ ref, head });
@@ -363,6 +364,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], ...(snapshot.missingCheckout ? { missingCheckout: true } : {}), gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
     restore: [
       'git -C <repo> fetch commits.bundle HEAD:refs/heads/<restored-branch>',
+      'git -C <repo> fetch commits.bundle "+refs/portos/archive/*:refs/portos/recovered/*"',
       `git -C <repo> worktree add <checkout> ${tree.head}`,
       snapshot.indexDiff ? 'git -C <checkout> apply --index index.diff' : null,
       snapshot.worktreeDiff ? 'git -C <checkout> apply worktree.diff' : null,

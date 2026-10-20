@@ -10,7 +10,7 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
-const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn() }));
+const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn() }));
 vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
 
 vi.mock('../services/taskSchedule.js', () => ({
@@ -85,6 +85,13 @@ describe('CoS Schedule Routes', () => {
     const restore = { ...recoveryInput, journalDigest: 'c'.repeat(64) };
     expect((await request(app).post(`${base}/restore`).send(restore)).status).toBe(200);
     expect(initialized.restoreInitializedCheckout).toHaveBeenCalledWith(restore);
+    initialized.reviewInitializedCheckoutBranch.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-branch`).send(restore)).status).toBe(200);
+    expect((await request(app).post(`${base}/retire-branch`).send(restore)).status).toBe(400);
+    initialized.retireInitializedCheckoutBranch.mockResolvedValue({ ok: true, branchDeleted: true });
+    const branchInput = { ...restore, review };
+    expect((await request(app).post(`${base}/retire-branch`).send(branchInput)).status).toBe(200);
+    expect(initialized.retireInitializedCheckoutBranch).toHaveBeenCalledWith(branchInput);
   });
 
   describe('GET /api/cos/schedule', () => {

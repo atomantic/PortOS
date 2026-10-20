@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -346,6 +346,20 @@ router.post('/schedule/branch-reconcile/initialized-checkouts/verify-archive', a
   const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
   const { verifyInitializedCheckoutArchive } = await import('../services/initializedCheckoutRecovery.js');
   res.json(await verifyInitializedCheckoutArchive(input));
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-branch', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutBranch(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/retire-branch', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutBranchRetireSchema, req.body);
+  const { retireInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await retireInitializedCheckoutBranch(input);
+  res.status(result.ok ? 200 : 409).json(result);
 }));
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see

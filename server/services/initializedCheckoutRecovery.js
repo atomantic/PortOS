@@ -3,7 +3,7 @@
  * quarantined whole, never unlinked. Immutable journal steps and a durable
  * repository reservation survive an interrupted request or server restart.
  */
-import { spawn } from 'node:child_process';
+import { spawn } from '../lib/childProcess.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -219,6 +219,107 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     } finally { await executor.release(); }
   }).catch(error => ({ ok: false, reason: error.message }));
 
+  const loadBoundTransaction = async input => {
+    const directory = location(input.transactionId);
+    const state = await readJournal(directory);
+    if (hash(state) !== input.journalDigest) fail('retirement-journal-changed');
+    const ctx = await context(input.appId);
+    if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
+    return { directory, state, ctx };
+  };
+  const branchReview = async ({ directory, state, ctx }) => {
+    if (state.phase !== 'quarantined' || state.branchDeleted) fail('retirement-branch-phase-not-ready');
+    const policy = await ensureOwner(ctx, state.release, false);
+    const proof = await native({ command: 'verify', transactionDir: directory, mode: 'restore' });
+    if (['working', 'administration'].some(part => proof.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
+    const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+    if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
+    const runGit = deps.execGit || execGit;
+    const head = await runGit(['rev-parse', '--verify', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true });
+    if (head.exitCode !== 0 || head.stdout.trim() !== state.release.head) fail('branch-ref-changed');
+    const facts = await forge(ctx, state.release, state.review.forge.prUrl);
+    const base = await comparison(ctx, state.release, facts.prUrl, state.review.snapshot, policy, facts);
+    const evidence = { ...base, mode: 'quarantined-branch', transactionId: state.id,
+      journalDigest: hash(state), archiveFingerprint: proof.fingerprint };
+    delete evidence.digest;
+    return { digest: hash(evidence), ...evidence };
+  };
+  const reviewBranch = input => fenced(async () => {
+    const bound = await loadBoundTransaction(input);
+    return (await admission()).withCheckoutPublication(bound.ctx.repoPath,
+      async () => ({ ok: true, review: await branchReview(bound) }));
+  }).catch(error => ({ ok: false, reason: error.message }));
+  // A receiver success was fsynced before recording the schedule receipt. Replay
+  // only those completed phases: this never issues a Git mutation or recreates
+  // a ref, and still refuses a new branch/holder or changed archive.
+  const finishBranchReceipt = async ({ directory, ctx, state }) => {
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    const gate = await admission();
+    try {
+      if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      const verify = async () => {
+        executor.assertHeld();
+        await ensureOwner(ctx, state.release, false);
+        await native({ command: 'verify', transactionDir: directory, mode: 'standalone' });
+        const placement = await native({ command: 'status', transactionDir: directory });
+        if (['working', 'administration'].some(part => placement.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
+        const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+        if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
+        const result = await (deps.execGit || execGit)(['show-ref', '--verify', '--quiet', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true });
+        if (result.exitCode !== 1) fail('retirement-deleted-branch-not-absent');
+      };
+      const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(error => {
+        if (error.code === 'ENOENT' && state.phase === 'retired' && state.receiptRecorded === true) return null;
+        throw error;
+      });
+      const finish = async () => {
+        await verify();
+        if (state.phase === 'branch-retired') {
+          const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+          await record(state.appId, { path: state.release.path, branch: state.release.branch,
+            head: state.release.head, branchDeleted: true, archiveDir: directory });
+          state = await appendStep(directory, state, 'retired', { receiptRecorded: true });
+        }
+        if (reservation) await gate.releaseCheckoutReservation(reservation);
+        return { ok: true, transactionId: state.id, branchDeleted: true, receiptRecorded: true, archiveDir: directory };
+      };
+      return reservation ? await gate.withCheckoutReservation(reservation, finish)
+        : await gate.withCheckoutPublication(ctx.repoPath, finish);
+    } finally { await executor.release(); }
+  };
+  const retireBranch = input => fenced(async () => {
+    const bound = await loadBoundTransaction(input);
+    const { directory, ctx } = bound;
+    let { state } = bound;
+    if (['branch-retired', 'retired'].includes(state.phase) && state.branchDeleted === true) return finishBranchReceipt(bound);
+    // An interrupted receiver may have completed without its journal result.
+    // It is an explicit uncertainty hold, never permission to recreate a ref.
+    if (state.phase === 'branch-retirement-intent') fail('retirement-branch-deletion-uncertain');
+    const current = await branchReview(bound);
+    assertReview(current, input.review);
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    const gate = await admission();
+    try {
+      if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      const reservation = await gate.reserveCheckoutRetirement(ctx.repoPath, state.id);
+      return await gate.withCheckoutReservation(reservation, async () => {
+        assertReview(await branchReview(bound), input.review);
+        executor.assertHeld();
+        state = await appendStep(directory, state, 'branch-retirement-intent', { reservation, branchReview: current });
+        const remove = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+        const deleted = await remove(ctx.repoPath, state.release.branch, state.release.head);
+        if (!deleted) fail('retirement-branch-delete-refused-or-uncertain');
+        state = await appendStep(directory, state, 'branch-retired', { branchDeleted: true, branchRetainedReason: null });
+        const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+        await record(state.appId, { path: state.release.path, branch: state.release.branch,
+          head: state.release.head, branchDeleted: true, archiveDir: directory });
+        state = await appendStep(directory, state, 'retired', { receiptRecorded: true });
+        await gate.releaseCheckoutReservation(reservation);
+        return { ok: true, transactionId: state.id, branchDeleted: true, receiptRecorded: true, archiveDir: directory };
+      });
+    } finally { await executor.release(); }
+  }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
+
   const status = async ({ appId, transactionId }) => {
     const directory = location(transactionId);
     const state = await readJournal(directory);
@@ -229,8 +330,16 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       throw error;
     });
     const placement = hasManifest ? await native({ command: 'status', transactionDir: directory }) : { preserved: false };
+    let branchRef;
+    if (state.phase === 'branch-retirement-intent') {
+      const result = await (deps.execGit || execGit)(['show-ref', '--verify', '--quiet', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
+      branchRef = result?.exitCode === 0 ? 'present' : result?.exitCode === 1 ? 'absent' : 'unreadable';
+    }
     return { ok: true, transactionId, phase: state.phase, release: state.release, placement,
-      branchDeleted: state.branchDeleted ?? null, journalDigest: hash(state) };
+      branchDeleted: state.branchDeleted ?? null, journalDigest: hash(state),
+      ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
+      ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
+      ...(['branch-retired', 'retired'].includes(state.phase) ? { recoveryAction: 'retire-branch' } : {}) };
   };
 
   const verifyArchive = async input => {
@@ -293,7 +402,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       });
     } finally { await executor.release(); }
   }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
-  return { review, retire, status, restore, verifyArchive };
+  return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch };
 }
 
 const recovery = _createInitializedCheckoutRecovery();
@@ -303,3 +412,6 @@ export const initializedCheckoutStatus = recovery.status;
 export const restoreInitializedCheckout = recovery.restore;
 
 export const verifyInitializedCheckoutArchive = recovery.verifyArchive;
+
+export const reviewInitializedCheckoutBranch = recovery.reviewBranch;
+export const retireInitializedCheckoutBranch = recovery.retireBranch;

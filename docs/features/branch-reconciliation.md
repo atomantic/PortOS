@@ -65,9 +65,14 @@ or purges an archive.
    restore before moving either original directory. Kernel no-replace renames
    quarantine originals without unlinking them. Each intent/result is fsynced.
 3. The successful phase is **quarantined**, not fully retired. The branch remains
-   with reason `quarantined-checkout-rollback-ref`. A later branch-only retirement
-   must obtain fresh merge/ownership proof and preserve its own reflog archive.
-   No UI merged flag authorizes either operation.
+   with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts
+   `appId`, `transactionId` and the fresh status `journalDigest`; it verifies the
+   quarantined originals and archive, exact current branch, fresh merge/default
+   head, ownership and full supersession comparison. `POST /retire-branch` accepts
+   those identifiers plus the newly accepted `review`. It uses exact-head native
+   deletion with holder protection and preserves the branch reflog archive,
+   then records the original checkout retirement receipt. No UI merged flag
+   authorizes either operation.
 4. `GET /status?appId=…&transactionId=…` returns the journal phase, placements and
    current `journalDigest`. `POST /restore` requires those two identifiers plus
    that digest. It restores original inodes only to vacant original locations,
@@ -80,6 +85,15 @@ or purges an archive.
    branch is deleted or the live parent/module object stores are unavailable.
    Parent and module staged blobs and private recovery refs are explicitly
    checked; `git fsck` alone does not prove every staged blob exists.
+6. If branch deletion was conclusively journaled as `branch-retired`, but writing
+   its receipt failed, or `retired` was journaled before reservation release,
+   repeat `POST /retire-branch` with the latest `journalDigest`. This verifies
+   archive integrity, quarantined originals, ownership, no new holder and the
+   still-absent ref; it only finishes the receipt and reservation release. It
+   never deletes or recreates a ref on replay. A `branch-retirement-intent`
+   without a recorded receiver result remains an explicit uncertainty hold,
+   even when the ref is absent. Status reports that evidence; standalone recovery
+   stays available, but no automatic retry clears the uncertain reservation.
 
 The native backend preserves file bytes, permissions, ownership, timestamps,
 ACLs, xattrs, supported flags, empty directories, hard links and symlink targets
@@ -90,11 +104,18 @@ Git operations, insufficient space and unsupported metadata hold the operation.
 A full parent store copy and a second standalone restore require bounded free
 space; there is no cache deletion fallback.
 
-Managed checkout creation/adoption/removal, claim binding and continuation
-publication share admission under the canonical common Git directory. A pending
+Managed checkout creation/adoption/removal, claim binding, the full workspace
+preparation through agent registration/spawn, and supported Git API writers
+share admission under the canonical common Git directory. Read-only merge proof
+may add immutable commit objects; concurrent additions conservatively invalidate
+an exact archive snapshot rather than authorize removing changed evidence. A pending
 reservation survives restart. Normal writers release their permits only after
 settlement; timeout, overflow or signal termination retain an uncertain permit
 because direct-child exit cannot establish that every helper stopped. No PID,
-age, timer or automatic retry clears this evidence. An interrupted transaction
+age, timer or automatic retry clears this evidence. Reservation release atomically
+moves the intact owner into a durable private release record, preserving evidence
+across a crash without leaving an ownerless cut. Receipt replay keeps the original
+archive identity and timestamp so a newer checkout obligation cannot be satisfied
+by replaying an older retirement. An interrupted transaction
 requires explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.

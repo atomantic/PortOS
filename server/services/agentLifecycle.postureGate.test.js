@@ -101,7 +101,7 @@ vi.mock('./agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: v
 // what most of this file observes, and letting the real workspace prep run
 // would touch git. The dispatch cases override it per test via `reachDispatch`.
 vi.mock('./agentWorkspacePrep.js', () => ({
-  prepareAgentWorkspace: vi.fn().mockResolvedValue({ outcome: 'blocked', reason: 'stop here' }),
+  prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => onPrepared({ outcome: 'blocked', reason: 'stop here' })),
 }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
@@ -184,12 +184,12 @@ const postureBlockWrites = () => vi.mocked(updateTask).mock.calls.filter(
  * branch-jack baseline.
  */
 function reachDispatch() {
-  vi.mocked(prepareAgentWorkspace).mockResolvedValueOnce({
+  vi.mocked(prepareAgentWorkspace).mockImplementationOnce(async ({ onPrepared }) => onPrepared({
     outcome: 'ready',
     workspacePath: join(TEMP_ROOT, 'workspace'),
     resolvedAppName: 'example-app',
     worktreeInfo: null,
-  });
+  }));
   vi.mocked(materializePublicReviewInput).mockResolvedValue(true);
   // The actions stage also materializes the read-only patch files; without this
   // its dispatch cases block on `public-review-input-missing` before routing.
@@ -242,11 +242,11 @@ describe('spawn setup failure after the worktree exists', () => {
   // Every failed Stage 2 spawn used to leave its checkout behind: the task
   // stayed pending and each retry cut another worktree.
   it('removes the worktree this attempt cut', async () => {
-    vi.mocked(prepareAgentWorkspace).mockResolvedValueOnce({
+    vi.mocked(prepareAgentWorkspace).mockImplementationOnce(async ({ onPrepared }) => onPrepared({
       outcome: 'ready',
       workspacePath: '/tmp/worktrees/agent-x',
       worktreeInfo: { worktreePath: '/tmp/worktrees/agent-x', branchName: 'cos/task-public-review/agent-x' },
-    });
+    }));
     vi.mocked(materializePublicReviewInput).mockRejectedValueOnce(new Error('The "cb" argument must be of type function'));
 
     await spawnAgentForTask({

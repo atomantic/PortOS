@@ -1,6 +1,6 @@
 /** Durable repository admission shared by checkout writers and explicit quarantine. */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { lstat, open, readFile, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readFile, rename } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { realpathSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { createBackupSharedAdmission } from './backupSharedAdmission.js';
@@ -73,6 +73,11 @@ async function verifyCheckoutReservation(reservation) {
   if (!info.isDirectory() || info.isSymbolicLink()) throw refused();
   const owner = JSON.parse(await readFile(join(cut, 'owner.json'), 'utf8'));
   if (JSON.stringify(owner) !== JSON.stringify(reservation.owner)) throw refused();
+  const uncertain = await lstat(join(cut, 'uncertain')).then(() => true, error => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
+  if (uncertain) throw refused();
 }
 
 /** Only the transaction executor holding its native mutex may enter or release a cut. */
@@ -105,8 +110,15 @@ export async function releaseCheckoutReservation(reservation) {
     throw error;
   });
   if (uncertain) throw refused();
-  await unlink(join(cut, 'owner.json'));
-  await rmdir(cut);
+  // Keep the owner intact across the release crash boundary. Atomic rename
+  // either leaves the complete live cut or a complete private release record;
+  // it never strands an ownerless cut which another transaction might claim.
+  const released = await mkdtemp(join(reservation.directory, 'released-'));
+  const ancestry = await open(reservation.directory, 'r');
+  try { await ancestry.sync(); } finally { await ancestry.close(); }
+  await rename(cut, join(released, 'cut'));
+  const tombstone = await open(released, 'r');
+  try { await tombstone.sync(); } finally { await tombstone.close(); }
   const fd = await open(reservation.directory, 'r');
   try { await fd.sync(); } finally { await fd.close(); }
 }

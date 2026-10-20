@@ -134,6 +134,11 @@ export async function getDiffStats(dir) {
  * that exact file, and a crafted `*` can't expand to the whole tree.
  */
 export async function stageFiles(dir, files) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => stageFilesAdmitted(dir, files));
+}
+
+async function stageFilesAdmitted(dir, files) {
   const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['add', '--', ...safePaths], dir);
   return true;
@@ -143,6 +148,11 @@ export async function stageFiles(dir, files) {
  * Unstage files (same literal-pathspec handling as stageFiles).
  */
 export async function unstageFiles(dir, files) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => unstageFilesAdmitted(dir, files));
+}
+
+async function unstageFilesAdmitted(dir, files) {
   const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['reset', 'HEAD', '--', ...safePaths], dir);
   return true;
@@ -156,6 +166,11 @@ export async function unstageFiles(dir, files) {
  * Same `:(literal)` pathspec handling as stageFiles. Omitted = commit the index as-is.
  */
 export async function commit(dir, message, { paths = [] } = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => commitAdmitted(dir, message, { paths }));
+}
+
+async function commitAdmitted(dir, message, { paths = [] } = {}) {
   const pathspecs = paths.length ? ['--', ...validateFilePaths(paths).map(toLiteralPathspec)] : [];
   // Using spawn with -m argument passes message safely without shell interpretation
   const result = await execGit(['commit', '-m', message, ...pathspecs], dir);
@@ -257,7 +272,12 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
  * @param {{prune?: boolean}} [opts] - `prune` also drops remote-tracking refs whose
  *   remote branch is gone, for callers that go on to reason about what origin still has.
  */
-export function fetchOrigin(dir, { prune = false } = {}) {
+export async function fetchOrigin(dir, { prune = false } = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => fetchOriginAdmitted(dir, { prune }));
+}
+
+function fetchOriginAdmitted(dir, { prune = false } = {}) {
   return fetchOriginAttempt(dir, 1, prune);
 }
 
@@ -267,6 +287,11 @@ export function fetchOrigin(dir, { prune = false } = {}) {
  * would swap files on disk and trigger HMR/server restarts).
  */
 export async function updateBranches(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => updateBranchesAdmitted(dir));
+}
+
+async function updateBranchesAdmitted(dir) {
   await fetchOrigin(dir);
 
   const status = await getStatus(dir);
@@ -328,6 +353,11 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
  * Push to origin
  */
 export async function push(dir, branch = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pushAdmitted(dir, branch));
+}
+
+async function pushAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const args = branch ? ['push', 'origin', branch] : ['push'];
   const result = await execGit(args, dir);
@@ -339,6 +369,11 @@ export async function push(dir, branch = null) {
  * Never uses --force. Returns per-branch results.
  */
 export async function pushAll(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pushAllAdmitted(dir));
+}
+
+async function pushAllAdmitted(dir) {
   const allBranches = await getBranches(dir);
   const pushable = allBranches.filter(b => b.tracking && b.ahead > 0);
 
@@ -370,6 +405,11 @@ export async function pushAll(dir) {
  * Create and switch to a new branch
  */
 export async function createBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => createBranchAdmitted(dir, branchName));
+}
+
+async function createBranchAdmitted(dir, branchName) {
   await execGit(['checkout', '-b', branchName], dir);
   return { success: true, branch: branchName };
 }
@@ -378,6 +418,11 @@ export async function createBranch(dir, branchName) {
  * Switch to an existing branch
  */
 export async function checkout(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => checkoutAdmitted(dir, branchName));
+}
+
+async function checkoutAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   await execGit(['checkout', branchName], dir);
   return { success: true, branch: branchName };
@@ -804,6 +849,11 @@ export async function getBranches(dir, { strict = false } = {}) {
  * Pull changes from remote for current branch
  */
 export async function pull(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pullAdmitted(dir));
+}
+
+async function pullAdmitted(dir) {
   const result = await execGit(['pull', '--rebase', '--autostash'], dir).catch((err) => {
     // A rebase killed mid-flight can leave the repo in a rebase-in-progress
     // state, so a lock found here is cleared but NOT retried — blindly
@@ -903,6 +953,11 @@ async function updatePinnedSubmodules(dir) {
  * @returns {Promise<{success: boolean, branch: string, output: string, conflict: boolean, rebased?: boolean, error?: string}>}
  */
 export async function updateDefaultBranch(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => updateDefaultBranchAdmitted(dir));
+}
+
+async function updateDefaultBranchAdmitted(dir) {
   // Git splits a failed pull across both streams — fetch progress and rebase
   // instructions on stderr, the `CONFLICT (content): …` lines naming the files
   // on stdout — so an `stderr || stdout` pick would drop exactly the part that
@@ -1036,6 +1091,11 @@ export async function updateDefaultBranch(dir) {
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => syncBranchAdmitted(dir, branch));
+}
+
+async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const currentBranch = branch || await getBranch(dir);
 
@@ -1094,7 +1154,20 @@ export function hasChangelogDir(dir) {
 // FIRST agent's in-flight rebase.
 const ensureLatestTails = new Map();
 
-export function ensureLatest(dir) {
+export async function ensureLatest(dir) {
+  const gitCheck = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true });
+  if (gitCheck.exitCode === 128
+    && /^fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point)/im.test(gitCheck.stderr || '')) {
+    return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
+  }
+  if (gitCheck.exitCode !== 0 || gitCheck.stdout.trim() !== 'true') {
+    throw new Error(gitCheck.stderr?.trim() || 'Could not verify Git working tree');
+  }
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => ensureLatestAdmitted(dir));
+}
+
+function ensureLatestAdmitted(dir) {
   const key = resolve(dir);
   const prev = ensureLatestTails.get(key) || Promise.resolve();
   const run = prev.catch(() => {}).then(() => ensureLatestUnserialized(dir));
@@ -1150,9 +1223,6 @@ function summarizeRebaseConflict({ stdout = '', stderr = '' } = {}) {
 }
 
 async function ensureLatestUnserialized(dir) {
-  const gitCheck = await isRepo(dir).catch(() => false);
-  if (!gitCheck) return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
-
   // A rebase left in progress is someone's (a person's, or an agent resolving a
   // conflict) — never start a second one on top of it, and never abort it.
   if (await rebaseInProgress(dir)) {
@@ -1271,22 +1341,25 @@ async function ensureLatestUnserialized(dir) {
 export async function getRemoteBranches(dir, { force = false } = {}) {
   // Fetch latest refs if forced or not fresh within window
   if (force || !isFetchFresh(dir)) {
-    if (activeFetches.has(dir)) {
-      await activeFetches.get(dir);
-    } else {
-      const fetchPromise = execGit(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true })
-        .then(res => {
-          if (res.exitCode === 0 || isBenignConcurrentFetchRefRace(res.stderr || res.stdout || '')) {
-            recordFetchSuccess(dir);
-          }
-          return res;
-        })
-        .finally(() => {
-          activeFetches.delete(dir);
-        });
-      activeFetches.set(dir, fetchPromise);
-      await fetchPromise;
-    }
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    await withCheckoutPublication(dir, async () => {
+      if (activeFetches.has(dir)) {
+        await activeFetches.get(dir);
+      } else {
+        const fetchPromise = execGit(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true })
+          .then(res => {
+            if (res.exitCode === 0 || isBenignConcurrentFetchRefRace(res.stderr || res.stdout || '')) {
+              recordFetchSuccess(dir);
+            }
+            return res;
+          })
+          .finally(() => {
+            activeFetches.delete(dir);
+          });
+        activeFetches.set(dir, fetchPromise);
+        await fetchPromise;
+      }
+    });
   }
 
   // Detect default branch
@@ -1423,6 +1496,11 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
  * @returns {Promise<{success: boolean, output: string}>}
  */
 export async function mergeBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => mergeBranchAdmitted(dir, branchName));
+}
+
+async function mergeBranchAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   const result = await execGit(['merge', '--no-ff', branchName], dir);
   return { success: true, output: (result.stdout + result.stderr).trim() };
@@ -1498,6 +1576,8 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   // Write a synthetic commit object with the branch's full tree atop the merge base.
   // commit-tree uses the repo's configured identity; if that's unset it fails and
   // no merge evidence is established (the worktree is preserved).
+  // This immutable object addition moves no refs or checkout state. A concurrent
+  // complete-checkout archive still refuses if its exact common-store snapshot drifts.
   const synthesized = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, { ignoreExitCode: true })
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
@@ -1522,6 +1602,11 @@ export const isBranchMergedInto = hasBranchMergeEvidence;
  * @returns {Promise<{success: boolean, branch: string}>}
  */
 export async function checkoutRemoteBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => checkoutRemoteBranchAdmitted(dir, branchName));
+}
+
+async function checkoutRemoteBranchAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   await execGit(['checkout', '-b', branchName, `origin/${branchName}`], dir);
   return { success: true, branch: branchName };
@@ -1644,6 +1729,11 @@ export async function findActiveAgentInWorkspace(dir, { includePaused = false, f
  *   fetched: boolean}>}
  */
 export async function resetToDefaultBranch(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => resetToDefaultBranchAdmitted(dir));
+}
+
+async function resetToDefaultBranchAdmitted(dir) {
   // A linked worktree cannot check out the default branch — the main checkout
   // already holds it — and hard-resetting one would discard an agent's
   // in-flight work on a branch that is not the default anyway. Fail with a

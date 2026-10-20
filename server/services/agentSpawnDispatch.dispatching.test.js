@@ -38,7 +38,10 @@ vi.mock('./agentProviderResolution.js', () => ({
     ok: true, provider: { id: 'example-cli', type: 'cli', command: 'codex' }, selectedModel: 'example-model', modelSelection: {},
   }),
 }));
-vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async () => f.prep) }));
+vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication('/repos/example', () => onPrepared(f.prep));
+}) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: () => ({ command: 'codex', args: [] }),
   isClaudeCliProvider: () => false,
@@ -84,15 +87,11 @@ describe('dispatchAgentRun ownership window', () => {
     expect(getActiveAgentIds()).not.toContain('agent-x');
   });
 
-  it('holds a resumed claim publication through pending ownership registration and spawn', async () => {
+  it.each([{}, { claimResumeInPlace: true }, { existingBranch: 'feature/existing', useWorktree: true }])('holds workspace publication through pending registration and spawn: %j', async metadata => {
     let finishRegistration;
     f.registerGate = new Promise(resolve => { finishRegistration = resolve; });
     const context = newContext();
-    context.task = { ...task, metadata: { claimResumeInPlace: true, app: 'example-app' } };
-    prepareAgentWorkspace.mockImplementationOnce(async () => {
-      expect(f.publicationActive).toBe(true);
-      return f.prep;
-    });
+    context.task = { ...task, metadata: { ...metadata, app: 'example-app' } };
     const dispatched = dispatchAgentRun(context);
     await vi.waitFor(() => expect(registerAgent).toHaveBeenCalled());
     expect(withCheckoutPublication).toHaveBeenCalledWith('/repos/example', expect.any(Function));
@@ -108,7 +107,7 @@ describe('dispatchAgentRun ownership window', () => {
     const context = newContext();
     context.task = { ...task, metadata: { claimResumeInPlace: 'true', app: 'example-app' } };
     await expect(dispatchAgentRun(context)).rejects.toThrow('checkout-retirement-reserved');
-    expect(prepareAgentWorkspace).not.toHaveBeenCalled();
+    expect(prepareAgentWorkspace).toHaveBeenCalledOnce();
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain('agent-x');

@@ -421,6 +421,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'GET /api/cos/schedule/branch-reconcile/initialized-checkouts/status',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/verify-archive',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-branch',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire-branch',
   'POST /api/cos/schedule/maintenance-runs',
   // Editing a pending stage changes the provider used by deferred host work.
   'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
