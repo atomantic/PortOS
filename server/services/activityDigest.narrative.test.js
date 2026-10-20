@@ -34,7 +34,7 @@ describe('activity digest narrative provider', () => {
 
     const result = await runDigestForDate('2026-10-01');
 
-    expect(result).toMatchObject({ drafted: true, usedLlm: false });
+    expect(result).toMatchObject({ drafted: true, usedLlm: false, narrativeSkipped: 'provider-not-tool-free' });
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
 
@@ -44,6 +44,7 @@ describe('activity digest narrative provider', () => {
     const result = await runDigestForDate('2026-10-01');
 
     expect(result).toMatchObject({ drafted: true, usedLlm: true });
+    expect(result.narrativeSkipped).toBeUndefined();
     expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({ toolFree: true, allowFallback: false }));
   });
 });

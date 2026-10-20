@@ -95,6 +95,15 @@ export const supportsToolFreeOneShot = (provider) => provider?.enabled !== false
 // path, with incompatible records visible but disabled.
 export const toolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsToolFreeOneShot });
 
+/** Strictly tool-free: a direct API or a server-verified tool-free CLI, never a
+ * read-only-sandboxed authoring CLI. Mirrors `isToolFreeOneShotProvider` in
+ * server/lib/providerVendors.js, for pickers whose server refuses the rest.
+ */
+export const supportsStrictToolFreeOneShot = (provider) => provider?.enabled !== false
+  && (provider?.type === 'api' || provider?.type === 'cli' && provider.toolFreeOneShot === true);
+
+export const strictToolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsStrictToolFreeOneShot });
+
 // The two enforceable public-review postures. MIRROR of
 // `server/lib/agentExecutionProfiles.js`; a pr-reviewer stage names a posture
 // and the server publishes each provider's `publicReviewPostures` on
