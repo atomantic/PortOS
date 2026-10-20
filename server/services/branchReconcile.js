@@ -1078,7 +1078,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
   } : null;
   const reason = !entries.length ? 'no-in-flight-branches'
     : entries.every(entry => entry.claimMarker) ? 'claim-markers-held'
-    : heldLive.length ? 'branches-held-by-live-owners'
+    : heldLive.length && entries.every(entry => heldLive.some(owner => owner.branch === entry.branch && owner.liveOwnerReason === entry.cause)) ? 'branches-held-by-live-owners'
       : heldBackMerged.length === entries.length ? 'merged-branches-held-back' : 'branches-blocked';
   return {
     reason, heldBackMerged, counts, skipCauses: entries.length ? skipCauses : null,
@@ -1833,6 +1833,7 @@ export const actionOn = (actions, key) => actions?.[key] !== false;
 export function filterActionable(inFlight, actions) {
   return inFlight.filter((b) => {
     if (b.openPr?.isDraft) return false;
+    if (b.state === 'REVIEW_RETIREMENT') return actionOn(actions, 'cleanupMerged');
     if (b.state === 'ABANDONED_WIP') return actionOn(actions, 'finishAbandoned');
     if (b.state === 'NEEDS_PR') return actionOn(actions, 'openPr');
     if (b.state === 'CONFLICTED') return actionOn(actions, 'resolveConflicts');
@@ -1994,7 +1995,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
  */
 export function actionableSignature(actionable) {
   return actionable
-    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}${b.tip ? `:${b.tip}` : ''}`)
+    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}${b.tip ? `:${b.tip}` : ''}${b.retirement?.digest ? `:${b.retirement.digest}` : ''}`)
     .sort()
     .join('|');
 }
@@ -2062,10 +2063,12 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
   }
   // This list is a scan from before dispatch; a claim run can take a branch
   // after it. Each branch's own recheck runs right before its first mutation (#10089).
-  if (appId) {
+  if (appId && inFlight.some(branch => !branch.retirement)) {
     lines.splice(lines.length - 1, 0, '', 'Ownership recheck: immediately before the FIRST edit, commit, rebase, push, merge, PR change, move or removal on a branch below (and again before its merge), run that branch\'s "Recheck" command and require a parsed JSON response with admitted:true. On admitted:false, an HTTP/auth/transport error or unreadable JSON, leave that branch and its checkout untouched and report it as held by a live owner with the returned reason — a live claim run owns it now. A successful Recheck also reserves that branch for this run until it ends, so no claim run can take it mid-mutation.');
   }
+  const { retirementReviewInstructions } = await import('./branchReconcileRetirement.js');
   inFlight.forEach((b, i) => {
+    if (b.retirement) { lines.push(retirementReviewInstructions(b, appId), ''); return; }
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
@@ -2101,13 +2104,13 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
     lines.push('');
   });
   // Detached trees outside the managed roots are never removed by the deterministic
-  // pass; the coordinator confirms nothing is using one, then removes it.
+  // pass. An inventory observation never grants the coordinator removal authority.
   const unmanaged = detachedWorktrees.filter((d) => !d.managed);
   if (unmanaged.length) {
     lines.push(`Detached worktrees at commits already on \`${defaultBranch}\`, outside PortOS's managed roots (${unmanaged.length}):`, '');
     for (const d of unmanaged) {
       lines.push(`### Detached worktree \`${d.path}\``);
-      lines.push(`- Do: confirm nothing is using \`${d.path}\` (no running process, no uncommitted work), then run \`git worktree remove ${d.path}\` yourself.`, '');
+      lines.push('- Do: retain this unmanaged checkout and report worktree-unmanaged-location. Do not unlock, alter or remove it; this review batch grants no cleanup authority for unrelated checkouts.', '');
     }
   }
   return lines.join('\n');

@@ -61,7 +61,7 @@ const cleanupMock = vi.fn();
 vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...args) => cleanupMock(...args) }));
 
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
-import { processPendingMergePrs, readPendingMergePrs } from './prWatcher.js';
+import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
 import { addTask } from './cos.js';
 
@@ -164,6 +164,26 @@ describe('pending-merge handoff', () => {
     await watcher.followUpHandoffReceipt('app1', result.receipt.id);
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toHaveLength(1);
+  });
+
+  it('an on-demand local nudge recovers the existing conflicted receipt once and preserves remote-only/locked receipts', async () => {
+    await handedOff();
+    f.tasks['task-agent-1'].status = 'completed';
+    const original = pending()[0];
+    const untouched = ['remote-only', 'locked'].map((kind, i) => ({ ...structuredClone(original), prNumber: 80 + i,
+      prUrl: `https://github.com/example/repo/pull/${80 + i}`, prBranch: `claim/${kind}`,
+      handoff: { ...original.handoff, receiptId: kind }, ticks: 9 }));
+    f.apps.get('app1').pendingMergePrs.push(...untouched);
+    f.pr.mergeStateStatus = 'DIRTY';
+    const local = { getBranches: async () => [{ name: 'claim/issue-1' }, { name: 'claim/locked' }],
+      listWorktrees: async () => [{ branch: 'refs/heads/claim/locked', locked: true }] };
+    const results = await Promise.all([nudgeLocalPendingMergePrs('app1', local), nudgeLocalPendingMergePrs('app1', local)]);
+    expect(results[0]).toMatchObject({ escalated: 1, checked: 1 });
+    expect(followUpMock).toHaveBeenCalledTimes(1);
+    expect(pending()).toEqual(untouched);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(await nudgeLocalPendingMergePrs('app1', local)).toMatchObject({ checked: 0 });
+    expect(followUpMock).toHaveBeenCalledTimes(1);
   });
 
   it('waits for an active original claim before dispatching CI failure recovery and transfers custody once', async () => {

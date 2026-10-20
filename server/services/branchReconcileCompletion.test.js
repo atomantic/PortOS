@@ -7,6 +7,7 @@ vi.mock('./branchReconcile.js', async (importOriginal) => ({
   ...await importOriginal(),
   reconcile: vi.fn(), buildActiveOwnerIds: vi.fn(() => new Set(['active'])),
 }));
+vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: vi.fn(), recordBranchReconcileOutcome: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn(() => [{ prBranch: 'claim/queued' }]) }));
 import { getAppById } from './apps.js';
@@ -14,12 +15,14 @@ import { getTaskById } from './cosTaskStore.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { reconcile } from './branchReconcile.js';
 import { emitLog } from './cosEvents.js';
-import { settleBranchReconcileRun } from './branchReconcileCompletion.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { settleBranchReconcileRun, settleRetirementReviewRun } from './branchReconcileCompletion.js';
 
 const agent = { taskId: 'task-example', metadata: { taskAnalysisType: 'branch-reconcile', taskApp: 'example' } };
 describe('branch reconciliation completion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getBranchReconcileOutcome.mockResolvedValue(null);
     getTaskById.mockResolvedValue({ metadata: { perpetual: false } });
     getAppById.mockResolvedValue({ id: 'example', repoPath: '/example/repo', forgeAccount: 'example-account' });
     readClaimOwnershipAgents.mockResolvedValue([]);
@@ -32,6 +35,19 @@ describe('branch reconciliation completion', () => {
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
   });
+  it('requires an exact persisted archive receipt after the review task reports success', async () => {
+    const release = { branch: 'claim/issue-42', path: '/example/checkout', head: 'a'.repeat(40) };
+    getTaskById.mockResolvedValue({ metadata: { reconcileRetirements: [{ release, createdAt: '2026-10-20T00:00:00Z', prUrl: 'https://github.com/example/repo/pull/42' }] } });
+    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true }] });
+    await settleBranchReconcileRun({ ...agent, result: { success: true } });
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('example', expect.objectContaining({ status: 'incomplete', reason: 'retirement-receipt-unverified' }));
+    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 1; scan incomplete'), expect.any(Object));
+    recordBranchReconcileOutcome.mockClear();
+    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
+    await settleBranchReconcileRun({ ...agent, result: { success: true } });
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
+  });
+
   it('reports inventory-only protected and detached worktrees plus retained claims', async () => {
     reconcile.mockResolvedValue({
       cleaned: ['claim/issue-42'], inFlight: [], skipped: [],
@@ -99,5 +115,32 @@ describe('branch reconciliation completion', () => {
   it('ignores other completed task types', async () => {
     await settleBranchReconcileRun({ metadata: { taskAnalysisType: 'claim-issue' } });
     expect(getTaskById).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('scoped retirement recovery completion', () => {
+  it('uses persisted task identity and keeps missing receipts despite reported success, without a Git scan', async () => {
+    vi.clearAllMocks();
+    const release = { branch: 'fix/merged', path: '/example/checkout', head: 'a'.repeat(40) };
+    const recovery = { taskId: 'recovery', result: { success: true }, metadata: {
+      recoveryOrigin: { subsystem: 'repository-cleanup' }, retirementReview: { appId: 'untrusted-hint' },
+    } };
+    getTaskById.mockResolvedValue({ metadata: { retirementReview: { appId: 'persisted-app', release, createdAt: '2026-10-20T00:00:00Z' } } });
+    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '/example/other' }] });
+    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('persisted-app', expect.objectContaining({ retirementObligations: [{ ...release, reason: 'retirement-receipt-unverified' }] }));
+    expect(reconcile).not.toHaveBeenCalled();
+    for (const retiredAt of ['invalid', '2026-10-19T23:59:00Z']) {
+      getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt }] });
+      expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
+    }
+    recordBranchReconcileOutcome.mockClear();
+    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
+    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: true });
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
+    getTaskById.mockResolvedValue({ metadata: {} });
+    expect(await settleRetirementReviewRun(recovery)).toBeNull();
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
   });
 });

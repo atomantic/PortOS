@@ -2789,12 +2789,7 @@ Done from INSIDE the worktree (you've already created \`claim/<slug>\` in Phase 
    \`\`\`
 2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[<slug>]\` ID**. This keeps the queue moving so the next \`plan-task\` run picks a different actionable item.
 3. Commit, push the branch (\`git push -u origin claim/<slug>\`), and open a PR with \`gh pr create\` so the user can see the questions. **Do NOT merge** — the user resolves \`.plan-questions.md\` first.
-4. Then run the **Phase 3b cleanup** (which differs from Phase 7 — the PR is intentionally unmerged here, so the local branch must NOT be deleted):
-   \`\`\`bash
-   cd {repoPath}
-   git worktree remove "\${WORKTREE}"
-   \`\`\`
-   Leave the local \`claim/<slug>\` branch alone — \`git branch -d\` will refuse (PR not merged) and \`-D\` would discard work that's still in flight. The branch lives on locally and remotely until the user resolves the questions and the PR merges; \`git branch -d "claim/<slug>"\` becomes safe only after that point.
+4. Preserve the exact checkout, local branch and remote branch for the clarification handoff. This PR is intentionally unmerged: do not remove or unlock its worktree, delete refs, or invoke merged retirement. Report the retained path and unresolved questions.
 
 After Phase 3b runs, **exit** — do NOT proceed to Phase 4. The implementing path resumes only when the user reopens the slug post-clarification.
 
@@ -2855,19 +2850,11 @@ ${buildManagedGithubMergeScript()}
 
 ## Phase 7 — Clean up (post-merge ONLY)
 
-This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
+This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you retained the checkout for clarification — do NOT also run Phase 7.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first; you are currently inside the worktree):
-
-\`\`\`bash
-cd {repoPath}
-git worktree remove "\${WORKTREE}"
-git branch -d "claim/\${SLUG}"
-\`\`\`
-
-If \`git branch -d\` refuses, fetch the default branch and re-check remote \`MERGED\` state. Retry \`-d\` only when Git proves the branch integrated; otherwise leave it for reconciliation. Never force-delete with \`-D\`.
+From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
 
 **Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
 
@@ -2958,12 +2945,7 @@ Done from INSIDE the worktree (you've already created \`claim/<slug>\` in Phase 
    \`\`\`
 2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[<slug>]\` ID**. This keeps the queue moving so the next \`plan-task\` run picks a different actionable item.
 3. Commit, push the branch (\`git push -u origin claim/<slug>\`), and open a PR with \`gh pr create\` so the user can see the questions. **Do NOT merge** — the user resolves \`.plan-questions.md\` first.
-4. Then run the **Phase 3b cleanup** (which differs from Phase 7 — the PR is intentionally unmerged here, so the local branch must NOT be deleted):
-   \`\`\`bash
-   cd {repoPath}
-   git worktree remove "\${WORKTREE}"
-   \`\`\`
-   Leave the local \`claim/<slug>\` branch alone — \`git branch -d\` will refuse (PR not merged) and \`-D\` would discard work that's still in flight. The branch lives on locally and remotely until the user resolves the questions and the PR merges; \`git branch -d "claim/<slug>"\` becomes safe only after that point.
+4. Preserve the exact checkout, local branch and remote branch for the clarification handoff. This PR is intentionally unmerged: do not remove or unlock its worktree, delete refs, or invoke merged retirement. Report the retained path and unresolved questions.
 
 After Phase 3b runs, **exit** — do NOT proceed to Phase 4. The implementing path resumes only when the user reopens the slug post-clarification.
 
@@ -3032,19 +3014,11 @@ ${buildManagedGithubMergeScript()}
 
 ## Phase 7 — Clean up (post-merge ONLY)
 
-This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
+This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you retained the checkout for clarification — do NOT also run Phase 7.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first; you are currently inside the worktree):
-
-\`\`\`bash
-cd {repoPath}
-git worktree remove "\${WORKTREE}"
-git branch -d "claim/\${SLUG}"
-\`\`\`
-
-If \`git branch -d\` refuses, fetch the default branch and re-check remote \`MERGED\` state. Retry \`-d\` only when Git proves the branch integrated; otherwise leave it for reconciliation. Never force-delete with \`-D\`.
+From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
 
 **Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
 
@@ -3276,7 +3250,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the PR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this — the PR + commit history is the record.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
 3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not a PR diff.** No PR exists yet, so \`gh pr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`). Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.
+4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.
 
 ## Phase 6 — Open the PR, satisfy PR-side review + CI, and merge
 
@@ -3287,7 +3261,7 @@ Every local reviewer's fixes are already committed, so the PR opens against fini
 2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
 3. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (\`gh pr edit <pr-number> --add-reviewer <login>\`, drop the \`@\`), poll every 5–15s for it, and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. If the repo auto-requests a review bot when the PR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
-   **Review-stuck cleanup** (a PR-side reviewer still unsatisfied after 3 rounds): post one summarizing PR comment (\`gh pr comment\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
+   **Review-stuck cleanup** (a PR-side reviewer still unsatisfied after 3 rounds): post one summarizing PR comment (\`gh pr comment\`), preserve the exact worktree and local branch. Leave the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
 4. **Let required CI finish and go green** — \`gh pr checks <pr-number> --required --watch --fail-fast\` (scope the wait to REQUIRED checks so an optional job can't stall a merge branch protection would allow). A red required check is not merge-eligible: fix it and re-push (same 3-round cap), or, if it stays red, stop exactly as the review-stuck cleanup above does.
 5. **Merge immediately via \`gh pr merge\`** — NEVER a local \`git merge\` and NEVER \`--auto\`, which can return successfully while leaving the PR queued and OPEN. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
    \`\`\`bash
@@ -3301,15 +3275,7 @@ This phase runs only after the PR merged via Phase 6.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-From the **source repo**, only after the preservation and ownership gates above succeed (cd back to {repoPath} first):
-
-\`\`\`bash
-cd {repoPath}
-git worktree remove "\${WORKTREE}"
-git branch -d "claim/issue-\${NUM}"
-\`\`\`
-
-If \`git branch -d\` refuses, fetch the default branch and re-check the PR's remote \`MERGED\` state. Retry \`-d\` only when Git can prove the branch is integrated; otherwise leave the local branch for the reconciliation task. Never force-delete with \`-D\`.
+From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
 
 **Reconcile the issue — did this PR FULLY satisfy its scope?**
 - **Yes (full)** — the \`Closes #\${NUM}\` trailer already auto-closed it; if it's somehow still open, close it (\`gh issue close "\${NUM}"\`) and remove the label (\`gh issue edit "\${NUM}" --remove-label in-progress\`).
@@ -3466,7 +3432,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the MR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
 3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR diff.** No MR exists yet, so \`glab mr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, remove ONLY the worktree (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`), and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.
+4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.
 
 ## Phase 6 — Open the merge request, satisfy MR-side review + CI, and merge
 
@@ -3477,14 +3443,14 @@ Every local reviewer's fixes are already committed, so the MR opens against fini
 2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the MR open, and stop before the MR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
 3. **Satisfy the MR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (resolve \`MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer <login>\`, dropping the \`@\`; if glab rejects the flag, run \`glab mr update --help\` rather than guessing), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. If the project auto-requests a review bot when the MR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
-   **Review-stuck cleanup** (an MR-side reviewer still unsatisfied after 3 rounds): post one summarizing MR note (\`glab mr note\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
+   **Review-stuck cleanup** (an MR-side reviewer still unsatisfied after 3 rounds): post one summarizing MR note (\`glab mr note\`), preserve the exact worktree and local branch. Leave the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
 4. **Let required CI finish and go green** — inspect the MR's pipeline (\`glab ci status\` on the branch, or \`glab mr view "\${MR_IID}"\`). A red required pipeline is not merge-eligible: fix it and re-push (same 3-round cap), or, if it stays red, stop exactly as the review-stuck cleanup above does.
 5. **Merge immediately via \`glab mr merge\`** — NEVER a local \`git merge\`. \`glab mr merge\` takes the **MR IID**, which is NOT the issue number — resolve it from the source branch first, merge, then verify remote state:
    \`\`\`bash
    MR_IID="$(glab mr list --source-branch "claim/issue-\${NUM}" --output json | sed -n 's/.*"iid":\\([0-9]\\{1,\\}\\).*/\\1/p' | head -1)"
-   glab mr merge "\${MR_IID}" --yes --remove-source-branch || {
+   glab mr merge "\${MR_IID}" --yes || {
      glab mr view "\${MR_IID}" --output json | jq -e 'select((.state | ascii_downcase) == "merged")' >/dev/null || \
-       glab mr merge "\${MR_IID}" --yes --squash --remove-source-branch
+       glab mr merge "\${MR_IID}" --yes --squash
    }
    glab mr view "\${MR_IID}" --output json | jq -er 'select((.state | ascii_downcase) == "merged") | .state'
    \`\`\`
@@ -3492,15 +3458,11 @@ Every local reviewer's fixes are already committed, so the MR opens against fini
 
 ## Phase 7 — Clean up (post-merge ONLY)
 
-This phase runs only after the MR merged via Phase 6. From the **source repo** (cd back to {repoPath} first):
+This phase runs only after the MR merged via Phase 6.
 
-\`\`\`bash
-cd {repoPath}
-git worktree remove "\${WORKTREE}"
-git branch -d "claim/issue-\${NUM}"
-\`\`\`
+${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-If \`git branch -d\` refuses, fetch the default branch and re-check the MR's merged state. Retry \`-d\` only when Git proves the branch integrated; otherwise leave it for reconciliation. Never force-delete with \`-D\`.
+If the retirement service does not support this forge, retain the exact checkout and refs with that explicit blocker; no CLI deletion fallback.
 
 **Reconcile the issue — did this MR FULLY satisfy its scope?**
 - **Yes (full)** — the \`Closes #\${NUM}\` line already auto-closed it on merge to the default branch; if it's somehow still open, close it (\`glab issue close "\${NUM}"\`) and remove the label (\`glab issue update "\${NUM}" --unlabel in-progress\`).
@@ -3672,12 +3634,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 The local reviewers already ran in Phase 5, so only the reviewers that need an open MR/PR remain.
 
 1. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review on the open MR/PR (GitHub: \`gh pr edit <pr-number> --add-reviewer <login>\`, dropping the \`@\`; GitLab: \`glab mr update <MR_IID> --reviewer <login>\`), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds per reviewer. Wait out any auto-requested review bot the same way. A missing reviewer, timeout, or unresolvable finding is UNSATISFIED, not clean: comment on the MR/PR naming the failure and stop. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
-2. **Leave the MR/PR open for a human to land.** Unlike the GitHub/GitLab issue flows, this flow does NOT auto-merge — the ticket is "In Review" and a human reviews + merges. After the reviewers finish, run the worktree-only cleanup so the source checkout is left clean:
-   \`\`\`bash
-   cd {repoPath}
-   git worktree remove "\${WORKTREE}"
-   \`\`\`
-   Leave the local \`claim/<KEY>\` branch and the open MR/PR in place. **Do NOT \`git merge\`, \`gh pr merge\`, \`glab mr merge\`, or \`git pull\`** — landing the change and moving the ticket to Done is the human's call.
+2. **Leave the MR/PR open for a human to land.** Unlike the GitHub/GitLab issue flows, this flow does NOT auto-merge — the ticket is "In Review" and a human reviews + merges. After the reviewers finish, preserve the exact worktree, local \`claim/<KEY>\` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged. **Do NOT \`git merge\`, \`gh pr merge\`, \`glab mr merge\`, or \`git pull\`** — landing the change and moving the ticket to Done is the human's call.
 
 ## Phase 7 — Report
 
@@ -4215,56 +4172,17 @@ This task runs on a schedule and generates status reports summarizing:
 - Recently completed tickets (last 7 days)
 - Priority distribution`,
 
-  'branch-cleanup': `[Improvement: {appName}] Branch Cleanup — Delete Merged Branches
-
-Clean up stale branches in {appName} that have already been merged into the default branch.
+  'branch-cleanup': `[Improvement: {appName}] Branch Cleanup — Preserve and Retire Completed Work
 
 Repository: {repoPath}
 
-## Phase 1 — Identify Merged Branches
+Delegate cleanup to the supported branch-reconcile workflow: resolve this managed app's exact appId and POST /api/cos/schedule/trigger with {taskType:"branch-reconcile",appId} using authenticated PortOS API transport. Read back its outcome; a trigger acknowledgment or merged badge is not completed cleanup. Report retained branches, exact hold reasons and any pending review obligation. Preserve active agents, manual handoffs, locks, dirty/untracked/ignored content and unmerged work.
 
-1. cd into {repoPath}
-2. Run \`git fetch origin --prune\` to sync remote refs and remove stale tracking references
-3. Detect the default branch: \`git branch --list\` — look for main, then master
-4. List all local branches: \`git branch --format='%(refname:short)'\`
-5. List merged branches: \`git branch --merged <defaultBranch> --format='%(refname:short)'\`
-6. Filter out protected branches that must NEVER be deleted:
-   - main, master (default branches)
-   - release (release branch)
-   - dev, develop (development branches)
-   - The currently checked-out branch
-
-## Phase 2 — Delete Merged Local Branches
-
-7. For each merged branch that is NOT protected:
-   - Delete locally: \`git branch -d <branch>\`
-   - Log the branch name and result
-
-## Phase 3 — Clean Up Merged Remote Branches
-
-8. List remote branches merged into the default branch: \`git branch -r --merged origin/<defaultBranch> --format='%(refname:short)'\`
-9. Filter out protected remote branches (origin/main, origin/master, origin/release, origin/dev, origin/develop, origin/HEAD)
-10. For each merged remote branch:
-    - Delete remotely: \`git push origin --delete <branch>\`
-    - Log the branch name and result
-
-## Phase 4 — Checkout Default Branch
-
-11. Checkout the default branch so the repo is not left on a stale feature branch: \`git checkout <defaultBranch>\`
-
-## Phase 5 — Report
-
-12. Summarize:
-    - Total branches found (local and remote)
-    - Branches deleted (local and remote)
-    - Branches skipped (protected or unmerged)
-    - Any errors encountered
-
-IMPORTANT: Never delete unmerged branches. Only delete branches fully merged into the default branch. Use \`git branch -d\` (not -D) for local branches to ensure safety.`,
+${MANAGED_WORKTREE_CLEANUP_CONTRACT}`,
 
   'branch-reconcile': `[Improvement: {appName}] Branch & PR Reconciliation
 
-You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has already run the deterministic pass (removed fully-merged, orphaned local branches + their worktrees) and handed you ONLY the branches that need judgment.
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has run deterministic cleanup and handed you only local branches that need judgment. REVIEW_RETIREMENT entries are completed merged work with unresolved historical review obligations: read their exact preview and original/current code, then use their digest-bound live retirement API. Their work is not complete until the verified archive and retirement receipt exist. Preserve active owners, intentional human handoffs, locks, and every refusal. Never remove a checkout with shell commands or bypass the retirement service.
 
 Repository: {repoPath}
 
@@ -4272,7 +4190,7 @@ Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a mach
 
 {inFlightBranches}
 
-Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one. **Dispatch each sub-agent at ITS OWN branch's recommended model and effort** — a branch's block above names one when its issue carries \`model:\`/\`effort:\` labels; a batch is one partition decision, not one routing decision, and two branches in the same run routinely deserve different capability. Name the model/effort you used for each branch in your final summary.
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one, except REVIEW_RETIREMENT reviewers, who read from the source repository and follow their API-only instructions. **Dispatch each sub-agent at ITS OWN branch's recommended model and effort** — a branch's block above names one when its issue carries \`model:\`/\`effort:\` labels; a batch is one partition decision, not one routing decision, and two branches in the same run routinely deserve different capability. Name the model/effort you used for each branch in your final summary.
 
 ${DISPATCH_HINT_FANOUT_GUIDANCE}
 
@@ -4285,7 +4203,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 - **A branch whose "Do:" line ends in a merge is not finished until it IS merged.** Its sub-agent stays alive through CI — waiting out the check run, fixing what goes red, then merging — and reports back only when the PR is merged or a specific check/review is blocking it. "PR opened, left open for review" is a completed STEP, not a completed branch: the PR just sits green until the next run re-drives it. Do not end your own run while a sub-agent is still waiting on CI.
 - Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
 - If a sub-agent reports a branch is incomplete, superseded, or blocked, leave it as-is and note it in your summary.
-- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For a SUPERSEDED branch, record the verdict per the instructions above so PortOS's deterministic pass backs it up, removes its worktree, and deletes the branch. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
+- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For REVIEW_RETIREMENT, record the exact reviewed digest and source-backed supersession decision before calling the live retirement API; never substitute a generic SUPERSEDED verdict. For other SUPERSEDED branches, record the verdict and report the remaining preservation hold; a verdict alone does not authorize removal. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
 
   'issue-reconcile': `[Improvement: {appName}] Trusted Issue Reconciliation
 

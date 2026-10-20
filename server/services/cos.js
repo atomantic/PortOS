@@ -1547,6 +1547,10 @@ export async function init() {
     setImmediate(() => {
       Promise.resolve()
         .then(async () => {
+          if (agent?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+            const { settleRetirementReviewRun } = await import('./branchReconcileCompletion.js');
+            await settleRetirementReviewRun(agent);
+          }
           if (agentScheduledType(agent) !== 'branch-reconcile') return;
           const { settleBranchReconcileRun } = await import('./branchReconcileCompletion.js');
           await settleBranchReconcileRun(agent);

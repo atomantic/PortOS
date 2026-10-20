@@ -20,6 +20,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { retainRetirementObligations } from '../lib/reconcileRetirementEvidence.js';
 
 const BRANCH_RECONCILE_TEMPLATE = [
   '# Branch reconcile for {appName}',
@@ -45,6 +46,7 @@ vi.mock('./taskSchedule.js', () => ({
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
   recordBranchReconcileOutcome: vi.fn(async () => {}),
+  getBranchReconcileOutcome: vi.fn(async () => null),
   parkPerpetual: (...a) => parkPerpetual(...a),
   getPerpetualDrainState: (...a) => getPerpetualDrainState(...a),
   recordPerpetualDispatch: (...a) => recordPerpetualDispatch(...a),
@@ -72,6 +74,13 @@ vi.mock('./taskLearning.js', async (importActual) => ({
 
 // The reconcile scan is the git/gh-touching half; the classification helpers it
 // feeds stay REAL so the block the prompt receives is the real rendering.
+const prepareRetirement = vi.fn();
+vi.mock('./heldCheckoutRecovery.js', () => ({ prepareInventoriedCheckoutRetirement: (...args) => prepareRetirement(...args) }));
+const mergedPrRead = vi.fn();
+vi.mock('./branchReconcileRetirement.js', async (original) => {
+  const real = await original();
+  return { ...real, prepareReconcileRetirements: (app, result) => real.prepareReconcileRetirements(app, result, { readPr: mergedPrRead }) };
+});
 const reconcileMock = vi.fn();
 vi.mock('./branchReconcile.js', async (importActual) => ({
   ...(await importActual()),
@@ -97,7 +106,7 @@ vi.mock('./cosState.js', () => ({
 }));
 
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
-import { getTaskInterval, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getTaskInterval, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
 
@@ -120,12 +129,48 @@ const generate = () =>
 describe('generateManagedAppImprovementTaskForType composes the extracted pre-step layer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getBranchReconcileOutcome.mockResolvedValue(null);
+    recordBranchReconcileOutcome.mockImplementation(async (_appId, update) => ({ ...update, retirementObligations: retainRetirementObligations(null, update.remaining || [], '2026-10-20T00:00:00Z') }));
     parkPerpetual.mockReset().mockResolvedValue();
     recordPerpetualDispatch.mockReset().mockResolvedValue(1);
     readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {} });
     getPerpetualDrainState.mockResolvedValue({ signature: null, dispatchCount: 0 });
     reconcileMock.mockResolvedValue(scan());
     getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3 } });
+  });
+
+  it('a user run with only historical merged review holds generates bounded durable review work', async () => {
+    const rows = [1, 2, 3, 4].map(n => ({ branch: `claim/issue-${n}`, tip: String(n).repeat(40),
+      worktreePath: `/example/checkouts/${n}`, isMerged: n !== 2, completionPolicyReason: 'pr-completion-review-required' }));
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: rows, worktreeInventory: rows.map(row => ({
+      branch: row.branch, path: row.worktreePath, head: row.tip, managed: true, locked: false, lockReason: null,
+    })) }));
+    mergedPrRead.mockImplementation(async (_app, name) => `https://github.com/example/repo/pull/${name.split('-').at(-1)}`);
+    prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] } } });
+    const task = await generateManagedAppImprovementTaskForType('branch-reconcile', APP, STATE, { skipPreconditions: true, onDemand: true });
+    expect(task).not.toBeNull();
+    expect(task.metadata.reconcileRetirements).toHaveLength(3);
+    expect(task.description).toContain('[REVIEW_RETIREMENT]');
+    expect(task.description).toContain('checkouts/retire');
+    expect(task.description).not.toContain('claim-ownership');
+    expect(parkPerpetual).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({
+      remaining: expect.arrayContaining([expect.objectContaining({ branch: 'claim/issue-4', head: '4'.repeat(40), reason: 'retirement-review-pending' })]),
+    }));
+  });
+
+  it('keeps an unresolved retirement visible after the checkout disappears on a later refill', async () => {
+    const release = { branch: 'claim/issue-42', path: '/example/missing', head: 'a'.repeat(40), createdAt: '2026-10-20T00:00:00Z', reason: 'retirement-receipt-unverified' };
+    getBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [release], remaining: [] });
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], worktreeInventory: [] }));
+    expect(await generate()).toBeNull();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: [expect.objectContaining({ branch: release.branch, path: release.path, head: release.head, reason: release.reason })] }));
+    expect(parkPerpetual).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.objectContaining({
+      reason: 'branches-blocked', skipCauses: { 'retirement-receipt-unverified': 1 },
+    }));
+    getBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [release], retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
+    await generate();
+    expect(parkPerpetual).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.objectContaining({ reason: 'no-in-flight-branches' }));
   });
 
   it('folds the reconcile pre-step block into the prompt via {inFlightBranches}', async () => {

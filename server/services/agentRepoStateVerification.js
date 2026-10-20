@@ -1,5 +1,6 @@
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
+import { sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
 /**
  * Agent Repo-State Verification
  *
@@ -11,15 +12,13 @@ import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
  * is an agent that opens its own PR (`metadata.prOpenedBy` naming the agent),
  * merges it itself, and exits before deleting the branch — or exits with the PR
  * still open.
- * Cleanup stands down for exactly those runs, so nothing checked, and the branch
- * plus its worktree persist through every later sweep that treats "an agent owns
- * it" as a reason to skip. (`removeWorktree` also only `console.log`s a failed
- * `git branch -D`, so even the attempted delete can fail silently.)
+ * Cleanup may stand down for those runs, leaving the branch and checkout for
+ * another completion owner.
  *
- * What it does NOT do: touch anything. It probes, classifies (via the pure
- * `lib/repoStateExpectations.js`), and files ONE recovery task. Deleting a branch
- * from here would be a destructive action on the basis of a heuristic, which is
- * what `branchReconcile.js` is careful not to do either.
+ * It probes and classifies via `lib/repoStateExpectations.js`, tries the shared
+ * deterministic cleanup gates, and files one recovery task when needed. A held
+ * merged checkout requires persisted inventory and a fresh review preview;
+ * the recovery agent cannot substitute shell deletion for a retirement receipt.
  *
  * Detection is what this adds over `branchReconcile.js`: that reconciler is an
  * opt-in scheduled task on a recheck cadence, and it parks on no-progress. This
@@ -33,7 +32,7 @@ import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
  */
 
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
 import * as git from './git.js';
@@ -435,10 +434,21 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     }
   }
 
+  let retirement = null;
+  if (observed.prState === 'MERGED' && (observed.worktreePresent || observed.localBranchPresent)) {
+    const prepared = await prepareRecoveryRetirement({ app, sourceWorkspace, branchName, worktreePath, observed })
+      .catch(() => ({ reason: 'retirement-review-unavailable' }));
+    if (!prepared.retirement) {
+      emitLog('warn', `Repo-state retirement retained ${branchName}: ${prepared.reason}`, { agentId, branchName });
+      return { verified: false, skipReason: prepared.reason, issues, observed, recoveryTaskId: null };
+    }
+    retirement = prepared.retirement;
+  }
+
   emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -457,6 +467,41 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   return { verified: false, skipReason: null, issues, observed, recoveryTaskId };
 }
 
+/** Persist the exact obligation before preview, so refusal or restart cannot
+ * lose it. The preview supplies evidence for review, never deletion authority.
+ */
+async function prepareRecoveryRetirement({ app, sourceWorkspace, branchName, worktreePath, observed }) {
+  if (!app?.id || !app.repoPath || resolve(app.repoPath) !== resolve(sourceWorkspace)) return { reason: 'retirement-app-unavailable' };
+  const trees = await listWorktrees(sourceWorkspace);
+  const matches = trees.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName
+    && (!worktreePath || tree.path === worktreePath));
+  if (matches.length !== 1 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(matches[0].head || '')) {
+    return { reason: 'retirement-exact-inventory-unavailable' };
+  }
+  const tree = matches[0];
+  const release = { branch: branchName, path: tree.path, head: tree.head,
+    locked: tree.locked === true, lockReason: tree.lockReason ?? null };
+  const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+  const outcome = await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
+    retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
+    nextAction: 'Review this exact checkout through the retirement API; require its verified archive receipt.' });
+  const obligation = outcome?.retirementObligations?.find(row => sameRetirementCheckout(row, release));
+  if (!obligation?.createdAt) return { reason: 'retirement-obligation-unavailable' };
+  if (release.locked) {
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-worktree-locked',
+      nextAction: 'Keep the checkout locked; its owner must explicitly release it before another preview.' });
+    return { reason: 'retirement-worktree-locked' };
+  }
+  const { prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
+  const prepared = await prepareInventoriedCheckoutRetirement({ appId: app.id, release, prUrl: observed.prUrl });
+  if (!prepared.ok) {
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: prepared.reason,
+      nextAction: 'Retain the checkout and obligation; retry a fresh preview after the reported hold resolves.' });
+    return { reason: prepared.reason };
+  }
+  return { retirement: { release, createdAt: obligation.createdAt, prUrl: observed.prUrl, digest: prepared.review.digest } };
+}
+
 /**
  * The remediation step for each issue code, as an instruction the recovery agent
  * can follow without re-deriving the diagnosis.
@@ -466,23 +511,22 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
  * `PR_UNMERGED` delegates to branch-reconcile's `driveToMerge`, which carries the
  * caveats a hand-written line loses: preserve the linked checkout (gh can implicitly delete a
  * branch checked out elsewhere), retry `--squash`/`--rebase` on "not allowed",
- * verify the exact-head server handoff, or remove the worktree after merging
- * before deleting the branch.
+ * verify the exact-head server handoff and preserve the checkout for API review.
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
-    `Inspect the retained worktree ${worktreePath}. Preserve every unique tracked, untracked and ignored byte, verify its archive, and recheck live ownership before asking the shared retirement path to remove it. Never discard content or bypass a cleanup hold.`,
-  [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName, base }) =>
-    `Retire local branch ${branchName} only after fresh merge evidence against ${base}, archive verification and ownership checks. Let shared cleanup compare-and-delete its unchanged tip after the holder is safely retired.`,
+    `Keep the retained worktree ${worktreePath} intact. Use only the exact inventory, full preview review and digest-bound retirement API described below; preserve every tracked, untracked, ignored and private Git artifact.`,
+  [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName }) =>
+    `Keep local branch ${branchName} until the retirement service returns its exact verified archive receipt. Missing checkout or merged status is not permission for shell deletion.`,
   [REPO_STATE_ISSUES.REMOTE_BRANCH_PRESENT]: ({ branchName }) =>
-    `Re-read the exact remote ref for ${branchName}, prove that head merged, then delete only with an expected-head lease. Preserve any advanced or unreadable ref.`,
+    `Leave remote branch ${branchName} to the service's fresh exact-head cleanup. An advanced or unreadable ref is a hold; do not use a generic delete API or merge deletion flag.`,
   [REPO_STATE_ISSUES.BRANCH_UNMERGED]: ({ base }) =>
-    `The branch has commits that are NOT on ${base}. Decide whether they are still wanted: land them (open or merge a PR, or merge locally and resolve conflicts) before deleting anything. Do NOT delete this branch until its work is on ${base}.`,
+    `The branch has work not proven integrated in ${base}. Inspect whether it remains wanted, finish its draft PR, review and required checks, then complete the authorized merge. Preserve all unmerged or superseded work for explicit review; do not merge into the primary checkout or discard it.`,
   // Forge-aware: `driveToMerge` emits a `gh pr merge` procedure, which a GitLab
   // recovery agent cannot run. Its non-gh caveats still apply on either forge —
-  // merge from the repo ROOT, and remove the worktree before deleting the branch.
+  // merge from the repo ROOT and preserve all checkout/ref evidence.
   [REPO_STATE_ISSUES.PR_UNMERGED]: ({ prUrl, prNumber, forgeCli }) => (forgeCli === 'glab'
-    ? `Finish the merge request${prUrl ? ` ${prUrl}` : ''}: fix failing pipeline jobs, resolve threads, then merge it from the repo ROOT (not inside the branch's worktree) with "glab mr merge ${prNumber ?? '<iid>'} --yes --remove-source-branch". Remove the worktree before deleting the local branch — the delete fails while a worktree still has it checked out.`
+    ? `Finish the merge request${prUrl ? ` ${prUrl}` : ''}: fix failing pipeline jobs and resolve review threads, retain delivery ownership until required checks and reviews pass, revalidate its exact reviewed head under merge admission, then merge from the repo ROOT with "glab mr merge ${prNumber ?? '<iid>'} --yes" while preserving source branches and checkouts. Confirm MERGED and release admission; never request source-branch deletion during merge.`
     : `Finish the pull request${prUrl ? ` ${prUrl}` : ''}. ${driveToMerge(prUrl || '<num>')}`),
 });
 
@@ -495,11 +539,14 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
  *
  * @returns {Promise<string|null>} the task id, or null when it was a duplicate
  */
-async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun = false }) {
+async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null, claimRun = false }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
 
+  const retirementInstructions = retirement
+    ? (await import('./branchReconcileRetirement.js')).retirementReviewInstructions({ branch: branchName, retirement }, appId)
+    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow; report cleanup pending until the archive receipt exists.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',
@@ -516,10 +563,12 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     '',
     MANAGED_WORKTREE_CLEANUP_CONTRACT,
     '',
-    'Finish the work, in this order:',
+    'Finish delivery before retirement; retain anything whose evidence or ownership is uncertain:',
     ...issues.map((i, n) => `${n + 1}. ${REPO_STATE_REMEDIATIONS[i.code](ctx)}`),
     '',
-    `Rules: never delete a branch whose commits are not already on ${base} — land the work first. `
+    retirementInstructions,
+    '',
+    `Rules: preserve wanted unmerged work until it is delivered. Retirement requires service-verified integration in ${base} or explicitly reviewed supersession, plus exact digest and complete archive verification. `
       + `Other agents are running concurrently with their own worktrees and branches; touch ONLY ${branchName} and its worktree. `
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');
@@ -539,7 +588,8 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
       subsystem: 'repository-cleanup', attempt: Math.min(1000, (previous?.attempt || 0) + 1),
       observation, noProgress: previous?.observation === observation },
-    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}) },
+    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}),
+    ...(retirement ? { retirementReview: { appId, release: retirement.release, createdAt: retirement.createdAt } } : {}) },
     context,
     useWorktree: false,
   }, 'user');

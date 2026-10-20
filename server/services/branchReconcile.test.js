@@ -1962,7 +1962,8 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.detachedWorktrees).toEqual([expect.objectContaining({ path, managed: false, reason: 'worktree-unmanaged-location' })]);
     const prompt = await formatInFlightForPrompt([], { defaultBranch: 'main', detachedWorktrees: res.detachedWorktrees });
     expect(prompt).toContain(path);
-    expect(prompt).toContain(`git worktree remove ${path}`);
+    expect(prompt).toContain('retain this unmanaged checkout');
+    expect(prompt).not.toContain('git worktree remove');
   });
 
   it('does not remove a tree whose HEAD moved onto a branch after the gather', async () => {
@@ -2224,19 +2225,20 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('--squash --match-head-commit <verified-head>');
     expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
     expect(instruction).not.toContain('--delete-branch');
-    expect(instruction).toContain('Archive failure');
-    // Prove preservation and default-branch ancestry before removing the
-    // checkout; delete the named branch only after it is no longer checked out.
+    // Cleanup must cross the fresh preview/review/retirement service boundary;
+    // descriptive preservation prose cannot authorize shell teardown.
     const cleanupSteps = [
-      'Archive failure',
-      'Fetch the verified remote’s intended default branch explicitly',
-      'git merge-base --is-ancestor <exact-local-tip> <fetched-intended-default>',
-      'Then remove only the authorized worktree',
-      'git branch -d <branch>',
+      'remote state is exactly MERGED',
+      '/checkouts/review',
+      'Read the full returned comparison',
+      '/checkouts/retire',
+      'Require ok:true, archiveDir and branchDeleted:true',
     ].map(step => instruction.indexOf(step));
     expect(cleanupSteps.every(position => position >= 0)).toBe(true);
     expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
-    expect(instruction).toContain('If ancestry is unproven, preserve both checkout and branch');
+    expect(instruction).toContain('never a shell fallback');
+    expect(instruction).not.toContain('git worktree remove');
+    expect(instruction).not.toContain('git branch -d');
   });
 
   it('names the real PR number when the branch already has one', () => {
@@ -2770,9 +2772,9 @@ describe('describeIdleReconcilePark', () => {
     expect(out.heldBackMerged).toHaveLength(2);
   });
 
-  it('live owners outrank a held-back merge — a running session is why it is idle', () => {
+  it('reports mixed holds without attributing every branch to a live owner', () => {
     const out = describeIdleReconcilePark([CLAIM_HOLD], [{ branch: 'cos/x', liveOwnerReason: 'worktree-active-agent' }]);
-    expect(out.reason).toBe('branches-held-by-live-owners');
+    expect(out.reason).toBe('branches-blocked');
     // The held-back set still travels, so the log/UI can name both.
     expect(out.counts).toEqual({ heldBackMerged: 1, heldBranches: 2, heldDetached: 0 });
   });
