@@ -4,10 +4,27 @@ import { execFileSync, spawn as realSpawn } from 'node:child_process';
 import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-const delayed = vi.hoisted(() => ({ child: null, failAfterRename: false }));
+const delayed = vi.hoisted(() => ({ child: null, failAfterRename: false, hostType: null, rejectDirectoryOpen: false, syntheticModes: false }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, type: () => delayed.hostType || actual.type() };
+});
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, openSync: (path, ...args) => {
+    if (delayed.rejectDirectoryOpen && actual.existsSync(path) && actual.lstatSync(path).isDirectory()) throw new Error('directory-open-unsupported');
+    return actual.openSync(path, ...args);
+  } };
+});
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, rename: async (...args) => {
+  return { ...actual, lstat: async path => {
+    const info = await actual.lstat(path);
+    return delayed.syntheticModes ? Object.assign(Object.create(info), { mode: (info.mode & ~0o777) | 0o777 }) : info;
+  }, open: async (path, ...args) => {
+    if (delayed.rejectDirectoryOpen && (await actual.lstat(path).catch(() => null))?.isDirectory()) throw new Error('directory-open-unsupported');
+    return actual.open(path, ...args);
+  }, rename: async (...args) => {
     await actual.rename(...args);
     if (delayed.failAfterRename) { delayed.failAfterRename = false; throw new Error('release-result-lost'); }
   } };
@@ -20,11 +37,29 @@ import { _checkoutAdmission, withCheckoutPublication, reserveCheckoutRetirement,
   withCheckoutReservation, releaseCheckoutReservation, readCheckoutReservation } from './checkoutRetirementAdmission.js';
 let repo;
 beforeEach(async () => {
+  delayed.hostType = null; delayed.rejectDirectoryOpen = delayed.syntheticModes = false;
   repo = await mkdtemp(join(tmpdir(), 'checkout-admission-'));
   execFileSync('git', ['init', '--quiet', repo]);
 });
 afterEach(async () => { vi.useRealTimers(); await rm(repo, { recursive: true, force: true }); });
 describe('durable checkout admission', () => {
+  it('releases on actual Windows capability even if process.platform is emulated', async () => {
+    const cut = await reserveCheckoutRetirement(repo, 'windows-cut');
+    delayed.hostType = 'Windows_NT'; delayed.rejectDirectoryOpen = delayed.syntheticModes = true;
+    const platform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      await releaseCheckoutReservation(cut);
+      await withCheckoutPublication(repo, async () => {});
+      expect((await _checkoutAdmission(repo)).admission.status().cut).toBeNull();
+    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+  });
+  it('retains the live cut when Darwin directory fsync cannot open its parent', async () => {
+    const cut = await reserveCheckoutRetirement(repo, 'darwin-cut');
+    delayed.hostType = 'Darwin'; delayed.rejectDirectoryOpen = true;
+    await expect(releaseCheckoutReservation(cut)).rejects.toThrow('directory-open-unsupported');
+    expect(JSON.parse(await readFile(join(cut.directory, 'cut', 'owner.json'), 'utf8'))).toMatchObject({ id: 'darwin-cut' });
+  });
   it('rejects cuts during a writer and writers after a cut, including another instance', async () => {
     await withCheckoutPublication(repo, async () => {
       await expect(reserveCheckoutRetirement(repo, 'test-cut')).rejects.toThrow('checkout-retirement-reserved');
@@ -105,8 +140,9 @@ describe('durable checkout admission', () => {
     expect((await _checkoutAdmission(repo)).admission.status().cut).toBeNull();
     await withCheckoutPublication(repo, async () => {});
   });
-  it('refuses reentry of a persisted uncertain cut after a timed-out child closes', async () => {
+  it.each([false, true])('refuses reentry of a persisted uncertain cut after timeout (Windows capability=%s)', async windows => {
     const cut = await reserveCheckoutRetirement(repo, 'uncertain-cut');
+    if (windows) { delayed.hostType = 'Windows_NT'; delayed.rejectDirectoryOpen = true; }
     const child = new EventEmitter();
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
     child.pid = 12345; child.kill = vi.fn(); delayed.child = child;

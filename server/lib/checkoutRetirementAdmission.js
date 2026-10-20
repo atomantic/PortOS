@@ -2,11 +2,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdtemp, open, readFile, rename } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { type as hostOsType } from 'node:os';
 import { realpathSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { createBackupSharedAdmission } from './backupSharedAdmission.js';
 import { execGit, withGitMutationLifetime } from './execGit.js';
 
 const context = new AsyncLocalStorage();
+
+// Filesystem capabilities follow the actual host, not an emulated platform.
+async function syncDirectory(path) {
+  if (hostOsType() === 'Windows_NT') return;
+  const directory = await open(path, 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+}
 const refused = () => Object.assign(new Error('checkout-retirement-reserved'), {
   code: 'CHECKOUT_RETIREMENT_RESERVED',
 });
@@ -21,7 +29,7 @@ export async function _checkoutAdmission(repoPath) {
       throw error;
     });
     if (info && (!info.isDirectory() || info.isSymbolicLink()
-      || (process.platform !== 'win32' && (info.mode & 0o777) !== 0o700))) throw refused();
+      || (hostOsType() !== 'Windows_NT' && (info.mode & 0o777) !== 0o700))) throw refused();
   }
   return { directory, admission: createBackupSharedAdmission(directory) };
 }
@@ -92,8 +100,10 @@ export async function withCheckoutReservation(reservation, work) {
       const fd = openSync(join(reservation.directory, 'cut', 'uncertain'), 'wx', 0o600);
       try { writeFileSync(fd, 'Git or helper termination is uncertain; retain reservation.\n'); fsyncSync(fd); }
       finally { closeSync(fd); }
-      const parent = openSync(join(reservation.directory, 'cut'), 'r');
-      try { fsyncSync(parent); } finally { closeSync(parent); }
+      if (hostOsType() !== 'Windows_NT') {
+        const parent = openSync(join(reservation.directory, 'cut'), 'r');
+        try { fsyncSync(parent); } finally { closeSync(parent); }
+      }
     }); }
   finally { cutLifetime.active = false; }
 }
@@ -114,11 +124,8 @@ export async function releaseCheckoutReservation(reservation) {
   // either leaves the complete live cut or a complete private release record;
   // it never strands an ownerless cut which another transaction might claim.
   const released = await mkdtemp(join(reservation.directory, 'released-'));
-  const ancestry = await open(reservation.directory, 'r');
-  try { await ancestry.sync(); } finally { await ancestry.close(); }
+  await syncDirectory(reservation.directory);
   await rename(cut, join(released, 'cut'));
-  const tombstone = await open(released, 'r');
-  try { await tombstone.sync(); } finally { await tombstone.close(); }
-  const fd = await open(reservation.directory, 'r');
-  try { await fd.sync(); } finally { await fd.close(); }
+  await syncDirectory(released);
+  await syncDirectory(reservation.directory);
 }

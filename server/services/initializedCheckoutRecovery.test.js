@@ -3,7 +3,11 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-const persisted = vi.hoisted(() => ({ json: '{}' }));
+const persisted = vi.hoisted(() => ({ json: '{}', hostType: null, rejectDirectoryOpen: false, syntheticModes: false, fileSyncs: 0 }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, type: () => persisted.hostType || actual.type() };
+});
 vi.mock('./taskScheduleStore.js', () => ({
   loadSchedule: async () => JSON.parse(persisted.json),
   updateSchedule: async mutate => {
@@ -15,12 +19,25 @@ vi.mock('./taskScheduleStore.js', () => ({
 }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, open: async (path, ...args) => {
+  return { ...actual, lstat: async path => {
+    const info = await actual.lstat(path);
+    // Model POSIX permission bits even when this Darwin-capability fixture runs
+    // on Windows; the unsafe-mode branch below still exercises real refusal.
+    if (persisted.hostType === 'Darwin' || persisted.syntheticModes) {
+      const mode = persisted.syntheticModes ? 0o777 : info.isDirectory() ? 0o700 : 0o600;
+      return Object.assign(Object.create(info), { mode: (info.mode & ~0o777) | mode });
+    }
+    return info;
+  }, open: async (path, ...args) => {
+    if (persisted.rejectDirectoryOpen && (await actual.lstat(path).catch(() => null))?.isDirectory()) throw new Error('directory-open-unsupported');
     if (fixture?.failNextJournal && /[\\/]\d{6}\.json$/.test(String(path))) {
       fixture.failNextJournal = false;
       throw new Error('journal-write-interrupted');
     }
-    return actual.open(path, ...args);
+    const handle = await actual.open(path, ...args);
+    const originalSync = handle.sync.bind(handle);
+    handle.sync = async () => { persisted.fileSyncs++; return originalSync(); };
+    return handle;
   } };
 });
 vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work() }));
@@ -30,6 +47,7 @@ let root, fixture;
 const release = { path: '/fixture/checkout', branch: 'claim/42', head: 'a'.repeat(40), locked: false, lockReason: null };
 const prUrl = 'https://github.com/example/repo/pull/42';
 beforeEach(async () => {
+  persisted.hostType = null; persisted.rejectDirectoryOpen = persisted.syntheticModes = false; persisted.fileSyncs = 0;
   root = await mkdtemp(join(tmpdir(), 'initialized-recovery-'));
   const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
   const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
@@ -85,6 +103,34 @@ const reviewed = async () => {
 };
 
 describe('initialized checkout transaction', () => {
+  it('uses actual Windows filesystem capabilities for mocked workflows without suppressing file fsync', async () => {
+    persisted.hostType = 'Windows_NT'; persisted.syntheticModes = true; persisted.rejectDirectoryOpen = true;
+    const platform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      const result = await fixture.service.retire(await reviewed());
+      expect(result).toMatchObject({ ok: true, originalsQuarantined: true });
+      expect((await fixture.service.status({ appId: 'app', transactionId: result.transactionId })).phase).toBe('quarantined');
+      expect(persisted.fileSyncs).toBeGreaterThan(0);
+    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+  });
+  it('does not suppress directory sync failure or POSIX mode checks on Darwin', async () => {
+    persisted.hostType = 'Darwin'; persisted.rejectDirectoryOpen = true;
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, reason: 'directory-open-unsupported' });
+    expect(fixture.deps.native.mock.calls.some(([input]) => input.command === 'move')).toBe(false);
+    persisted.rejectDirectoryOpen = false; persisted.syntheticModes = true;
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, reason: 'retirement-journal-directory-unsafe' });
+  });
+  it('keeps the real native backend unavailable on unsupported platforms', async () => {
+    const platform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      const { native: _native, ...deps } = fixture.deps;
+      const service = _createInitializedCheckoutRecovery(deps);
+      expect(await service.review({ appId: 'app', release, prUrl })).toMatchObject({ ok: false, reason: 'retirement-platform-unsupported' });
+      expect(await readdir(root)).toEqual([]);
+    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+  });
   it('quarantines both original directories only after preservation, retaining the rollback ref', async () => {
     const result = await fixture.service.retire(await reviewed());
     expect(result).toMatchObject({ ok: true, originalsQuarantined: true, branchDeleted: false, branchRetainedReason: 'quarantined-checkout-rollback-ref' });

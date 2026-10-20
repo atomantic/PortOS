@@ -7,6 +7,7 @@ import { spawn } from '../lib/childProcess.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { type as hostOsType } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { PATHS } from '../lib/paths.js';
 import { execGit } from '../lib/execGit.js';
@@ -74,11 +75,19 @@ function runInitializedCheckoutNative(input, { keepOpen = false } = {}) {
   });
 }
 
+// Native execution remains Darwin-only. Mocked workflow tests may run on
+// Windows, where POSIX modes and opening directories for fsync are unsupported.
+async function syncDirectory(path) {
+  if (hostOsType() === 'Windows_NT') return;
+  const directory = await open(path, 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+}
+
 async function privateDirectory(path, create = false) {
   assertNotRealDataWrite(path, 'initialized checkout recovery');
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o700) fail('retirement-journal-directory-unsafe');
+  if (!info.isDirectory() || info.isSymbolicLink() || (hostOsType() !== 'Windows_NT' && (info.mode & 0o777) !== 0o700)) fail('retirement-journal-directory-unsafe');
 }
 
 async function appendStep(directory, state, phase, patch = {}) {
@@ -88,8 +97,7 @@ async function appendStep(directory, state, phase, patch = {}) {
   const file = await open(join(directory, `${String(next.sequence).padStart(6, '0')}.json`), 'wx', 0o600);
   try { await file.writeFile(`${JSON.stringify(next)}\n`); await file.sync(); }
   finally { await file.close(); }
-  const folder = await open(directory, 'r');
-  try { await folder.sync(); } finally { await folder.close(); }
+  await syncDirectory(directory);
   return next;
 }
 
@@ -99,7 +107,7 @@ async function readJournal(directory) {
   let previous = null;
   for (const [sequence, name] of files.entries()) {
     const info = await lstat(join(directory, name));
-    if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600) fail('retirement-journal-unsafe');
+    if (!info.isFile() || info.isSymbolicLink() || (hostOsType() !== 'Windows_NT' && (info.mode & 0o777) !== 0o600)) fail('retirement-journal-unsafe');
     const row = JSON.parse(await readFile(join(directory, name), 'utf8'));
     if (row.version !== 1 || row.sequence !== sequence || row.previous !== (previous ? hash(previous) : null)) fail('retirement-journal-invalid');
     previous = row;
@@ -176,8 +184,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     await privateDirectory(root(), true);
     const directory = location(id);
     await mkdir(directory, { mode: 0o700 });
-    const parent = await open(root(), 'r');
-    try { await parent.sync(); } finally { await parent.close(); }
+    await syncDirectory(root());
     let state = await appendStep(directory, { version: 1, id, appId: input.appId,
       repoPath: ctx.repoPath, release: input.release, review: prepared.review }, 'intent');
     const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
