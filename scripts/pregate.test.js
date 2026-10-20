@@ -161,7 +161,7 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       copyFileSync(join(REPO_ROOT, path), join(root, path));
     }
-    write('package.json', '{"type":"module"}\n');
+    write('package.json', '{"type":"module","scripts":{"pregate":"node scripts/pregate.js"}}\n');
     // The receipt lands under /.cache/, which the real repository ignores too.
     write('.gitignore', 'node_modules\n/.cache/\n');
     for (const workspace of ['', 'client', 'server', 'autofixer']) {
@@ -332,6 +332,74 @@ describe('pregate hidden-content invocation', () => {
       expect(stdout).not.toContain('Pregate passed');
     } finally {
       runner.kill('SIGKILL');
+    }
+  });
+
+  // #12641: a Ctrl-C reaches pregate from the terminal group AND from npm's
+  // forwarding; the duplicate used to kill pregate before it signalled the
+  // stage, orphaning the runner. The fixture stage mirrors run-ci-tests.js: a
+  // launcher that settles its own separately grouped child on a signal, plus
+  // an in-group descendant that ignores signals and keeps writing.
+  it.skipIf(process.platform === 'win32').each(['SIGINT', 'SIGTERM'])('settles every owned stage process before a %s through npm finishes', async (signal) => {
+    const heartbeat = join(scratch, 'heartbeat');
+    write('scripts/scan-diff-hidden-content.js', `
+      import { spawn } from 'child_process';
+      const straggler = spawn(process.execPath, ['-e', "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
+        + " setInterval(() => require('fs').appendFileSync(process.env.FIXTURE_HEARTBEAT, '.'), 10);"], { stdio: 'ignore' });
+      const launched = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+      const settle = () => {
+        process.kill(-launched.pid, 'SIGKILL');
+        launched.once('exit', () => setTimeout(() => process.exit(1), 100));
+      };
+      process.on('SIGINT', settle);
+      process.on('SIGTERM', settle);
+      setTimeout(() => console.log('fixture-stage-ready ' + JSON.stringify([process.pid, straggler.pid, launched.pid])), 200);
+      setInterval(() => {}, 1000);
+    `);
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+    const npm = spawn('npm', ['run', 'pregate', '--', '--base', base, '--skip-lint'], {
+      cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: { ...process.env, FIXTURE_HEARTBEAT: heartbeat },
+    });
+    const alive = (pid) => {
+      try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+    };
+    let owned = [];
+    let stdout = '';
+    let stderr = '';
+    npm.stderr.on('data', (data) => { stderr += data; });
+    npm.stdout.on('data', (data) => {
+      stdout += data;
+      const ready = /fixture-stage-ready (\[[\d,]+\])/.exec(stdout);
+      if (ready && owned.length === 0) {
+        owned = JSON.parse(ready[1]);
+        // Ctrl-C reaches the whole foreground group: npm and pregate alike.
+        process.kill(-npm.pid, signal);
+      }
+    });
+    try {
+      // `exit`, not `close`: a surviving descendant would hold the pipes open.
+      const result = await new Promise((resolve, reject) => {
+        npm.once('error', reject);
+        npm.once('exit', (status, exitSignal) => resolve({ status, signal: exitSignal }));
+      });
+      expect(owned).toHaveLength(3);
+      expect(owned.filter(alive)).toEqual([]);
+      expect(result.status === null ? result.signal : result.status).not.toBe(0);
+      expect(stderr).toMatch(new RegExp(`stage="hidden-content scan" owner_pid=\\d+ child_pid=${owned[0]} received_signal=${signal}`));
+      expect(stderr).toContain(`stage="hidden-content scan" cancelled by ${signal}; its process group has exited.`);
+      expect(stdout).not.toContain('Pregate passed');
+      const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+      expect(report.passed).toBe(false);
+      expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed', signal });
+      const written = readFileSync(heartbeat, 'utf8').length;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(readFileSync(heartbeat, 'utf8').length).toBe(written);
+      expect(alive(unrelated.pid)).toBe(true);
+    } finally {
+      for (const pid of [npm.pid, unrelated.pid, ...owned]) {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* not a live group */ }
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
     }
   });
 
@@ -868,9 +936,13 @@ describe('uncoveredSuites', () => {
 
 describe('stageSpawnEnv', () => {
   it('applies stage values and removes the variables a stage sets to undefined', () => {
-    const env = stageSpawnEnv({ TEST_DB_OK: '1', PGDATABASE: 'portos', KEEP: 'x' }, { TEST_DB_OK: undefined, PGDATABASE: 'portos_test' });
+    const env = stageSpawnEnv({ TEST_DB_OK: '1', PGDATABASE: 'portos', KEEP: 'x' }, { TEST_DB_OK: undefined, PGDATABASE: 'portos_test' }, { ownsGroup: false });
     expect(env).toEqual({ KEEP: 'x', PGDATABASE: 'portos_test', PORTOS_PREGATE_MAX_WORKERS: '4' });
     expect('TEST_DB_OK' in env).toBe(false);
+  });
+
+  it('keeps the test runner\'s npm and Vitest inside the stage group pregate owns', () => {
+    expect(stageSpawnEnv({}, {}, { ownsGroup: true }).PORTOS_CI_TEST_SUPERVISED_GROUP).toBe('1');
   });
 });
 

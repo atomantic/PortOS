@@ -120,6 +120,12 @@ that was validated — untracked and uncommitted files included, so a later
 commit of that state yields the same `HEAD^{tree}`. A green summary never
 claims a suite it skipped; required CI checks still apply.
 
+Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
+it: the running stage — including the test runner's npm and Vitest processes,
+which share that stage's process group — gets the signal and a 5-second grace,
+then the group is killed until no member remains. Only then does pregate write
+an incomplete receipt (`passed: false`) and exit by the same signal.
+
 After the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
 `pregate` commit status on the pushed head, bound to the validated tree and
