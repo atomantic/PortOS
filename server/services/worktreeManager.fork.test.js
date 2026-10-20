@@ -7,9 +7,10 @@ import { execGit } from '../lib/execGit.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-worktree-fork-' });
 vi.mock('../lib/fileUtils.js', async importOriginal => makeProxy(await importOriginal()));
+vi.mock('../lib/paths.js', async importOriginal => makeProxy(await importOriginal()));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
 const { PATHS } = await import('../lib/fileUtils.js');
-const { createWorktree, removeWorktree } = await import('./worktreeManager.js');
+const { createWorktree, removeWorktree, adoptWorktree } = await import('./worktreeManager.js');
 afterAll(cleanup);
 
 const git = async (repo, ...args) => (await execGit(args, repo)).stdout.trim();
@@ -37,6 +38,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('fork checkout and publication', () => {
     const primaryHead = await commit(repo, 'primary-only.txt');
     await git(repo, 'push', 'origin', 'main');
     await mkdir(PATHS.worktrees, { recursive: true });
+    await writeFile(join(PATHS.cos, 'state.json'), JSON.stringify({ agents: {} }));
     const options = { existingBranch: 'main', forkHead: { remoteUrl: fork, ownerLogin: 'contributor' }, linkDependencies: false };
 
     const attached = await createWorktree('agent-fork', repo, 'task-fork', options);
@@ -56,12 +58,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('fork checkout and publication', () => {
     expect(sameRepo.branchName).toBe('same-repo-head');
     expect(await git(sameRepo.worktreePath, 'rev-parse', 'HEAD')).toBe(primaryHead);
     const unpublished = await commit(attached.worktreePath, 'retry-work.txt');
-    await removeWorktree('agent-fork', repo, attached.branchName, { merge: false, preserveBranchWithCommits: true });
-    const retry = await createWorktree('agent-retry', repo, 'task-fork', options);
+    expect(await removeWorktree('agent-fork', repo, attached.branchName, { merge: false, preserveBranchWithCommits: true }))
+      .toMatchObject({ removed: false, warnings: expect.arrayContaining([expect.stringContaining('merge-evidence-unavailable')]) });
+    const retry = await adoptWorktree('agent-retry', repo, attached.worktreePath, attached.branchName);
+    expect(retry).toMatchObject({ adopted: true, branchName: attached.branchName });
     expect(await git(retry.worktreePath, 'rev-parse', 'HEAD')).toBe(unpublished);
     expect(await git(fork, 'rev-parse', 'main')).toBe(published);
     expect(await git(origin, 'rev-parse', 'main')).toBe(primaryHead);
-    await removeWorktree('agent-retry', repo, retry.branchName, { merge: false, preserveBranchWithCommits: true });
+    expect(await removeWorktree('agent-retry', repo, retry.branchName, { merge: false, preserveBranchWithCommits: true }))
+      .toMatchObject({ removed: false });
+    // Simulate a checkout an older workflow already removed; createWorktree
+    // must recover its local-only branch even after the fork ref disappears.
+    await git(repo, 'worktree', 'remove', retry.worktreePath);
     await git(fork, 'update-ref', '-d', 'refs/heads/main');
     await git(repo, 'fetch', '--prune', 'fork-contributor');
     const orphaned = await createWorktree('agent-local-recovery', repo, 'task-fork', options);

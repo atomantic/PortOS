@@ -18,10 +18,10 @@
  * failure leaves the checkout, its lock and its branch exactly as found.
  */
 
-import { createReadStream } from 'node:fs';
-import { lstat, readlink, readdir, readFile, chmod } from 'node:fs/promises';
+import { createReadStream, realpathSync } from 'node:fs';
+import { lstat, stat, readlink, readdir, readFile, chmod } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sha256File, writeFileGuarded } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
@@ -203,6 +203,29 @@ async function archiveCheckout(input) {
   });
 }
 
+// A missing tail has no filesystem identity yet. Match its exact spelling under
+// the deepest existing directory's identity, so Git's expanded Windows 8.3
+// names and directory aliases agree without case-folding nonexistent names.
+async function missingPathIdentity(path) {
+  let ancestor = resolve(path);
+  const tail = [];
+  for (;;) {
+    const info = await lstat(ancestor).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (info) {
+      // Native realpath expands Windows short names; JavaScript realpath may
+      // retain them. Existing dangling links/errors must hold, never walk past.
+      const canonical = realpathSync.native(ancestor);
+      const identity = await stat(canonical, { bigint: true });
+      if ((!identity.isDirectory() && tail.length) || identity.ino === 0n) throw new Error('missing-checkout-ancestor-unverified');
+      return { ancestor: canonical, dev: String(identity.dev), ino: String(identity.ino), tail };
+    }
+    const parent = dirname(ancestor);
+    if (parent === ancestor) throw new Error('missing-checkout-ancestor-unverified');
+    tail.unshift(basename(ancestor));
+    ancestor = parent;
+  }
+}
+
 // A vanished checkout can still own a staged index and private recovery files.
 // Locate its exact registration without recreating the missing working tree.
 async function missingCheckoutAdministration(repoPath, path) {
@@ -210,15 +233,18 @@ async function missingCheckoutAdministration(repoPath, path) {
   if (present) return null;
   const common = resolve(repoPath, (await git(['rev-parse', '--git-common-dir'], repoPath)).trim());
   const roots = [];
+  const target = await missingPathIdentity(join(path, '.git'));
+  const mismatches = [];
   for (const name of await readdir(join(common, 'worktrees'))) {
     const root = join(common, 'worktrees', name);
     if (!(await lstat(root)).isDirectory()) continue;
     const pointer = await readFile(join(root, 'gitdir'), 'utf8').catch(() => null);
-    // Git writes forward slashes on Windows; normalize both spellings with
-    // native path semantics without changing POSIX backslashes or case.
-    if (pointer?.trim() && resolve(root, pointer.trim()) === resolve(path, '.git')) roots.push(root);
+    if (!pointer?.trim()) continue;
+    const candidate = await missingPathIdentity(resolve(root, pointer.trim()));
+    if (candidate.dev === target.dev && candidate.ino === target.ino && JSON.stringify(candidate.tail) === JSON.stringify(target.tail)) roots.push(root);
+    else if (mismatches.length < 4) mismatches.push({ registration: name, pointer: pointer.trim().slice(0, 1024), identity: candidate });
   }
-  if (roots.length !== 1) throw new Error('missing-checkout-administration-unverified');
+  if (roots.length !== 1) throw new Error(`missing-checkout-administration-unverified: ${JSON.stringify({ target, matches: roots.length, mismatches })}`);
   return roots[0];
 }
 

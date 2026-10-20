@@ -137,29 +137,50 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await saved.verify(tree)).toBe(null);
   });
 
-  it('archives a missing checkout private index and staged contents before pruning', async () => {
+  it.each([false, true])('archives a missing checkout private index and staged contents before pruning, parentAlias=%s', async parentAlias => {
     const path = join(external, 'missing');
     await execGit(['worktree', 'add', '-b', 'feature/missing', path, 'main'], repo);
     await writeFile(join(path, 'staged.txt'), 'only in the private index');
     await execGit(['add', 'staged.txt'], path);
     const tree = { path, branch: 'refs/heads/feature/missing', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    if (parentAlias) {
+      const alias = join(scratch, 'external-alias');
+      // Directory junctions need no Windows symlink privilege. This reproduces
+      // two filesystem spellings of the existing parent of a missing checkout.
+      await symlink(external, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+      await writeFile(join(admin, 'gitdir'), `${join(alias, 'missing', '.git')}\n`);
+      await execGit(['worktree', 'add', '--detach', join(external, 'unrelated'), 'main'], repo);
+    }
     await rm(path, { recursive: true, force: true });
     const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
     expect(await readFile(join(saved.archiveDir, 'index.diff'), 'utf8')).toContain('only in the private index');
     expect(existsSync(join(saved.archiveDir, 'administration', 'gitdir', 'index'))).toBe(true);
     expect(JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8')).captured.missingCheckout).toBe(true);
     expect(await saved.verify(tree)).toBe(null);
+    const restored = join(scratch, 'restored-missing');
+    await mkdir(restored);
+    await materializeGitRepo(restored);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/recovered'], restored);
+    await execGit(['checkout', 'recovered'], restored);
+    await execGit(['apply', '--index', join(saved.archiveDir, 'index.diff')], restored);
+    expect(await readFile(join(restored, 'staged.txt'), 'utf8')).toBe('only in the private index');
+    expect((await execGit(['show', ':staged.txt'], restored)).stdout).toBe('only in the private index');
     await mkdir(path);
     await expect(saved.verify(tree)).rejects.toThrow('missing-checkout-reappeared');
   });
 
-  it('refuses a missing checkout whose private registration points elsewhere', async () => {
+  it.each(['different-tail', 'different-parent', 'tail-case'])('refuses a missing checkout whose private registration points elsewhere: %s', async mismatch => {
     const path = join(external, 'missing-mismatched');
     await execGit(['worktree', 'add', '-b', 'feature/mismatched', path, 'main'], repo);
     const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
     const tree = { path, branch: 'refs/heads/feature/mismatched', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
     await rm(path, { recursive: true, force: true });
-    await writeFile(join(admin, 'gitdir'), `${join(external, 'another-checkout', '.git')}\n`);
+    const otherParent = join(scratch, 'other-parent');
+    await mkdir(otherParent);
+    const pointer = mismatch === 'different-parent' ? join(otherParent, 'missing-mismatched', '.git')
+      : join(external, mismatch === 'tail-case' ? 'MISSING-MISMATCHED' : 'another-checkout', '.git');
+    await writeFile(join(admin, 'gitdir'), `${pointer}\n`);
     await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir }))
       .rejects.toThrow('missing-checkout-administration-unverified');
     expect(await archives()).toEqual([]);
