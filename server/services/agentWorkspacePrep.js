@@ -364,13 +364,13 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
  * @param {{ agentId: string, task: object }} params
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
-export async function prepareAgentWorkspace({ agentId, task }) {
+export async function prepareAgentWorkspace({ agentId, task, onPrepared = result => result }) {
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
     await ensureDir(workspacePath);
-    return { outcome: 'ready', workspacePath, resolvedApp: null, resolvedAppName: null, worktreeInfo: null,
-      jiraTicket: null, jiraBranchName: null, explicitWorktree: false };
+    return onPrepared({ outcome: 'ready', workspacePath, resolvedApp: null, resolvedAppName: null, worktreeInfo: null,
+      jiraTicket: null, jiraBranchName: null, explicitWorktree: false });
   }
 
   // Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables
@@ -392,7 +392,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     emitLog('info', `📂 Agent workspace: ${workspacePath} (creative-director scratch)`, {
       taskId: task.id, workspace: workspacePath,
     });
-    return {
+    return onPrepared({
       outcome: 'ready',
       workspacePath,
       resolvedApp: null,
@@ -401,7 +401,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       jiraTicket: null,
       jiraBranchName: null,
       explicitWorktree: false,
-    };
+    });
   }
 
   // Pre-change investigation tasks may already be persisted without delivery
@@ -443,7 +443,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       + `(The agent was not started, so it could not write into the PortOS directory by mistake.)`;
     emitLog('error', `❌ ${reason}`, { taskId: task.id });
     await blockTask(task, reason, 'app-unresolved');
-    return { outcome: 'blocked', reason };
+    return onPrepared({ outcome: 'blocked', reason });
   }
   // Same resolver the /runs spawn paths use, so a `~/Projects/App` repoPath
   // expands here too and a repoPath pointing at a FILE is rejected up front
@@ -462,9 +462,25 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     // unusable, which is a different problem than a mis-configured app record —
     // don't file it under the app category.
     await blockTask(task, reason, task.metadata?.app ? 'app-unresolved' : 'workspace-invalid');
-    return { outcome: 'blocked', reason };
+    return onPrepared({ outcome: 'blocked', reason });
   }
 
+  const prepareAndRegister = async () => onPrepared(await prepareResolvedWorkspace({
+    agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly,
+  }));
+  // Resolve once, then admit the entire preparation → registration → spawn
+  // lifetime. A create/adopt helper's shorter permit cannot protect dependency
+  // changes or an owner which has not yet been durably registered.
+  const probe = await execGit(['rev-parse', '--is-inside-work-tree'], workspacePath, { ignoreExitCode: true });
+  if (probe.stdout.trim() !== 'true') {
+    if (probe.exitCode === 128 && /^fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point)/im.test(probe.stderr || '')) return prepareAndRegister();
+    throw new Error('Cannot establish workspace repository identity before dispatch');
+  }
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(workspacePath, prepareAndRegister);
+}
+
+async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly }) {
   const remediationPin = resolveTaskPinnedHead(task.metadata);
   if (remediationPin !== null && (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(remediationPin)
     || !resolveTaskRemoteBranch(task.metadata))) {

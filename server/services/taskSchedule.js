@@ -21,7 +21,7 @@
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
@@ -778,12 +778,31 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
   return updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome || {};
+    // Display history is bounded; replay identity is durable. A delayed retry
+    // must not become new evidence after its display row has been evicted.
+    const identity = receipt => createHash('sha256').update(JSON.stringify([
+      receipt.archiveDir, receipt.path, receipt.branch ?? null, receipt.head,
+      receipt.branchDeleted === true,
+    ])).digest('hex');
+    const receipts = { ...(outcome.retirementReceiptIdentities || {}) };
+    for (const receipt of outcome.retired || []) {
+      if (receipt.archiveDir && receipt.retiredAt) receipts[identity(receipt)] ??= receipt.retiredAt;
+    }
+    const receiptId = archiveDir ? identity({ path, branch, head, archiveDir, branchDeleted }) : null;
+    if (receiptId && receipts[receiptId]) {
+      // Keep the original timestamp AND any newer inventory incarnation.
+      const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {});
+      if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts };
+      return { result: record.branchReconcileOutcome, changed };
+    }
     const retiredAt = new Date().toISOString();
+    if (receiptId) receipts[receiptId] = retiredAt;
     const receipt = { path, ...(branch && { branch }), head, branchDeleted, archiveDir, retiredAt };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     const retirementObligations = unresolvedRetirements({ ...outcome, retired });
     record.branchReconcileOutcome = {
       ...outcome, retirementObligations,
+      retirementReceiptIdentities: receipts,
       updatedAt: retiredAt,
       remaining: Array.isArray(outcome.remaining)
         ? outcome.remaining.filter(entry => retirementObligations.some(row => sameRetirementCheckout(row, entry))

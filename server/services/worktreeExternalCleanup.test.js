@@ -1,4 +1,6 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
+// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';

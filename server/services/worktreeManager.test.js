@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+const publicationMock = vi.hoisted(() => vi.fn((_repo, work) => work()));
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (...args) => publicationMock(...args) }));
 import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without
@@ -1699,6 +1702,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
   const tree = agentId => join(PATHS.worktrees, agentId);
 
   beforeEach(() => {
+    publicationMock.mockReset().mockImplementation((_repo, work) => work());
     existsSync.mockReset().mockReturnValue(true);
     readdir.mockReset().mockResolvedValue([]);
     lstat.mockReset().mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
@@ -1710,8 +1714,27 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
   });
 
   afterEach(() => {
+    publicationMock.mockReset().mockImplementation((_repo, work) => work());
     readdir.mockReset().mockResolvedValue([]);
     lstat.mockReset().mockResolvedValue({});
+  });
+
+  it('retains an orphan before lockfile discard or merge when a durable retirement cut owns the repository', async () => {
+    execGitMock.mockImplementation(async (args, cwd) => {
+      if (args[0] === 'worktree' && args[1] === 'list') return { stdout: ['worktree ' + tree('agent-dead'),
+        'HEAD ' + 'a'.repeat(40), 'branch refs/heads/cos/task/agent-dead', ''].join('\n') };
+      if (args[0] === 'status') return { stdout: ' M package-lock.json', exitCode: 0 };
+      if (args[0] === 'rev-list') return { stdout: '1', exitCode: 0 };
+      if (args[0] === 'rev-parse') return { stdout: args[1] === '--show-toplevel' ? cwd : args[1] === '--verify' ? 'a'.repeat(40) : 'main', exitCode: 0 };
+      return { stdout: '', exitCode: 0 };
+    });
+    publicationMock.mockRejectedValueOnce(new Error('checkout-retirement-reserved'));
+    expect(await cleanupOrphanedWorktrees('/repo', new Set(), { claimOwners: { agents: [] } })).toBe(0);
+    expect(publicationMock).toHaveBeenCalledTimes(1);
+    expect(publicationMock).toHaveBeenCalledWith('/repo', expect.any(Function));
+    expect(execGitMock.mock.calls.some(([args]) => ['checkout', 'merge', 'branch', 'push'].includes(args[0])
+      || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
+    expect(rm).not.toHaveBeenCalled();
   });
 
   it('removes only the clean inactive agent and preserves active, human, locked, dirty and detached trees', async () => {

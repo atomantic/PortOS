@@ -1,3 +1,4 @@
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: async (_repo, work) => work() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
@@ -29,7 +30,7 @@ vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
   let stdout;
   if (args[0] === 'symbolic-ref') stdout = f.branch;
-  if (args[0] === 'rev-parse') stdout = f.head;
+  if (args[0] === 'rev-parse') stdout = args.includes('--is-inside-work-tree') ? 'true' : f.head;
   if (args[0] === 'remote') stdout = args.includes('--push') ? f.pushRemote : f.remote;
   if (args[0] === 'config') stdout = args[2].endsWith('.remote') ? f.upstream.remote : f.upstream.merge;
   if (typeof stdout !== 'string') throw new Error('unreadable git fixture');

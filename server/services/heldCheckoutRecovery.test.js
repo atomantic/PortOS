@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
+import { mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -135,6 +135,57 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
     expect((await execGit(['show', `${lost}:lost.txt`], restored)).stdout).toBe('recover this private commit');
     expect(await saved.verify(tree)).toBe(null);
+  });
+
+  it('recovers AUTO_MERGE trees and private blob/tag roots without the original object store', async () => {
+    const path = join(external, 'private-objects');
+    await execGit(['worktree', 'add', '-b', 'feature/private-objects', path, 'main'], repo);
+    await writeFile(join(path, 'conflict.txt'), '<<<<<<< ours\nprivate conflict bytes\n=======\nother side\n>>>>>>> theirs\n');
+    await execGit(['add', 'conflict.txt'], path);
+    const autoMerge = (await execGit(['write-tree'], path)).stdout.trim();
+    const conflictBlob = (await execGit(['rev-parse', ':conflict.txt'], path)).stdout.trim();
+    await execGit(['tag', '-a', 'temporary-tree-tag', autoMerge, '-m', 'private tree evidence'], path);
+    const tag = (await execGit(['rev-parse', 'refs/tags/temporary-tree-tag'], path)).stdout.trim();
+    await execGit(['tag', '-d', 'temporary-tree-tag'], path);
+    await execGit(['reset', '--hard', 'main'], path);
+    await writeFile(join(path, 'blob-source'), 'private root blob bytes');
+    const blob = (await execGit(['hash-object', '-w', 'blob-source'], path)).stdout.trim();
+    await rm(join(path, 'blob-source'));
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(admin, 'AUTO_MERGE'), `${autoMerge}\n`);
+    await execGit(['update-ref', 'refs/worktree/private-blob', blob], path);
+    await execGit(['update-ref', 'refs/worktree/private-tag', tag], path);
+    const tree = { path, branch: 'refs/heads/feature/private-objects', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag]));
+    expect(await readFile(join(saved.archiveDir, 'administration', 'gitdir', 'AUTO_MERGE'), 'utf8')).toBe(`${autoMerge}\n`);
+    expect(await saved.verify(tree)).toBe(null);
+    // The archive must supply the conflict tree's children, not just list roots
+    // whose missing bytes happen to be available from the original repository.
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'restored-private-objects');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['show', `${autoMerge}:conflict.txt`], restored)).stdout).toContain('private conflict bytes');
+    expect((await execGit(['cat-file', 'blob', conflictBlob], restored)).stdout).toContain('>>>>>>> theirs');
+    expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private root blob bytes');
+    expect((await execGit(['rev-parse', `${tag}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
+
+  it('retains the checkout when an AUTO_MERGE recovery tree is missing', async () => {
+    const path = join(external, 'missing-auto-merge');
+    await execGit(['worktree', 'add', '-b', 'feature/missing-auto-merge', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const missing = 'f'.repeat(40);
+    await writeFile(join(admin, 'AUTO_MERGE'), `${missing}\n`);
+    const tree = { path, branch: 'refs/heads/feature/missing-auto-merge', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
+    expect(existsSync(path)).toBe(true);
+    expect(await readFile(join(admin, 'AUTO_MERGE'), 'utf8')).toBe(`${missing}\n`);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive'], repo)).stdout).toBe('');
   });
 
   it.each([false, true])('archives a missing checkout private index and staged contents before pruning, parentAlias=%s', async parentAlias => {
@@ -447,7 +498,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
     expect(await c.confirm(before.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await lockText(c.release.path)).toBe(c.release.lockReason);
     expect(await archives()).toEqual([]);
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
   });

@@ -9,6 +9,8 @@ const runtime = vi.hoisted(() => ({ dir: null, agents: {}, trusted: true, tip: '
 const repoPath = '/synthetic/repository';
 const branch = 'feature/handoff';
 const prUrl = 'https://github.com/example/repository/pull/42';
+// Synthetic Git contracts do not create a filesystem repository.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 vi.mock('../lib/fileUtils.js', async () => ({
   ...await vi.importActual('../lib/fileUtils.js'),
   PATHS: { root: '/synthetic/repository', data: '/synthetic/data', worktrees: '/synthetic/worktrees', get cos() { return runtime.dir; } },

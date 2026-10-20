@@ -1,3 +1,4 @@
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: async (_repo, work) => work() }));
 /** Resume to real spawn dispatch, registration, completion and ownership gates.
  * Only provider/process, git discovery and persisted IO are doubled.
  */
@@ -59,7 +60,7 @@ vi.mock('./workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn() }));
 vi.mock('./agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: async () => ({
   ok: true, provider: { id: 'example-cli', type: 'cli', command: 'codex' }, selectedModel: 'example-model', modelSelection: {},
 }) }));
-vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: async () => ({
+vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: async ({ onPrepared }) => onPrepared({
   workspacePath: '/repos/example', worktreeInfo: null,
 }) }));
 vi.mock('./agentCliSpawning.js', () => ({

@@ -192,7 +192,12 @@ export function isBranchCheckedOutElsewhereError(message) {
  * exists`, and cleanup must NOT mistake that for "the branch pre-dated us"
  * (#2193) — the branch is exactly the orphan it needs to delete.
  */
-export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null) {
+export async function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(repo, () => addWorktreeAdmitted(args, repo, attempt, firstError));
+}
+
+function addWorktreeAdmitted(args, repo, attempt, firstError) {
   return execGit(args, repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch((err) => {
     const originalError = firstError || err;
     if (attempt >= WORKTREE_ADD_MAX_ATTEMPTS || !isGitLockError(err.message)) {
@@ -230,7 +235,10 @@ async function queueWorktreeCreate(repo, fn) {
   let key = common && isAbsolute(common) ? common : repo;
   try { key = realpathSync(key); } catch { /* invalid repositories fail in the operation itself */ }
   if (!key) key = '__unknown__';
-  return queueWorktreeCreateForKey(key, fn);
+  return queueWorktreeCreateForKey(key, async () => {
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(repo, fn);
+  });
 }
 
 /** Delete one completed local ref through Git's receiver. Unlike update-ref,
@@ -403,7 +411,13 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
-export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
+export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(repo, () => forceRemoveWorktreeDirAdmitted(repo, worktreePath, opts))
+    .catch(error => ({ removed: false, reason: error.message, warning: 'Checkout retained: repository reservation unavailable' }));
+}
+
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
@@ -987,7 +1001,13 @@ export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
  * @param {{ activeWorkspacePaths?: string[], agents?: object[], requestingAgentId?: string, idleMs?: number, nowMs?: number, allowUntracked?: boolean }} [options]
  * @returns {Promise<{ path: string }|null>} the released holder, or null
  */
-export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, {
+export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, options = {}) {
+  if (!sourceWorkspace || !branchName?.startsWith('next/')) return null;
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName, options));
+}
+
+async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName, {
   activeWorkspacePaths = [],
   agents = null,
   requestingAgentId = null,
@@ -1297,7 +1317,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
     agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
   });
-  return withClaimOwnershipLock(() => removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold));
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withClaimOwnershipLock(() => withCheckoutPublication(sourceWorkspace,
+    () => removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold)));
+
 }
 
 async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold) {
@@ -1609,6 +1632,11 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
  * Remove a persistent feature agent worktree
  */
 export async function removePersistentWorktree(featureAgentId, sourceWorkspace, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => removePersistentWorktreeAdmitted(featureAgentId, sourceWorkspace, branchName));
+}
+
+async function removePersistentWorktreeAdmitted(featureAgentId, sourceWorkspace, branchName) {
   const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
 
   if (!existsSync(worktreePath)) return { removed: false };
@@ -1748,7 +1776,8 @@ async function removeIfStillOrphaned({ isOwned, branchName, holderPath, sourceWo
     if (isOwned()) return null;
     const agents = await readOwners();
     if (claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace, agents })) return null;
-    return remove();
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(sourceWorkspace, remove);
   });
 }
 
@@ -2056,7 +2085,8 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
 
     // Non-force removal is a final Git guard against newly dirty or locked
     // trees. A refusal must never fall through to recursive filesystem removal.
-    const removed = await removeIfStillOrphaned(
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    const removed = await withCheckoutPublication(parentRepo, () => removeIfStillOrphaned(
       { isOwned: () => ownership({ locked: wt.locked }), branchName, holderPath: worktreePath, sourceWorkspace: parentRepo, readOwners },
       async () => {
         const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
@@ -2076,7 +2106,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
         }
         return ok;
       },
-    ).catch(err => {
+    )).catch(err => {
       console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
       return false;
     });

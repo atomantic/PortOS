@@ -1,0 +1,398 @@
+import { pinPlatform } from '../lib/testHelper.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+const persisted = vi.hoisted(() => ({ json: '{}', hostType: null, rejectDirectoryOpen: false, syntheticModes: false, fileSyncs: 0 }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, type: () => persisted.hostType || actual.type() };
+});
+vi.mock('./taskScheduleStore.js', () => ({
+  loadSchedule: async () => JSON.parse(persisted.json),
+  updateSchedule: async mutate => {
+    const schedule = JSON.parse(persisted.json);
+    const { result, changed } = await mutate(schedule);
+    if (changed) persisted.json = JSON.stringify(schedule);
+    return result;
+  },
+}));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstat: async path => {
+    const info = await actual.lstat(path);
+    // Model POSIX permission bits even when this Darwin-capability fixture runs
+    // on Windows; the unsafe-mode branch below still exercises real refusal.
+    if (persisted.hostType === 'Darwin' || persisted.syntheticModes) {
+      const mode = persisted.syntheticModes ? 0o777 : info.isDirectory() ? 0o700 : 0o600;
+      return Object.assign(Object.create(info), { mode: (info.mode & ~0o777) | mode });
+    }
+    return info;
+  }, open: async (path, ...args) => {
+    if (persisted.rejectDirectoryOpen && (await actual.lstat(path).catch(() => null))?.isDirectory()) throw new Error('directory-open-unsupported');
+    if (fixture?.failNextJournal && /[\\/]\d{6}\.json$/.test(String(path))) {
+      fixture.failNextJournal = false;
+      throw new Error('journal-write-interrupted');
+    }
+    const handle = await actual.open(path, ...args);
+    const originalSync = handle.sync.bind(handle);
+    handle.sync = async () => { persisted.fileSyncs++; return originalSync(); };
+    return handle;
+  } };
+});
+vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work() }));
+import { _createInitializedCheckoutRecovery } from './initializedCheckoutRecovery.js';
+
+let root, fixture;
+const release = { path: '/fixture/checkout', branch: 'claim/42', head: 'a'.repeat(40), locked: false, lockReason: null };
+const prUrl = 'https://github.com/example/repo/pull/42';
+beforeEach(async () => {
+  persisted.hostType = null; persisted.rejectDirectoryOpen = persisted.syntheticModes = false; persisted.fileSyncs = 0;
+  root = await mkdtemp(join(tmpdir(), 'initialized-recovery-'));
+  const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
+  const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
+  fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null };
+  const admission = {
+    withCheckoutPublication: async (_repo, work) => { if (fixture.cut) throw new Error('checkout-retirement-reserved'); return work(); },
+    reserveCheckoutRetirement: vi.fn(async (_repo, id) => {
+      if (fixture.cut) throw new Error('checkout-retirement-reserved');
+      fixture.cut = { owner: { id }, directory: '/fixture/admission' }; return fixture.cut;
+    }),
+    withCheckoutReservation: async (_cut, work) => work(),
+    readCheckoutReservation: async () => {
+      if (!fixture.cut) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return fixture.cut;
+    },
+    releaseCheckoutReservation: vi.fn(async () => { fixture.cut = null; }),
+  };
+  const native = vi.fn(async input => {
+    if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
+    if (input.command === 'inspect') return { ...fixture.snapshot };
+    if (input.command === 'preserve') {
+      if (fixture.failPreserve) throw new Error('archive-no-space');
+      await writeFile(join(input.transactionDir, 'manifest.json'), '{}', { mode: 0o600 });
+      return { ok: true, restoreProof: { verified: true } };
+    }
+    if (input.command === 'move') {
+      if (fixture.failPart === input.part && input.direction === 'quarantine') throw new Error('move-refused');
+      fixture.placement[input.part] = input.direction === 'quarantine' ? 'quarantined' : 'original';
+    }
+    if (fixture.failArchive && input.command === 'verify') throw new Error('archive-changed');
+    return { ok: true, placement: fixture.placement, fingerprint: fixture.snapshot.fingerprint,
+      placements: Object.fromEntries(Object.entries(fixture.placement).map(([part, state]) => [part, { state: state === 'quarantined' ? 'quarantine' : state }])) };
+  });
+  const deps = { root: () => root, fenced: work => work(), admission, native,
+    context: async () => ({ repoPath: '/fixture/repo' }),
+    ownership: vi.fn(async () => ({ ok: true, policy: null })),
+    forge: async () => ({ ...fixture.facts }),
+    comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({
+      forge, policy, comparison: { disposition: fixture.superseded ? 'review-supersession' : 'ancestor' },
+    }),
+    listWorktrees: async () => fixture.newHolder ? [{ path: '/fixture/new', branch: release.branch }] : [],
+    execGit: vi.fn(async () => ({ exitCode: fixture.headExists ? 0 : 1, stdout: fixture.headExists ? release.head : '' })),
+    deleteRef: vi.fn(async () => { fixture.headExists = false; return true; }),
+    recordRetirement: vi.fn(async () => {}),
+  };
+  fixture.deps = deps; fixture.service = _createInitializedCheckoutRecovery(deps);
+});
+afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+const reviewed = async () => {
+  const response = await fixture.service.review({ appId: 'app', release, prUrl });
+  expect(response.ok).toBe(true);
+  return { appId: 'app', release, review: { prUrl, digest: response.review.digest, acceptSuperseded: fixture.superseded === true } };
+};
+
+describe('initialized checkout transaction', () => {
+  it('uses actual Windows filesystem capabilities for mocked workflows without suppressing file fsync', async () => {
+    persisted.hostType = 'Windows_NT'; persisted.syntheticModes = true; persisted.rejectDirectoryOpen = true;
+    const restorePlatform = pinPlatform('darwin');
+    try {
+      const result = await fixture.service.retire(await reviewed());
+      expect(result).toMatchObject({ ok: true, originalsQuarantined: true });
+      expect((await fixture.service.status({ appId: 'app', transactionId: result.transactionId })).phase).toBe('quarantined');
+      expect(persisted.fileSyncs).toBeGreaterThan(0);
+    } finally { restorePlatform(); }
+  });
+  it('does not suppress directory sync failure or POSIX mode checks on Darwin', async () => {
+    persisted.hostType = 'Darwin'; persisted.rejectDirectoryOpen = true;
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, reason: 'directory-open-unsupported' });
+    expect(fixture.deps.native.mock.calls.some(([input]) => input.command === 'move')).toBe(false);
+    persisted.rejectDirectoryOpen = false; persisted.syntheticModes = true;
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, reason: 'retirement-journal-directory-unsafe' });
+  });
+  it('keeps the real native backend unavailable on unsupported platforms', async () => {
+    const restorePlatform = pinPlatform('win32');
+    try {
+      const { native: _native, ...deps } = fixture.deps;
+      const service = _createInitializedCheckoutRecovery(deps);
+      expect(await service.review({ appId: 'app', release, prUrl })).toMatchObject({ ok: false, reason: 'retirement-platform-unsupported' });
+      expect(await readdir(root)).toEqual([]);
+    } finally { restorePlatform(); }
+  });
+  it('quarantines both original directories only after preservation, retaining the rollback ref', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    expect(result).toMatchObject({ ok: true, originalsQuarantined: true, branchDeleted: false, branchRetainedReason: 'quarantined-checkout-rollback-ref' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
+    expect(fixture.cut).toBeNull();
+    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    const commands = fixture.deps.native.mock.calls.map(([input]) => input.command);
+    expect(commands.indexOf('preserve')).toBeLessThan(commands.indexOf('move'));
+    const status = await fixture.service.status({ appId: 'app', transactionId: result.transactionId });
+    expect(status.phase).toBe('quarantined');
+    expect(status.journalDigest).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it.each(['working', 'administration'])('retains a durable cut on %s move interruption and restores explicitly after restart', async part => {
+    fixture.failPart = part;
+    const result = await fixture.service.retire(await reviewed());
+    expect(result).toMatchObject({ ok: false, recoveryRequired: true, reason: 'move-refused' });
+    expect(fixture.cut).not.toBeNull();
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status({ appId: 'app', transactionId: result.transactionId });
+    const restored = await restarted.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest });
+    expect(restored).toMatchObject({ ok: true, restored: true, archivesRetained: true });
+    expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
+    expect(fixture.cut).toBeNull();
+  });
+  it('can cancel a failed preservation without deleting its partial evidence', async () => {
+    fixture.failPreserve = true;
+    const result = await fixture.service.retire(await reviewed());
+    expect(result.reason).toBe('archive-no-space');
+    const status = await fixture.service.status({ appId: 'app', transactionId: result.transactionId });
+    expect(status.placement).toEqual({ preserved: false });
+    expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
+    expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
+  });
+  it('requires a fresh accepted review and an explicit supersession decision', async () => {
+    const input = await reviewed();
+    fixture.facts.defaultHead = 'e'.repeat(40);
+    expect(await fixture.service.retire(input)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).not.toHaveBeenCalled();
+    fixture.superseded = true;
+    const superseded = await reviewed(); superseded.review.acceptSuperseded = false;
+    expect(await fixture.service.retire(superseded)).toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+  });
+  it('rechecks ownership after preservation before any move', async () => {
+    const input = await reviewed();
+    fixture.deps.ownership.mockImplementation(async () => ({ ok: !fixture.deps.native.mock.calls.some(([v]) => v.command === 'preserve'), policy: null, reason: 'active-owner' }));
+    expect(await fixture.service.retire(input)).toMatchObject({ ok: false, reason: 'active-owner', recoveryRequired: true });
+    expect(fixture.deps.native.mock.calls.some(([v]) => v.command === 'move')).toBe(false);
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('refuses stale recovery digest, a new holder, or changed rollback ref without moving originals', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const status = await fixture.service.status({ appId: 'app', transactionId: result.transactionId });
+    const input = { appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest };
+    expect(await fixture.service.restore({ ...input, journalDigest: 'f'.repeat(64) })).toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    fixture.newHolder = true;
+    expect(await fixture.service.restore(input)).toMatchObject({ ok: false, reason: 'branch-has-new-holder' });
+    fixture.newHolder = false;
+    fixture.deps.execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    expect(await fixture.service.restore(input)).toMatchObject({ ok: false, reason: 'branch-ref-changed' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
+  });
+  it('verifies standalone recovery independently after the live branch is unavailable', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const status = await fixture.service.status({ appId: 'app', transactionId: result.transactionId });
+    fixture.deps.execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    const input = { appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest };
+    expect(await fixture.service.verifyArchive(input)).toMatchObject({ ok: true, verified: true });
+    expect(fixture.deps.native).toHaveBeenLastCalledWith({ command: 'verify', transactionDir: join(root, result.transactionId), mode: 'standalone' });
+    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+  });
+  const quarantinedReview = async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const status = await fixture.service.status({ appId: 'app', transactionId: result.transactionId });
+    const bound = { appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest };
+    const response = await fixture.service.reviewBranch(bound);
+    expect(response.ok).toBe(true);
+    return { ...bound, review: { prUrl, digest: response.review.digest, acceptSuperseded: fixture.superseded === true } };
+  };
+  it('finishes a quarantined branch with a new exact review and records the source checkout receipt', async () => {
+    const input = await quarantinedReview();
+    const result = await fixture.service.retireBranch(input);
+    expect(result).toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledWith('/fixture/repo', release.branch, release.head);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', { path: release.path, branch: release.branch,
+      head: release.head, branchDeleted: true, archiveDir: join(root, input.transactionId) });
+    expect(fixture.cut).toBeNull();
+    expect((await fixture.service.status(input)).phase).toBe('retired');
+  });
+  it('invalidates branch finalization when the default advances or a holder appears', async () => {
+    const input = await quarantinedReview();
+    fixture.facts.defaultHead = 'e'.repeat(40);
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    fixture.newHolder = true;
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'branch-has-new-holder' });
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('requires explicit fresh supersession acceptance and complete archive proof for branch finalization', async () => {
+    fixture.superseded = true;
+    const input = await quarantinedReview(); input.review.acceptSuperseded = false;
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    fixture.failArchive = true;
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'archive-changed' });
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('retains the delete intent and reports uncertainty after deletion without a journal outcome', async () => {
+    const input = await quarantinedReview();
+    fixture.deps.deleteRef.mockImplementation(async () => { fixture.headExists = false; throw new Error('receiver-result-lost'); });
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'receiver-result-lost', recoveryRequired: true });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status).toMatchObject({ phase: 'branch-retirement-intent', branchDeletion: 'uncertain', branchRef: 'absent', recoveryRequired: true });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+    expect(await restarted.retireBranch({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-branch-deletion-uncertain' });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'update-ref')).toBe(false);
+  });
+  it('preserves the completed deletion obligation when recording the schedule receipt fails', async () => {
+    const input = await quarantinedReview();
+    fixture.deps.recordRetirement.mockRejectedValue(new Error('receipt-disk-full'));
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'receipt-disk-full' });
+    expect(await fixture.service.status(input)).toMatchObject({ phase: 'branch-retired', branchDeleted: true, receiptPending: true, recoveryRequired: true });
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('replays a conclusively completed deletion receipt after restart without another Git mutation', async () => {
+    const input = await quarantinedReview();
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-disk-full'));
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(await restarted.retireBranch({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(2);
+    expect(fixture.cut).toBeNull();
+  });
+  it('releases the retained cut after receipt completion and is idempotent once released', async () => {
+    const input = await quarantinedReview();
+    fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('cut-release-interrupted'));
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'cut-release-interrupted' });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status.phase).toBe('retired');
+    expect(fixture.cut).not.toBeNull();
+    const replay = { ...input, journalDigest: status.journalDigest };
+    expect(await restarted.retireBranch(replay)).toMatchObject({ ok: true });
+    expect(fixture.cut).toBeNull();
+    expect(await restarted.retireBranch(replay)).toMatchObject({ ok: true });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+  });
+  it.each(['headExists', 'newHolder', 'failArchive'])('retains receipt recovery on fresh %s conflict', async conflict => {
+    const input = await quarantinedReview();
+    fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-disk-full'));
+    await fixture.service.retireBranch(input);
+    const status = await fixture.service.status(input);
+    fixture[conflict] = true;
+    expect(await fixture.service.retireBranch({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, recoveryRequired: true });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+  });
+  it('does not duplicate receipts or refresh their timestamps when the sink succeeded before journal failure', async () => {
+    const input = await quarantinedReview();
+    const { recordHeldCheckoutRetirement, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    persisted.json = JSON.stringify({ executions: { 'task:branch-reconcile': { perApp: { app: {
+      branchReconcileOutcome: { remaining: [release], retired: Array.from({ length: 20 }, (_, index) => ({
+        path: `/other/${index}`, archiveDir: `/archives/${index}`, retiredAt: '2020-01-01T00:00:00.000Z',
+      })) },
+    } } } } });
+    fixture.deps.recordRetirement.mockImplementationOnce(async (...args) => {
+      await recordHeldCheckoutRetirement(...args);
+      fixture.failNextJournal = true;
+    }).mockImplementation(recordHeldCheckoutRetirement);
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'journal-write-interrupted' });
+    // Evict the original from the 20-row display ring before replay.
+    for (let index = 0; index < 20; index++) await recordHeldCheckoutRetirement('app', {
+      path: `/later/${index}`, branch: `later/${index}`, head: 'f'.repeat(40),
+      branchDeleted: true, archiveDir: `/later-archives/${index}`,
+    });
+    const newer = { ...release, reason: 'retirement-review-pending' };
+    await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [newer] });
+    const saved = JSON.parse(persisted.json);
+    const outcome = saved.executions['task:branch-reconcile'].perApp.app.branchReconcileOutcome;
+    const originalReceipts = structuredClone(outcome.retired);
+    const originalIdentities = structuredClone(outcome.retirementReceiptIdentities);
+    expect(originalReceipts.some(receipt => receipt.path === release.path)).toBe(false);
+    const currentInventory = structuredClone(outcome.remaining);
+    const currentObligations = structuredClone(outcome.retirementObligations);
+    expect(currentObligations).toHaveLength(1);
+    expect(Number.isFinite(Date.parse(currentObligations[0].createdAt))).toBe(true);
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(await restarted.retireBranch({ ...input, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
+    const replayed = JSON.parse(persisted.json).executions['task:branch-reconcile'].perApp.app.branchReconcileOutcome;
+    expect(replayed.retired).toEqual(originalReceipts);
+    expect(replayed.retirementReceiptIdentities).toEqual(originalIdentities);
+    expect(replayed.remaining).toEqual(currentInventory);
+    expect(replayed.retirementObligations).toEqual(currentObligations);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
+    expect(fixture.cut).toBeNull();
+  });
+  it('keeps a recreated checkout generation pending on old receipt replay and accepts its own new archive', async () => {
+    const { recordHeldCheckoutRetirement, recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+    persisted.json = JSON.stringify({ executions: {} });
+    const pending = { ...release, reason: 'retirement-review-pending' };
+    const first = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [pending] });
+    const firstCreated = first.retirementObligations[0].createdAt;
+    const receipt = { ...release, branchDeleted: true, archiveDir: '/archive/original' };
+    const retired = await recordHeldCheckoutRetirement('app', receipt);
+    expect(retired.retirementObligations).toEqual([]);
+    expect(retired.remaining).toEqual([]);
+    const originalTimestamp = retired.retired[0].retiredAt;
+    const recreated = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [pending] });
+    const generation = recreated.retirementObligations[0].createdAt;
+    expect(Date.parse(generation)).toBeGreaterThan(Date.parse(originalTimestamp));
+    expect(Date.parse(generation)).toBeGreaterThanOrEqual(Date.parse(firstCreated));
+    await recordHeldCheckoutRetirement('app', receipt);
+    expect(await getBranchReconcileOutcome('app')).toEqual(recreated);
+    // The fresh archive is a different retirement identity, with evidence later
+    // than this server-created generation. The old archive remains untouched.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(generation) + 1);
+      const completed = await recordHeldCheckoutRetirement('app', { ...receipt, archiveDir: '/archive/new-generation' });
+      expect(completed.retirementObligations).toEqual([]);
+      expect(completed.remaining).toEqual([]);
+      expect(completed.retired.find(row => row.archiveDir === receipt.archiveDir).retiredAt).toBe(originalTimestamp);
+      expect(Object.keys(completed.retirementReceiptIdentities)).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['quarantined', 'branch-retired'])('rechecks the journal after executor acquisition in %s', async phase => {
+    let input = await quarantinedReview();
+    if (phase === 'branch-retired') {
+      fixture.deps.recordRetirement.mockRejectedValueOnce(new Error('receipt-pending'));
+      await fixture.service.retireBranch(input);
+      input = { ...input, journalDigest: (await fixture.service.status(input)).journalDigest };
+    }
+    const directory = join(root, input.transactionId);
+    const invoke = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async request => {
+      if (request.command === 'lock') {
+        const files = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+        const previous = JSON.parse(await readFile(join(directory, files.at(-1)), 'utf8'));
+        const next = { ...previous, sequence: previous.sequence + 1,
+          previous: createHash('sha256').update(JSON.stringify(previous)).digest('hex') };
+        await writeFile(join(directory, `${String(next.sequence).padStart(6, '0')}.json`), JSON.stringify(next), { mode: 0o600 });
+      }
+      return invoke(request);
+    });
+    const deletes = fixture.deps.deleteRef.mock.calls.length;
+    const receipts = fixture.deps.recordRetirement.mock.calls.length;
+    expect(await fixture.service.retireBranch(input)).toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(deletes);
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(receipts);
+  });
+  it('holds if immutable journal history is changed', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const first = join(root, result.transactionId, '000000.json');
+    const value = JSON.parse(await readFile(first, 'utf8')); value.repoPath = '/different';
+    await writeFile(first, JSON.stringify(value));
+    await expect(fixture.service.status({ appId: 'app', transactionId: result.transactionId })).rejects.toThrow('retirement-journal-invalid');
+  });
+});

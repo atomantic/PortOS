@@ -19,7 +19,7 @@ vi.mock('fs/promises', async original => {
 });
 vi.mock('../lib/execGit.js', async original => {
   const actual = await original();
-  return { execGit: (...args) => {
+  return { ...actual, execGit: (...args) => {
     if (fault.rejectAdd && args[0][0] === 'worktree' && args[0][1] === 'add') throw new Error('Synthetic add failure');
     return actual.execGit(...args);
   } };
