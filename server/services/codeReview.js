@@ -61,7 +61,7 @@ import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermiss
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
-const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429|402|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
+const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|too many requests|\b(?:HTTP|status|code|error)\W{0,3}(?:429|402)\b|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
 
 function isReviewerQuotaFailure(error) {
   if (!error) return false
@@ -74,7 +74,7 @@ function isReviewerQuotaFailure(error) {
     }
   }
   const message = typeof error === 'object'
-    ? `${error.error || ''} ${error.message || ''} ${error.code || ''} ${error.stderr || ''} ${error.text || ''} ${error.output || ''}`
+    ? `${error.error || ''} ${error.message || ''} ${error.code || ''} ${error.stderr || ''}`
     : String(error)
   return QUOTA_FAILURE.test(message)
 }
@@ -98,7 +98,7 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const explicitReason = typeof result.reason === 'string' ? result.reason : null
   const isConfigFault = explicitReason === 'configuration' || isReviewerConfigFault(code)
   const isMalformed = explicitReason === 'malformed' || code === 'MALFORMED_REVIEW'
-  const isQuota = explicitReason === 'quota' || isReviewerQuotaFailure(result)
+  const isQuota = explicitReason === 'quota' || (!isTimeoutFailure(message) && isReviewerQuotaFailure(result))
   const isExplicitUnavailable = explicitReason === 'unavailable'
 
   const isProvider = isProviderReviewer(reviewer)
