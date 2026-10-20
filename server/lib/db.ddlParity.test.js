@@ -279,6 +279,21 @@ describe('DDL parity (init-db.sql ↔ db/schema ensureSchema)', () => {
 
   // ── Targeted pins: contracts a two-sided set comparison cannot see ──────────
 
+  // #12500: function bodies are not compared above, so a fresh install could
+  // keep a transaction-start NOW() clock that the upgrade path no longer has.
+  it('every catalog LWW trigger stamps the monotonic change clock in both files', () => {
+    const fns = ['update_catalog_ingredient_timestamp', 'update_catalog_scrap_timestamp', 'update_catalog_ref_sync_seq',
+      'update_catalog_relation_sync_seq', 'update_catalog_media_sync_seq', 'update_catalog_tag_timestamp'];
+    for (const [label, source] of [['init-db.sql', INIT_SQL], ['db/schema', DB_JS]]) {
+      expect(source, `${label} missing catalog_next_change_clock`).toMatch(/CREATE OR REPLACE FUNCTION catalog_next_change_clock\(previous TIMESTAMPTZ\)/);
+      for (const fn of fns) {
+        const body = new RegExp(`CREATE OR REPLACE FUNCTION ${fn}\\(\\)([\\s\\S]*?)\\$\\$ LANGUAGE plpgsql`).exec(source)?.[1];
+        expect(body, `${label} ${fn}`).toContain('NEW.updated_at := catalog_next_change_clock(OLD.updated_at)');
+        expect(body, `${label} ${fn}`).not.toMatch(/NEW\.updated_at := NOW\(\)/);
+      }
+    }
+  });
+
   // memories is SQL_ONLY_TOLERATED, so the shared-table comparison cannot
   // catch fresh-install drift in its generated expression or matching index.
   it('stores the same memory search lexemes on fresh installs and upgrades', () => {
