@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { RefreshCw, Clock, Activity } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource.js';
 import TaskAddForm from '../../cos/TaskAddForm';
 import * as api from '../../../services/api';
 import { formatDurationMs, formatTime } from '../../../utils/formatters';
@@ -16,35 +18,33 @@ const STATUS_CONFIG = {
 };
 
 
+const fetchProviders = () => api.getProviders({ silent: true }).then(d => d?.providers ?? []);
+const fetchApps = () => api.getApps({ silent: true }).then(a => (a ?? []).filter(app => app.id !== 'portos-autofixer'));
+
 export default function TasksTab({ appId }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [providers, setProviders] = useState([]);
-  const [apps, setApps] = useState([]);
+  // The tab owns its error UI, so the request is silent (no auto-toast).
+  const fetchAppAgents = useCallback(
+    () => api.getAppAgents(appId, undefined, { silent: true }).then((result) => result?.agents ?? []),
+    [appId],
+  );
+  const { items: agents, state, error, retry: fetchAgents } = useListResource(fetchAppAgents);
 
-  const fetchAgents = useCallback(async () => {
-    setLoading(true);
-    const result = await api.getAppAgents(appId).catch(() => ({ agents: [], summary: {} }));
-    setData(result);
-    setLoading(false);
-  }, [appId]);
+  // Pickers for the add-task form: a failed read shows a retry row instead of a
+  // form that silently offers no providers or apps.
+  const providersResource = useListResource(fetchProviders);
+  const appsResource = useListResource(fetchApps);
 
-  useEffect(() => {
-    let active = true;
-    fetchAgents();
-    // Fetch providers and apps for the task add form
-    api.getProviders().catch(() => ({ providers: [] }))
-      .then(d => { if (active) setProviders(d.providers || []); });
-    api.getApps().catch(() => [])
-      .then(a => { if (active) setApps((a || []).filter(app => app.id !== 'portos-autofixer')); });
-    return () => { active = false; };
-  }, [appId, fetchAgents]);
-
-  if (loading) {
+  if (state === 'loading') {
     return <BrailleSpinner text="Loading agent history" />;
   }
 
-  const { agents = [], summary = {} } = data || {};
+  // Mirrors the server's summary (same list, same status buckets).
+  const failed = state === 'error';
+  const summary = {
+    total: agents.length,
+    running: agents.filter(a => a.status === 'running' || a.status === 'spawning').length,
+    succeeded: agents.filter(a => a.status === 'completed').length,
+  };
   const successRate = summary.total > 0
     ? Math.round((summary.succeeded / summary.total) * 100)
     : 0;
@@ -52,9 +52,15 @@ export default function TasksTab({ appId }) {
   return (
     <div className="w-full min-w-0 space-y-4">
       {/* Add Task Form */}
+      {providersResource.state === 'error' && (
+        <ListLoadError what="providers for the task form" error={providersResource.error} onRetry={providersResource.retry} />
+      )}
+      {appsResource.state === 'error' && (
+        <ListLoadError what="apps for the task form" error={appsResource.error} onRetry={appsResource.retry} />
+      )}
       <TaskAddForm
-        providers={providers}
-        apps={apps}
+        providers={providersResource.items}
+        apps={appsResource.items}
         onTaskAdded={fetchAgents}
         compact
         defaultApp={appId}
@@ -70,6 +76,9 @@ export default function TasksTab({ appId }) {
         </button>
       </div>
 
+      {failed ? (
+        <ListLoadError what="agent history" error={error} onRetry={fetchAgents} />
+      ) : (<>
       {/* Summary Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
@@ -153,6 +162,7 @@ export default function TasksTab({ appId }) {
           </table>
         </div>
       )}
+      </>)}
     </div>
   );
 }

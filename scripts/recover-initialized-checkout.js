@@ -7,7 +7,7 @@
  * node scripts/recover-initialized-checkout.js <action> request.json \
  *   --install-root /absolute/install --output /absolute/new-private-record.jsonl
  * Actions: review, restore, review-finalization, finalize,
- * review-quarantine, resume-quarantine.
+ * review-quarantine, resume-quarantine, cancel-preservation.
  *
  * Output is an exclusive 0600 JSONL journal: a durable pending intent precedes
  * the service call; a completed response is appended. A lone pending line means
@@ -35,6 +35,7 @@ const ACTIONS = {
   finalize: { method: 'finalizeRestored', acceptedReview: true },
   'review-quarantine': { method: 'reviewQuarantineResumption', acceptedReview: false },
   'resume-quarantine': { method: 'resumeQuarantine', acceptedReview: true, supersession: true },
+  'cancel-preservation': { method: 'cancelPreservation', acceptedReview: false },
 };
 const fail = code => { throw Object.assign(new Error(code), { recoveryCode: code }); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

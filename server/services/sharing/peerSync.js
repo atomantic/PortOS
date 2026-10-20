@@ -579,9 +579,9 @@ async function getIssueSeriesId(issueId) {
  * edit) gets another attempt.
  */
 export async function retryPendingPushesForPeer(peerId) {
-  if (!isNonBlankStr(peerId)) return { walked: 0, pushed: 0 };
+  if (!isNonBlankStr(peerId) || stopping) return { walked: 0, pushed: 0 };
   const subs = await listPeerSubscriptions({ peerId });
-  if (subs.length === 0) return { walked: 0, pushed: 0 };
+  if (subs.length === 0 || stopping) return { walked: 0, pushed: 0 };
   // Separate counter for the log line — only count subs that were never
   // pushed (genuine retries) so steady-state convergence runs stay quiet.
   const neverPushedCount = subs.filter(s => !s.lastPushedAt).length;
@@ -600,6 +600,7 @@ export async function retryPendingPushesForPeer(peerId) {
   // terminal write covering all N records' stamps.
   await withBaseHashFlushBatch(async () => {
     for (const sub of subs) {
+      if (stopping) break;
       // peer:online fired — re-probe schema-blocked subs immediately (peer
       // may have upgraded since the last 409). Edit-triggered pushes still
       // respect the cooldown.
@@ -750,10 +751,15 @@ export async function syncNowForPeer(peerId) {
 let onUpdated = null;
 let onDeleted = null;
 let onPeerOnline = null;
+// Set by uninstallPeerSyncListener (shutdown). Convergence walks poll it so they
+// stop quietly instead of pushing into a closing DB pool; the next boot's
+// peer:online pass repeats whatever was abandoned (#11750).
+let stopping = false;
 
 /** Attach the `recordEvents` + `peer:online` listeners — call once during sharing init. */
 export function installPeerSyncListener() {
   if (onUpdated) return;
+  stopping = false;
   onUpdated = ({ recordKind, recordId }) => {
     trackBackgroundOperation(triggerPushForRecord(recordKind, recordId).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: listener error for ${recordKind}/${recordId}`, err);
@@ -804,6 +810,7 @@ export function installPeerSyncListener() {
       // peerHasCategory owns the (kind → category) mapping and the fullSync
       // short-circuit, so iterate the kinds and let it decide.
       for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+        if (stopping) return;
         // peerHasCategory short-circuits true for a full-sync peer, so a peer
         // that came online with its category bits off (or a freshly-added
         // full-sync peer whose instanceId we only just learned) still back-
@@ -814,7 +821,9 @@ export function installPeerSyncListener() {
           });
         }
       }
+      if (stopping) return;
       await retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+      if (stopping) return;
       // A full-sync peer added (via defaultPeerFullSync) or toggled before its
       // instanceId was known couldn't be reciprocated by updatePeer — no identity
       // yet. peer:online is the first point we know it, so request the mutual
@@ -837,6 +846,7 @@ export function installPeerSyncListener() {
  * test teardown when a follow-up test re-creates events).
  */
 export function uninstallPeerSyncListener() {
+  stopping = true;
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
   if (onUpdated) recordEvents.off('updated', onUpdated);
@@ -862,6 +872,8 @@ export async function __resetForTests() {
   await drainBackgroundOperations();
   await drainWriteTail();
   await flushBaseHashes();
+  // Direct callers of retryPendingPushesForPeer in later tests never re-install.
+  stopping = false;
 }
 
 /**

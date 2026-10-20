@@ -348,3 +348,63 @@ describe('AutomationTab task visibility filter', () => {
     expect(cardOrder()).toHaveLength(3);
   });
 });
+
+describe('AutomationTab read failures', () => {
+  const primeOthers = () => {
+    api.getCosStatus.mockResolvedValue({ paused: false });
+    api.getProviders.mockResolvedValue(PROVIDERS);
+    api.getCosJobs.mockResolvedValue({ jobs: [] });
+    api.getSettings.mockResolvedValue({ timezone: 'UTC' });
+  };
+
+  it('does not render per-app or master switches over an unknown overrides state, and recovers on Retry', async () => {
+    primeOthers();
+    api.getCosSchedule.mockResolvedValue(SCHEDULE);
+    api.getAppTaskTypes.mockRejectedValueOnce(new Error('overrides down'));
+    mountTab();
+
+    const alert = await screen.findByText(/Could not load this app's automation settings/);
+    expect(alert).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Task visibility' })).toBeNull();
+    expect(screen.queryByText('layered-intelligence')).toBeNull();
+
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: { security: { enabled: true } } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('group', { name: 'Task visibility' });
+    expect(screen.queryByText(/Could not load/)).toBeNull();
+    expect(screen.getByText('On for this app (1)', { exact: false })).toBeInTheDocument();
+  });
+
+  it('shows a schedule error instead of "No task types configured", and recovers on Retry', async () => {
+    primeOthers();
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+    api.getCosSchedule.mockRejectedValueOnce(new Error('schedule down'));
+    mountTab();
+
+    expect(await screen.findByText(/Could not load the task schedule/)).toBeInTheDocument();
+    expect(screen.queryByText(/No task types configured/)).toBeNull();
+
+    api.getCosSchedule.mockResolvedValue(SCHEDULE);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('group', { name: 'Task visibility' });
+  });
+
+  it('still renders the empty copy when the schedule loads with no task types', async () => {
+    primeOthers();
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+    api.getCosSchedule.mockResolvedValue({ tasks: {} });
+    mountTab();
+    expect(await screen.findByText(/No task types configured/)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load/)).toBeNull();
+  });
+
+  it('shows a provider list error row instead of an empty provider catalogue', async () => {
+    primeOthers();
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+    api.getCosSchedule.mockResolvedValue(SCHEDULE);
+    api.getProviders.mockRejectedValueOnce(new Error('providers down'));
+    mountTab();
+    expect(await screen.findByText(/Could not load the provider list/)).toBeInTheDocument();
+  });
+});
