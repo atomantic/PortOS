@@ -128,7 +128,7 @@ class NativeArchive(unittest.TestCase):
         (admission / 'writer.lock').write_text('owned service bookkeeping')
         self.assertEqual(archive.inspect(self.request), before)
 
-    def test_unbound_cancellation_accepts_only_shared_mtime_drift_without_touching_evidence(self):
+    def test_unbound_cancellation_accepts_shared_updates_without_touching_originals_or_evidence(self):
         before = archive.inspect(self.request, full=True)
         self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}
         archive.private_json(self.txn / 'source.json', before)
@@ -137,18 +137,19 @@ class NativeArchive(unittest.TestCase):
         objects = Path(before['commonGitDir']) / 'objects'
         info = objects.stat()
         os.utime(objects, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000000))
+        self.git(self.repo, 'update-ref', 'refs/heads/independent-work', 'HEAD')
         observed = archive.inspect(self.request, full=True)
         proof = archive.verify_unmoved_preservation(self.request)
         self.assertTrue(proof['verified'])
         self.assertTrue(proof['originalsUnmoved'])
-        self.assertEqual(proof['sharedMtimeChanges'], 1)
+        self.assertFalse(proof['archiveVerified'])
+        self.assertNotEqual(proof['sharedBeforeSha256'], proof['sharedAfterSha256'])
         self.assertEqual(archive.inspect(self.request, full=True), observed)
         self.assertEqual((self.txn / 'partial-copy').read_bytes(), b'incomplete evidence')
         self.assertFalse((self.txn / 'manifest.json').exists())
-        # No byte or placement difference may borrow the timestamp exception.
+        # Changes to original bytes or placement never borrow this exception.
         for target, content, refusal in (
             (self.work / 'new-data', b'new work', 'preservation-original-content-changed'),
-            (objects / 'unrecognized-data', b'new object', 'preservation-shared-content-changed'),
             (self.txn / 'quarantine' / 'working', b'move evidence', 'preservation-originals-may-have-moved'),
             (self.txn / 'manifest.json', b'bound proof', 'preservation-already-bound'),
         ):
@@ -167,6 +168,9 @@ class NativeArchive(unittest.TestCase):
             archive.verify_unmoved_preservation(self.request)
         (self.txn / 'source.json').write_bytes(saved)
         self.assertTrue(archive.verify_unmoved_preservation(self.request)['verified'])
+        self.git(self.repo, 'update-ref', 'refs/heads/feature/fixture', 'HEAD^')
+        with self.assertRaisesRegex(RuntimeError, 'release-head-or-branch-changed'):
+            archive.verify_unmoved_preservation(self.request)
 
     def test_common_runtime_sockets_are_outside_capture_but_private_and_captured_sockets_hold(self):
         facts = archive.inspect(self.request)

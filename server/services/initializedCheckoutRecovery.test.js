@@ -90,7 +90,7 @@ beforeEach(async () => {
     if (input.command === 'verify-unmoved-preservation') {
       if (fixture.cancelRefusal) throw new Error(fixture.cancelRefusal);
       if ((await readdir(input.transactionDir)).includes('manifest.json')) throw new Error('preservation-already-bound');
-      return { verified: true, originalsUnmoved: true, sharedMtimeChanges: 2,
+      return { verified: true, originalsUnmoved: true, archiveVerified: false,
         reviewedFingerprint: input.expected.fingerprint, observedFingerprint: fixture.snapshot.fingerprint };
     }
     if (input.command === 'preserve') {
@@ -244,23 +244,23 @@ describe('initialized checkout transaction', () => {
     expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
   });
-  it('releases a failed copy after proved shared mtime drift and replays cancellation after restart', async () => {
+  it('releases an unmoved failed copy after shared Git drift and replays cancellation after restart', async () => {
     fixture.failPreserve = true;
     const result = await fixture.service.retire(await reviewed());
     fixture.snapshot.fingerprint = '9'.repeat(64);
     const input = { appId: 'app', transactionId: result.transactionId };
     const status = await fixture.service.status(input);
     fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));
-    expect(await fixture.service.restore({ ...input, journalDigest: status.journalDigest }))
+    expect(await fixture.service.cancelPreservation({ ...input, journalDigest: status.journalDigest }))
       .toMatchObject({ ok: false, reason: 'release-interrupted' });
     expect(fixture.cut).not.toBeNull();
     const rows = (await readdir(join(root, result.transactionId))).filter(name => /^\d{6}\.json$/.test(name)).sort();
     const saved = JSON.parse(await readFile(join(root, result.transactionId, rows.at(-1)), 'utf8'));
     expect(saved).toMatchObject({ phase: 'restored', cancelledUnboundPreservation: true,
-      cancellationProof: { verified: true, originalsUnmoved: true, sharedMtimeChanges: 2 } });
+      cancellationProof: { verified: true, originalsUnmoved: true, archiveVerified: false } });
     const restarted = _createInitializedCheckoutRecovery(fixture.deps);
     const fresh = await restarted.status(input);
-    expect(await restarted.restore({ ...input, journalDigest: fresh.journalDigest })).toMatchObject({ ok: true });
+    expect(await restarted.cancelPreservation({ ...input, journalDigest: fresh.journalDigest })).toMatchObject({ ok: true });
     expect(fixture.cut).toBeNull();
   });
   it.each(['preservation-original-content-changed', 'preservation-originals-may-have-moved'])(
@@ -298,6 +298,18 @@ describe('initialized checkout transaction', () => {
     expect(fixture.deps.admission.reserveCheckoutRetirement).not.toHaveBeenCalled();
     expect(fixture.cut).toBeNull();
     expect((await fixture.service.status(input)).journalDigest).toBe(status.journalDigest);
+  });
+  it('the recovery CLI cancellation cannot restore or release an already quarantined transaction', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const input = { appId: 'app', transactionId: result.transactionId };
+    const status = await fixture.service.status(input);
+    fixture.deps.native.mockClear();
+    fixture.deps.admission.reserveCheckoutRetirement.mockClear();
+    expect(await fixture.service.cancelPreservation({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-cancellation-phase-invalid' });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).not.toHaveBeenCalled();
+    expect(fixture.deps.native.mock.calls.map(([call]) => call.command)).toEqual(['lock']);
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
   });
   const interruptedMetadata = async () => {
     fixture.failPart = 'administration';

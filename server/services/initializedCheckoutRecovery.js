@@ -496,13 +496,15 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
 
   // Explicit recovery restores the exact original inodes. It does not erase
   // archives or auto-finish an interrupted ref deletion on stale forge evidence.
-  const restore = input => fenced(async () => {
+  const restore = (input, { cancelOnly = false } = {}) => fenced(async () => {
     const directory = location(input.transactionId);
     const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
     const gate = await admission();
     try {
       let state = await readJournal(directory);
       if (hash(state) !== input.journalDigest) fail('retirement-journal-changed');
+      if (cancelOnly && (state.proof?.manifestSha256 || !(['intent', 'reserved'].includes(state.phase)
+        || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)))) fail('retirement-cancellation-phase-invalid');
       const ctx = await context(input.appId);
       if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
       await ensureOwner(ctx, state.release, false);
@@ -526,8 +528,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
           let cancellationProof;
           if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) {
             // A failed, unbound copy has never authorized a move. A concurrent
-            // fetch can freshen shared object mtimes without changing any bytes.
-            // Verify that narrow difference, retaining every partial copy; this
+            // fetch or another checkout can change shared Git data. Verify the
+            // untouched original checkout/private Git, retaining every copy; this
             // cancels only the reservation and never approves an archive.
             if (state.proof?.manifestSha256 || state.phase === 'preserved') fail('retirement-source-changed');
             cancellationProof = await native({ command: 'verify-unmoved-preservation',
@@ -935,7 +937,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   };
   const automatic = async (input, options) => recoverAutomatically(input, options)
     .catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
-  return { discover, recoverAutomatically: automatic, review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
+  return { discover, recoverAutomatically: automatic, review, retire, status, restore,
+    cancelPreservation: input => restore(input, { cancelOnly: true }), verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
     reviewRestoredFinalization, finalizeRestored, reviewQuarantineResumption, resumeQuarantine };
 }
 

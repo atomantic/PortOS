@@ -682,7 +682,7 @@ def preserve(request):
 
 
 def verify_unmoved_preservation(request):
-    """Cancel an unbound copy after shared Git timestamps changed; never move data."""
+    """Cancel an unbound copy while shared Git evolves; never move any data."""
     root = transaction(request['transactionDir'])
     if os.path.lexists(root / 'manifest.json'):
         fail('preservation-already-bound')
@@ -708,23 +708,23 @@ def verify_unmoved_preservation(request):
     if digest({'facts': unsigned, 'sources': before['sources']}) != before['fingerprint']:
         fail('preservation-source-proof-changed')
     after = inspect(request, full=True)
-    stable_facts = lambda value: {k: v for k, v in value.items() if k not in ('sources', 'fingerprint')}
+    def stable_facts(value):
+        facts = {k: v for k, v in value.items() if k not in ('sources', 'fingerprint')}
+        # Other checkouts publish shared refs. Their history is not being
+        # retired here. inspect still resolves this exact released branch/head;
+        # private refs are also covered byte-for-byte by administration below.
+        facts['parent'] = {k: v for k, v in facts['parent'].items() if k != 'refs'}
+        return facts
     if stable_facts(before) != stable_facts(after):
         fail('preservation-original-identity-or-git-changed')
     for part in ('working', 'administration'):
         if before['sources'][part] != after['sources'][part]:
             fail('preservation-original-content-changed')
-    shared_before, shared_after = before['sources']['common'], after['sources']['common']
-    without_mtimes = lambda sections: {
-        name: [{k: v for k, v in row.items() if k != 'mtimeNs'} for row in rows]
-        for name, rows in sections.items()
-    }
-    if without_mtimes(shared_before) != without_mtimes(shared_after):
-        fail('preservation-shared-content-changed')
-    changed = sum(left['mtimeNs'] != right['mtimeNs']
-                  for name, rows in shared_before.items()
-                  for left, right in zip(rows, shared_after[name]))
-    return {'verified': True, 'originalsUnmoved': True, 'sharedMtimeChanges': changed,
+    # No shared data is restored, removed, or certified as archived. Preserve
+    # both observation hashes so cancellation cannot masquerade as retirement.
+    return {'verified': True, 'originalsUnmoved': True, 'archiveVerified': False,
+            'sharedBeforeSha256': digest(before['sources']['common']),
+            'sharedAfterSha256': digest(after['sources']['common']),
             'sourceSha256': hashlib.sha256(encoded).hexdigest(),
             'reviewedFingerprint': before['fingerprint'], 'observedFingerprint': after['fingerprint']}
 
