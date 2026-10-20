@@ -568,10 +568,14 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
 
   const lastChecksum = cachedChecksums?.[category] ?? null;
   // A saved schema gap is compatibility state, independent of payload changes.
-  // Keep retrying that category even when its payload checksum is unchanged so
-  // a peer upgrade can clear the old warning without requiring another edit.
-  const hasSchemaGap = Boolean(peer?.schemaGaps?.[category]);
-  if (lastChecksum && lastChecksum === checksumRes.checksum && !hasSchemaGap) {
+  // Retry only when something that could clear it moved (payload checksum, the
+  // peer's version, or our own schema versions); otherwise the refused body
+  // would be downloaded and discarded again every cycle.
+  const gap = peer?.schemaGaps?.[category];
+  if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
+    return { totalApplied: 0, checksum: null, blockedBySchema: gap };
+  }
+  if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
 
@@ -605,7 +609,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     peerId,
   });
   if (result.blockedBySchema) {
-    await recordPeerSchemaGap(peerId, category, result.blockedBySchema)
+    await recordPeerSchemaGap(peerId, category, { ...result.blockedBySchema, checksum: checksumRes.checksum })
       .catch((err) => logFailureWithStack('⚠️ syncOrchestrator: persist schema gap failed', err));
     // Don't advance the cached checksum — when the user upgrades, the
     // category will look "changed" again and we'll re-try the apply.
@@ -687,7 +691,23 @@ async function recordPeerSchemaGap(peerId, category, gap) {
     ahead: Array.isArray(gap.ahead) ? gap.ahead : [],
     behind: Array.isArray(gap.behind) ? gap.behind : [],
     senderPortosVersion: typeof gap.senderPortosVersion === 'string' ? gap.senderPortosVersion : null,
+    // Inputs that could clear the block; see schemaGapMayHaveCleared.
+    checksum: typeof gap.checksum === 'string' ? gap.checksum : null,
+    localSchemaVersions: { ...PORTOS_SCHEMA_VERSIONS },
   });
+}
+
+/**
+ * True when a recorded snapshot-category gap is worth re-fetching: the refused
+ * payload's checksum, the peer's probed version, or our own schema versions
+ * differ from what the gap was recorded against. A gap recorded without that
+ * evidence (older install, catalog gap) always retries.
+ */
+function schemaGapMayHaveCleared(gap, peer, checksum) {
+  if (typeof gap.checksum !== 'string' || !isPlainObjectShallow(gap.localSchemaVersions)) return true;
+  if (gap.checksum !== checksum) return true;
+  if ((peer?.version ?? null) !== (gap.senderPortosVersion ?? null)) return true;
+  return JSON.stringify(gap.localSchemaVersions) !== JSON.stringify(PORTOS_SCHEMA_VERSIONS);
 }
 
 async function clearPeerSchemaGap(peerId, category) {

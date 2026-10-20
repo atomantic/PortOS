@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { once } from 'node:events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 // Mock all dependencies
 vi.mock('./instances.js', async () => ({
@@ -1303,6 +1304,67 @@ describe('syncOrchestrator', () => {
       await onPeerOnline(disabled);
       await vi.runOnlyPendingTimersAsync();
       expect(categoryUrls()).toHaveLength(0);
+    });
+  });
+
+  // A category refused for a schema gap must not re-download the refused body
+  // every cycle; only a changed checksum, peer version or local schema retries.
+  describe('schema-gapped snapshot category', () => {
+    let dataSync;
+    const snapshotCalls = () => mockFetch.mock.calls.filter((c) => c[0].includes('/goals/snapshot'));
+    const gapPeer = (gapOverrides = {}, peerOverrides = {}) => ({
+      ...mockPeer,
+      version: '2.5.0',
+      syncCategories: { goals: true },
+      schemaGaps: {
+        goals: {
+          detectedAt: '2026-01-01T00:00:00.000Z', ahead: ['goals'], behind: [],
+          senderPortosVersion: '2.5.0', checksum: 'remote',
+          localSchemaVersions: { ...PORTOS_SCHEMA_VERSIONS }, ...gapOverrides,
+        },
+      },
+      ...peerOverrides,
+    });
+
+    beforeEach(async () => {
+      dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['goals']);
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/goals/checksum')) return { ok: true, json: async () => ({ checksum: 'remote' }) };
+        if (url.includes('/goals/snapshot')) return { ok: true, json: async () => ({ data: { goals: [] }, checksum: 'remote' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+    });
+
+    it('makes no snapshot request while checksum, peer version and local schema are unchanged', async () => {
+      await syncWithPeer(gapPeer());
+      expect(snapshotCalls()).toHaveLength(0);
+      expect(dataSync.applyRemote).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the checksum', {}, { checksum: 'older' }],
+      ['the peer version', { version: '2.6.0' }, {}],
+      ['our local schema versions', {}, { localSchemaVersions: { ...PORTOS_SCHEMA_VERSIONS, goals: -1 } }],
+      ['a gap recorded without retry evidence', {}, { checksum: undefined, localSchemaVersions: undefined }],
+    ])('fetches exactly once when %s changed, and a compatible payload clears the gap', async (_label, peerOverrides, gapOverrides) => {
+      const { setPeerSchemaGap } = await import('./instances.js');
+      dataSync.applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      await syncWithPeer(gapPeer(gapOverrides, peerOverrides));
+      expect(snapshotCalls()).toHaveLength(1);
+      expect(setPeerSchemaGap).toHaveBeenCalledWith(mockPeer.instanceId, 'goals', null);
+    });
+
+    it('records the refused checksum and schema versions when a snapshot is blocked', async () => {
+      const { setPeerSchemaGap } = await import('./instances.js');
+      dataSync.applyRemote.mockResolvedValue({
+        applied: false, count: 0,
+        blockedBySchema: { ahead: ['goals'], behind: [], senderPortosVersion: '2.7.0' },
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { goals: true } });
+      expect(setPeerSchemaGap).toHaveBeenCalledWith(mockPeer.instanceId, 'goals', expect.objectContaining({
+        checksum: 'remote', senderPortosVersion: '2.7.0', localSchemaVersions: PORTOS_SCHEMA_VERSIONS,
+      }));
     });
   });
 
