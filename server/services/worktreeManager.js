@@ -636,11 +636,16 @@ async function resolveCommit(sourceWorkspace, ref) {
 }
 
 /**
- * Refuse a pinned attach unless the remote tip IS the reviewed commit, and
+ * Refuse a pinned attach unless the freshly fetched remote tip IS the reviewed commit, and
  * unless resetting an existing local branch to it loses nothing (equal or a
  * fast-forward). The pin exists because the attached code is then executed.
  */
-async function assertPinnedAttachable(sourceWorkspace, branchName, startPoint, pinnedHead, localExists) {
+async function assertPinnedAttachable(sourceWorkspace, branchName, remote, pinnedHead, localExists) {
+  // A cached remote-tracking ref can still name the reviewed commit after the
+  // contributor moved or deleted the branch, so the tip must come from a fetch
+  // that succeeded now; a failed fetch refuses the attach.
+  await execGit(['fetch', remote, branchName], sourceWorkspace);
+  const startPoint = `${remote}/${branchName}`;
   const remoteTip = await resolveCommit(sourceWorkspace, startPoint);
   if (remoteTip !== pinnedHead) {
     const err = new Error(`Cannot attach worktree to ${branchName}: ${startPoint} is at ${remoteTip || 'an unreadable commit'}, not the reviewed head ${pinnedHead}`);
@@ -773,8 +778,9 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
       // later `git push` to the CONTRIBUTOR's fork. Tracking origin here would
       // push their commits into the upstream repository instead — the #4172
       // failure mode, one remote over.
-      const startPoint = forkRemote ? `${forkRemote}/${branchName}` : `origin/${branchName}`;
-      if (pinnedHead) await assertPinnedAttachable(sourceWorkspace, branchName, startPoint, pinnedHead, !!localExists);
+      const remote = forkRemote || 'origin';
+      const startPoint = `${remote}/${branchName}`;
+      if (pinnedHead) await assertPinnedAttachable(sourceWorkspace, branchName, remote, pinnedHead, !!localExists);
       // Use -B (force-create) so we don't fail if a stale local ref exists.
       // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
       // A pinned attach checks out the verified SHA itself, not the ref, so a

@@ -64,6 +64,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree pinned to a reviewed hea
     expect(existsSync(join(PATHS.worktrees, 'agent-moved'))).toBe(false);
   });
 
+  it('refuses when only a stale remote-tracking ref still names the reviewed commit', async () => {
+    const reviewed = await publish(sandbox.repo, 'origin', BRANCH, 'reviewed.txt');
+    // The branch is deleted upstream (not via this checkout, which would drop
+    // its own tracking ref); without pruning, origin/<branch> survives.
+    await execGit(['config', 'fetch.prune', 'false'], sandbox.repo);
+    await execGit(['branch', '-D', BRANCH], sandbox.origin);
+
+    await expect(createWorktree('agent-stale', sandbox.repo, 'task-stale', { existingBranch: BRANCH, expectedHeadSha: reviewed }))
+      .rejects.toThrow();
+    expect(existsSync(join(PATHS.worktrees, 'agent-stale'))).toBe(false);
+  });
+
   it('resolves a pinned fork head through the fork even when origin has a same-named branch', async () => {
     // A fork PR opened from a branch whose name origin also uses: the unpinned
     // resolve order would pick origin's, a different branch entirely.
