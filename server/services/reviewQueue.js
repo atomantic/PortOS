@@ -413,8 +413,8 @@ const PRODUCERS = [
     },
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Internal CoS tasks parked awaiting the user's approval before they run.
-      const { awaitingApproval = [] } = await cosTaskStore.getCosTasks();
-      return (Array.isArray(awaitingApproval) ? awaitingApproval : []).slice(0, limit);
+      const { awaitingApproval } = await cosTaskStore.getCosApprovalView({ limit });
+      return awaitingApproval;
     },
     map(task) {
       // Surface the task priority as a triage badge. Only HIGH/MEDIUM/LOW are

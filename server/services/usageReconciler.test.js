@@ -16,6 +16,8 @@ const {
   reconcileRunUsage,
   recordCompletedRunUsage,
   resolveFamilyProvider,
+  snapshotUsageClaims,
+  CLAIM_RETENTION_MS,
   __resetUsageClaims
 } = await import('./usageReconciler.js');
 
@@ -506,17 +508,24 @@ describe('recordCompletedRunUsage', () => {
   });
 
   it('durably marks a completed run so a later backfill skips it', async () => {
-    await recordCompletedRunUsage({
-      id: 'run-example-live',
+    const run = {
       providerId: 'ollama',
       model: 'llama3',
       workspacePath: WORKSPACE,
       promptLength: 40,
       startTime: '2026-07-01T10:00:00.000Z',
       endTime: '2026-07-01T10:10:00.000Z'
-    }, 'captured output');
+    };
+    await recordCompletedRunUsage({ ...run, id: 'run-example-live' }, 'captured output', { home, providers: [] });
+    // With a provider list the nested-session pass ran too, so a backfill must
+    // not bill those sessions a second time.
+    await recordCompletedRunUsage({ ...run, id: 'run-example-scanned' }, 'captured output', {
+      home,
+      providers: [{ id: 'grok-cli', type: 'cli', command: 'grok', enabled: true }]
+    });
 
-    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-live');
+    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-live', { siblings: false });
+    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-scanned', { siblings: true });
   });
 
   it('records the estimate when no transcript exists rather than recording nothing', async () => {
@@ -759,6 +768,128 @@ describe('claim ledger — concurrency and cumulative rollouts', () => {
       workspacePath: '/work/some-other-repo',
       startTime: runA.startTime, endTime: runA.endTime, family: 'claude', home
     })).toBeNull();
+  });
+});
+
+// The ledger used to grow by one key per billed message for the life of the
+// process (#12605). A claim only matters while a run still to be reconciled can
+// see its message, so claims past the retention bound are dropped.
+describe('claim ledger retention', () => {
+  const HOUR = 60 * 60 * 1000;
+  const run = {
+    providerId: 'claude-code-tui',
+    model: 'claude-opus-5',
+    workspacePath: WORKSPACE,
+    startTime: '2026-07-01T10:00:00.000Z',
+    endTime: '2026-07-01T10:10:00.000Z'
+  };
+  const overlapping = { ...run, startTime: '2026-07-01T10:02:00.000Z', endTime: '2026-07-01T10:12:00.000Z' };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Every completed run prunes the ledger; one with no transcript adds nothing.
+  const completeUnrelatedRunAt = async (nowMs) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(nowMs);
+    await recordCompletedRunUsage({
+      providerId: 'ollama',
+      model: 'llama3',
+      workspacePath: '/work/unrelated-repo',
+      promptLength: 1,
+      startTime: new Date(nowMs - 60_000).toISOString(),
+      endTime: new Date(nowMs).toISOString()
+    }, 'x', { home, providers: [] });
+    vi.useRealTimers();
+  };
+
+  it('stays bounded across many sequential completed runs', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const days = 12;
+    const sizes = [];
+    for (let day = 0; day < days; day += 1) {
+      const start = Date.parse('2026-07-01T10:00:00.000Z') + day * 24 * HOUR;
+      await writeClaudeSession(`day-${day}.jsonl`, [
+        claudeAssistant({ id: `m-${day}`, timestamp: new Date(start + 5 * 60_000).toISOString() })
+      ]);
+      vi.setSystemTime(start + 11 * 60_000);
+      await recordCompletedRunUsage({
+        providerId: 'claude-code-tui',
+        model: 'claude-opus-5',
+        workspacePath: WORKSPACE,
+        promptLength: 10,
+        startTime: new Date(start).toISOString(),
+        endTime: new Date(start + 10 * 60_000).toISOString()
+      }, 'out', { home, providers: [] });
+      sizes.push(snapshotUsageClaims().claimedMessages.length);
+    }
+
+    // Every run billed its own message…
+    expect(recordRunUsage).toHaveBeenCalledTimes(days);
+    for (const [records] of recordRunUsage.mock.calls) {
+      expect(records).toEqual([expect.objectContaining({ source: 'measured', tokensOut: 50 })]);
+    }
+    // …but the ledger holds only the runs inside the retention bound.
+    const retainedRuns = Math.ceil(CLAIM_RETENTION_MS / (24 * HOUR)) + 1;
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(retainedRuns);
+    expect(sizes.at(-1)).toBeLessThanOrEqual(retainedRuns);
+  });
+
+  it('drops a claim older than the retention bound after a completed run', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse(run.endTime) + CLAIM_RETENTION_MS + 2 * HOUR);
+
+    await recordCompletedRunUsage({ ...run, promptLength: 10 }, 'out', { home, providers: [] });
+
+    expect(recordRunUsage.mock.calls[0][0]).toEqual([expect.objectContaining({ tokensOut: 50 })]);
+    expect(snapshotUsageClaims().claimedMessages).toEqual([]);
+  });
+
+  it('keeps a claim inside the retention bound, so an overlapping run still bills once', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z', output: 50 }),
+      claudeAssistant({ id: 'm2', timestamp: '2026-07-01T10:06:00.000Z', output: 25 })
+    ]);
+
+    const first = await readMeasuredUsage({ ...run, family: 'claude', home });
+    // A prune between the two reads — the second run is still pending.
+    await completeUnrelatedRunAt(Date.parse(overlapping.endTime) + CLAIM_RETENTION_MS - HOUR);
+    const second = await readMeasuredUsage({ ...overlapping, family: 'claude', home });
+
+    expect(first.tokensOut).toBe(75);
+    expect(second).toBeNull();
+  });
+
+  it('keeps a killed grok session claimed until the session itself ages out', async () => {
+    const sessionDir = join(home, '.grok', 'sessions', encodeURIComponent(WORKSPACE), 'session-aaaa');
+    await mkdir(sessionDir, { recursive: true });
+    const lastActive = Date.parse('2026-07-03T10:00:00.000Z');
+    await writeFile(join(sessionDir, 'summary.json'), JSON.stringify({
+      created_at: '2026-07-01T10:05:00.000Z',
+      last_active_at: new Date(lastActive).toISOString(),
+      current_model_id: 'example-grok-model'
+    }));
+    await writeFile(join(sessionDir, 'chat_history.jsonl'), [
+      JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'a'.repeat(400) }] }),
+      JSON.stringify({ type: 'assistant', content: 'b'.repeat(200), model_id: 'example-grok-model' })
+    ].join('\n'));
+
+    const first = await readMeasuredUsage({ ...run, family: 'grok', home });
+    expect(first?.tokensOut).toBeGreaterThan(0);
+
+    // Long past the claiming run's window, but the session stayed active
+    // later, so a run overlapping its tail must still find it claimed.
+    await completeUnrelatedRunAt(lastActive + HOUR);
+    expect(await readMeasuredUsage({
+      ...run, startTime: '2026-07-03T09:00:00.000Z', endTime: '2026-07-03T09:30:00.000Z', family: 'grok', home
+    })).toBeNull();
+
+    await completeUnrelatedRunAt(lastActive + CLAIM_RETENTION_MS + 2 * HOUR);
+    expect(snapshotUsageClaims().claimedMessages).toEqual([]);
   });
 });
 

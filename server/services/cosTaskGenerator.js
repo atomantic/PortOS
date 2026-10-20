@@ -1251,9 +1251,13 @@ export async function queueDueInstallWideImprovementTasks({
 }
 
 /**
- * Queue eligible self-improvement and app improvement tasks as system tasks
- * Called during every evaluation to ensure system tasks are queued even when user tasks exist
- * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
+ * Queue eligible self-improvement and app improvement tasks as system tasks.
+ * Called by evaluation (`maybeQueueImprovementTasks`) only when no user tasks
+ * are pending and COS auto-run is `execute`, by `runImprovementCheckOnce`, by
+ * the post-startup queue in `cos.js`, and by `refillPerpetualForCompletedAgent`.
+ * The latter three gate on `canQueueImprovementTasks` before allowing this
+ * COS-TASKS.md write.
+ * Tasks are picked up in Priority 2.
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, {
   ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null,
@@ -1869,15 +1873,6 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
 }
 
-/**
- * Generate a managed app improvement task for a specific type
- * Used by on-demand task processing and can be called directly
- *
- * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
- * @param {Object} app - The managed app object
- * @param {Object} state - Current CoS state
- * @returns {Object} Generated task
- */
 // How many CONSECUTIVE transient skips (across evaluations) applyPerpetualWorkGate
 // tolerates at `debug` before escalating to `warn` — see noteTransientProbe's
 // return value.
@@ -2506,10 +2501,9 @@ const skipped = (gate, { reason = null, cli = null, remedy = null, detail = null
  * that is returned as `pendingPerpetualDispatch` (`null`, or
  * `{ taskType, appId, signature }`) alongside the task, so the caller can
  * record it (via `recordDeferredPerpetualDispatch`) at whatever point the
- * task's admission is certain. `generateManagedAppImprovementTaskForType`
- * below is the thin direct-caller wrapper that records immediately; the
- * queue, on-demand, and idle-review paths call this function directly and
- * defer the record until their own spawn-engine admission succeeds (#6871).
+ * task's admission is certain. The queue, on-demand, and idle-review paths call
+ * this function directly and defer the record until their own spawn-engine
+ * admission succeeds (#6871).
  *
  * Always resolves to ONE shape, `{ task, pendingPerpetualDispatch, skip }`:
  * `skip` is `null` when a task was built, otherwise
@@ -2835,31 +2829,4 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     : null;
 
   return { task, pendingPerpetualDispatch, skip: null };
-}
-
-/**
- * Generate a managed app improvement task for a specific type.
- * Used by on-demand task processing and can be called directly.
- *
- * Thin wrapper over `prepareManagedAppImprovementTask` (above) that records
- * any deferred perpetual-dispatch signature immediately — the shape every
- * direct caller got before the queue, on-demand, and idle-review paths needed
- * to defer that record until their own admission gate passes. Those three
- * callers use `prepareManagedAppImprovementTask` directly instead (see
- * `queueEligibleImprovementTasks`, `onDemandDrain.js`, `generateIdleReviewTask`).
- *
- * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
- * @param {Object} app - The managed app object
- * @param {Object} state - Current CoS state
- * @returns {Promise<Object|null>} Generated task, or null when nothing is eligible.
- */
-export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
-  const taskSchedule = await import('./taskSchedule.js');
-  const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
-  // Guard on `prepared.task`, matching every other caller of prepare — task
-  // and pendingPerpetualDispatch are always constructed together, but this
-  // keeps the guard from silently drifting if that ever changes.
-  if (!prepared.task) return null;
-  await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
-  return prepared.task;
 }

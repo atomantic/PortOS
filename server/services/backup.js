@@ -9,7 +9,7 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, unlink, writeFile } from 'fs/promises';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
@@ -76,8 +76,17 @@ const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // A finished failure replaces these guards with `.failed`: downloads remain
 // available for manual salvage, while restore paths can distinguish the partial
 // tree from both completed and legacy snapshots after a restart.
+// Each in-progress marker carries the writing process's start id. Only the
+// server process runs `runBackup`, so in this host's namespace a marker with
+// any other token (or the legacy empty marker) belongs to a killed run: that
+// snapshot is `interrupted` — never restorable or downloadable, but deletable,
+// pruned once a newer complete snapshot exists, and converged to `.failed`
+// with INTERRUPTED_FAILURE_REASON by the next run (#12618).
 const SNAPSHOT_IN_PROGRESS_MARKER = '.in-progress';
 const SNAPSHOT_FAILED_MARKER = '.failed';
+const BACKUP_PROCESS_START_ID = randomUUID();
+const INTERRUPTED_FAILURE_REASON = 'interrupted by restart';
+const MARKER_UNREADABLE = Symbol('marker-unreadable');
 let activeSnapshotId = null;
 
 const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRESS_MARKER);
@@ -89,50 +98,64 @@ const markerExistsAt = (path) =>
     () => true,
     (err) => err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? false : true,
   );
-const markerExists = (snapshotDir, snapshotId) =>
-  Promise.all([
-    markerExistsAt(markerPath(snapshotDir)),
-    snapshotId
-      ? markerExistsAt(parentMarkerPath(snapshotDir, snapshotId))
-      : false,
-  ]).then(([snapshotMarker, parentMarker]) => snapshotMarker || parentMarker);
-
-const failedMarkerExists = (snapshotDir) =>
-  markerExistsAt(failedMarkerPath(snapshotDir));
+// null when absent, the marker's text when readable, MARKER_UNREADABLE when it
+// exists (or cannot be proven absent) but its owner cannot be read.
+const readMarkerAt = async (path) => {
+  if (!await markerExistsAt(path)) return null;
+  return readFile(path, 'utf8').catch(() => MARKER_UNREADABLE);
+};
 
 async function snapshotState(snapshotDir, snapshotId, currentSource = true) {
-  const [markedInProgress, failed] = await Promise.all([
-    markerExists(snapshotDir, snapshotId),
-    failedMarkerExists(snapshotDir),
+  const [snapshotMarker, parentMarker, failedMarker] = await Promise.all([
+    readMarkerAt(markerPath(snapshotDir)),
+    snapshotId ? readMarkerAt(parentMarkerPath(snapshotDir, snapshotId)) : null,
+    readMarkerAt(failedMarkerPath(snapshotDir)),
   ]);
+  const inProgressMarkers = [snapshotMarker, parentMarker].filter(marker => marker !== null);
+  const failed = failedMarker !== null;
+  const active = currentSource && snapshotId === activeSnapshotId;
+  // Another machine's namespace stays `incomplete`: its run may still be
+  // live. An unreadable owner, or one this process wrote (the reservation
+  // window before `activeSnapshotId` is set), is never presumed dead.
+  const abandoned = currentSource && !active && !failed && inProgressMarkers.length > 0
+    && inProgressMarkers.every(marker => marker !== MARKER_UNREADABLE && marker !== BACKUP_PROCESS_START_ID);
   return {
     failed,
     // Once `.failed` exists the run is finished even if marker cleanup was
     // interrupted. The durable failed state still blocks every restore.
-    incomplete: (currentSource && snapshotId === activeSnapshotId) || (markedInProgress && !failed),
+    incomplete: active || (inProgressMarkers.length > 0 && !failed && !abandoned),
+    interrupted: abandoned || (!active && failedMarker === INTERRUPTED_FAILURE_REASON),
   };
 }
 
-/** Reject a snapshot that is still being written before any consumer reads it. */
+const snapshotInterruptedError = (snapshotId) =>
+  new ServerError(`Snapshot backup was interrupted by a restart: ${snapshotId}. Delete it or choose a completed backup.`, {
+    status: 409,
+    code: 'SNAPSHOT_INTERRUPTED',
+  });
+
+/** Reject a snapshot that is still being written, or was abandoned mid-write, before any consumer reads it. */
 async function assertSnapshotComplete(snapshotDir, snapshotId, currentSource) {
-  const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
+  const { incomplete, interrupted } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
       code: 'SNAPSHOT_INCOMPLETE',
     });
   }
+  if (interrupted) throw snapshotInterruptedError(snapshotId);
 }
 
 /** Reject snapshots whose backup run finished unsuccessfully before restoring. */
 async function assertSnapshotRestorable(snapshotDir, snapshotId, currentSource) {
-  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId, currentSource);
+  const { incomplete, failed, interrupted } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
       code: 'SNAPSHOT_INCOMPLETE',
     });
   }
+  if (interrupted) throw snapshotInterruptedError(snapshotId);
   if (failed) {
     throw new ServerError(`Snapshot backup failed: ${snapshotId}. Choose a completed backup to restore.`, {
       status: 409,
@@ -690,6 +713,11 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
     const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
     await ensureDir(snapshotsRoot);
+    // Inside the single-run guard, so no run of this process can own a marker
+    // the sweep is converging.
+    await markInterruptedSnapshotsFailed(snapshotsRoot).catch(err => {
+      console.error(`❌ Backup interrupted-snapshot sweep failed: code=${err?.code ?? 'UNKNOWN'}`);
+    });
     // Own the durable guard before exposing a directory. Never adopt an
     // existing tree, even when its timestamp matches this run's clock.
     for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -701,7 +729,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
         throw err;
       });
       if (exists) continue;
-      const reserved = await writeFile(candidateMarker, '', { flag: 'wx' }).then(() => true, err => {
+      const reserved = await writeFile(candidateMarker, BACKUP_PROCESS_START_ID, { flag: 'wx' }).then(() => true, err => {
         if (err.code === 'EEXIST') return false;
         throw err;
       });
@@ -726,7 +754,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     if (io) io.emit('backup:started', { snapshotId });
     await ensureDir(dataDestDir);
     activeSnapshotId = snapshotId;
-    await writeFile(markerPath(snapshotDir), '');
+    await writeFile(markerPath(snapshotDir), BACKUP_PROCESS_START_ID);
     dashboardEvents.emit('backup:changed');
 
     // Freeze admitted file-plus-row publications across both stores. A writer
@@ -797,7 +825,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // (via `snapshotState`) and drop out of the retention count entirely,
     // silently keeping one snapshot MORE than configured. A run that throws
     // before this point takes the `fail()` path below and never reaches
-    // here, so a failed or in-progress snapshot is never a prune candidate.
+    // here, so this run's own snapshot is never pruned as failed or in-progress.
     // Retention failures must not fail an otherwise-successful backup.
     let pruned = { pruned: 0 };
     if (pgResult.status === 'failed') {
@@ -1040,7 +1068,7 @@ function inventoryReadError(cause, operation) {
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
- * @returns {Array<{ id, source, selectionKey, createdAt, fileCount, incomplete, failed }>} sorted newest-first
+ * @returns {Array<{ id, source, selectionKey, createdAt, fileCount, incomplete, failed, interrupted }>} sorted newest-first
  */
 export async function listSnapshots(destPath) {
   if (!destPath) return [];
@@ -1090,7 +1118,7 @@ export async function listSnapshots(destPath) {
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
       // must not be offered for it. Mirrors assertSnapshotComplete's two signals.
-      const { incomplete, failed } = await snapshotState(snapshotDir, id, currentSource);
+      const { incomplete, failed, interrupted } = await snapshotState(snapshotDir, id, currentSource);
       return {
         id,
         source,
@@ -1104,6 +1132,7 @@ export async function listSnapshots(destPath) {
         fileCount: manifest?.fileCount ?? 0,
         incomplete,
         failed,
+        interrupted,
       };
     })
   );
@@ -1118,23 +1147,65 @@ export async function listSnapshots(destPath) {
 }
 
 /**
+ * Converge every interrupted snapshot in this host's namespace to a durable
+ * `.failed` (reason INTERRUPTED_FAILURE_REASON), then drop its in-progress
+ * markers — the same order `fail()` uses, so a failed write leaves the
+ * snapshot guarded. Holds the exclusive lease so a concurrent delete or
+ * reader cannot interleave with the marker writes.
+ */
+async function markInterruptedSnapshotsFailed(snapshotsRoot) {
+  const entries = await readdir(snapshotsRoot, { withFileTypes: true });
+  let marked = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || !SNAPSHOT_ID_PATTERN.test(entry.name)) continue;
+    const id = entry.name;
+    const snapshotDir = join(snapshotsRoot, id);
+    const isCandidate = ({ interrupted, failed }) => interrupted && !failed;
+    // Lease only candidates, so a download starting now is not refused
+    // SNAPSHOT_DELETING by a healthy snapshot's sweep.
+    if (!isCandidate(await snapshotState(snapshotDir, id, true))) continue;
+    // Own the snapshot before the final state check, as deleteSnapshot does.
+    const { release, refusal } = await claimSnapshotLease(snapshotDir, 'delete');
+    if (refusal) continue;
+    try {
+      const exists = await stat(snapshotDir).then(info => info.isDirectory(), () => false);
+      if (!exists || !isCandidate(await snapshotState(snapshotDir, id, true))) continue;
+      const removeIfPresent = (path) => unlink(path).catch(err => { if (err.code !== 'ENOENT') throw err; });
+      await writeFile(failedMarkerPath(snapshotDir), INTERRUPTED_FAILURE_REASON)
+        .then(() => removeIfPresent(markerPath(snapshotDir)))
+        .then(() => removeIfPresent(parentMarkerPath(snapshotDir, id)))
+        .then(
+          () => { marked += 1; },
+          err => console.error(`❌ Backup: failed to mark interrupted snapshot ${id} failed: code=${err?.code ?? 'UNKNOWN'}`),
+        );
+    } finally {
+      release();
+    }
+  }
+  if (marked) console.log(`💾 Backup: marked ${marked} interrupted snapshot(s) failed`);
+}
+
+/**
  * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
- * namespace beyond `retentionCount`. Called only from `runBackup()` after a
- * run reaches a completed snapshot with a successful or explicitly skipped
- * database dump — a run that fails earlier never reaches this call, so an
- * in-progress or `.failed` snapshot is never a candidate; both are re-checked
- * here anyway via `snapshotState` in case an unrelated run left one behind.
- * Only ever walks `snapshots/<MACHINE_HOST>/` — never another machine's
- * namespace and never the legacy pre-namespace root, both of which this
- * install has no authority to prune.
- * `retentionCount` of `null`/`undefined` means unlimited: no-op.
+ * namespace beyond `retentionCount`, plus every interrupted snapshot older
+ * than the newest healthy completed one. Interrupted snapshots never count
+ * toward the budget and are pruned even under unlimited retention: they can
+ * never be restored or downloaded, so they only fill the drive.
+ * Called only from `runBackup()` after a run reaches a completed snapshot
+ * with a successful or explicitly skipped database dump — a run that fails
+ * earlier never reaches this call, so an in-progress snapshot is never a
+ * candidate; state is re-checked here anyway via `snapshotState` in case an
+ * unrelated run left one behind. Ordinary `.failed` snapshots are kept for
+ * salvage. Only ever walks `snapshots/<MACHINE_HOST>/` — never another
+ * machine's namespace and never the legacy pre-namespace root, both of which
+ * this install has no authority to prune.
+ * `retentionCount` of `null`/`undefined` means unlimited completed snapshots.
  * @param {string} destPath
  * @param {number|null} retentionCount
  * @returns {Promise<{ pruned: number }>}
  */
 async function pruneOldSnapshots(destPath, retentionCount) {
-  if (retentionCount === null || retentionCount === undefined) return { pruned: 0 };
-
+  const unlimited = retentionCount === null || retentionCount === undefined;
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
   // A completed snapshot was just written here; even ENOENT is a failed
   // inventory, not proof that there is nothing to prune. Keep paths private.
@@ -1147,8 +1218,12 @@ async function pruneOldSnapshots(destPath, retentionCount) {
 
   const descriptors = (await Promise.all(candidateIds.map(async (id) => {
     const snapshotDir = join(sourceRoot, id);
-    const { incomplete, failed } = await snapshotState(snapshotDir, id, true);
+    const { incomplete, failed, interrupted } = await snapshotState(snapshotDir, id, true);
+    if (interrupted) return { id, snapshotDir, interrupted: true };
     if (incomplete || failed) return null;
+    // Unlimited retention prunes only interrupted snapshots; completed ones are
+    // never candidates, so their manifests need no admission check.
+    if (unlimited) return { id, snapshotDir };
     // Share restore's structural admission, without hashing old payloads.
     // Only confirmed absence is legacy; JSON null is an invalid manifest.
     const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
@@ -1163,13 +1238,20 @@ async function pruneOldSnapshots(destPath, retentionCount) {
 
   // Keep protected snapshots in addition to the readable retention budget,
   // even when a bad clock placed a protected snapshot ahead of healthy ones.
-  const toDelete = descriptors.filter(d => {
+  const healthy = descriptors.filter(d => {
+    if (d.interrupted) return false;
     if (d.protectedFromPrune) {
       console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable or invalid)`);
       return false;
     }
     return true;
-  }).slice(retentionCount);
+  });
+  // An interrupted snapshot is only dropped once a newer healthy one exists.
+  const newestHealthyId = healthy[0]?.id;
+  const toDelete = [
+    ...(newestHealthyId ? descriptors.filter(d => d.interrupted && d.id.localeCompare(newestHealthyId) < 0) : []),
+    ...(unlimited ? [] : healthy.slice(retentionCount)),
+  ];
   let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
     // A snapshot a restore or download is reading stays; a later run prunes it
@@ -1186,7 +1268,7 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     release();
   }
   if (pruned) {
-    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s), keeping ${retentionCount}`);
+    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s), keeping ${retentionCount ?? 'all'} completed`);
   }
   return { pruned };
 }
@@ -1268,11 +1350,11 @@ async function assertExplicitSnapshotSourceSafe({
  * action, never automatic retention (see `pruneOldSnapshots`, which shares the
  * traversal/symlink guards through `resolveSnapshotPath` but is driven by
  * `runBackup()` instead). Refuses a snapshot that is still being written
- * (`.in-progress`), matching the guard that blocks restore and download,
+ * (`incomplete`), matching the guard that blocks restore and download,
  * because the partial directory may still be owned by an in-flight
- * `runBackup()`. A `.failed` snapshot IS deletable — unlike restore, deletion
- * has no reason to require a successful backup. A snapshot a restore or
- * download is still reading is refused with `SNAPSHOT_IN_USE`.
+ * `runBackup()`. A `.failed` or interrupted snapshot IS deletable — unlike
+ * restore, deletion has no reason to require a successful backup. A snapshot
+ * a restore or download is still reading is refused with `SNAPSHOT_IN_USE`.
  * @param {string} destPath - Path to external drive backup root
  * @param {string} snapshotId - Snapshot ID to delete
  * @param {{ source?: string }} [options]
@@ -2387,13 +2469,12 @@ export function getNextRunTime() {
  * system-idle gate. Deliberately reads the in-process `isRunning` flag rather
  * than scanning for an on-disk `.in-progress` marker: that marker is designed
  * to OUTLIVE a crash/PM2 restart so a restore never mistakes a partial
- * snapshot for a complete one, but nothing ever clears an orphaned one on its
- * own (the next run writes a fresh snapshot id) — gating the updater on its
- * mere existence would block it forever after a single interrupted backup on
- * a drive that might not even be mounted. The gate only needs to know whether
- * restarting would kill a live rsync/pg_dump in this server instance, and
- * `isRunning` answers exactly that, with no I/O and nothing that can fail to
- * read.
+ * snapshot for a complete one, and only the next run converges an orphaned
+ * one — gating the updater on its mere existence would block it until then
+ * after a single interrupted backup on a drive that might not even be
+ * mounted. The gate only needs to know whether restarting would kill a live
+ * rsync/pg_dump in this server instance, and `isRunning` answers exactly
+ * that, with no I/O and nothing that can fail to read.
  */
 export function isBackupInProgress() {
   return isRunning;

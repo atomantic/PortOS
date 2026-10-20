@@ -42,6 +42,7 @@ import {
   resolveReviewerGroup,
   resolveReviewerPins,
   normalizeReviewerEffort,
+  normalizeReviewers,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
 } from '../lib/reviewerConfig.js'
@@ -455,14 +456,14 @@ export async function getCodeReviewDefaults() {
 }
 
 /**
- * Reviewer-loop option resolver shared by `finalizeAgent` (agentLifecycle.js)
- * and the CLI cleanup path (agentCliSpawning.js): merges per-task metadata
+ * Reviewer-loop option resolver used by `server/services/agentCompletionCleanup.js`,
+ * `server/services/cosMergeHandoff.js`, `server/services/developmentWatchdog.js`,
+ * and `server/routes/apps/pullRequests.js`: merges per-task metadata
  * with the user's Code Review Defaults, returning `{ reviewers, reviewStopMode,
  * reviewerApplies }` in the exact shape `cleanupAgentWorktree` expects.
  *
- * Pass `normalize` (server/lib/validation.js `normalizeReviewers`) so this
- * module doesn't have to import it directly — keeps validation.js as the
- * single source of truth for the reviewer enum & fallback rules.
+ * `normalize` can override `normalizeReviewers` for callers that need a
+ * different normalization contract.
  *
  * `reviewerModels` is a reviewer-keyed model map (e.g. `{ codex: 'gpt-5.6-sol',
  * ollama: 'qwen2.5:7b' }`) resolved with task-over-default precedence: the task's
@@ -480,7 +481,7 @@ export async function getCodeReviewDefaults() {
  * Errors in settings I/O fall back to the hardcoded defaults — settings read
  * failures shouldn't block agent completion.
  */
-export async function resolveReviewLoopOptions(metadata, { normalize }) {
+export async function resolveReviewLoopOptions(metadata, { normalize = normalizeReviewers } = {}) {
   const defaults = await getCodeReviewDefaults().catch(() => null)
   const reviewers = resolveReviewerGroup(metadata, defaults, defaults?.reviewers, normalize)
   // GitHub reviewer usernames: a task-level list (even empty) overrides the
@@ -528,9 +529,9 @@ export async function resolveReviewLoopOptions(metadata, { normalize }) {
  * settings-event-invalidated like `getCodeReviewDefaults()`, because a probe
  * result can go stale from something settings changes never fire for (the
  * user installs/uninstalls a CLI mid-session). Deliberately kept OUT of
- * `getCodeReviewDefaults()`/`pickCodeReviewDefaults()`: those are synchronous,
- * no-I/O functions also called from the agent-completion spawn path
- * (`resolveReviewLoopOptions`), and this does a real `execFile` per reviewer —
+ * `pickCodeReviewDefaults()`: that is a synchronous, no-I/O function also used
+ * by callers that already have settings in memory. `getCodeReviewDefaults()`
+ * is async and reads settings; this does a real `execFile` per reviewer —
  * only the `GET /defaults` route needs it, so it's called from there alone.
  *
  * Warn-only, per #3606's "warn, do not block" decision: this never filters or
@@ -1195,13 +1196,12 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
  *   reviewer's working directory when its vendor enforces a no-tool or
  *   read-only review mode (#6338), neither of which can write to it. A CLI with
  *   no such mode never receives it: it runs in a scratch directory instead.
- * @param {boolean} [opts.isolateFromCheckout] - Run a CLI reviewer in a scratch
- *   cwd instead of `opts.cwd`, whatever its mode.
- * @param {boolean} [opts.toolFree] - Deprecated alias for checkout isolation.
+ * @param {boolean} [opts.toolFree] - Run a CLI reviewer in a scratch cwd
+ *   instead of `opts.cwd`, whatever its mode.
  * @param {string} [opts.kind] - `claim-review` always uses a scratch cwd;
  *   enforced vendor isolation is preferred but is not a transport requirement.
  */
-export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, isolateFromCheckout = false, toolFree = false, kind = null } = {}) {
+export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null } = {}) {
   if (!isToolFreeReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
@@ -1232,7 +1232,7 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     diffSizeBytes,
     baseUrl,
     cwd,
-    isolateFromCheckout: kind === 'claim-review' || isolateFromCheckout || toolFree,
+    isolateFromCheckout: kind === 'claim-review' || toolFree,
     allowUnconfined: true,
     systemPromptFor: buildCodeReviewSystemPrompt,
     userMessage: { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },

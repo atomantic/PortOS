@@ -1353,8 +1353,6 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  * @param {string} branchName - The worktree branch to clean up
  * @param {object} options
  * @param {boolean} [options.merge] - attempt to merge the branch back first
- * @param {boolean} [options.preserveBranchWithCommits] - legacy caller hint;
- *   unmerged branches and checkouts are now always retained until merge proof.
  * @param {boolean} [options.discardDirt] - remove even when the tree is dirty.
  *   The dirty-abort exists to protect work that might still be wanted; the
  *   throwaway-worktree posture has already declared this tree's contents
@@ -1436,7 +1434,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     if (finalOwner) return { merged: false, removed: true, uncommittedSaved: false,
       warnings: [...warnings, `Branch ${branchName} preserved — ${finalOwner}`] };
     await cleanupWorktreeBranch(sourceWorkspace, branchName, {
-      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings, expectedHead: preservation?.head,
+      warnings, expectedHead: preservation?.head,
     });
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
   }
@@ -1926,47 +1924,30 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
  * `requireAgentId: true`, so a `claim-*` basename is refused as
  * `worktree-missing-agent-id` before the claim test is even reached.)
  *
- * `includeUnmanagedTrees` drops the managed-root allowlist, so a worktree living
- * anywhere is eligible. It drops the two rules that allowlist carried — the
- * location check, and `WORKTREES_DIR`'s `requireAgentId` — and nothing else: the
- * lock, live-agent, unknown-liveness and human-claim holds all still apply, as do
- * both gates above (so a tree it reaches is still merged + clean before anything
- * is removed). It exists for the user-initiated "clean merged branches" action,
- * where the point IS to clear whatever worktree pins a merged branch; the
- * scheduled sweeps leave it off so an unattended pass never reaches outside the
- * directories PortOS created.
- *
  * @param {string} sourceWorkspace - repo root
  * @param {object} [options]
  * @param {Set<string>|(() => Set<string>)} [options.activeAgentIds] - CoS agents currently running
  *   (never reaped), or a getter re-read per tree and again before removal. Anything but a
  *   Set reads as "liveness unknown" and holds every `agent-*` tree.
- * @param {Set<string>} [options.excludeBranches] - branch names never reaped, whatever their tree
  * @param {boolean} [options.includeClaudeTrees=true] - also reap `.claude/worktrees/`
- * @param {boolean} [options.includeUnmanagedTrees=false] - consider worktrees outside the managed roots
- * @param {string} [options.defaultBranch] - skip the default-branch lookup, which can
- *   contact the remote (`remote set-head`); pass it on a latency-sensitive request path
- * @param {boolean} [options.dryRun=false] - report candidates without deleting
- * @returns {Promise<{reaped: Array<{path,branch,locked,branchDeleted}>, skipped: Array<{path,branch,reason,warning?}>, defaultBranch: string, target: string, dryRun: boolean}>}
+ * @param {{agents?: object[]|null, readAgents?: () => Promise<object[]|null>}} [options.claimOwners] -
+ *   trusted agent registry reader or snapshot; omitted reads state.json
+ * @returns {Promise<{reaped: Array<{path,branch,locked,branchDeleted}>, skipped: Array<{path,branch,reason,warning?}>, defaultBranch: string, target: string}>}
  */
 export async function reapMergedWorktrees(sourceWorkspace, {
   activeAgentIds = new Set(),
   claimOwners,
-  excludeBranches = null,
-  includeClaudeTrees = true,
-  includeUnmanagedTrees = false,
-  defaultBranch: knownDefaultBranch = null,
-  dryRun = false
+  includeClaudeTrees = true
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  // Every entry point (scheduled, reconcile, operator cleanup) needs a trusted
+  // Every entry point (scheduled or reconcile) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
   const readOwners = claimOwnerReader(claimOwners, readClaimOwnershipAgents);
   const readActiveIds = activeIdsReader(activeAgentIds);
 
-  const defaultBranch = knownDefaultBranch || await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+  const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
 
   const currentBranch = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })
@@ -1975,9 +1956,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
   const protectedBranches = new Set(['main', 'master', 'dev', 'develop', 'release', defaultBranch]);
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
-  // An empty allowlist is how worktreeOwnershipReason spells "no location check"
-  // (see includeUnmanagedTrees above for what that gives up).
-  const managedRoots = includeUnmanagedTrees ? [] : [
+  const managedRoots = [
     { path: WORKTREES_DIR, requireAgentId: true },
     { path: claudeTreesRoot, requireAgentId: false },
   ];
@@ -1995,7 +1974,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     if (!branchName) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
     // Named so a caller can say WHICH branch a hold kept, not just which path.
     const hold = (reason) => skipped.push({ path: wt.path, branch: branchName, reason });
-    if (protectedBranches.has(branchName) || branchName === currentBranch || excludeBranches?.has(branchName)) {
+    if (protectedBranches.has(branchName) || branchName === currentBranch) {
       hold('protected');
       continue;
     }
@@ -2044,12 +2023,6 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         if (!classifyWorktreeDirt(freshStatus).clean) return 'worktree-dirty';
         return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
       };
-      if (dryRun) {
-        const reason = await verifyRemoval(wt);
-        if (reason) hold(reason);
-        else reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false });
-        return;
-      }
       const initialHold = await verifyRemoval(wt);
       if (initialHold) { hold(initialHold); return; }
       const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
@@ -2072,10 +2045,10 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   }
 
   if (reaped.length > 0) {
-    console.log(`🌳 ${dryRun ? 'Would reap' : 'Reaped'} ${reaped.length} merged worktree(s): ${reaped.map(r => r.branch).join(', ')}`);
+    console.log(`🌳 Reaped ${reaped.length} merged worktree(s): ${reaped.map(r => r.branch).join(', ')}`);
   }
 
-  return { reaped, skipped, defaultBranch, target, dryRun };
+  return { reaped, skipped, defaultBranch, target };
 }
 
 /**

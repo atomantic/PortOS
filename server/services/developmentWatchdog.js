@@ -275,9 +275,8 @@ async function dispatch(app, decision) {
   const finalState = await loadState();
   if (authorityLost(finalState, app.id)) return { reason: 'authority-changed' };
   const { resolveReviewLoopOptions } = await import('./codeReview.js');
-  const { normalizeReviewers, claimSafeReviewers } = await import('../lib/reviewerConfig.js');
-  const { isTruthyMeta } = await import('./agentState.js');
-  const options = await resolveReviewLoopOptions({}, { normalize: normalizeReviewers, isTruthyMeta });
+  const { claimSafeReviewers } = await import('../lib/reviewerConfig.js');
+  const options = await resolveReviewLoopOptions({});
   const reviewers = claimSafeReviewers(options.reviewers);
   const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
   const task = await spawnReviewLoopFollowUp({ originalAgentId: null,

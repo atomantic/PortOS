@@ -31,6 +31,7 @@ vi.mock('./cosTaskStore.js', async (importActual) => ({
   }),
   getUserTasks: async () => ({ exists: true, grouped: { pending: mocks.userTasks } }),
   getCosTasks: async () => mocks.cosTaskData,
+  getCosApprovalView: async () => ({ autoApprovedCount: mocks.cosTaskData.autoApproved?.length ?? 0 }),
   reconcileLegacyForgeMaintenanceTasks: async () => ({ recovered: 0, retired: 0 }),
   addTask: async (task) => { mocks.persisted.push(task); return task; },
 }));

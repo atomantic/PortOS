@@ -698,6 +698,12 @@ describe('codeReview helpers', () => {
   })
 
   describe('resolveReviewLoopOptions', () => {
+    it('uses the reviewer config normalizer by default', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot'] } }
+      const out = await resolveReviewLoopOptions({ reviewers: ['grok'] })
+      expect(out.reviewers).toEqual(['grok'])
+    })
+
     // Reviewers inspecting public PR content are advisory only — the follow-up
     // must never hand an untrusted diff to a second process with write authority.
     // Pinned on the resolver itself because this is the one place the rule lives:
