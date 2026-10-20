@@ -25,6 +25,7 @@ import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkH
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
+import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
@@ -70,6 +71,8 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  * or reinstalling them. Missing source directories are skipped so this also
  * works for managed repositories that do not use PortOS's client/server
  * layout. Existing paths are preserved, including real directories and links.
+ * A root node_modules holding workspace links is rebuilt as a real directory
+ * so those links resolve inside the worktree, not the source (#12633).
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
@@ -80,13 +83,15 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
     if (!sourceExists) return;
     const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
     if (targetExists) return;
+    if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return;
     await symlink(sourcePath, targetPath, 'dir');
   }));
 }
 
 /**
- * Remove only dependency symlinks that point back into the source checkout.
- * Real dependency directories and links managed by another tool stay intact.
+ * Remove only dependency symlinks that point back into the source checkout,
+ * plus a root node_modules this module provisioned as a link farm. Real
+ * dependency directories and links managed by another tool stay intact.
  */
 export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) {
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup: true });
@@ -97,7 +102,11 @@ export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) 
       if (err.code === 'ENOENT') return null;
       throw err;
     });
-    if (!targetStat?.isSymbolicLink()) return;
+    if (!targetStat) return;
+    if (!targetStat.isSymbolicLink()) {
+      if (relativePath === 'node_modules') await removeProvisionedNodeModules(sourceWorkspace, worktreePath);
+      return;
+    }
 
     const linkTarget = await readlink(targetPath);
     const linkedPath = isAbsolute(linkTarget) ? linkTarget : resolve(dirname(targetPath), linkTarget);

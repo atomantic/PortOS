@@ -351,6 +351,32 @@ use the workspace binaries from the primary checkout
 `dependency-updates` scheduled task is the exception: its managed worktree gets
 no dependency symlinks, and any package-manager install stays in that worktree.
 
+### Worktree Tests Fail on a Clean Tree in a Workspace-Link Repo (Stale Workspace Packages)
+
+**Symptom**: In a managed repo that uses npm workspaces (`node_modules/@scope/pkg
+-> ../../packages/pkg`), a fresh CoS or claim worktree fails tests that import a
+workspace package — a `TypeError` on a field the branch just added, or a path
+assertion naming the primary checkout — even though the branch is untouched.
+
+**Cause**: a plain `worktree/node_modules -> primary/node_modules` symlink
+resolves the workspace links against the PRIMARY checkout. When the primary's
+checked-out branch is behind the worktree's base, `require('@scope/pkg')` loads
+the primary's stale `packages/pkg`. The branch is fine; the environment is not.
+
+**Fix**: `scripts/link-worktree-deps.js` (and `worktreeManager`'s dependency
+linking) now detects workspace links in the source's `node_modules` and builds a
+REAL `node_modules` directory in the worktree. Every entry is symlinked to the
+primary except the workspace links, which are recreated with the same relative
+targets so they resolve inside the worktree. Provisioning refuses a link that
+would resolve outside the worktree (`server/lib/worktreeNodeModules.js`). The
+directory carries a `.portos-worktree-links` marker so cleanup removes only what
+it created.
+
+**Existing worktrees** keep whatever they were given (provisioning never replaces
+an existing path). To repair one, delete the `node_modules` symlink in the
+worktree and rerun `node scripts/link-worktree-deps.js <primary> <worktree>`.
+Still never run `npm install` in a worktree.
+
 ### Tasks Not Being Picked Up
 
 **Symptom**: Added tasks to TASKS.md but CoS ignores them.
