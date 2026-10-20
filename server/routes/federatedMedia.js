@@ -27,6 +27,7 @@ import {
   getFederatedMediaResult,
   submitFederatedMediaJob,
 } from '../services/federatedMediaProvider.js';
+import { listJobs } from '../services/mediaJobQueue/index.js';
 import {
   describeFederatedMediaAsset,
   storeFederatedMediaAsset,
@@ -73,6 +74,7 @@ router.post('/assets', assetAuth, assetBody, asyncHandler(async (req, res) => {
     mimeType: (req.get('Content-Type') || '').split(';')[0].trim().toLowerCase(),
     declaredSha256: req.get('X-Content-SHA256'),
     body: req.body,
+    jobs: listJobs(),
   });
   res.status(201).json(stored);
 }));

@@ -12,15 +12,19 @@ vi.mock('../../lib/fileUtils.js', async (load) => {
   } };
 });
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync, truncateSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PATHS } from '../../lib/fileUtils.js';
 import {
   FEDERATED_MEDIA_ASSET_TTL_MS,
   federatedMediaAssetId,
+  federatedMediaAssetOwner,
 } from '../../lib/federatedMediaWire.js';
 import {
+  FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES,
+  FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT,
+  FEDERATED_MEDIA_ASSET_TOTAL_MAX_BYTES,
   __resetFederatedAssetSweepForTests,
   collectActiveFederatedAssetBasenames,
   describeFederatedMediaAsset,
@@ -66,7 +70,53 @@ const upload = async (callerId, body = PNG, mimeType = 'image/png', digest) => s
   body,
 });
 
+const distinctPng = (n) => Buffer.concat([PNG, Buffer.from(`-variant-${n}`)]);
+
+// Sparse file: reports its logical size to lstat without writing the bytes.
+const plantSparse = (callerId, tag, sizeBytes, ageMs = 0) => {
+  const path = join(tempRoot, `${federatedMediaAssetOwner(callerId)}-${tag.padStart(64, '0')}.png`);
+  writeFileSync(path, '');
+  truncateSync(path, sizeBytes);
+  const when = (Date.now() - ageMs) / 1000;
+  utimesSync(path, when, when);
+  return path;
+};
+
 describe('federated media asset store', () => {
+  describe('storage quota', () => {
+    it('refuses a caller beyond the per-caller count with 429, but still lets another caller upload and a replay refresh', async () => {
+      for (let i = 0; i < FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT; i += 1) await upload('peer-a', distinctPng(i));
+      await expect(upload('peer-a', distinctPng(9999))).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
+      await expect(upload('peer-a', distinctPng(0))).resolves.toMatchObject({ sizeBytes: distinctPng(0).length });
+      await expect(upload('peer-b', distinctPng(9999))).resolves.toMatchObject({ assetId: expect.any(String) });
+    });
+
+    it('refuses a caller beyond the per-caller byte cap', async () => {
+      plantSparse('peer-a', 'a', FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES - 10);
+      await expect(upload('peer-a')).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
+    });
+
+    it('refuses any caller once the store total is full', async () => {
+      const chunk = FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES - 1;
+      const chunks = Math.ceil(FEDERATED_MEDIA_ASSET_TOTAL_MAX_BYTES / chunk);
+      for (let i = 0; i < chunks; i += 1) plantSparse(`other-${i}`, String(i), Math.min(chunk, FEDERATED_MEDIA_ASSET_TOTAL_MAX_BYTES - i * chunk));
+      await expect(upload('peer-z')).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
+    });
+
+    it('sweeps expired assets on upload before evaluating the cap, but keeps ones a live job pins', async () => {
+      const stale = plantSparse('peer-a', 'b', FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES - 10, FEDERATED_MEDIA_ASSET_TTL_MS + 60_000);
+      await expect(upload('peer-a')).resolves.toMatchObject({ sizeBytes: PNG.length });
+      expect(existsSync(stale)).toBe(false);
+
+      const pinned = plantSparse('peer-c', 'c', FEDERATED_MEDIA_ASSET_CALLER_MAX_BYTES - 10, FEDERATED_MEDIA_ASSET_TTL_MS + 60_000);
+      const jobs = [{ status: 'running', params: { initImagePath: pinned } }];
+      await expect(storeFederatedMediaAsset({
+        callerId: 'peer-c', mimeType: 'image/png', declaredSha256: await sha256(PNG), body: PNG, jobs,
+      })).rejects.toMatchObject({ code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
+      expect(existsSync(pinned)).toBe(true);
+    });
+  });
+
   it('keeps input admission unsettled when shared persistence may leave an unknown partial temp file', async () => {
     failures.write = true;
     await expect(upload('peer-a')).rejects.toMatchObject({ code: 'EIO' });
