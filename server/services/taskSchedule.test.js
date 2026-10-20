@@ -923,13 +923,13 @@ describe('taskSchedule', () => {
       expect(PROMPT_VERSIONS['reference-watch']).toBe(REFERENCE_WATCH_AUDITED_VERSION)
     })
 
-    it('reference-watch v4 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
-      // The coupling the audit anchor protects: at the audited version (v4), the prompt
+    it('reference-watch v5 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
+      // The coupling the audit anchor protects: at the audited version (v5), the prompt
       // writes to the resolved tracker (PLAN.md commit, or `gh`/`glab issue create`), so the
       // raw default must be writable. If a future re-audit flips
       // REFERENCE_WATCH_AUDITED_VERSION to a propose-only version, update this expectation
       // alongside the default and the anchor.
-      if (REFERENCE_WATCH_AUDITED_VERSION === 4) {
+      if (REFERENCE_WATCH_AUDITED_VERSION === 5) {
         expect(DEFAULT_TASK_INTERVALS['reference-watch'].taskMetadata.readOnly).toBe(false)
       }
     })

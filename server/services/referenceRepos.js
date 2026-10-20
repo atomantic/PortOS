@@ -39,6 +39,7 @@ import {
   updateApp,
 } from './apps.js';
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { resolveAppWorkTracker, isFileTracker, formatTrackerInstructions } from '../lib/workTracker.js';
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
@@ -626,6 +627,9 @@ export async function markReferenceRepoReviewed(appId, refId, sha) {
  * (not in the prompt template) so we can iterate the format without
  * touching cos.js.
  */
+// Generous cap: COMMIT_LIST_CAP subjects at typical length fit; a crafted flood cannot dominate the prompt.
+const COMMIT_LIST_FENCE_CHARS = 20000;
+
 export function formatReferenceForPrompt(ref, snapshot) {
   const lines = [];
   lines.push(`## Reference: ${ref.name}`);
@@ -659,9 +663,10 @@ export function formatReferenceForPrompt(ref, snapshot) {
   }
   lines.push('');
   lines.push('### Commits to review');
-  for (const c of snapshot.commits) {
-    lines.push(`- \`${c.sha.slice(0, 8)}\` ${c.subject} _(by ${c.author}, ${c.date.slice(0, 10)})_`);
-  }
+  lines.push(UNTRUSTED_CONTENT_NOTICE);
+  // Subjects and authors are upstream-controlled; fence them so they stay data.
+  const commitLines = snapshot.commits.map((c) => `${c.sha.slice(0, 8)} ${c.subject} (by ${c.author}, ${c.date.slice(0, 10)})`);
+  lines.push(fenceBlock('Upstream commits', commitLines.join('\n'), COMMIT_LIST_FENCE_CHARS));
   lines.push('');
   lines.push(`Source clone is at: \`${snapshot.cwd}\` — use \`git -C ${snapshot.cwd} show <sha>\` to read each commit's diff.`);
   return lines.join('\n');
