@@ -23,7 +23,7 @@ vi.mock('./manifest.js', () => ({
   writeManifest: writeManifestMock,
   readManifest: vi.fn(),
   listManifestFilenames: vi.fn(async () => []),
-  annotationManifestFilename: vi.fn(),
+  annotationManifestFilename: vi.fn(() => 'annotations-local-instance.json'),
 }));
 
 vi.mock('./version.js', () => ({ getProducedByVersion: vi.fn(async () => '1.0.0-test') }));
@@ -312,7 +312,7 @@ describe('sharing/annotationsSync.listBucketAssetKeys cache', () => {
 
     const ann = { 'image:a.png': { starred: true, note: 'hi', updatedAt: '2026-01-01T00:00:00.000Z' } };
     const r1 = await svc.exportAnnotationsToBucket(bucket(), ann, 'local-instance');
-    const r2 = await svc.exportAnnotationsToBucket(bucket(), ann, 'local-instance');
+    const r2 = await svc.exportAnnotationsToBucket(bucket(), { 'image:a.png': { ...ann['image:a.png'], note: 'edited' } }, 'local-instance');
     fs.existsSync.mockReturnValue(false);
     expect(r1.skipped).toBe(false);
     expect(r2.skipped).toBe(false);
@@ -434,6 +434,61 @@ describe('sharing/annotationsSync event flush', () => {
     } finally {
       vi.useRealTimers();
       errorLog.mockRestore();
+    }
+  });
+
+  it('flushes once at boot, skips an unchanged manifest, and retries a failed export on backoff until it succeeds', async () => {
+    const { listLocalAuthorAnnotations } = await import('../mediaAnnotations.js');
+    const { listBuckets } = await import('./buckets.js');
+    const { listManifestFilenames, readManifest } = await import('./manifest.js');
+    const { existsSync } = await import('fs');
+    const recordPath = '/mock/bucket/records/media-annotations/local-instance.json';
+    const local = { 'image:kept.png': { starred: true, note: 'Boot', updatedAt: '2026-01-01T00:00:00.000Z' } };
+    fileStore.clear();
+    writeCalls.length = 0;
+    writeManifestMock.mockClear();
+    svc.__resetBucketAssetKeysCache();
+    listBuckets.mockResolvedValue([bucket()]);
+    listManifestFilenames.mockResolvedValue(['asset.json']);
+    readManifest.mockResolvedValue({ assetRefs: [{ kind: 'image', ref: 'kept.png' }] });
+    // The manifest file only "exists" once writeManifest has succeeded.
+    let manifestOnDisk = false;
+    writeManifestMock.mockImplementation(async (bucketPath, manifest) => {
+      manifestOnDisk = true;
+      return `${manifest.kind}.manifest.json`;
+    });
+    existsSync.mockImplementation((p) => !toPosix(String(p)).endsWith('annotations-local-instance.json') || manifestOnDisk);
+    listLocalAuthorAnnotations.mockResolvedValue(local);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      // First export fails (unreachable bucket), then recovers on the 1 min retry.
+      writeManifestMock.mockImplementationOnce(async () => { throw new Error('bucket offline'); });
+      svc.__resetAnnotationsSyncForTests();
+      svc.initAnnotationsSync();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('bucket offline'));
+      expect(writeManifestMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(writeManifestMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(writeManifestMock).toHaveBeenCalledTimes(2);
+      expect(fileStore.get(recordPath).annotations['image:kept.png'].note).toBe('Boot');
+
+      // Success stops retries; a later boot with identical content writes nothing.
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      expect(writeManifestMock).toHaveBeenCalledTimes(2);
+      svc.__resetAnnotationsSyncForTests();
+      svc.initAnnotationsSync();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(writeManifestMock).toHaveBeenCalledTimes(2);
+    } finally {
+      svc.__resetAnnotationsSyncForTests();
+      vi.useRealTimers();
+      errorLog.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });
