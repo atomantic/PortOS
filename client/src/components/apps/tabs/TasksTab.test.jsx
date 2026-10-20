@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
@@ -56,5 +56,35 @@ describe('TasksTab layout', () => {
     const table = screen.getByRole('table');
     expect(table).toHaveClass('w-full', 'table-fixed');
     expect(table.parentElement).toHaveClass('overflow-x-auto');
+  });
+});
+
+describe('TasksTab read failure', () => {
+  beforeEach(() => {
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getApps.mockResolvedValue([]);
+  });
+
+  it('shows an error row with Retry instead of zero stats and the empty copy, then recovers', async () => {
+    api.getAppAgents.mockRejectedValueOnce(new Error('boom'));
+    renderTab();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load agent history');
+    expect(screen.queryByText('Success Rate')).toBeNull();
+    expect(screen.queryByText(/No agent tasks found/)).toBeNull();
+
+    api.getAppAgents.mockResolvedValue({ agents: [AGENT], summary: { total: 1 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('table');
+    expect(screen.getByText('Success Rate')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('renders the real-empty copy when the read succeeds with no agents', async () => {
+    api.getAppAgents.mockResolvedValue({ agents: [], summary: {} });
+    renderTab();
+    expect(await screen.findByText(/No agent tasks found/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

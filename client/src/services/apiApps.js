@@ -266,7 +266,7 @@ export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { 
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.
 export const buildApp = (id, options = {}) => request(`/apps/${id}/build`, { method: 'POST', ...options });
-export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
+export const getAppTaskTypes = (id, options = {}) => request(`/apps/${id}/task-types`, options);
 export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/apps/${id}/task-types/all`, {
   method: 'PUT',
   body: JSON.stringify({ enabled }),
@@ -304,4 +304,4 @@ export const saveAppDocument = (id, filename, content, commitMessage, options) =
     method: 'PUT',
     body: JSON.stringify({ content, ...(commitMessage && { commitMessage }) })
   });
-export const getAppAgents = (id, limit = 50) => request(`/apps/${id}/agents?limit=${limit}`);
+export const getAppAgents = (id, limit = 50, options = {}) => request(`/apps/${id}/agents?limit=${limit}`, options);
