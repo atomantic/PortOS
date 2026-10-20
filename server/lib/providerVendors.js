@@ -79,6 +79,11 @@ import {
   OPENCODE_PUBLIC_REVIEW_AGENT,
   OPENCODE_BUILD_AGENT,
   applyLeanClaudeArgs,
+  CODEX_WORKSPACE_NETWORK_KEY,
+  CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
+  CODEX_PLUGINS_FEATURE_KEY,
+  CODEX_APPS_FEATURE_KEY,
+  CODEX_HOOKS_FEATURE_KEY,
 } from './providerModels.js';
 import {
   isCodexCommand,
@@ -1140,6 +1145,52 @@ export function toolFreeOneShotArgs(provider, args = []) {
   if (spec?.toolFreeArgs) return { args: spec.toolFreeArgs(stripped), toolFree: true };
   if (spec?.sandboxArgs) return { args: spec.sandboxArgs(stripped), toolFree: false, readOnlySandbox: true };
   return { args: removed && spec?.afterStrip ? spec.afterStrip(stripped) : stripped, toolFree: false };
+}
+
+// Autofixer repair posture (#12487). Claude keeps file Read/Edit/Write only:
+// acceptEdits auto-approves edits inside the working directory and nothing
+// else, and neither project MCP servers nor project settings (hooks) load.
+const CLAUDE_REPAIR_ARGS = [
+  '--restricted', '--safe-mode',
+  '--permission-mode', 'acceptEdits',
+  '--tools', 'Read,Edit,Write,Grep,Glob',
+  '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+  '--no-chrome', '--disable-slash-commands',
+  '--disallowedTools', 'Bash', 'WebFetch', 'WebSearch',
+];
+// Codex's OS sandbox confines its shell commands to the working directory
+// with network off. MCP servers, plugins and apps run outside that sandbox
+// (computer-use, node_repl), and an `mcp_servers` override cannot clear them,
+// so the user's config.toml is not loaded at all (auth still is) and the
+// plugin/app surfaces are disabled.
+const CODEX_REPAIR_ARGS = [
+  '--sandbox', 'workspace-write', '--ignore-user-config', '--ignore-rules',
+  '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`, '-c', `${CODEX_WORKSPACE_WRITABLE_ROOTS_KEY}=[]`,
+  '-c', `${CODEX_PLUGINS_FEATURE_KEY}=false`, '-c', `${CODEX_APPS_FEATURE_KEY}=false`,
+  '-c', `${CODEX_HOOKS_FEATURE_KEY}=false`,
+];
+
+/**
+ * Saved provider argv for a file-editing repair driven by untrusted input
+ * (autofixer crash logs), or null when the vendor has no enforced restricted
+ * mode. Build from the fixed recipe: arbitrary saved options can restore MCP,
+ * plugins, hooks or writable roots even after a sandbox flag is overridden.
+ * Model and effort still come from the provider's fields in the vendor builder.
+ * The result replaces `provider.args`; the vendor builder adds `-p -` / `-`.
+ *
+ * @param {object} provider - provider record (command, args)
+ * @returns {{ mode: 'claude-disallowed-tools'|'codex-workspace-write', args: string[] } | null}
+ */
+export function restrictedRepairArgs(provider) {
+  const command = provider?.command;
+  if (!command) return null;
+  if (isClaudeCommand(command)) {
+    return { mode: 'claude-disallowed-tools', args: [...CLAUDE_REPAIR_ARGS] };
+  }
+  if (isCodexCommand(command)) {
+    return { mode: 'codex-workspace-write', args: ['exec', ...CODEX_REPAIR_ARGS] };
+  }
+  return null;
 }
 
 /**

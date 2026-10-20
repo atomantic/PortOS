@@ -12,22 +12,37 @@
  *  - `buildFixPrompt`        — wrap logs in a per-session, forge-resistant
  *                              UNTRUSTED-EVIDENCE fence with strong "data, not
  *                              instructions" framing.
- *  - `restrictedToolArgs`    — deny the shell/network toolset for claude-code so
- *                              the agent can only Read/Edit files.
+ *  - `pickRepairProvider`    — run a repair only on a CLI with an enforced
+ *                              restricted mode (claude without shell/network
+ *                              tools, or codex's network-denied workspace-write
+ *                              sandbox); every other CLI is refused.
  *  - `validateProposedDiff`  — bound size + reject escapes/sensitive paths.
  *  - git worktree helpers    — run the agent against a disposable, detached
  *                              worktree; only a validated diff is ever promoted
  *                              back to the live checkout.
+ *  - `runVerifyCommand`      — run the verify command over the agent-edited
+ *                              worktree under OS containment, never on the host.
  *
- * Node builtins only (child_process/fs/path/crypto/os) so the standalone
+ * Node builtins plus dependency-light `server/lib` modules, so the standalone
  * autofixer package — which installs only `express` — can import it.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from 'node:child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
-import { writeFile, rm, mkdir, readdir } from 'fs/promises';
-import { join, isAbsolute, normalize, resolve, dirname } from 'path';
-import { randomBytes } from 'crypto';
+import { writeFile, rm, mkdir, mkdtemp, readdir, realpath, lstat, access } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { join, isAbsolute, normalize, resolve, dirname } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { pickCliProvider } from '../server/lib/cliProviderRun.js';
+import { restrictedRepairArgs } from '../server/lib/providerVendors.js';
+import {
+  CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism,
+} from '../server/lib/codeAnimationContainment.js';
+import {
+  autofixVerifyBubblewrapArgs, autofixVerifyEnv, autofixVerifyProtectedPaths,
+  autofixVerifySeccompFilter,
+} from '../server/lib/autofixVerifyContainment.js';
 
 // ---------------------------------------------------------------------------
 // Environment sanitization
@@ -198,23 +213,52 @@ Fix the bug by editing files in the current working directory, then stop.`;
 }
 
 /**
- * Extra CLI argv that constrain the agent's toolset. For claude-code we deny
- * the shell + network tools so the agent — even if a log tricks it — cannot
- * execute commands, read the environment, or exfiltrate over the network; it is
- * left with file Read/Edit/Write/Grep/Glob only. Other CLIs have no portable
- * equivalent flag, so they rely on the worktree + env + promotion isolation.
+ * Resolve the repair provider, restricted. A worktree cwd does not confine a
+ * shell, so only a CLI with an enforced restricted mode may run a repair:
+ * claude with Bash/WebFetch/WebSearch denied (left with file tools, edits
+ * auto-accepted inside the worktree only), or codex in its workspace-write
+ * sandbox with network off (`restrictedRepairArgs`). A configured provider
+ * without one is refused rather than swapped; with no configured provider the
+ * pick is claude-code, else the first restrictable CLI — never an
+ * unrestrictable `cli[0]`.
  *
- * @param {object} provider resolved CLI provider ({ id, command })
- * @returns {string[]}
+ * @param {Array|Object} providers  providers list or on-disk map
+ * @param {{ providerId?: string, model?: string }} [config]  settings.autofixer
+ * @returns {{ provider: object, model: string|null, mode: string } | { error: string }}
  */
-export function restrictedToolArgs(provider) {
-  const id = provider?.id || '';
-  const command = provider?.command || '';
-  const isClaude = id === 'claude-code' || /(^|[\\/])claude(\.\w+)?$/.test(command);
-  if (isClaude) {
-    return ['--disallowedTools', 'Bash', 'WebFetch', 'WebSearch'];
+export function pickRepairProvider(providers, config = {}) {
+  const list = (Array.isArray(providers) ? providers : Object.values(providers || {})).filter((p) => p?.enabled !== false);
+  const configured = config?.providerId && list.find((p) => p.id === config.providerId);
+  if (configured && !restrictedRepairArgs(configured)) {
+    return { error: `Provider ${configured.id} has no enforced restricted mode, so autonomous repair is skipped. Choose a Claude Code or Codex CLI provider for the autofixer.` };
   }
-  return [];
+  const restrictable = list.filter((p) => restrictedRepairArgs(p));
+  if (restrictable.length === 0) {
+    return { error: 'No enabled Claude Code or Codex CLI provider, so autonomous repair is skipped: other CLIs cannot be restricted from running shell commands.' };
+  }
+  const picked = pickCliProvider(restrictable, config);
+  if (picked.error) return picked;
+  const { mode, args } = restrictedRepairArgs(picked.provider);
+  return { provider: { ...picked.provider, args }, model: picked.model, mode };
+}
+
+/** User-config suppression does not establish project-layer trust behavior.
+ * Both the source checkout and disposable linked checkout are project roots;
+ * refuse executable Codex configuration there before exposing crash-log input.
+ */
+export async function repairWorkspaceHold(mode, sourceWorkspace, worktreePath) {
+  if (mode !== 'codex-workspace-write') return null;
+  for (const root of new Set([sourceWorkspace, worktreePath])) {
+    for (const file of ['config.toml', 'hooks.json']) {
+      try {
+        await lstat(join(root, '.codex', file));
+        return 'Codex repair refused: project configuration or hooks could restore tools outside the repair sandbox';
+      } catch (error) {
+        if (error.code !== 'ENOENT') return 'Codex repair refused: project configuration could not be safely inspected';
+      }
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +279,8 @@ const FORBIDDEN_PATH_PATTERNS = [
   /\.pem$/,
   /(^|[\\/])\.github([\\/]|$)/,
   /(^|[\\/])\.claude([\\/]|$)/,
+  /(^|[\\/])\.(codex|agents)([\\/]|$)/,
+  /(^|[\\/])\.mcp\.json$/,
 ];
 
 /**
@@ -437,32 +483,124 @@ export async function sweepStaleWorktrees(parentDir) {
   return swept;
 }
 
+const canExecute = (path) => access(path, fsConstants.X_OK).then(() => true, () => false);
+
 /**
- * Run the user-configured verification command (e.g. `npm test`) against the
- * isolated worktree with the sanitized env, before any change reaches the live
- * checkout. The command is user-supplied (trusted config), so it runs through a
- * shell; the crash logs never influence it. Returns { ok, code, output }.
- *
- * @param {string} command  user-configured shell command
- * @param {string} cwd      worktree path
- * @param {Record<string,string>} env  sanitized environment
- * @param {number} [timeoutMs=300000]
+ * Verification needs filesystem/network AND descendant lifecycle containment.
+ * Linux bubblewrap supplies a PID namespace; a process-group kill on macOS
+ * cannot contain a verifier that creates a new session with setsid.
  */
-export function runVerifyCommand(command, cwd, env, timeoutMs = 300000) {
+export async function probeVerifyContainment() {
+  if (process.platform === 'darwin') {
+    return { id: null, supported: false, reason: 'macOS verification is unavailable: Seatbelt cannot prevent detached verifier descendants from surviving completion or timeout' };
+  }
+  if (process.platform !== 'linux') return codeAnimationContainmentMechanism(process.platform, false);
+  if (!['x64', 'arm64'].includes(process.arch)) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'the verify seccomp filter requires x64 or arm64' });
+  }
+  if (!(await canExecute(CODE_ANIMATION_BUBBLEWRAP))) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'install bubblewrap (/usr/bin/bwrap) to verify autofixes' });
+  }
+  const child = spawn(CODE_ANIMATION_BUBBLEWRAP, ['--unshare-all', '--die-with-parent', '--ro-bind', '/', '/', '--', '/bin/true'], {
+    cwd: '/', env: {}, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
+  });
+  const { code } = await waitForChild(child, { timeoutMs: 5000, capture: false });
+  return codeAnimationContainmentMechanism('linux', false, {
+    supported: code === 0,
+    reason: 'bubblewrap could not create namespaces; check unprivileged user namespaces and the host AppArmor policy',
+  });
+}
+
+// Run a contained command as its own process group so a timeout reaches every
+// process the test runner started, not just the sandbox launcher.
+function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, env, shell: true, windowsHide: true });
     let output = '';
     let settled = false;
+    let child;
+    try {
+      child = spawn(file, args, {
+        cwd, env, detached: true, windowsHide: true, stdio: seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      resolve({ ok: false, code: -1, output: `[verify] ${err.message}` });
+      return;
+    }
+    const killGroup = () => {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
+    };
     const done = (result) => { if (settled) return; settled = true; clearTimeout(timer); resolve(result); };
     const timer = setTimeout(() => {
-      if (!child.killed) child.kill('SIGTERM');
+      killGroup();
       done({ ok: false, code: -1, output: `${output}\n[verify] timed out after ${timeoutMs}ms` });
     }, timeoutMs);
+    if (seccomp) {
+      // bwrap reads the filter from fd 3; a refused setup can close it early,
+      // which surfaces as bwrap's nonzero exit.
+      child.stdio[3].on('error', () => {});
+      child.stdio[3].end(seccomp);
+    }
     child.stdout?.on('data', (d) => { output += d.toString(); });
     child.stderr?.on('data', (d) => { output += d.toString(); });
     child.on('error', (err) => done({ ok: false, code: -1, output: `${output}\n[verify] ${err.message}` }));
-    child.on('close', (code) => done({ ok: code === 0, code, output }));
+    child.on('close', (code) => { killGroup(); done({ ok: code === 0, code, output }); });
   });
+}
+
+/**
+ * Run the user-configured verification command (e.g. `npm test`) against the
+ * agent-edited worktree before any change reaches the live checkout. The
+ * command string is trusted config, but the files it executes (tests, npm
+ * lifecycle scripts) were just written by an agent driven by untrusted logs,
+ * so it runs only under OS containment (`autofixVerifyContainment.js`): no
+ * network or host Unix sockets, writes confined to the worktree and a private scratch dir, no reads
+ * of the PortOS data directory or host credential stores, and an environment
+ * built from nothing — no provider key or PortOS token. Without an enforced
+ * mechanism the verify is refused, which blocks promotion.
+ *
+ * @param {string} command  user-configured shell command
+ * @param {string} cwd      worktree path
+ * @param {object} [opts]
+ * @param {string} [opts.dataDir]  PortOS data directory to hide from the command
+ * @param {number} [opts.timeoutMs=300000]
+ * @param {string} [opts.homeDir]  host home whose credential stores are hidden (default: os.homedir())
+ * @param {() => Promise<{ id: string|null, supported: boolean, reason: string|null }>} [opts.probe]
+ * @returns {Promise<{ ok: boolean, code: number, output: string, contained: boolean, mechanism?: string }>}
+ */
+export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir = homedir(), timeoutMs = 300000, probe = probeVerifyContainment } = {}) {
+  const mechanism = await probe();
+  if (!mechanism.supported || mechanism.id !== 'linux-bubblewrap') {
+    return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${mechanism.reason}` };
+  }
+  const scratchDir = await mkdtemp(join(tmpdir(), 'portos-autofix-verify-'));
+  try {
+    await Promise.all(['home', 'tmp'].map((name) => mkdir(join(scratchDir, name))));
+    const worktree = await realpath(cwd);
+    const scratch = await realpath(scratchDir);
+    const realOrSelf = (path) => realpath(path).catch(() => path);
+    const listed = autofixVerifyProtectedPaths({
+      dataDir: dataDir ? await realOrSelf(dataDir) : null,
+      realHome: await realOrSelf(homeDir),
+    });
+    // Protect a symlinked store (~/.ssh → elsewhere) through its target too.
+    const protectedPaths = [...new Set([...listed, ...await Promise.all(listed.map(realOrSelf))])];
+    const env = autofixVerifyEnv({ scratch, path: process.env.PATH });
+    const shell = ['/bin/sh', '-c', command];
+    const seccomp = autofixVerifySeccompFilter(process.arch);
+    // bwrap mounts over each path, so a symlink is skipped: its resolved
+    // target is already listed and is what the mount must cover.
+    const present = (await Promise.all(protectedPaths.map(async (path) => [path, await lstat(path).catch(() => null)])))
+      .filter(([, info]) => info && !info.isSymbolicLink());
+    const bwrapArgs = autofixVerifyBubblewrapArgs({
+      worktree, scratch, env,
+      protectedDirs: present.filter(([, info]) => info?.isDirectory()).map(([path]) => path),
+      protectedFiles: present.filter(([, info]) => !info.isDirectory()).map(([path]) => path),
+    });
+    const result = await runGroup(CODE_ANIMATION_BUBBLEWRAP, [...bwrapArgs, ...shell], { cwd: worktree, env, timeoutMs, seccomp });
+    return { ...result, contained: true, mechanism: mechanism.id };
+  } finally {
+    await rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**
