@@ -46,10 +46,10 @@ export async function inspectOrQueueCompletedReview(input, deps = {}) {
       { phase: 'blocked-before-dispatch', taskId: null, reason: refusal });
     return { disposition: 'held', reason: refusal };
   }
-  const spawn = deps.spawn || (await import('./agentWorktreeCleanup.js')).spawnReviewLoopFollowUp;
+  const queueReview = deps.spawn || (await import('./agentWorktreeCleanup.js')).spawnReviewLoopFollowUp;
   let task;
   try {
-    task = await spawn({ originalAgentId: inspected.agentId, originalTask: inspected.originalTask,
+    task = await queueReview({ originalAgentId: inspected.agentId, originalTask: inspected.originalTask,
       sourceWorkspace: target.repoPath, prUrl: target.prUrl, prBranch: target.branch,
       prCompletion: resolvePrCompletion(inspected.originalTask.metadata), ...inspected.roster, reviewTarget: target });
   } catch {
