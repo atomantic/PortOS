@@ -87,7 +87,7 @@ router.delete('/snapshots/:snapshotId', asyncHandler(async (req, res) => {
 
 // POST /api/backup/restore
 router.post('/restore', asyncHandler(async (req, res) => {
-  const { snapshotId, source, subdirFilter, dryRun } = validateRequest(restoreRequestSchema, req.body);
+  const { snapshotId, source, subdirFilter, dryRun, adoptIdentity } = validateRequest(restoreRequestSchema, req.body);
   const settings = await getSettings();
   const destPath = settings.backup?.destPath;
   if (!destPath) {
@@ -96,6 +96,7 @@ router.post('/restore', asyncHandler(async (req, res) => {
   const result = await backup.restoreSnapshot(destPath, snapshotId, {
     dryRun,
     subdirFilter,
+    adoptIdentity,
     ...(source ? { source } : {}),
   });
   res.json(result);

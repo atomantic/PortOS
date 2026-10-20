@@ -85,7 +85,7 @@ import {
   PEER_BODY_IDLE_TIMEOUT,
   peerAuthHeaders,
   derivePeerAuthToken,
-  __resetSelfInstanceIdForTests,
+  resetSelfInstanceIdCache,
 } from './peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from './httpClient.js';
 
@@ -107,7 +107,7 @@ describe('peerHttpClient', () => {
 
     beforeEach(() => {
       selfInstanceId = 'self-instance-id';
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
       calls = [];
       globalThis.fetch = async (url, options) => {
         calls.push({ url, options });
@@ -117,7 +117,7 @@ describe('peerHttpClient', () => {
 
     afterEach(() => {
       globalThis.fetch = realFetch;
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
     });
 
     it('identifies this install with X-PortOS-Instance-Id on every hop', async () => {
@@ -221,7 +221,7 @@ describe('peerHttpClient', () => {
 
     it('omits the header entirely when this install has no identity yet', async () => {
       selfInstanceId = 'unknown';
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
       await peerFetch('http://peer.example/x');
       expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBeUndefined();
     });
@@ -246,7 +246,7 @@ describe('peerHttpClient', () => {
     beforeEach(() => {
       servers = [];
       selfInstanceId = 'self-instance-id';
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
     });
 
     afterEach(async () => {
@@ -254,7 +254,7 @@ describe('peerHttpClient', () => {
         server.close(resolve);
         server.closeAllConnections();
       })));
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
     });
 
     const serve = async (handler) => {
@@ -324,13 +324,13 @@ describe('peerHttpClient', () => {
 
     beforeEach(() => {
       selfInstanceId = 'self-instance-id';
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
     });
 
     afterEach(async () => {
       if (fixture) await fixture.close();
       fixture = null;
-      __resetSelfInstanceIdForTests();
+      resetSelfInstanceIdCache();
     });
 
     it('destroys an unbounded response stream after it exceeds maxBytes', async () => {

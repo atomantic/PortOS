@@ -1434,7 +1434,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
   }
 }
 
-function manifestDataEntries(manifest, srcDir, subdirFilter) {
+function manifestDataEntries(manifest, srcDir, subdirFilter, isSkippedPath = isRestorePreservedPath) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
       || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
       || !Number.isInteger(manifest.fileCount) || manifest.fileCount < 0
@@ -1469,7 +1469,7 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
 
     // Still recorded in dataPaths (inventory consistency), but never hashed:
     // Finder may rewrite a hashed metadata file that restore never transfers.
-    if (isRestorePreservedPath(normalized) || isOsMetadataFile(segments.at(-1))) continue;
+    if (isSkippedPath(normalized) || isOsMetadataFile(segments.at(-1))) continue;
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
@@ -1532,6 +1532,56 @@ const restoreScopeIsPreservedFile = (subdirFilter) => {
   return isRestorePreservedPath(normalized);
 };
 
+/**
+ * `instances.json` holds this install's federation identity (`self.instanceId`),
+ * its peers and their pair secrets. A shared destination offers every machine's
+ * snapshots, so installing another machine's file would give two live installs
+ * one identity: each claims the other's CoS tasks and signs pushes with the
+ * other's pair credentials (#12596). A restore therefore installs it only when
+ * the identities match, the live install has none, or the operator adopts the
+ * snapshot's identity (replacing a retired machine). Otherwise it is preserved
+ * through the same three places as RESTORE_PRESERVED_FILES.
+ */
+const IDENTITY_FILE = 'instances.json';
+const IDENTITY_RSYNC_EXCLUDE = `--exclude=/${caseInsensitiveGlob(IDENTITY_FILE)}`;
+const isIdentityPath = relativePath => typeof relativePath === 'string' && relativePath.toLowerCase() === IDENTITY_FILE;
+const IDENTITY_ABSENT = Symbol('identity-absent');
+
+async function readIdentityFile(path) {
+  const { ok, value } = await readJSONFileStrict(path, IDENTITY_ABSENT, { logError: false });
+  if (ok && value === IDENTITY_ABSENT) return { present: false, readable: true, instanceId: null };
+  const instanceId = ok ? value?.self?.instanceId : null;
+  return { present: true, readable: ok, instanceId: typeof instanceId === 'string' && instanceId ? instanceId : null };
+}
+
+/**
+ * Whether this restore installs the snapshot's instances.json. Decided before
+ * the integrity preflight so preview and execution exclude the same bytes. An
+ * unreadable live file counts as an identity (fail closed): only adoption
+ * replaces it, since its owner cannot be known.
+ */
+async function resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity) {
+  const notInstalled = { installs: false, preserved: null, adopted: null };
+  if (subdirFilter && !isIdentityPath(subdirFilter)) return notInstalled;
+  const snapshot = await readIdentityFile(join(srcDir, IDENTITY_FILE));
+  if (!snapshot.present) return notInstalled;
+  const live = await readIdentityFile(join(PATHS.data, IDENTITY_FILE));
+  const liveHasIdentity = live.present && (live.instanceId !== null || !live.readable);
+  if (!liveHasIdentity || (live.instanceId !== null && live.instanceId === snapshot.instanceId)) {
+    return { installs: true, preserved: null, adopted: null };
+  }
+  const ids = { liveInstanceId: live.instanceId, snapshotInstanceId: snapshot.instanceId };
+  return adoptIdentity
+    ? { installs: true, preserved: null, adopted: ids }
+    : { ...notInstalled, preserved: ids };
+}
+
+// `beforeTransfer`: nothing was written, so the caller must not report a partial restore.
+const identityChangedError = () => Object.assign(new ServerError(
+  'This machine\'s federation identity (instances.json) changed after the restore was checked. Nothing was restored; preview the restore again.',
+  { status: 409, code: 'BACKUP_RESTORE_IDENTITY_CHANGED' },
+), { beforeTransfer: true });
+
 const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new ServerError(
   // Name the offending entry: without it the operator is told their only backup
   // failed integrity and given nothing to act on.
@@ -1546,7 +1596,7 @@ const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new 
  * (rsync `--checksum` digests only regular files in scope, so the largest one
  * bounds the longest explainable silence between `-ii` heartbeats).
  */
-async function snapshotScopeInventory(srcDir, subdirFilter) {
+async function snapshotScopeInventory(srcDir, subdirFilter, isSkippedPath = isRestorePreservedPath) {
   const scopePath = subdirFilter
     ? resolve(srcDir, ...subdirFilter.split('/'))
     : srcDir;
@@ -1577,7 +1627,7 @@ async function snapshotScopeInventory(srcDir, subdirFilter) {
     // not inflate the digest floor either.
     if (isOsMetadataFile(basename(filePath))) continue;
     const scopedPath = relative(srcDir, filePath).replaceAll('\\', '/');
-    if (isRestorePreservedPath(scopedPath)) continue;
+    if (isSkippedPath(scopedPath)) continue;
     if (info.size > largestFileBytes) largestFileBytes = info.size;
 
     const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
@@ -1620,7 +1670,10 @@ async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
   }
 }
 
-async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
+async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity = false } = {}) {
+  const isSkippedPath = preserveIdentity
+    ? path => isRestorePreservedPath(path) || isIdentityPath(path)
+    : isRestorePreservedPath;
   // A unique fallback distinguishes a genuinely absent legacy manifest from an
   // existing file whose parsed value is JSON null.
   const manifestRead = await readJSONFileStrict(
@@ -1639,7 +1692,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
     // still needs the largest in-scope file. PostgreSQL also needs a complete
     // inventory to reject ignored legacy metadata; only the file escape hatch
     // can retain the old best-effort behavior when inventory fails.
-    const legacyInventory = await snapshotScopeInventory(srcDir, subdirFilter).catch(() => null);
+    const legacyInventory = await snapshotScopeInventory(srcDir, subdirFilter, isSkippedPath).catch(() => null);
     await assertRestoreStorageCompatible(srcDir, legacyInventory, snapshotId);
     return {
       status: 'unverified',
@@ -1649,7 +1702,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
     };
   }
 
-  const manifestEntries = manifestDataEntries(manifestRead.value, srcDir, subdirFilter);
+  const manifestEntries = manifestDataEntries(manifestRead.value, srcDir, subdirFilter, isSkippedPath);
   if (!manifestEntries) {
     throw new ServerError(`Snapshot integrity manifest is invalid: ${snapshotId}`, {
       status: 409,
@@ -1661,7 +1714,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   // Hash agreement is insufficient if rsync can also copy files the manifest
   // never recorded. Rebuild the same regular-file inventory in the selected
   // scope and reject additions before rsync reads or overwrites anything.
-  const inventory = await snapshotScopeInventory(srcDir, subdirFilter)
+  const inventory = await snapshotScopeInventory(srcDir, subdirFilter, isSkippedPath)
     .catch(() => null);
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
   await assertRestoreStorageCompatible(srcDir, inventory, snapshotId);
@@ -1703,8 +1756,11 @@ function restoreIdleTimeoutMs(largestFileBytes = 0) {
  * @param {object} options
  * @param {boolean} [options.dryRun=true] - If true, do not write any files
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
+ * @param {boolean} [options.adoptIdentity=false] - Install a snapshot's different
+ *   federation identity (instances.json) over the live one; only for replacing a
+ *   retired machine. Without it the live identity is preserved (`identityPreserved`).
  */
-export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter: requestedFilter = null, source } = {}) {
+export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter: requestedFilter = null, source, adoptIdentity = false } = {}) {
   // Canonicalize once: manifest selection, the inventory and the rsync include
   // chain each spell the filter differently, so `brain/` or `./brain` would
   // select nothing yet verify clean. An all-dot/empty filter means no filter.
@@ -1736,17 +1792,21 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // neither explicit deletion nor retention can remove verified bytes while
   // rsync still reads them (#10898).
   return withSnapshotRead(resolved.snapshotDir, snapshotId,
-    () => restoreHeldSnapshot(resolved, snapshotId, { dryRun, subdirFilter }));
+    () => restoreHeldSnapshot(resolved, snapshotId, { dryRun, subdirFilter, adoptIdentity: adoptIdentity === true }));
 }
 
-async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter }) {
+async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter, adoptIdentity }) {
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
+  const identity = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
+  // Keyed on the approval, not on a mismatch: a snapshot instances.json that
+  // appears after the check must not reach the live file unfenced.
+  const preserveIdentity = !identity.installs;
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
-  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter);
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity });
   // A full restore installs the snapshot's ledger too, so the next boot re-runs
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
@@ -1757,6 +1817,8 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   const restoreNotes = (restoredLegacyStores) => ({
     ...(ledgerGap !== undefined && { ledgerGap }),
     ...(restoredLegacyStores.length > 0 && { restoredLegacyStores }),
+    ...(identity.preserved && { identityPreserved: identity.preserved }),
+    ...(identity.adopted && { identityAdopted: identity.adopted }),
   });
 
   // Restore must compare destination bytes even when size and mtime match.
@@ -1787,7 +1849,8 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // Same placement rule: excluded before the include chain, and kept out of the
   // manifest selection and inventory above, so what rsync may write is exactly
   // what the preflight verified.
-  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES];
+  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES,
+    ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : [])];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
@@ -1820,7 +1883,14 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
     subdirFilter,
     transfer: async () => {
-      const changed = await transferWithIdentityFence({ scope, srcDir, transferFiles });
+      const changed = await transferWithIdentityFence({
+        installsIdentity: identity.installs,
+        assertIdentityUnchanged: async () => {
+          const current = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
+          if (JSON.stringify(current) !== JSON.stringify(identity)) throw identityChangedError();
+        },
+        transferFiles,
+      });
       restoredLegacyStores = await convertRestoredLegacySplitStores(legacyStores);
       return changed;
     },
@@ -1955,19 +2025,29 @@ function withLiveFileRestoreOwners(scope, srcDir, operation) {
 
 /**
  * Peer-execution identity fence: shorter-lived than the owners above. It wraps
- * ONLY the rsync transfer, never reconciliation, and only when the scope can
- * touch instances.json AND the snapshot actually carries that file — probed
- * here, inside the already-held owners.
+ * ONLY the rsync transfer, never reconciliation, and only when this restore
+ * installs instances.json (resolveIdentityRestore). The decision was made
+ * before verification, so it is re-checked here under the identity writer lock:
+ * a live identity written since then (first pairing, ensureSelf) must not be
+ * overwritten without adoption. The memoized instance id is dropped even after
+ * a partial transfer, so the process never stamps an id the file no longer holds.
  */
-async function transferWithIdentityFence({ scope, srcDir, transferFiles }) {
-  const identityInScope = !scope || scope === 'instances.json';
-  const snapshotHasIdentity = identityInScope && await stat(join(srcDir, 'instances.json')).then(
-    info => info.isFile(),
-    error => { if (error.code === 'ENOENT') return false; throw error; },
-  );
-  if (!snapshotHasIdentity) return transferFiles();
-  const { withPeerExecutionIdentityRestore } = await import('./peerExecutionRuntime.js');
-  return withPeerExecutionIdentityRestore(transferFiles);
+async function transferWithIdentityFence({ installsIdentity, assertIdentityUnchanged, transferFiles }) {
+  if (!installsIdentity) return transferFiles();
+  const [{ withPeerExecutionIdentityRestore }, { resetInstanceIdCache }, { resetSelfInstanceIdCache }] = await Promise.all([
+    import('./peerExecutionRuntime.js'),
+    import('./instanceIdentity.js'),
+    import('../lib/peerHttpClient.js'),
+  ]);
+  return withPeerExecutionIdentityRestore(async () => {
+    await assertIdentityUnchanged();
+    try {
+      return await transferFiles();
+    } finally {
+      resetInstanceIdCache();
+      resetSelfInstanceIdCache();
+    }
+  });
 }
 
 /**
@@ -1980,6 +2060,7 @@ async function transferAndReconcileLiveFiles({ subdirFilter, transfer }) {
   const [result] = await Promise.allSettled([transfer()]);
   const reconciliationError = await reconcileLiveFileRestore(subdirFilter).then(() => null, error => error);
   if (result.status === 'rejected') {
+    if (result.reason?.beforeTransfer) throw result.reason;
     const partialRestoreError = new Error(
       `${result.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
       { cause: result.reason },

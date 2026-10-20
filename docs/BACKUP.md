@@ -521,6 +521,16 @@ A full restore also installs the snapshot's `migrations.applied.json`, so the ne
 
 `data/database-authority.json` is backed up as cutover evidence but is never installed by a file restore. It records which database backend a completed cutover retired on the machine that ran it, so restoring it from another machine's snapshot (or from an older snapshot after a reverse cutover) would make PortOS refuse its own healthy database with `DATABASE_RETIRED_BACKEND`, including after a restart. Every file restore therefore excludes it, in preview and execution alike, and the integrity preflight ignores it too. The destination's existing file stays byte-for-byte as it was: an absent record stays absent and a damaged one stays fail-closed. The same preservation covers the other machine-local authority and recovery records — `peer-execution/`, `peer-execution-catalog.json`, `peer-execution-grants.json`, `peer-execution-authority.json`, `peer-execution-recovery.jsonl`, `workflow-maintenance/` (the graceful-maintenance journal and abandoned-run receipts) and `backup-admission/` (which snapshots also skip) — so a snapshot's copy is evidence only (see [STORAGE.md](./STORAGE.md)). Other records in the snapshot restore normally. Selecting any of these paths, including `database-authority.json` itself, is refused with `BACKUP_RESTORE_MACHINE_LOCAL` before anything is transferred. This does not touch an active maintenance journal (`database-maintenance/`): its recovery semantics are unchanged, and another machine's cutover endpoints are never imported. To change which backend is authoritative, run a database cutover.
 
+#### Federation identity is kept unless adopted
+
+`data/instances.json` holds this install's federation identity (`self.instanceId`), its peer list and each peer's pair secret. A shared destination lists every machine's snapshots, so installing another machine's file would give two live installs one identity: both would claim the same CoS tasks, sign pushes with the same pair credentials and advance the same per-peer sync cursors (#12596). Before verification, a restore whose scope reaches `instances.json` (a full restore or `subdirFilter: 'instances.json'`) compares the snapshot's `self.instanceId` with the live file's:
+
+- **Same identity, or no live identity** (this machine's own older snapshot, or a never-federated install): the file restores as before.
+- **Different identity:** the live file is kept byte-for-byte. It is excluded from the rsync transfer, the manifest selection and the scope inventory exactly like the machine-local records above, so preview and execution agree, and both report `identityPreserved: { liveInstanceId, snapshotInstanceId }`. Every other file restores normally. An unreadable live file counts as an identity (`liveInstanceId: null`), since its owner cannot be known; an unreadable snapshot file reports `snapshotInstanceId: null`.
+- **`adoptIdentity: true`** installs the snapshot's file anyway and reports `identityAdopted`. Use it only to replace a retired machine. The restore panel shows the mismatch with an unchecked "Adopt the snapshot's identity — only if the machine that made it is retired" checkbox; toggling it requires a new preview.
+
+Any restore that does not install the snapshot's `instances.json` (including a snapshot that had none when checked) excludes it from the transfer, so bytes that appear later cannot reach the live file. Because the choice is made before verification, execution re-checks it under the identity writer lock immediately before rsync starts; if the live identity changed in between (a first pairing, for example), the restore is refused with `409 BACKUP_RESTORE_IDENTITY_CHANGED` before any file is written. Whenever a restore installs `instances.json`, the memoized instance id is dropped after the transfer (even a partial one), so `getInstanceId()` and peer request headers follow the restored identity without a restart.
+
 ### Database — `restorePostgres()`
 
 Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back.
@@ -645,9 +655,9 @@ boundary there rather than nesting another wrapper. Snapshot integrity is
 verified before any boundary is acquired, and a dry run acquires none of them.
 
 The peer-execution identity fence is shorter-lived: it wraps only the rsync
-transfer, never reconciliation, and only when the scope can reach
-`instances.json` and the snapshot actually contains that file (probed inside the
-held boundaries).
+transfer, never reconciliation, and only when the restore installs
+`instances.json` (see [Federation identity is kept unless adopted](#federation-identity-is-kept-unless-adopted);
+decided before verification, so a preview reports the same choice).
 
 A restore callback must never call a queued settings write API; cache reload reads
 directly and does not re-enter the queue.
