@@ -26,7 +26,8 @@ export function _selectTestChrome(candidates) {
   return candidates.find(({ path }) => path && existsSync(path));
 }
 
-// Failure-only Linux observations of this owned child and its current worker.
+// Failure-only observations of this owned child and its current worker: Linux
+// procfs samples, or bounded lifecycle categories on macOS.
 // Never read cmdline, environ, links, stacks, or arbitrary process output.
 // At most 40 prefixes of 4096 bytes (160 KiB), 17 directory entries and one
 // statfs call. These count/byte caps do not guarantee elapsed time. Samples
@@ -113,11 +114,26 @@ function resourceFacts(child, { read, cpus, usage, disk }) {
     + ` memAvailableKiB=${memory} tmpFreeBytes=${freeBytes} tmpFreeInodes=${safeInteger(fs?.ffree)}`;
 }
 
+// Startup progress recorded by _waitForTestChrome. Without procfs, macOS can
+// still tell a child that never spawned from one that is alive but silent.
+const startupLifecycle = new WeakMap();
+
+// Lifecycle categories only: no PID value, path, exit code or signal name.
+function lifecycleFacts(proc, now) {
+  const record = startupLifecycle.get(proc);
+  const exit = proc.exitCode != null ? (proc.exitCode === 0 ? 'clean' : 'failed')
+    : proc.signalCode != null ? 'signaled' : 'running';
+  const elapsed = record ? safeInteger(Math.round(attemptObservation(now) - record.startedAt)) : 'unavailable';
+  return `os=darwin spawned=${record ? (record.spawned ? 'yes' : 'no') : 'unavailable'}`
+    + ` pid=${Number.isSafeInteger(proc?.pid) && proc.pid > 0 ? 'yes' : 'no'} exit=${exit} startElapsedMs=${elapsed}`;
+}
+
 export function _testChromeProcessFacts(proc, {
   platform = process.platform, workerPid = process.pid, read = readProcPrefix, threads = readThreadIds,
-  arch = process.arch,
+  arch = process.arch, now = () => performance.now(),
   cpus = availableParallelism, usage = () => process.resourceUsage(), disk = () => statfsSync(tmpdir()),
 } = {}) {
+  if (platform === 'darwin') return lifecycleFacts(proc, now);
   if (platform !== 'linux') return 'os=unsupported';
   if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return 'os=linux child=unavailable';
   // Once Node has reaped it, the numeric PID may belong to somebody else.
@@ -257,9 +273,10 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
   return new Promise((resolve, reject) => {
     let stderr = '';
     let timer;
-    let spawned = false;
     let settled = false;
-    const onSpawn = () => { spawned = true; };
+    const lifecycle = { startedAt: performance.now(), spawned: false };
+    startupLifecycle.set(proc, lifecycle);
+    const onSpawn = () => { lifecycle.spawned = true; };
     const diagnostic = async () => {
       const categories = [
         ['sandbox', /sandbox/i],
@@ -272,7 +289,7 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
       const base = categories.length ? `; stderr: ${categories.join(', ')}` : stderr ? '; Chrome emitted stderr' : '; no stderr';
       const processFacts = `; process: ${describeProcess(proc, observeProcess)}`;
       if (!startup) return base + processFacts;
-      proc.spawnedSeen = spawned;
+      proc.spawnedSeen = lifecycle.spawned;
       return `${base}; startup: ${await _describeTestChromeStartup(proc, startup, { spawnVersion })}${processFacts}`;
     };
     const cleanup = () => {
