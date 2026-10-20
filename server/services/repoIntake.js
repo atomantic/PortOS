@@ -29,15 +29,18 @@ import { prepareScanReportDirectory, reportPathForId } from './malwareScanReport
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import { GENERIC_REPO_STUDY_LABEL_CONTRACT } from '../lib/dispatchLabels.js';
 import { normalizeRepoIntake } from '../lib/repoIntakeActions.js';
-import { pullRepo } from './repoCloner.js';
+import { isDerivedClonePath, pullRepo } from './repoCloner.js';
 import { repoLinkLabel as repoLabel } from '../lib/repoLinkFields.js';
 
 /**
  * True when the link's recorded clone is readable on disk. Both actions read the
  * clone, so neither may queue an agent against a path that was never written or
- * has since been deleted.
+ * has since been deleted. The path must also be the one PortOS derives for the
+ * link's URL, so a `localPath` that did not come from this machine's own clone
+ * (e.g. a synced record) never points an agent at an arbitrary directory.
  */
-const isCloneReadable = (link) => Boolean(link?.localPath) && existsSync(link.localPath);
+const isCloneReadable = (link) =>
+  Boolean(link?.localPath) && isDerivedClonePath(link.url, link.localPath) && existsSync(link.localPath);
 
 /**
  * Queue the read-only `/do:scan` malware audit against a cloned link.

@@ -33,6 +33,25 @@ beforeEach(() => {
   brainEvents.emit('record:changed', { type: 'people', id: 'test-reset' });
 });
 
+describe('machine-local link fields', () => {
+  const synced = { id: 'a', updatedAt: '2026-01-01T00:00:00.000Z', title: 'A', url: 'https://github.com/o/r' };
+  const withLocal = (extra) => ({ links: { a: { ...synced, ...extra } } });
+
+  it('are neither hashed nor shipped in the snapshot', async () => {
+    emptyStores(withLocal({}));
+    const bare = await getBrainChecksum();
+
+    brainEvents.emit('record:changed', { type: 'links', id: 'a' });
+    emptyStores(withLocal({
+      localPath: '/srv/x', cloneStatus: 'cloned', repoIntake: { learn: true, studyContext: 'do X' }, malwareScan: { reportId: 'r' },
+    }));
+    const snapshot = await getBrainSnapshot();
+
+    expect(snapshot.checksum).toBe(bare);
+    expect(snapshot.records.links.a).toEqual(synced);
+  });
+});
+
 describe('brainReconcile checksum', () => {
   it('reuses the cached checksum when no brain records changed', async () => {
     emptyStores({ links: { a: { id: 'a', updatedAt: '2026-01-01T00:00:00.000Z', title: 'A' } } });

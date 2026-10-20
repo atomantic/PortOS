@@ -39,7 +39,7 @@ async function requireClonedRepoLink(id) {
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
-  if (!link.isRepo || link.cloneStatus !== 'cloned' || !link.localPath) {
+  if (!link.isRepo || link.cloneStatus !== 'cloned' || !link.localPath || !repoCloner.isDerivedClonePath(link.url, link.localPath)) {
     throw new ServerError('Link is not a cloned repository', { status: 400, code: 'NOT_CLONED' });
   }
   return link;
@@ -235,7 +235,7 @@ router.post('/links/:id/pull', asyncHandler(async (req, res) => {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  if (!link.isRepo || !link.localPath) {
+  if (!link.isRepo || !link.localPath || !repoCloner.isDerivedClonePath(link.url, link.localPath)) {
     throw new ServerError('Link is not a cloned repository', {
       status: 400,
       code: 'NOT_CLONED'
@@ -256,7 +256,7 @@ router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  if (!link.localPath) {
+  if (!link.localPath || !repoCloner.isDerivedClonePath(link.url, link.localPath)) {
     throw new ServerError('Link has no local folder', {
       status: 400,
       code: 'NO_LOCAL_PATH'
