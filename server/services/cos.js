@@ -570,6 +570,8 @@ async function bootDaemon(state) {
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
       if (await pendingMergeSweepBlocked()) return;
+      const { sweepRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+      await sweepRepoStateVerifications().catch(err => console.warn(`⚠️ Completion recovery sweep deferred: ${err.message}`));
       const prWatcher = await import('./prWatcher.js');
       const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
         console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);

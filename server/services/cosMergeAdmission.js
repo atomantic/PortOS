@@ -263,9 +263,12 @@ async function verifiedCleanupRecovery(agent, repository, agents) {
     const { readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
     parent = await readAgentRecordOrUnreadable(parentAgentId);
   }
-  const link = parent?.metadata?.repoStateRecovery;
+  const link = parent?.metadata?.repoStateRecoveries?.[target.branch] || parent?.metadata?.repoStateRecovery;
+  const parentBranches = [parent?.metadata?.worktreeBranch,
+    ...(Array.isArray(parent?.metadata?.claimBranches) ? parent.metadata.claimBranches : []),
+    ...(Array.isArray(parent?.metadata?.claimReleasedBranches) ? parent.metadata.claimReleasedBranches : [])];
   if (!isPlainObject(parent) || parent.id !== parentAgentId || parent.taskId !== parentTaskId || parent.status !== 'completed'
-    || parent.metadata.worktreeBranch !== target.branch || parent.metadata.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || !parentBranches.includes(target.branch) || parent.metadata.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
     || !isPlainObject(link) || link.taskId !== agent.taskId || link.url !== target.url || link.branch !== target.branch
     || !parent.metadata.sourceWorkspace) return false;
   return repositoryKey(await getOriginInfo(parent.metadata.sourceWorkspace).catch(() => null)) === repository;

@@ -88,7 +88,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -588,6 +588,12 @@ describe('completeAgent idempotence (#3384)', () => {
       agentId
     );
     expect(existsSync(archiveDir)).toBe(false);
+
+    // A completion sweep between failure and retry must not create a bucket
+    // that makes archiveCompletedAgent skip the original transcript move.
+    await recordRepoStateVerification(agentId, { status: 'pending', reasons: ['retry'] });
+    expect(existsSync(archiveDir)).toBe(false);
+    expect(await readFile(join(flatDir, 'output.txt'), 'utf8')).toBe('the run that finished\n');
 
     fsFailures.dateBucketWritesFail = false;
     recordDomainUsage.mockClear();

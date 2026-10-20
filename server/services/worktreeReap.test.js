@@ -22,6 +22,9 @@ import {
   resetGitWorktreeSandbox,
   SKIP_HEAVY_INTEGRATION,
 } from '../lib/gitTestRepo.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
+afterAll(cleanupTempDataRoots);
 import { hasBranchMergeEvidence } from './git.js';
 import { reapMergedWorktrees } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));

@@ -150,8 +150,8 @@ export function resolveRepoStateExpectation({
 export function classifyRepoStateIssues(expectation, observed = {}) {
   if (!expectation?.verify) return [];
   const branch = observed.branchName || 'the agent branch';
-  // GitHub owns a verified pending merge; retaining its branch is intentional.
-  if (observed.prState === 'OPEN' && observed.autoMergeEnabled === true) return [];
+  // Enabling forge auto-merge does not own failure recovery or local cleanup.
+  // Explicit server receipts are checked by the caller's pending-owner gate.
   const branchShouldBeGone = !expectation.staysOpen;
   const issues = [];
 

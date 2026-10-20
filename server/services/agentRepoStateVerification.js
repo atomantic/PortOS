@@ -145,7 +145,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // tree wedges the next `git worktree add` for that path. The cheap disk check
   // first, so the common leaked-directory case skips the `git worktree list` spawn.
   const probeWorktree = async () => {
-    if (existsSync(worktreePath)) return true;
+    if (worktreePath && existsSync(worktreePath)) return true;
     const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
     if (!worktrees) return null;
     return worktrees.some(wt =>
@@ -243,7 +243,97 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
  * @param {string[]} [params.cleanupWarnings] - warnings cleanup already raised
  * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
  */
-export async function verifyAgentRepoState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [] }) {
+const verificationRuns = new Map();
+
+export async function verifyAgentRepoState(input) {
+  if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
+  const run = verifyRunBranches(input).then(async result => {
+    // Completion persists pending before publishing its event. A failed probe,
+    // active follow-up or refused task write stays pending for the timer sweep.
+    if (input.agentState?.metadata?.repoStateVerification?.status === 'pending') {
+      const outcomes = result.branches || [result];
+      const terminalSkips = [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
+        REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE, REPO_STATE_SKIPS.FAILED_RUN];
+      const settled = outcomes.every(item => item.verified || terminalSkips.includes(item.skipReason))
+        || leavesPrForHuman(input.task);
+      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+      await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
+        checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
+    }
+    return result;
+  }).finally(() => verificationRuns.delete(input.agentId));
+  verificationRuns.set(input.agentId, run);
+  return run;
+}
+
+let completionSweep = null;
+/** Resume interrupted completion from existing agent archives, bounded per pass. */
+export function sweepRepoStateVerifications() {
+  if (completionSweep) return completionSweep;
+  completionSweep = resumeCompletionAudits().finally(() => { completionSweep = null; });
+  return completionSweep;
+}
+
+async function resumeCompletionAudits() {
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const { getTaskById } = await import('./cosTaskStore.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  const pending = agents.filter(agent => agent.status === 'completed' && agent.metadata?.repoStateVerification?.status === 'pending')
+    .sort((a, b) => (a.metadata.repoStateVerification.checkedAt || '').localeCompare(b.metadata.repoStateVerification.checkedAt || ''));
+  let checked = 0;
+  for (const agent of pending.slice(0, 10)) {
+    const task = await getTaskById(agent.taskId).catch(() => null);
+    // Move missing tasks to the back of the next pass; they cannot grant authority.
+    if (!task) {
+      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+      await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
+        checkedAt: new Date().toISOString(), reasons: ['task-unavailable'] });
+      checked++;
+      continue;
+    }
+    await verifyAgentRepoState({ agentId: agent.id || agent.agentId, agentState: agent, task,
+      success: agent.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) })
+      .catch(error => emitLog('warn', `Completion recovery deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
+    checked++;
+  }
+  return { checked, pendingAtStart: pending.length };
+}
+
+async function verifyRunBranches(input) {
+  const meta = input.agentState?.metadata || {};
+  if (meta.isWorktree === true || !isTruthyMeta(meta.claimPicksOwnBranch)) return verifyAgentBranchState(input);
+  const bindings = [meta.claimBranches, meta.claimReleasedBranches];
+  if (bindings.some(value => value != null && (!Array.isArray(value) || value.some(branch => typeof branch !== 'string' || !branch)))) {
+    return { verified: false, skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE, issues: [], observed: null, recoveryTaskId: null };
+  }
+  const branches = [...new Set(bindings.flatMap(value => value || []))];
+  if (!branches.length) return verifyAgentBranchState(input);
+  const sourceWorkspace = meta.sourceWorkspace || meta.workspacePath;
+  const trees = sourceWorkspace ? await listWorktrees(sourceWorkspace).catch(() => null) : null;
+  if (!trees) return { verified: false, skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE, issues: [], observed: null, recoveryTaskId: null };
+  const results = [];
+  for (const branch of branches) {
+    const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+    const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+    const agents = await readClaimOwnershipAgents().catch(() => null);
+    const owner = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace, agents });
+    if (owner) {
+      results.push({ branch, verified: false, skipReason: owner, issues: [], recoveryTaskId: null });
+      continue;
+    }
+    // Scope only to server-recorded bindings, never branches parsed from prose.
+    // Resolve the holder from Git; the claim agent's workspace is the primary.
+    const holder = trees.find(tree => tree.branch === `refs/heads/${branch}`);
+    results.push({ branch, ...await verifyAgentBranchState({ ...input, prExpected: true,
+      agentState: { ...input.agentState, metadata: { ...meta, isWorktree: true,
+        worktreeBranch: branch, sourceWorkspace, workspacePath: holder?.path || null } },
+    }) });
+  }
+  return { verified: results.every(result => result.verified), branches: results,
+    issues: results.flatMap(result => result.issues), skipReason: null };
+}
+
+async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [] }) {
   const metadata = agentState?.metadata || {};
   const branchName = metadata.worktreeBranch || null;
   const sourceWorkspace = metadata.sourceWorkspace || null;
@@ -287,7 +377,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
   const expectation = resolveRepoStateExpectation({ ...structural, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
-  const worktreePath = metadata.workspacePath || join(PATHS.worktrees, agentId);
+  const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
   const observed = await probeRepoState({
     sourceWorkspace,
     branchName,
@@ -311,7 +401,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
       emitLog('info', `🔎 Repo state only partly readable for ${agentId} (${branchName}) — could not check: ${observed.unreadable.join(', ')}`, { agentId, branchName });
       return { verified: false, skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE, issues: [], observed, recoveryTaskId: null };
     }
-    emitLog('info', `🔎 Agent branch ${branchName} ${observed.autoMergeEnabled ? 'verified pending GitHub auto-merge' : 'verified clean'} for ${agentId}`, { agentId, branchName });
+    emitLog('info', `🔎 Agent branch ${branchName} verified clean for ${agentId}`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
   }
 
@@ -347,7 +437,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
   emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId,
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -404,7 +494,7 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
  *
  * @returns {Promise<string|null>} the task id, or null when it was a duplicate
  */
-async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId }) {
+async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun = false }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
@@ -453,13 +543,20 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
 
   if (created?.duplicate) {
     emitLog('info', `🔎 Repo-state recovery for ${branchName} already queued as ${created.id}`, { agentId, branchName });
-    return null;
+    // Repair an interruption between task creation and backlink persistence,
+    // but never bind an unrelated task returned by description deduplication.
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const duplicate = await getTaskById(created.id).catch(() => null);
+    const origin = duplicate?.metadata?.recoveryOrigin;
+    const target = duplicate?.metadata?.recoveryMergeTarget;
+    if (!mergeTarget || origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
+      || origin?.subsystem !== 'repository-cleanup' || target?.url !== mergeTarget.url || target?.branch !== branchName) return null;
   }
   if (mergeTarget && created?.id) {
     // Admission's trust anchor: task metadata is API-writable, so only this
     // server-written backlink on the parent names which task may land its PR.
-    const { updateAgent } = await import('./cosAgentLifecycle.js');
-    const bound = await updateAgent(agentId, { metadata: { repoStateRecovery: { taskId: created.id, ...mergeTarget } } })
+    const { recordRepoStateRecovery } = await import('./cosAgentLifecycle.js');
+    const bound = await recordRepoStateRecovery(agentId, { taskId: created.id, ...mergeTarget }, { claimRun })
       .catch(error => { emitLog('warn', `Could not bind repo-state recovery to ${agentId}: ${error.message}`, { agentId, branchName }); return null; });
     if (!bound) emitLog('warn', `Repo-state recovery ${created.id} cannot merge ${branchName}: parent ${agentId} was not bound`, { agentId, branchName });
   }

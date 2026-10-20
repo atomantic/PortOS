@@ -341,6 +341,7 @@ export const appSchema = z.object({
   // task when it diverges. See lib/repoStateExpectations.js. Unset = ON: an install
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
+  mergeHandoffMinQueuedRuns: z.number().int().min(1).max(10000).nullable().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),

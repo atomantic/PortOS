@@ -6,6 +6,7 @@ import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js'
 // recovery for a parent whose PR is still open; that recovery lands the PR
 // inside repository merge admission. Authority comes from the audit's own
 // forge observation and its backlink on the parent, never a caller claim.
+vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, archive: {} }));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
@@ -23,6 +24,7 @@ vi.mock('./cosAgentIndex.js', async () => ({
   ...await vi.importActual('./cosAgentIndex.js'),
   loadAgentIndex: async () => new Map([['parent-1', '2026-01-01']]),
 }));
+vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => Object.values(f.state.agents) }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null }));
 vi.mock('./cos.js', () => ({
@@ -57,7 +59,7 @@ import { addTask } from './cos.js';
 import { findPullRequestForBranch } from './github.js';
 import { buildTaskMetadata } from './cosTaskIntake.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { registerAgent, recordRepoStateRecovery } from './cosAgentLifecycle.js';
 import { verifyAgentRepoState } from './agentRepoStateVerification.js';
 import { claimMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
 
@@ -92,6 +94,7 @@ beforeEach(() => {
   f.state = { agents: { 'parent-1': { id: 'parent-1', taskId: 'task-parent', status: 'completed', startedAt: '2026-01-01T00:00:00Z',
     completedAt: '2026-01-01T01:00:00Z', metadata: { isWorktree: true, sourceWorkspace: '/repos/source', worktreeBranch: BRANCH,
       workspacePath: '/repos/source/data/cos/worktrees/parent-1', prOpenedBy: 'agent-slashdo' } } }, mergeAdmissions: {}, stats: { agentsSpawned: 0 } };
+  f.archive['/synthetic/agents/2026-01-01/parent-1/metadata.json'] = JSON.stringify(f.state.agents['parent-1']);
   persist();
 });
 
@@ -110,12 +113,46 @@ describe('repository-cleanup recovery merge admission', () => {
     expect(f.state.agents['recovery-1'].metadata.claimPicksOwnBranch).toBeUndefined();
   });
 
+  it('keeps admission for both claim-swarm recoveries after the second backlink is written', async () => {
+    const parent = f.state.agents['parent-1'];
+    parent.metadata = { ...parent.metadata, isWorktree: false, worktreeBranch: null,
+      claimPicksOwnBranch: true, claimBranches: ['claim/issue-11', 'claim/issue-12'] };
+    findPullRequestForBranch.mockImplementation(async branch => ({ status: 'found', detail: 'OPEN',
+      url: `https://github.com/example/repo/pull/${branch.endsWith('11') ? 11 : 12}` }));
+    addTask.mockResolvedValueOnce({ id: 'task-first' }).mockResolvedValueOnce({ id: 'task-second' });
+    await verifyAgentRepoState({ agentId: 'parent-1', task: parentTask, agentState: parent, success: true });
+    expect(Object.keys(f.state.agents['parent-1'].metadata.repoStateRecoveries)).toEqual(['claim/issue-11', 'claim/issue-12']);
+    for (const [index, id] of ['task-first', 'task-second'].entries()) {
+      await register('recovery-1', queue(id, addTask.mock.calls[index][0]));
+      const lease = await admission('acquire');
+      expect(lease.admitted).toBe(true);
+      await admission('release', lease.token, { outcome: 'merged' });
+      delete f.state.agents['recovery-1']; persist();
+    }
+  });
+
   it('verifies a parent already archived out of live state through its persisted backlink', async () => {
     await fileAndLaunch();
     delete f.state.agents['parent-1']; persist();
     const lease = await admission('acquire');
     expect(lease).toMatchObject({ admitted: true, repository: REPOSITORY });
     expect(await admission('release', lease.token, { outcome: 'merged' })).toMatchObject({ released: true });
+  });
+
+  it('binds a recovery after the parent has already left live retention', async () => {
+    const parent = f.state.agents['parent-1'];
+    delete f.state.agents['parent-1']; persist();
+    const audit = await verifyAgentRepoState({ agentId: 'parent-1', task: parentTask, agentState: parent, success: true, prExpected: true });
+    expect(audit.recoveryTaskId).toBe('task-recovery-1');
+    await register('recovery-1', queue('task-recovery-1', addTask.mock.calls.at(-1)[0]));
+    expect(await admission('acquire')).toMatchObject({ admitted: true });
+  });
+
+  it('does not synthesize a date bucket while a failed archive move still owns the flat directory', async () => {
+    f.archive = {};
+    await recordRepoStateRecovery('parent-1', { taskId: 'recovery', url: PR_URL, branch: BRANCH });
+    expect(f.archive).toEqual({});
+    expect(f.disk.agents['parent-1'].metadata.repoStateRecovery.taskId).toBe('recovery');
   });
 
   it('keeps the repository-wide lease exclusive against claim runs and the sweep', async () => {

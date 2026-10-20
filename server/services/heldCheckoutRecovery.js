@@ -20,7 +20,7 @@
 
 import { createReadStream } from 'node:fs';
 import { lstat, readlink, readdir, chmod } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sha256File, writeFileGuarded } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
@@ -193,12 +193,31 @@ async function snapshotContent(path) {
  */
 async function archiveCheckout(input) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = join(heldCheckoutArchiveRoot(input.cosDir), `${backupSlug(input.branch || `detached-${input.tree.head}`)}-${stamp}`);
+  const dir = join(heldCheckoutArchiveRoot(input.cosDir), `${backupSlug(input.branch || `detached-${input.tree.head}`)}-${stamp}-${randomUUID()}`);
   // An incomplete archive must not read as a restore point.
   return writeArchive(dir, input).catch(async (error) => {
     await rmGuarded(dir, { recursive: true, force: true }).catch(() => {});
     throw error;
   });
+}
+
+/** Preserve ignored content and recovery evidence before a clean merged tree
+ * is removed. The caller owns the live ownership fence and merge proof; this
+ * guard verifies that every preserved byte still matches immediately at removal.
+ */
+export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir } = {}) {
+  if (!tree?.head || !tree.branch || tree.locked) throw new Error('checkout-identity-unavailable');
+  const branch = shortBranch(tree.branch);
+  const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir });
+  return {
+    archiveDir: archive.dir,
+    async verify(holder) {
+      if (!holder || holder.head !== tree.head || holder.branch !== tree.branch) return 'worktree-holder-changed';
+      const [content, administration] = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+      return content.fingerprint === archive.fingerprint && administration.fingerprint === archive.administrationFingerprint
+        ? null : 'checkout-content-changed';
+    },
+  };
 }
 
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review }) {

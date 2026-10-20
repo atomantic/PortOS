@@ -40,7 +40,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
@@ -93,6 +93,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+
+  it('preserves ignored evidence before unattended cleanup and refuses later byte or head changes', async () => {
+    const path = join(external, 'merged');
+    await execGit(['worktree', 'add', '-b', 'feature/done', path, 'main'], repo);
+    await writeFile(join(path, 'ignored.txt'), 'recovery evidence');
+    await writeFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
+    expect((await execGit(['status', '--porcelain'], path)).stdout.trim()).toBe('');
+    const tree = { path, branch: 'refs/heads/feature/done', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await readFile(join(saved.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('recovery evidence');
+    await execGit(['bundle', 'verify', join(saved.archiveDir, 'commits.bundle')], repo);
+    expect(await saved.verify(tree)).toBe(null);
+    expect(await saved.verify({ ...tree, head: 'f'.repeat(40) })).toBe('worktree-holder-changed');
+    await writeFile(join(path, 'ignored.txt'), 'new evidence');
+    expect(await saved.verify(tree)).toBe('checkout-content-changed');
+    expect(existsSync(path)).toBe(true);
+  });
 
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');

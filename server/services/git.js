@@ -1734,22 +1734,16 @@ const WORKTREE_HOLD_REASONS = {
   'worktree-human-claim': 'worktree is a claimed session',
   'remove-failed': 'worktree removal failed and the checkout is still present'
 };
-const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked out in a worktree';
+const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || reason || 'checked out in a worktree';
 
 /**
  * Delete all merged branches (local and remote) in one operation.
  * Skips the `PROTECTED_BRANCHES` set (see `../lib/gitArgs.js`), the current branch,
  * and any explicitly excluded branches.
  *
- * A merged branch checked out in a WORKTREE is no longer reported-and-left: the
- * worktree is reaped first (`reapMergedWorktrees`, which removes the tree and the
- * branch together) so the "Clean N merged" affordance actually clears instead of
- * offering the same branch on every visit. That reap refuses anything it cannot
- * prove disposable — an uncommitted tree, a branch not fully in
- * `origin/<default>` (which is also what rules out losing unpushed work: every
- * commit on a reaped branch is already on the remote), a locked tree, a live
- * agent's tree, or a human `/claim` session. Those come back in `skipped` with
- * the reason, so the UI can say why one survived.
+ * Shares the reconciler's fresh ownership, merge, archival and retirement gates.
+ * Local and remote deletion are pinned to observed heads. Retained work is
+ * returned with its specific reason; the UI's merged flag is never authority.
  *
  * @param {string} dir - Working directory
  * @param {object} options
@@ -1759,104 +1753,62 @@ const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked
  * @returns {Promise<{deleted: Array<{name: string, local: string, remote: string, worktree?: string}>, skipped: string[], defaultBranch: string}>}
  */
 export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null } = {}) {
-  const [{ baseBranch }, currentBranch, worktreeBranches] = await Promise.all([
-    getRepoBranches(dir),
-    getBranch(dir),
-    getWorktreeBranches(dir)
-  ]);
+  const { cleanupMerged } = await import('./branchReconcile.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
-  const protectedSet = new Set(PROTECTED_BRANCHES);
-  if (baseBranch) protectedSet.add(baseBranch);
-
-  // Worktree and agent branches are only protected from local deletion. Read
-  // BEFORE the reap and corrected below, so nothing the reap freed stays behind
-  // a hold that no longer exists.
-  const localOnlyProtected = new Set([...worktreeBranches]);
-  if (excludeBranches) {
-    for (const b of excludeBranches) localOnlyProtected.add(b);
-  }
-
-  // Ahead of the merged-branch listing, so a reaped branch reads as an ordinary
-  // already-deleted local rather than as a worktree-held skip. `defaultBranch` is
-  // handed over because the reap's own lookup can fall back to a `remote set-head`
-  // probe, which is a 5s stall on this request path.
-  const reap = await reapMergedWorktrees(dir, {
-    activeAgentIds, excludeBranches, includeUnmanagedTrees: true, defaultBranch
-  }).catch(err => {
-    console.error(`❌ Worktree reap failed during merged-branch cleanup: ${err.message}`);
-    return null;
-  });
-  // Whatever the reap removed no longer has a worktree holding it, so drop the
-  // hold: a branch whose tree went but whose delete failed falls through to the
-  // ordinary `branch -d` pass below, which reports its own outcome.
-  for (const entry of reap?.reaped || []) localOnlyProtected.delete(entry.branch);
-  const reapedBranches = (reap?.reaped || []).filter(entry => entry.branch && entry.branchDeleted).map(entry => entry.branch);
-  const reapHolds = new Map((reap?.skipped || []).filter(entry => entry.branch).map(entry => [entry.branch, entry.reason]));
-
-  // The reap already fetched --prune; a second round-trip would change nothing.
-  if (!reap) await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
-
-  const [localMergedNames, remoteMerged] = await Promise.all([
-    getLocalMergedBranchNames(dir, defaultBranch),
-    execGit(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'], dir, { ignoreExitCode: true })
-  ]);
-
-  const mergedLocalCandidates = [...localMergedNames]
-    .filter(name => !protectedSet.has(name));
-  const mergedLocalNames = mergedLocalCandidates
-    .filter(name => !localOnlyProtected.has(name) && name !== currentBranch);
-
-  const mergedRemoteNames = remoteMerged.stdout.trim().split('\n').filter(Boolean)
-    .filter(ref => ref.startsWith('origin/'))
-    .map(ref => ref.replace(/^origin\//, ''))
-    .filter(name => !protectedSet.has(name) && name !== 'HEAD');
-
-  const allMerged = [...new Set([...mergedLocalNames, ...mergedRemoteNames])];
-  const localSet = new Set(mergedLocalNames);
-  const remoteSet = new Set(mergedRemoteNames);
-
-  // One record per branch, so a branch whose local half the reap already deleted
-  // and whose remote half is deleted below reports as a single row.
-  const records = new Map(reapedBranches.map(name => [name, { name, local: 'deleted', remote: null, worktree: 'removed' }]));
-  const skipped = mergedLocalCandidates
-    .filter(name => localOnlyProtected.has(name) || name === currentBranch)
-    .map(name => {
-      const reason = name === currentBranch
-        ? 'currently checked out'
-        : excludeBranches?.has(name)
-          ? 'used by an active agent'
-          : worktreeHoldReason(reapHolds.get(name));
-      return `${name} (local: ${reason})`;
+  const target = `refs/remotes/origin/${defaultBranch}`;
+  const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
+  const skipped = [];
+  const records = new Map();
+  // A stale local default or an unsuccessful fetch never authorizes deletion.
+  const fetched = await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
+  if (fetched.exitCode !== 0) return { deleted: [], skipped: ['cleanup (remote default could not be refreshed)'], defaultBranch };
+  const branches = await execGitSafe(['branch', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
+  if (branches.exitCode !== 0) return { deleted: [], skipped: ['cleanup (local branches unavailable)'], defaultBranch };
+  const local = new Set(branches.stdout.trim().split('\n').filter(Boolean));
+  const remote = await execGitSafe(['branch', '-r', '--merged', target, '--format=%(refname:short)'], dir, { ignoreExitCode: true });
+  if (remote.exitCode !== 0) return { deleted: [], skipped: ['cleanup (remote merge evidence unavailable)'], defaultBranch };
+  const remoteNames = remote.stdout.trim().split('\n').filter(ref => ref.startsWith('origin/')).map(ref => ref.slice(7));
+  const names = new Set([...local, ...remoteNames]);
+  for (const name of names) {
+    if (protectedSet.has(name) || name === 'HEAD') continue;
+    const exclusions = typeof excludeBranches === 'function' ? await excludeBranches() : excludeBranches;
+    if (exclusions?.has(name)) { skipped.push(`${name} (used by an active agent)`); continue; }
+    const record = { name, local: null, remote: null };
+    records.set(name, record);
+    if (local.has(name)) {
+      const retired = await cleanupMerged(dir, target, [{ branch: name }], { activeAgentIds });
+      if (retired.cleaned.includes(name)) record.local = 'deleted';
+      else {
+        for (const hold of retired.skipped) skipped.push(`${name} (local: ${worktreeHoldReason(hold.reason)}${hold.detail ? `: ${hold.detail}` : ''})`);
+        // Retention is a whole-branch outcome. In particular, archive failure
+        // must leave both the checkout and its remote recovery ref intact.
+        continue;
+      }
+    }
+    if (!remoteNames.includes(name)) continue;
+    // Binding and cleanup share the same fence. Snapshot exclusions are only an
+    // extra hold; the authoritative owner and completion policy are read afresh.
+    await withClaimOwnershipLock(async () => {
+      const agents = await readClaimOwnershipAgents();
+      const owner = claimCheckoutOwnerReason({ branchName: name, holderPath: null, sourceWorkspace: dir, agents });
+      if (owner) { skipped.push(`${name} (remote: ${owner})`); return; }
+      const ref = `refs/heads/${name}`;
+      const head = await execGitSafe(['ls-remote', '--heads', 'origin', ref], dir, { ignoreExitCode: true });
+      const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)\n?$/.exec(head.stdout.trim());
+      if (head.exitCode !== 0 || !match || match[2] !== ref) { skipped.push(`${name} (remote: head unavailable or already removed)`); return; }
+      const policy = await readBranchCompletionHold({ repoPath: dir, branch: name, tip: match[1], retirement: true });
+      if (policy) { skipped.push(`${name} (remote: ${policy})`); return; }
+      if (!await hasBranchMergeEvidence(dir, match[1], target)) { skipped.push(`${name} (remote: current head is not merged)`); return; }
+      const removed = await execGitSafe(['push', `--force-with-lease=${ref}:${match[1]}`, 'origin', `:${ref}`], dir, { ignoreExitCode: true });
+      record.remote = removed.exitCode === 0 ? 'deleted' : 'failed';
+      if (removed.exitCode !== 0) skipped.push(`${name} (remote: head changed or deletion failed)`);
     });
-  const opts = { ignoreExitCode: true };
-
-  for (const name of allMerged) {
-    const hasLocal = localSet.has(name);
-    const hasRemote = remoteSet.has(name);
-    const result = records.get(name) || { name, local: null, remote: null };
-    records.set(name, result);
-
-    if (hasLocal) {
-      // `mergedLocalNames` was computed against the default branch above. Git's
-      // `branch -d` checks the current checkout (or the branch's upstream), which
-      // can differ when the app repo is currently on another branch; that would
-      // reject a branch this cleanup has already proved merged. Force-delete is
-      // safe here because worktree/current/agent-held names were filtered out.
-      const r = await execGitSafe(['branch', '-D', name], dir, opts);
-      result.local = r.exitCode === 0 ? 'deleted' : 'failed';
-      if (r.exitCode !== 0) skipped.push(`${name} (local: ${r.stderr?.trim()})`);
-    }
-
-    if (hasRemote) {
-      const r = await execGitSafe(['push', 'origin', '--delete', name], dir, opts);
-      result.remote = r.exitCode === 0 ? 'deleted' : 'failed';
-      if (r.exitCode !== 0) skipped.push(`${name} (remote: ${r.stderr?.trim()})`);
-    }
   }
-
-  const deleted = [...records.values()].filter(r => r.local === 'deleted' || r.remote === 'deleted');
-
-  return { deleted, skipped, defaultBranch };
+  return { deleted: [...records.values()].filter(row => row.local === 'deleted' || row.remote === 'deleted'), skipped, defaultBranch };
 }
 
 /**

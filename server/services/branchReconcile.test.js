@@ -1,6 +1,6 @@
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
-  readBranchCompletionPolicies: vi.fn(async () => []),
+  readBranchCompletionPolicies: vi.fn(async () => (await wt.listWorktrees()).map(tree => ({ id: 'completed-owner', status: 'completed', metadata: { sourceWorkspace: '/repo', worktreeBranch: tree.branch?.replace('refs/heads/', '') } }))),
   readBranchCompletionHold: vi.fn(async () => null),
 }));
 /**
@@ -13,6 +13,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  *   inFlight / wip correctly).
  */
 
+vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })) }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
@@ -117,7 +118,7 @@ vi.mock('./supersededBackup.js', () => ({
 }));
 
 import {
-  classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason,
+  classifyBranch, classifyBranches, cleanupMerged as retireMerged, reconcile, gatherBranchState, worktreeProtectionReason,
   isAbandonedAgentWorktree, isAbandonedClaimWorktree, resolveLiveOwnerReason, gatherDivergence,
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
@@ -134,6 +135,18 @@ import { execGh } from './github.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { __resetForgeNoAccessLog } from '../lib/forgeAccessErrors.js';
+
+const RETIRE_HEAD = 'a'.repeat(40);
+const pinnedRef = args => args[0] === 'rev-parse' && args[1] === '--verify' && /^refs\/heads\/[^{}]+$/.test(args[2]);
+const gitFixtureResult = (stdout = '', exitCode = 0) => async args => ({ stdout: pinnedRef(args) ? RETIRE_HEAD : stdout, exitCode });
+let retirementTrees = [];
+async function cleanupMerged(repo, target, branches, options) {
+  retirementTrees = branches.filter(branch => branch.worktreePath).map(branch => ({
+    path: branch.worktreePath, branch: `refs/heads/${branch.branch}`, head: RETIRE_HEAD, locked: branch.worktreeLocked,
+  }));
+  wt.listWorktrees.mockImplementation(async () => retirementTrees);
+  return retireMerged(repo, target, branches, options);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -152,9 +165,9 @@ beforeEach(() => {
   });
   git.getDefaultBranch.mockResolvedValue('main');
   git.deleteBranch.mockResolvedValue({ branch: 'x', results: { local: 'deleted' } });
-  wt.forceRemoveWorktreeDir.mockResolvedValue({ removed: true, warning: null });
+  wt.forceRemoveWorktreeDir.mockImplementation(async (_repo, path) => { retirementTrees = (await wt.listWorktrees()).filter(tree => tree.path !== path); wt.listWorktrees.mockResolvedValue(retirementTrees); return { removed: true, warning: null }; });
   wt.reapMergedWorktrees.mockResolvedValue({ reaped: [], skipped: [] });
-  execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+  execGit.mockImplementation(gitFixtureResult('', 0));
   tryReadFileMock.mockResolvedValue(null);
   backupSupersededBranchMock.mockImplementation(async (_repoPath, branch) => ({
     dir: `/repo/data/cos/abandoned-worktree-backups/${branch.branch.replace(/\//g, '-')}`,
@@ -355,12 +368,12 @@ describe('cleanupMerged', () => {
     ['native-joined fixture', join('/repo', '.claude', 'worktrees', 'next-2190')]
   ])('removes worktree + deletes branch when merged and clean (%s)', async (_label, worktreePath) => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean worktree
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
     expect(res.skipped).toEqual([]);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
-    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', { local: true });
+    expect(execGit).toHaveBeenCalledWith(['update-ref', '-d', `refs/heads/${'next/issue-2190'}`, RETIRE_HEAD], '/repo', { ignoreExitCode: true });
   });
 
   it.each([
@@ -368,7 +381,7 @@ describe('cleanupMerged', () => {
     '/repo/.claude/worktrees/../outside/next-2190'
   ])('holds a merged clean worktree outside the managed root (%s)', async (worktreePath) => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: worktreePath, reason: 'worktree-unmanaged-location' }]);
@@ -378,7 +391,7 @@ describe('cleanupMerged', () => {
 
   it('does not delete the branch or report it cleaned when the worktree survives removal', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean worktree
     wt.forceRemoveWorktreeDir.mockResolvedValue({ removed: false, warning: 'Worktree cleanup incomplete — retryable' });
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/repo/.claude/worktrees/next-2190' }]);
     expect(res.cleaned).toEqual([]);
@@ -395,7 +408,7 @@ describe('cleanupMerged', () => {
 
   it('skips when the worktree has real uncommitted changes', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
+    execGit.mockImplementation(gitFixtureResult(' M server/index.js', 0)); // dirty
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2196', path: '/repo/.claude/worktrees/next-2196', reason: 'worktree-dirty' }]);
@@ -430,14 +443,14 @@ describe('cleanupMerged', () => {
 
   it('reaps an ABANDONED claim worktree (merged + clean + stale age)', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean
     const res = await cleanupMerged('/repo', 'main', [
       // 10 days old — comfortably past the 7-day STALE_CLAIM_IDLE_MS default
       { branch: 'claim/issue-1933', worktreePath: '/repo/data/cos/worktrees/claim-issue-1933', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 }
     ]);
     expect(res.cleaned).toEqual(['claim/issue-1933']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
-    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
+    expect(execGit).toHaveBeenCalledWith(['update-ref', '-d', `refs/heads/${'claim/issue-1933'}`, RETIRE_HEAD], '/repo', { ignoreExitCode: true });
   });
 
   it('leaves global issue markers untouched after successful local deletion without asserting they exist', async () => {
@@ -446,7 +459,7 @@ describe('cleanupMerged', () => {
     const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
-    expect(git.deleteBranch).toHaveBeenCalled();
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'update-ref')).toBe(true);
     expect(execGh).not.toHaveBeenCalled();
   });
 
@@ -470,7 +483,7 @@ describe('cleanupMerged', () => {
     const held = await cleanupMerged('/repo', 'main', [branch], { activeAgentIds: new Set(['claim-issue-42']) });
     expect(held.skipped[0].reason).toBe('worktree-active-agent');
     expect(execGh).not.toHaveBeenCalled();
-    git.deleteBranch.mockResolvedValue({ error: 'delete refused' });
+    execGit.mockImplementation(async args => args[0] === 'update-ref' ? { exitCode: 1, stdout: '' } : gitFixtureResult()(args));
     const failed = await cleanupMerged('/repo', 'main', [branch]);
     expect(failed.cleaned).toEqual([]);
     expect(execGh).not.toHaveBeenCalled();
@@ -480,7 +493,7 @@ describe('cleanupMerged', () => {
     expect(isMalformedClaimBranch('claim/issue-')).toBe(true);
     expect(isMalformedClaimBranch('claim/issue-42')).toBe(false);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
 
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-', worktreePath: '/repo/data/cos/worktrees/claim-issue-', worktreeAgeMs: 2 * 60 * 60 * 1000 }
@@ -488,12 +501,12 @@ describe('cleanupMerged', () => {
 
     expect(res.cleaned).toEqual(['claim/issue-']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-', expect.any(Object));
-    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', { local: true });
+    expect(execGit).toHaveBeenCalledWith(['update-ref', '-d', `refs/heads/${'claim/issue-'}`, RETIRE_HEAD], '/repo', { ignoreExitCode: true });
   });
 
   it('still protects a RECENT claim worktree for snapshot-only callers even when merged + clean, and says when the hold lifts', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean
     const before = Date.now();
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-9999', worktreePath: '/repo/data/cos/worktrees/claim-issue-9999', worktreeAgeMs: 60 * 1000 } // 1 min old
@@ -517,17 +530,17 @@ describe('cleanupMerged', () => {
     });
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean
     const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }], { claimOwners: { agents: [] } });
     expect(reaped.cleaned).toEqual(['claim/issue-0']);
 
     // The dirty gate is independent — a shorter window never overrides it.
-    execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
+    execGit.mockImplementation(gitFixtureResult(' M server/index.js', 0)); // dirty
     const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }], { claimOwners: { agents: [] } });
     expect(dirty.cleaned).toEqual([]);
     expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', path: '/repo/data/cos/worktrees/claim-x', reason: 'worktree-dirty' }]);
 
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    execGit.mockImplementation(gitFixtureResult('', 0)); // clean
     // No completion proof — never pushed, remote ref still on origin, or the
     // remote could not be read. The week-long window still applies.
     const unshipped = await cleanupMerged('/repo', 'main', [
@@ -564,22 +577,22 @@ describe('cleanupMerged', () => {
 
 describe('worktreeProtectionReason', () => {
   it('flags locked, human-claim, and active-agent worktrees; passes ordinary ones', () => {
-    expect(worktreeProtectionReason({ path: '/wt/x', locked: true })).toBe('worktree-locked');
-    expect(worktreeProtectionReason({ path: '/x/claim-foo' })).toBe('worktree-human-claim');
-    expect(worktreeProtectionReason({ path: '/x/agent-1', activeAgentIds: new Set(['agent-1']) })).toBe('worktree-active-agent');
-    expect(worktreeProtectionReason({ path: '/repo/next-issue-2199', activeAgentIds: new Set(['agent-1']) })).toBeNull();
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/wt/x', locked: true })).toBe('worktree-locked');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo' })).toBe('worktree-human-claim');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/agent-1', activeAgentIds: new Set(['agent-1']) })).toBe('worktree-active-agent');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/repo/next-issue-2199', activeAgentIds: new Set(['agent-1']) })).toBeNull();
   });
 
   it('reaps an abandoned claim (stale age) but protects a recent one and unknown age', () => {
     const staleClaimIdleMs = 24 * 60 * 60 * 1000;
     // recent human /claim session (2h old) — still protected
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: 2 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-human-claim');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', ageMs: 2 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-human-claim');
     // abandoned claim (3d old, merged+clean) — reaped
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBeNull();
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBeNull();
     // unknown age → fail safe toward protecting
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: null, staleClaimIdleMs })).toBe('worktree-human-claim');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', ageMs: null, staleClaimIdleMs })).toBe('worktree-human-claim');
     // locked always wins even when stale
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', locked: true, ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-locked');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', locked: true, ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-locked');
   });
 
   // A shipped claim gets a SHORTER window, not a bypass — so a worktree a live
@@ -588,7 +601,7 @@ describe('worktreeProtectionReason', () => {
   // fails safe. Both properties come free from reusing the window; a bypass had
   // neither.
   it('honors the short shipped-claim window without abandoning the window itself', () => {
-    const at = (ageMs, staleClaimIdleMs) => worktreeProtectionReason({ path: '/x/claim-foo', ageMs, staleClaimIdleMs });
+    const at = (ageMs, staleClaimIdleMs) => worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', ageMs, staleClaimIdleMs });
     // Just-merged and still busy: inside the short window, still protected.
     expect(at(60 * 1000, SHIPPED_CLAIM_IDLE_MS)).toBe('worktree-human-claim');
     // Idle past it: reaped, without waiting out the week-long window.
@@ -600,9 +613,9 @@ describe('worktreeProtectionReason', () => {
   });
 
   it('allows live claims through when allowLiveClaim is true, but locked and active-agent still hold', () => {
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true })).toBeNull();
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true, locked: true })).toBe('worktree-locked');
-    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true, activeAgentIds: new Set(['claim-foo']) })).toBe('worktree-active-agent');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true })).toBeNull();
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true, locked: true })).toBe('worktree-locked');
+    expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true, activeAgentIds: new Set(['claim-foo']) })).toBe('worktree-active-agent');
   });
 });
 
@@ -618,7 +631,7 @@ describe('gatherBranchState', () => {
       { name: 'next/issue-2190', isDefault: false, current: false, tracking: 'origin/next/issue-2190', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/wt/2199', branch: 'refs/heads/next/issue-2199' }
+      { head: RETIRE_HEAD, path: '/wt/2199', branch: 'refs/heads/next/issue-2199' }
     ]);
     execGh.mockResolvedValue(JSON.stringify([
       { number: 2206, headRefName: 'next/issue-2199', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
@@ -708,30 +721,30 @@ describe('isAbandonedAgentWorktree', () => {
   const live = new Set(['agent-aaaaaaaa']);
 
   it('is true only for an unlocked agent worktree whose agent is not running', () => {
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-bbbbbbbb', activeAgentIds: live })).toBe(true);
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-aaaaaaaa', activeAgentIds: live })).toBe(false);
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-bbbbbbbb', locked: true, activeAgentIds: live })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: live })).toBe(true);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-aaaaaaaa', activeAgentIds: live })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', locked: true, activeAgentIds: live })).toBe(false);
   });
 
   it('never claims a human /claim worktree, a non-agent sibling, or a missing path', () => {
-    expect(isAbandonedAgentWorktree({ path: '/wt/claim-fix-thing', activeAgentIds: live })).toBe(false);
-    expect(isAbandonedAgentWorktree({ path: '/wt/next-issue-42', activeAgentIds: live })).toBe(false);
-    expect(isAbandonedAgentWorktree({ path: '', activeAgentIds: live })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/claim-fix-thing', activeAgentIds: live })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/next-issue-42', activeAgentIds: live })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '', activeAgentIds: live })).toBe(false);
   });
 
   // Sentinel, not a plain collection: an empty Set is an authoritative "nothing is
   // running" (the common case), while an omitted/non-Set value means liveness is
   // unknown and must fail safe toward protecting the worktree.
   it('treats an empty Set as authoritative but an absent one as unknown', () => {
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-bbbbbbbb', activeAgentIds: new Set() })).toBe(true);
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-bbbbbbbb' })).toBe(false);
-    expect(isAbandonedAgentWorktree({ path: '/wt/agent-bbbbbbbb', activeAgentIds: ['agent-cccccccc'] })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: new Set() })).toBe(true);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb' })).toBe(false);
+    expect(isAbandonedAgentWorktree({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: ['agent-cccccccc'] })).toBe(false);
   });
 });
 
 describe('isAbandonedClaimWorktree', () => {
   it('recognizes an unlocked claim tree only with authoritative liveness', () => {
-    const dirty = { path: '/wt/claim-issue-42', worktreeDirty: true };
+    const dirty = { head: RETIRE_HEAD, path: '/wt/claim-issue-42', worktreeDirty: true };
     expect(isAbandonedClaimWorktree({ ...dirty, activeAgentIds: new Set() })).toBe(true);
     expect(isAbandonedClaimWorktree({ ...dirty, activeAgentIds: new Set(['claim-issue-42']) })).toBe(false);
     expect(isAbandonedClaimWorktree({ ...dirty, locked: true, activeAgentIds: new Set() })).toBe(false);
@@ -741,9 +754,9 @@ describe('isAbandonedClaimWorktree', () => {
 
   it('never treats an agent or ordinary sibling tree as a claim', () => {
     const activeAgentIds = new Set();
-    expect(isAbandonedClaimWorktree({ path: '/wt/agent-deadbeef', worktreeDirty: true, activeAgentIds })).toBe(false);
-    expect(isAbandonedClaimWorktree({ path: '/wt/next-issue-42', worktreeDirty: true, activeAgentIds })).toBe(false);
-    expect(isAbandonedClaimWorktree({ path: '', worktreeDirty: true, activeAgentIds })).toBe(false);
+    expect(isAbandonedClaimWorktree({ head: RETIRE_HEAD, path: '/wt/agent-deadbeef', worktreeDirty: true, activeAgentIds })).toBe(false);
+    expect(isAbandonedClaimWorktree({ head: RETIRE_HEAD, path: '/wt/next-issue-42', worktreeDirty: true, activeAgentIds })).toBe(false);
+    expect(isAbandonedClaimWorktree({ head: RETIRE_HEAD, path: '', worktreeDirty: true, activeAgentIds })).toBe(false);
   });
 });
 
@@ -751,28 +764,28 @@ describe('resolveLiveOwnerReason', () => {
   const live = new Set(['agent-aaaaaaaa']);
 
   it('reports dispatch-side ownership while cleanup keeps claim worktrees protected', () => {
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-aaaaaaaa', activeAgentIds: live })).toBe('worktree-active-agent');
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-bbbbbbbb', locked: true, activeAgentIds: live })).toBe('worktree-locked');
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-aaaaaaaa', activeAgentIds: live })).toBe('worktree-active-agent');
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', locked: true, activeAgentIds: live })).toBe('worktree-locked');
     // A claim directory identifies the claim, but not a live process — this side
     // passes allowLiveClaim. The cleanup-side protection remains covered by
     // worktreeProtectionReason. A lock still wins, structurally: the gate tests
     // it before the claim, so no slug rewriting happens here.
-    expect(resolveLiveOwnerReason({ path: '/wt/claim-fix-thing', activeAgentIds: live })).toBeNull();
-    expect(resolveLiveOwnerReason({ path: '/wt/claim-fix-thing', locked: true, activeAgentIds: live })).toBe('worktree-locked');
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/claim-fix-thing', activeAgentIds: live })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/claim-fix-thing', locked: true, activeAgentIds: live })).toBe('worktree-locked');
   });
 
   it('lets a LIVE owner outrank the claim exception, not the other way round', () => {
     // The scheduler adds live claim-worktree basenames to activeAgentIds, and
     // the gate tests liveness BEFORE the claim exception. Never hand a branch
     // to an agent while something says a process still owns it.
-    expect(resolveLiveOwnerReason({ path: '/wt/claim-fix-thing', activeAgentIds: new Set(['claim-fix-thing']) }))
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/claim-fix-thing', activeAgentIds: new Set(['claim-fix-thing']) }))
       .toBe('worktree-active-agent');
   });
 
   it('is null for a free worktree, a dead agent, and no worktree at all', () => {
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-bbbbbbbb', activeAgentIds: live })).toBeNull();
-    expect(resolveLiveOwnerReason({ path: '/wt/next-issue-42', activeAgentIds: live })).toBeNull();
-    expect(resolveLiveOwnerReason({ path: null, activeAgentIds: live })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: live })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/next-issue-42', activeAgentIds: live })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: null, activeAgentIds: live })).toBeNull();
   });
 
   // The one case worktreeProtectionReason can't answer: it is only ever called with
@@ -780,12 +793,12 @@ describe('resolveLiveOwnerReason', () => {
   // DISPATCH decision that default is backwards — presume live, like
   // isAbandonedAgentWorktree does.
   it('presumes an agent worktree is live when liveness is UNKNOWN', () => {
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-bbbbbbbb' })).toBe('worktree-agent-liveness-unknown');
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-bbbbbbbb', activeAgentIds: ['agent-cccccccc'] })).toBe('worktree-agent-liveness-unknown');
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb' })).toBe('worktree-agent-liveness-unknown');
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: ['agent-cccccccc'] })).toBe('worktree-agent-liveness-unknown');
     // …but an authoritative empty Set really does mean nothing is running.
-    expect(resolveLiveOwnerReason({ path: '/wt/agent-bbbbbbbb', activeAgentIds: new Set() })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/agent-bbbbbbbb', activeAgentIds: new Set() })).toBeNull();
     // and a non-agent worktree is nobody's live session either way.
-    expect(resolveLiveOwnerReason({ path: '/wt/next-issue-42' })).toBeNull();
+    expect(resolveLiveOwnerReason({ head: RETIRE_HEAD, path: '/wt/next-issue-42' })).toBeNull();
   });
 
   // Ownership lives in the branch NAME (`cos/<taskId>/<agentId>`), so it outlives the
@@ -810,6 +823,7 @@ describe('gatherDivergence', () => {
   // Drives execGit by subcommand so each probe can be answered independently.
   const mockGit = ({ counts = '3\t2', mergeBase = 'base1', defaultChanged = '', branchChanged = '' } = {}) => {
     execGit.mockImplementation(async (args) => {
+      if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
       if (args[0] === 'rev-list') return { stdout: counts, exitCode: 0 };
       if (args[0] === 'merge-base') return { stdout: mergeBase, exitCode: 0 };
       if (args[0] === 'diff' && args[args.length - 1] === 'main') return { stdout: defaultChanged, exitCode: 0 };
@@ -987,7 +1001,7 @@ describe('unreachable forge (#3358)', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
-    execGit.mockImplementation(async (args) => args[0] === 'ls-remote'
+    execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 } : args[0] === 'ls-remote'
       ? { stdout: 'sha\trefs/heads/claim/issue-1\n', exitCode: 0 }
       : { stdout: '', exitCode: 0 });
     execGh.mockResolvedValue(JSON.stringify([
@@ -1088,7 +1102,7 @@ describe('unreachable forge (#3358)', () => {
   });
 
   it('runs clean-and-merged worktree cleanup before a forge probe', async () => {
-    wt.reapMergedWorktrees.mockResolvedValueOnce({ reaped: [{ branch: 'feature/done' }], skipped: [] });
+    wt.reapMergedWorktrees.mockResolvedValueOnce({ reaped: [{ branch: 'feature/done', branchDeleted: true }], skipped: [] });
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
 
     const res = await reconcile('/repo');
@@ -1144,12 +1158,12 @@ describe('reconcile', () => {
       { name: 'claim/issue-4348', isDefault: false, current: false, tracking: 'origin/claim/issue-4348', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
     ]);
     execGh.mockResolvedValue('[]');
     // ls-remote reports origin has only main — the claim's remote branch was
     // deleted when its PR merged. Everything else (status, etc.) reads clean.
-    execGit.mockImplementation(async (args) => args[0] === 'ls-remote'
+    execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 } : args[0] === 'ls-remote'
       ? { stdout: 'abc123\trefs/heads/main\n', exitCode: 0 }
       : { stdout: '', exitCode: 0 });
     // Idle for hours — past SHIPPED_CLAIM_IDLE_MS, so no live session is implied.
@@ -1173,10 +1187,10 @@ describe('reconcile', () => {
       { name: 'claim/issue-4348', isDefault: false, current: false, tracking: 'origin/claim/issue-4348', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
     ]);
     execGh.mockResolvedValue('[]');
-    execGit.mockImplementation(async (args) => args[0] === 'ls-remote'
+    execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 } : args[0] === 'ls-remote'
       ? { stdout: '', exitCode: 1 } // ls-remote failed → listRemoteHeads returns null
       : { stdout: '', exitCode: 0 });
     // Idle long enough that the SHORT window would have released it — so the only
@@ -1205,7 +1219,7 @@ describe('reconcile', () => {
     // Branch-aware: only 2190 is merged (gather short-circuits it via merged:true;
     // this also satisfies the cleanup re-check). 2199 must stay un-merged so it
     // classifies IN_REVIEW rather than being swept into cleanup.
-    git.hasBranchMergeEvidence.mockImplementation(async (_dir, branch) => branch === 'next/issue-2190');
+    git.hasBranchMergeEvidence.mockImplementation(async (_dir, branch) => branch === 'next/issue-2190' || branch === RETIRE_HEAD);
 
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual(['next/issue-2190']);
@@ -1223,14 +1237,14 @@ describe('reconcile', () => {
       { name: 'cos/task-y/agent-live1234', isDefault: false, current: false, tracking: 'origin/cos/task-y/agent-live1234', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/agent-live1234', branch: 'refs/heads/cos/task-y/agent-live1234' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/agent-live1234', branch: 'refs/heads/cos/task-y/agent-live1234' }
     ]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue(JSON.stringify([
       { number: 4001, headRefName: 'cos/task-y/agent-live1234', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
     // Clean worktree — the agent has committed and pushed but is still running.
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-live1234']) });
     expect(res.inFlight).toEqual([]);
@@ -1254,7 +1268,7 @@ describe('reconcile', () => {
     execGh.mockResolvedValue(JSON.stringify([
       { number: 4002, headRefName: 'cos/task-z/agent-live5678', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-live5678']) });
     expect(res.inFlight).toEqual([]);
@@ -1266,7 +1280,7 @@ describe('reconcile', () => {
       { name: 'claim/issue-42', isDefault: false, current: false, tracking: 'origin/claim/issue-42', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
     ]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue(JSON.stringify([
@@ -1275,7 +1289,7 @@ describe('reconcile', () => {
     // The claim has committed its work and is no longer running. A clean claim
     // tree must be eligible for the same PR reconciliation as any other branch;
     // the cleanup-side claim guard is tested separately above.
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set() });
     expect(res.inFlight.map((b) => [b.branch, b.state])).toEqual([['claim/issue-42', 'IN_REVIEW']]);
@@ -1291,11 +1305,11 @@ describe('reconcile', () => {
       { name: 'cos/task-x/agent-deadbeef', isDefault: false, current: false, tracking: 'origin/main', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
     ]);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     // Uncommitted work in the worktree.
-    execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n?? server/services/newThing.js\n', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult(' M server/services/thing.js\n?? server/services/newThing.js\n', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set() });
     expect(res.inFlight.map((i) => i.state)).toEqual(['ABANDONED_WIP']);
@@ -1309,10 +1323,10 @@ describe('reconcile', () => {
       { name: 'claim/issue-42', isDefault: false, current: false, tracking: null, merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
     ]);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult(' M server/services/thing.js\n', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set() });
 
@@ -1338,10 +1352,10 @@ describe('reconcile', () => {
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: null, merged: true }
       ]);
       wt.listWorktrees.mockResolvedValue([
-        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+        { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
       ]);
       git.hasBranchMergeEvidence.mockResolvedValue(true);
-      execGit.mockResolvedValue({ stdout: '?? server/services/newThing.test.js\n', exitCode: 0 });
+      execGit.mockImplementation(gitFixtureResult('?? server/services/newThing.test.js\n', 0));
     };
     // Pinned to epic 100, then bound child 101 before cutting it.
     const owner = (status, metadata = {}) => ({
@@ -1390,10 +1404,10 @@ describe('reconcile', () => {
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }
       ]);
       wt.listWorktrees.mockResolvedValue([
-        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+        { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
       ]);
       git.hasBranchMergeEvidence.mockResolvedValue(true);
-      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      execGit.mockImplementation(gitFixtureResult('', 0));
       // The scan saw nobody; the run bound the branch before cleanup reached it.
       const late = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [owner('running')] } });
       expect(late.skipped).toEqual([expect.objectContaining({ branch: 'claim/issue-101', reason: 'claim-owner-active' })]);
@@ -1405,7 +1419,7 @@ describe('reconcile', () => {
 
     it('preserves work written after the scan even when the claim has no owner', async () => {
       git.hasBranchMergeEvidence.mockResolvedValue(true);
-      execGit.mockResolvedValue({ stdout: '?? unfinished.js\n', exitCode: 0 });
+      execGit.mockImplementation(gitFixtureResult('?? unfinished.js\n', 0));
       const result = await cleanupMerged('/repo', 'main', [{
         branch: 'claim/issue-101', worktreePath: '/repo/data/cos/worktrees/claim-issue-101', worktreeAgeMs: 0,
       }], { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
@@ -1417,7 +1431,7 @@ describe('reconcile', () => {
     it('preserves a recent claim when a workspace owner appears after the scan', async () => {
       dirtyClaim();
       worktreeMtimeMs = Date.now();
-      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      execGit.mockImplementation(gitFixtureResult('', 0));
       const result = await reconcile('/repo', {
         activeAgentIds: new Set(),
         claimOwners: { agents: [], readAgents: async () => [{
@@ -1435,10 +1449,10 @@ describe('reconcile', () => {
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }
       ]);
       wt.listWorktrees.mockResolvedValue([
-        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+        { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
       ]);
       git.hasBranchMergeEvidence.mockResolvedValue(true);
-      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      execGit.mockImplementation(gitFixtureResult('', 0));
       const res = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [owner('running')] } });
       expect(res.skipped).toEqual([expect.objectContaining({ branch: 'claim/issue-101', reason: 'claim-owner-active' })]);
       expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
@@ -1451,10 +1465,10 @@ describe('reconcile', () => {
       { name: 'cos/task-x/agent-deadbeef', isDefault: false, current: false, tracking: 'origin/main', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
     ]);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult(' M server/services/thing.js\n', 0));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-deadbeef']) });
     expect(res.inFlight).toEqual([]);
@@ -1478,9 +1492,10 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     git.getBranches.mockResolvedValue([
       { name: BRANCH, isDefault: false, current: false, tracking: 'origin/main', merged: false }
     ]);
-    wt.listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
+    wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => {
+      if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
       const [cmd] = args;
       if (cmd === 'rev-parse') return { stdout: `${tip}\n`, exitCode: 0 };
       if (cmd === 'merge-base' && args[1] === '--is-ancestor') {
@@ -1563,9 +1578,10 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     git.getBranches.mockResolvedValue([
       { name: CLAIM, isDefault: false, current: false, tracking: null, merged: false }
     ]);
-    wt.listWorktrees.mockResolvedValue([{ path: CLAIM_TREE, branch: `refs/heads/${CLAIM}` }]);
+    wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: CLAIM_TREE, branch: `refs/heads/${CLAIM}` }]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => {
+      if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
       const [cmd] = args;
       if (cmd === 'rev-parse') return { stdout: 'aaaaaaa\n', exitCode: 0 };
       if (cmd === 'merge-base' && args[1] === '--is-ancestor') return { stdout: '', exitCode: 0 };
@@ -1650,7 +1666,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 
   it('keeps the unmanaged-location hold for merged cleanup, which has no verdict to lean on', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    execGit.mockImplementation(gitFixtureResult('', 0));
     const res = await cleanupMerged('/repo', 'main', [{
       branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
     }]);
@@ -1799,10 +1815,11 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 // refused to delete a dirty tree, and every pass instead spent a coordinator run
 // that came back "no real work product, a human should discard it".
 describe('reconcile — detached-HEAD worktrees (#10825)', () => {
-  const MAIN = { path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
+  const MAIN = { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
   const detachedTree = (path, extra = {}) => ({ path, head: 'bbb222', detached: true, ...extra });
   // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
   const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
+      if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
     if (args[0] === 'merge-base') return { stdout: '', exitCode: merged ? 0 : 1 };
     if (args[0] === 'symbolic-ref') return { stdout: '', exitCode: 1 };
     if (args[0] === 'rev-parse') return { stdout: 'bbb222\n', exitCode: 0 };
@@ -1877,7 +1894,7 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
 
   it('never gathers the main checkout or a detached tree at unmerged commits', async () => {
     wt.listWorktrees.mockResolvedValue([
-      { path: '/repo', head: 'aaa111', detached: true },
+      { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', detached: true },
       detachedTree('/repo/data/cos/worktrees/unmerged-work'),
     ]);
     stubGit({ merged: false });
@@ -1896,9 +1913,10 @@ describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
     git.getBranches.mockResolvedValue([
       { name: BRANCH, isDefault: false, current: false, tracking: null, merged: true }
     ]);
-    wt.listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
+    wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(async (args) => {
+      if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
       if (args[0] === 'rev-list') return { stdout: '114\t0\n', exitCode: 0 };
       if (args[0] === 'status') return { stdout: porcelain, exitCode: 0 };
       return { stdout: '', exitCode: 0 };
@@ -1912,7 +1930,7 @@ describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
     expect(res.inFlight).toEqual([]);
     expect(res.cleaned).toContain(BRANCH);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.anything());
-    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', BRANCH, { local: true });
+    expect(execGit).toHaveBeenCalledWith(['update-ref', '-d', `refs/heads/${BRANCH}`, RETIRE_HEAD], '/repo', { ignoreExitCode: true });
   });
 
   it('still holds a worktree carrying one real change alongside the scratch', async () => {
@@ -2104,12 +2122,13 @@ describe('desiredEndState', () => {
     }
   });
 
-  it('offers verified auto-merge before the fallback CI wait in both merge-bound states', () => {
+  it('keeps delivery in-session unless a measured backlog has a durable successor', () => {
     for (const state of ['NEEDS_PR', 'IN_REVIEW']) {
       const instruction = desiredEndState(state, {});
       expect(instruction).toContain('gh pr checks <num> --required');
-      expect(instruction).toContain('--auto --merge --match-head-commit <published-head>');
-      expect(instruction).toContain('autoMergeRequest.enabledAt');
+      expect(instruction).not.toContain('--auto --merge');
+      expect(instruction).toContain('mergeHandoffMinQueuedRuns');
+      expect(instruction).toContain('Unknown backlog, refused handoff');
     }
   });
 
@@ -2340,7 +2359,7 @@ describe('orphaned remote branches', () => {
    */
   const mockRemote = (stdout, { exitCode = 0 } = {}) => {
     execGit.mockImplementation(async (args) =>
-      args[0] === 'ls-remote' ? { stdout, exitCode } : { stdout: '', exitCode: 0 }
+      pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 } : args[0] === 'ls-remote' ? { stdout, exitCode } : { stdout: '', exitCode: 0 }
     );
   };
 
@@ -2558,7 +2577,7 @@ describe('orphaned remote branches', () => {
       expect(res.orphanRemotes.reaped).toEqual([]);
       expect(res.orphanRemotes.reported).toEqual([{ branch: 'left/behind', reason: 'reap-disabled' }]);
       // Only the local half of the cleanup ran.
-      expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'next/issue-1', { local: true });
+      expect(execGit).toHaveBeenCalledWith(['update-ref', '-d', `refs/heads/${'next/issue-1'}`, RETIRE_HEAD], '/repo', { ignoreExitCode: true });
       expect(git.deleteBranch).not.toHaveBeenCalledWith('/repo', 'left/behind', { remote: true });
     });
 
@@ -2595,7 +2614,7 @@ describe('orphaned remote branches', () => {
 describe('worktreeProtectionExpiresAt', () => {
   const DAY = 24 * 60 * 60 * 1000;
   const CLAIM = '/repo/data/cos/worktrees/claim-issue-42';
-  const at = (over = {}) => worktreeProtectionExpiresAt({ path: CLAIM, ageMs: 2 * DAY, ...over });
+  const at = (over = {}) => worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, ...over });
 
   it('dates a claim hold to the end of its grace window', () => {
     const before = Date.now();
@@ -2612,7 +2631,7 @@ describe('worktreeProtectionExpiresAt', () => {
     expect(worktreeProtectionExpiresAt({
       path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set(['agent-abc12345'])
     })).toBeNull();
-    expect(worktreeProtectionExpiresAt({ path: null, ageMs: 2 * DAY })).toBeNull();
+    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: null, ageMs: 2 * DAY })).toBeNull();
   });
 
   it('returns null when the age is unknown rather than guessing one', () => {
@@ -2629,15 +2648,15 @@ describe('worktreeProtectionExpiresAt', () => {
     // The lock outlives the grace window, and the gate reports it as such: it
     // tests the lock BEFORE the claim, so a locked claim tree reads
     // 'worktree-locked' and there is no window here to date.
-    expect(worktreeProtectionExpiresAt({ path: CLAIM, ageMs: 2 * DAY, locked: true })).toBeNull();
+    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, locked: true })).toBeNull();
   });
 
   it('gives no expiry to a non-claim worktree that is not held at all', () => {
-    expect(worktreeProtectionExpiresAt({ path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set() })).toBeNull();
+    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set() })).toBeNull();
   });
 
   it('returns null when allowLiveClaim is true', () => {
-    expect(worktreeProtectionExpiresAt({ path: CLAIM, ageMs: 2 * DAY, allowLiveClaim: true })).toBeNull();
+    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, allowLiveClaim: true })).toBeNull();
   });
 });
 

@@ -1,159 +1,76 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../lib/execGit.js', () => {
   const execGit = vi.fn();
-  return {
-    execGit,
-    execGitSafe: (...args) => execGit(...args).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }))
-  };
+  return { execGit, execGitSafe: (...args) => execGit(...args).catch(error => ({ exitCode: 1, stdout: '', stderr: error.message })) };
 });
-
-vi.mock('./worktreeManager.js', () => ({
-  isGitLockError: vi.fn(),
-  listWorktrees: vi.fn().mockResolvedValue([]),
-  reapMergedWorktrees: vi.fn()
-}));
-
+vi.mock('./worktreeManager.js', () => ({ isGitLockError: vi.fn(), listWorktrees: vi.fn(async () => []) }));
+vi.mock('./branchReconcile.js', () => ({ cleanupMerged: vi.fn() }));
+vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: vi.fn(async () => []) }));
+vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: vi.fn(async () => null) }));
 import { execGit } from '../lib/execGit.js';
-import { listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
+import { cleanupMerged } from './branchReconcile.js';
+import { readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
+import { readBranchCompletionHold } from './branchCompletionPolicy.js';
 import { deleteMergedBranches } from './git.js';
-
-const result = (stdout = '', exitCode = 0, stderr = '') => ({ stdout, stderr, exitCode });
-
+const HEAD = 'a'.repeat(40);
+const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
+let local, remote, fetchFailed, moved, held;
 beforeEach(() => {
-  listWorktrees.mockResolvedValue([{ branch: 'refs/heads/feature/locked' }]);
-  reapMergedWorktrees.mockResolvedValue({ reaped: [], skipped: [], defaultBranch: 'main' });
-  execGit.mockImplementation((args) => {
-    if (args[0] === 'symbolic-ref') return Promise.resolve(result('origin/main\n'));
-    if (args[0] === 'rev-parse' && args.includes('--verify')) return Promise.resolve(result('abc123\n'));
-    if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return Promise.resolve(result('main\n'));
-    if (args[0] === 'branch' && args.includes('--list')) return Promise.resolve(result('  main\n  feature/locked\n  feature/free\n'));
-    if (args[0] === 'branch' && args.includes('-r') && args.includes('--merged')) return Promise.resolve(result(''));
-    if (args[0] === 'branch' && args.includes('--merged')) {
-      return Promise.resolve(result('main\nfeature/locked\nfeature/free\n'));
-    }
-    if (args[0] === 'fetch') return Promise.resolve(result());
-    if (args[0] === 'branch' && args[1] === '-d') return Promise.resolve(result());
-    return Promise.resolve(result());
-  });
-});
-
-afterEach(() => {
   vi.clearAllMocks();
+  local = ['main', 'release', 'feature/done']; remote = ['origin/feature/done']; fetchFailed = moved = false; held = null;
+  readClaimOwnershipAgents.mockResolvedValue([]);
+  readBranchCompletionHold.mockResolvedValue(null);
+  cleanupMerged.mockImplementation(async (_dir, _target, [{ branch }]) => held
+    ? { cleaned: [], skipped: [{ branch, reason: held }] } : { cleaned: [branch], skipped: [] });
+  execGit.mockImplementation(async args => {
+    if (args[0] === 'symbolic-ref') return ok('origin/main\n');
+    if (args[0] === 'rev-parse') return ok(HEAD);
+    if (args[0] === 'branch' && args.includes('--list')) return ok(local.join('\n'));
+    if (args[0] === 'branch') return ok((args.includes('-r') ? remote : local).join('\n'));
+    if (args[0] === 'fetch') return { ...ok(), exitCode: fetchFailed ? 1 : 0 };
+    if (args[0] === 'ls-remote') return ok(`${HEAD}\trefs/heads/feature/done\n`);
+    if (args[0] === 'push') return { ...ok(), exitCode: moved ? 1 : 0 };
+    return ok();
+  });
 });
-
-describe('deleteMergedBranches', () => {
-  it('reports merged branches the reaper refused, while deleting eligible locals', async () => {
-    reapMergedWorktrees.mockResolvedValue({
-      reaped: [],
-      skipped: [{ path: '/wt/locked', branch: 'feature/locked', reason: 'uncommitted' }]
-    });
-
-    const cleanup = await deleteMergedBranches('/repo');
-
-    expect(cleanup.deleted).toEqual([{ name: 'feature/free', local: 'deleted', remote: null }]);
-    // The reaper's reason is what tells the user why the branch survived — the
-    // generic "it's in a worktree" wording is now only the unknown-reason fallback.
-    expect(cleanup.skipped).toEqual(['feature/locked (local: worktree has uncommitted changes)']);
-    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/free'], '/repo', { ignoreExitCode: true });
-    expect(execGit).not.toHaveBeenCalledWith(['branch', '-D', 'feature/locked'], '/repo', { ignoreExitCode: true });
+describe('delete merged branches', () => {
+  it('shares local retirement and leases the merged remote head', async () => {
+    const result = await deleteMergedBranches('/repo');
+    expect(result.deleted).toEqual([{ name: 'feature/done', local: 'deleted', remote: 'deleted' }]);
+    expect(cleanupMerged).toHaveBeenCalledWith('/repo', 'refs/remotes/origin/main', [{ branch: 'feature/done' }], { activeAgentIds: null });
+    expect(execGit).toHaveBeenCalledWith(['push', `--force-with-lease=refs/heads/feature/done:${HEAD}`, 'origin', ':refs/heads/feature/done'], '/repo', { ignoreExitCode: true });
+    expect(readBranchCompletionHold).toHaveBeenCalledWith({ repoPath: '/repo', branch: 'feature/done', tip: HEAD, retirement: true });
   });
-
-  it('deletes branches proven merged into the default when the app checkout is elsewhere', async () => {
-    execGit.mockImplementation((args) => {
-      if (args[0] === 'symbolic-ref') return Promise.resolve(result('origin/main\n'));
-      if (args[0] === 'rev-parse' && args.includes('--verify')) return Promise.resolve(result('abc123\n'));
-      if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return Promise.resolve(result('develop\n'));
-      if (args[0] === 'branch' && args.includes('--list')) return Promise.resolve(result('  develop\n  main\n  feature/merged\n'));
-      if (args[0] === 'branch' && args.includes('-r') && args.includes('--merged')) return Promise.resolve(result(''));
-      if (args[0] === 'branch' && args.includes('--merged')) {
-        return Promise.resolve(result('main\nfeature/merged\n'));
-      }
-      if (args[0] === 'branch' && args[1] === '-d') {
-        return Promise.resolve(result('', 1, 'error: branch is not fully merged into the current checkout'));
-      }
-      return Promise.resolve(result());
-    });
-
-    const cleanup = await deleteMergedBranches('/repo');
-
-    expect(cleanup.deleted).toEqual([{ name: 'feature/merged', local: 'deleted', remote: null }]);
-    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/merged'], '/repo', { ignoreExitCode: true });
-    expect(execGit).not.toHaveBeenCalledWith(['branch', '-d', 'feature/merged'], '/repo', { ignoreExitCode: true });
+  it.each(['archive-failed', 'worktree-locked', 'worktree-dirty', 'claim-owner-active'])('retains both refs on %s', async reason => {
+    held = reason;
+    const result = await deleteMergedBranches('/repo');
+    expect(result.deleted).toEqual([]);
+    expect(result.skipped.join(' ')).toMatch(/archive|locked|dirty|active/);
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
   });
-
-  it('reports a worktree-held branch generically when the reaper named no reason', async () => {
-    const cleanup = await deleteMergedBranches('/repo');
-
-    expect(cleanup.skipped).toEqual(['feature/locked (local: checked out in a worktree)']);
+  it('does not use stale merge flags when refresh fails', async () => {
+    fetchFailed = true;
+    expect((await deleteMergedBranches('/repo')).skipped).toEqual(['cleanup (remote default could not be refreshed)']);
+    expect(cleanupMerged).not.toHaveBeenCalled();
   });
-
-  it('counts a reaped worktree branch as deleted and folds its remote half into one row', async () => {
-    reapMergedWorktrees.mockResolvedValue({
-      reaped: [{ path: '/wt/reaped', branch: 'feature/reaped', locked: false, branchDeleted: true }],
-      skipped: []
-    });
-    execGit.mockImplementation((args) => {
-      if (args[0] === 'symbolic-ref') return Promise.resolve(result('origin/main\n'));
-      if (args[0] === 'rev-parse' && args.includes('--verify')) return Promise.resolve(result('abc123\n'));
-      if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return Promise.resolve(result('main\n'));
-      if (args[0] === 'branch' && args.includes('--list')) return Promise.resolve(result('  main\n'));
-      if (args[0] === 'branch' && args.includes('-r') && args.includes('--merged')) {
-        return Promise.resolve(result('origin/main\norigin/feature/reaped\n'));
-      }
-      if (args[0] === 'branch' && args.includes('--merged')) return Promise.resolve(result('main\n'));
-      return Promise.resolve(result());
-    });
-
-    const cleanup = await deleteMergedBranches('/repo');
-
-    expect(cleanup.deleted).toEqual([
-      { name: 'feature/reaped', local: 'deleted', remote: 'deleted', worktree: 'removed' }
-    ]);
-    // The reap already deleted the local branch — re-running branch deletion
-    // would only produce a spurious "not found" skip.
-    expect(execGit).not.toHaveBeenCalledWith(['branch', '-D', 'feature/reaped'], '/repo', { ignoreExitCode: true });
-    expect(execGit).toHaveBeenCalledWith(['push', 'origin', '--delete', 'feature/reaped'], '/repo', { ignoreExitCode: true });
+  it('reports a remote ref that advances after evidence was read', async () => {
+    moved = true;
+    const result = await deleteMergedBranches('/repo');
+    expect(result.deleted[0]).toMatchObject({ local: 'deleted', remote: 'failed' });
+    expect(result.skipped).toContain('feature/done (remote: head changed or deletion failed)');
   });
-
-  it('hands the reaper the protected branches, agent ids and default branch, and skips its own fetch', async () => {
-    const excludeBranches = new Set(['feature/agent-work']);
-    const activeAgentIds = new Set(['agent-1']);
-
-    await deleteMergedBranches('/repo', { excludeBranches, activeAgentIds });
-
-    expect(reapMergedWorktrees).toHaveBeenCalledWith('/repo', {
-      activeAgentIds,
-      excludeBranches,
-      includeUnmanagedTrees: true,
-      // Passed so the reap skips its own lookup, which can stall on `remote set-head`.
-      defaultBranch: 'main'
-    });
-    // reapMergedWorktrees fetches --prune itself; a second round-trip is waste.
-    expect(execGit).not.toHaveBeenCalledWith(['fetch', 'origin', '--prune'], '/repo', { ignoreExitCode: true });
+  it('sends squash-merged candidates to the shared evidence gate', async () => {
+    remote = []; local.push('feature/squashed');
+    await deleteMergedBranches('/repo');
+    expect(cleanupMerged).toHaveBeenCalledWith('/repo', 'refs/remotes/origin/main', [{ branch: 'feature/squashed' }], expect.any(Object));
   });
-
-  it('retries the branch delete when the reap removed the tree but not the branch', async () => {
-    reapMergedWorktrees.mockResolvedValue({
-      reaped: [{ path: '/wt/locked', branch: 'feature/locked', locked: false, branchDeleted: false }],
-      skipped: []
-    });
-
-    const cleanup = await deleteMergedBranches('/repo');
-
-    // The worktree hold is gone with the tree, so the branch is an ordinary
-    // target again rather than being reported as still checked out.
-    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/locked'], '/repo', { ignoreExitCode: true });
-    expect(cleanup.deleted).toContainEqual({ name: 'feature/locked', local: 'deleted', remote: null });
-    expect(cleanup.skipped).toEqual([]);
-  });
-
-  it('falls back to branch-only cleanup when the reap throws', async () => {
-    reapMergedWorktrees.mockRejectedValue(new Error('worktree list failed'));
-
-    const cleanup = await deleteMergedBranches('/repo');
-
-    expect(cleanup.deleted).toEqual([{ name: 'feature/free', local: 'deleted', remote: null }]);
-    expect(execGit).toHaveBeenCalledWith(['fetch', 'origin', '--prune'], '/repo', { ignoreExitCode: true });
+  it('holds active exclusions and unreadable remote ownership', async () => {
+    const excluded = await deleteMergedBranches('/repo', { excludeBranches: async () => new Set(['feature/done']) });
+    expect(excluded.skipped).toEqual(['feature/done (used by an active agent)']);
+    expect(cleanupMerged).not.toHaveBeenCalled();
+    readClaimOwnershipAgents.mockResolvedValue(null);
+    const unknown = await deleteMergedBranches('/repo');
+    expect(unknown.skipped.join(' ')).toContain('ownership');
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
   });
 });

@@ -169,7 +169,7 @@ export async function readBranchCompletionHold(input, deps = {}) {
   // fetched. Only a potential explicit release needs a fresh forge read; offline
   // cleanup preserves the handoff when that read cannot establish the same head.
   if (input.retirement === true && decision.obligation?.prUrl
-    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true }).catch(() => null) === tip) return null;
+    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return null;
   if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return null;
   return decision.reason;
 }
@@ -195,14 +195,14 @@ export async function recordBranchCompletionPolicy({ agentId, task, repoPath, br
   await updateAgent(agentId, { metadata: { branchCompletionPolicy: { branch, prUrl, completion, tip } } });
 }
 
-async function verifiedPolicyTip(repoPath, branch, prUrl, { requireMerged = false } = {}) {
+async function verifiedPolicyTip(repoPath, branch, prUrl, { requireMerged = false, expectedTip = null } = {}) {
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const { parsePullRequestUrl } = await import('../lib/gitForge.js');
   const origin = await getOriginInfo(repoPath);
   const pr = parsePullRequestUrl(prUrl);
   if (!pr || pr.host !== origin?.host || `${pr.owner}/${pr.repo}` !== origin.fullName) return null;
   const { execGit } = await import('../lib/execGit.js');
-  const tip = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath)).stdout?.trim();
+  const tip = expectedTip || (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath)).stdout?.trim();
   if (!/^[a-f0-9]{40,64}$/i.test(tip || '')) return null;
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
   const { execGh } = await import('./github.js');

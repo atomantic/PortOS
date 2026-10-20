@@ -1798,18 +1798,27 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         else reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false });
         return;
       }
+      const initialHold = await verifyRemoval(wt);
+      if (initialHold) { hold(initialHold); return; }
+      const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+      const preservation = await preserveMergedCheckout(sourceWorkspace, wt, target).catch(error => ({ error }));
+      if (preservation.error) { skipped.push({ path: wt.path, branch: branchName, reason: 'archive-failed', detail: preservation.error.message }); return; }
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-        label: `worktree remove failed for ${wt.path}`, verifyRemoval,
+        label: `worktree remove failed for ${wt.path}`,
+        verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
       });
       if (!removal.removed) {
         skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
         return;
       }
-      const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
+      const holders = await listWorktrees(sourceWorkspace).catch(() => null);
+      const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
+        && await execGit(['update-ref', '-d', wt.branch, wt.head], sourceWorkspace).then(() => true).catch(err => {
         console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
         return false;
       });
-      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted });
+      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });
+      if (!branchDeleted) hold('branch-ref-changed-or-new-holder');
     });
   }
 
