@@ -358,7 +358,7 @@ describe('pregate hidden-content invocation', () => {
       const ready = setInterval(() => {
         if (!existsSync(process.env.FIXTURE_HEARTBEAT)) return;
         clearInterval(ready);
-        console.log('fixture-stage-ready ' + JSON.stringify([process.pid, straggler.pid, launched.pid]));
+        console.log('fixture-stage-ready ' + JSON.stringify([process.ppid, process.pid, straggler.pid, launched.pid]));
       }, 10);
       setInterval(() => {}, 1000);
     `);
@@ -369,6 +369,7 @@ describe('pregate hidden-content invocation', () => {
     const alive = (pid) => {
       try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
     };
+    let pregatePid = null;
     let owned = [];
     let stdout = '';
     let stderr = '';
@@ -377,7 +378,7 @@ describe('pregate hidden-content invocation', () => {
       stdout += data;
       const ready = /fixture-stage-ready (\[[\d,]+\])/.exec(stdout);
       if (ready && owned.length === 0) {
-        owned = JSON.parse(ready[1]);
+        [pregatePid, ...owned] = JSON.parse(ready[1]);
         // Ctrl-C reaches the whole foreground group: npm and pregate alike.
         process.kill(-npm.pid, signal);
       }
@@ -388,13 +389,20 @@ describe('pregate hidden-content invocation', () => {
         npm.once('error', reject);
         npm.once('exit', (status, exitSignal) => resolve({ status, signal: exitSignal }));
       });
-      // Liveness at `exit` is the contract. Output is read after `close`, which
-      // a surviving descendant holding the pipes would delay, hence the bound.
+      // npm's own exit is not the boundary: a SIGTERM to the group kills the
+      // `sh -c` wrapper npm runs the script under, and npm then exits at once.
+      // The contract is that pregate itself does not finish before its stage
+      // group settled, so liveness is checked the moment pregate is gone.
+      for (const until = Date.now() + 15_000; alive(pregatePid) && Date.now() < until;) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(alive(pregatePid)).toBe(false);
       expect(owned).toHaveLength(3);
       expect(owned.filter(alive)).toEqual([]);
+      // Output is read after `close`, which a survivor holding the pipes would delay.
       await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5000))]);
       expect(result.status === null ? result.signal : result.status).not.toBe(0);
-      expect(stderr).toMatch(new RegExp(`stage="hidden-content scan" owner_pid=\\d+ child_pid=${owned[0]} received_signal=${signal}`));
+      expect(stderr).toMatch(new RegExp(`stage="hidden-content scan" owner_pid=${pregatePid} child_pid=${owned[0]} received_signal=${signal}`));
       expect(stderr).toContain(`stage="hidden-content scan" cancelled by ${signal}; its process group has exited.`);
       expect(stdout).not.toContain('Pregate passed');
       const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
@@ -405,7 +413,7 @@ describe('pregate hidden-content invocation', () => {
       expect(readFileSync(heartbeat, 'utf8').length).toBe(written);
       expect(alive(unrelated.pid)).toBe(true);
     } finally {
-      for (const pid of [npm.pid, unrelated.pid, ...owned]) {
+      for (const pid of [npm.pid, unrelated.pid, ...owned].filter(Boolean)) {
         try { process.kill(-pid, 'SIGKILL'); } catch { /* not a live group */ }
         try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
       }
