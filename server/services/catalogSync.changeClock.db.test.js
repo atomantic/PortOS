@@ -76,9 +76,18 @@ describe.skipIf(!runDb)('catalog conflict clock is monotonic at wire precision (
     });
     await started;
 
-    const versionB = await updateIngredient(ing.id, { name: 'Renamed By B' });
-    const replica = replicaOf(versionB);
-    expect(await replica.apply(versionB)).toMatchObject({ applied: true });
+    let versionB;
+    let replica;
+    try {
+      versionB = await updateIngredient(ing.id, { name: 'Renamed By B' });
+      replica = replicaOf(versionB);
+      expect(await replica.apply(versionB)).toMatchObject({ applied: true });
+    } catch (err) {
+      // Never leave A holding an open transaction and a pooled client.
+      resumeA();
+      await transactionA.catch(() => {});
+      throw err;
+    }
 
     resumeA();
     const versionA = await transactionA;
