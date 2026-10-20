@@ -12,6 +12,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: (...args) => mocks.ensureDir(...args), atomicWrite: (...args) => mocks.atomicWrite(...args), sleep: vi.fn(async () => {}),
 }));
 
+import { withYoutubeTab } from './youtubeBrowserLock.js';
 import { normalizeYoutubePlaylist, normalizeYoutubeVideo, youtubePlaylistSnapshotSummary, syncYoutubePlaylists } from './youtubePlaylists.js';
 
 describe('YouTube playlist normalization', () => {
@@ -51,6 +52,18 @@ describe('syncYoutubePlaylists', () => {
     expect(mocks.evaluateOnPage.mock.calls[0][1]).toContain('yt-lockup-view-model');
     expect(mocks.evaluateOnPage.mock.calls[2][1]).toContain('ytd-rich-grid-media');
     expect(mocks.atomicWrite).toHaveBeenCalledWith('/tmp/youtube/playlists.json', expect.objectContaining({ schemaVersion: 1 }));
+  });
+
+  it('waits for the shared YouTube tab lease before touching the browser (history sync holds it)', async () => {
+    let release;
+    const held = withYoutubeTab(() => new Promise((resolve) => { release = resolve; }));
+    const pending = syncYoutubePlaylists();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(mocks.findOrOpenPage).not.toHaveBeenCalled();
+    release();
+    await held;
+    expect(await pending).toMatchObject({ ok: true });
+    expect(mocks.findOrOpenPage).toHaveBeenCalled();
   });
 
   it('navigates an existing YouTube tab to the playlists feed', async () => {
