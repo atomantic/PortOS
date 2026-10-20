@@ -4027,6 +4027,19 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).toHaveBeenCalledTimes(1);
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
+
+    it('names the nested cause when the media index rebuild cannot reach Postgres', async () => {
+      reconcileMediaAssets.mockRejectedValueOnce(
+        new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })], ''),
+      );
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.emit('close', 0);
+
+      await expect(pending).rejects.toThrow(/media index rebuild: ECONNREFUSED\)/);
+    });
   });
 });
 
