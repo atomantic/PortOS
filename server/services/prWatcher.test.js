@@ -402,6 +402,23 @@ describe('merge-only PR watcher', () => {
       expect(screenMock).toHaveBeenCalledTimes(2);
     });
 
+    it('does not persist a hold when a policy save overlaps the assessment', async () => {
+      const app = pendingApp([pendingMerge({ handoff: handoff() })]);
+      mockApps.set(app.id, app);
+      armOwner();
+      installPendingEvidence();
+      screenMock.mockImplementation(async () => {
+        await clearPendingMergeAssessmentHolds();
+        return modelRequired;
+      });
+      await sweep(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].assessmentWithheld).toBeUndefined();
+      screenMock.mockResolvedValue({ ok: true, screening: { safe: true } });
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(mockApps.get(app.id))).toMatchObject({ merged: 1 });
+      expect(screenMock).toHaveBeenCalledTimes(2);
+    });
+
     it('keeps an unrelated attention when a policy save clears the assessment hold', async () => {
       const app = pendingApp([pendingMerge({
         handoff: handoff(),

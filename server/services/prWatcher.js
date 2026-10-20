@@ -71,6 +71,9 @@ const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 // rather than a per-app map: simultaneous writes for different app ids would
 // otherwise still load stale whole-file snapshots and clobber one another.
 let pendingMergeWriteTail = Promise.resolve();
+// Bumped when an untrusted-content policy save clears holds. A sweep that
+// already read its entries must not write a hold back over that save.
+let assessmentHoldGeneration = 0;
 const pendingMergeSweeps = new Map();
 const pendingMergeResweeps = new Map();
 // appId -> { receipts: Map<receiptId, deadlineMs>, polls, timer }
@@ -292,6 +295,7 @@ async function mutatePendingMergePrs(appId, mutate) {
 // the usual fix is a provider default model, which is not part of the policy
 // document. Only an attention string that names the withheld code is cleared.
 export async function clearPendingMergeAssessmentHolds() {
+  assessmentHoldGeneration += 1;
   const apps = await getActiveApps().catch(() => []);
   for (const app of apps) {
     if (!readPendingMergePrs(app).some((entry) => entry?.assessmentWithheld)) continue;
@@ -544,10 +548,12 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
   const outcomes = new Map();
+  const withheldGenerations = new Map();
   const result = { ok: true, checked: 0, merged: 0, escalated: 0, invalidated: 0, timedOut: 0, errors: 0 };
 
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
+    withheldGenerations.set(key, assessmentHoldGeneration);
     if (Date.now() < (entry.cleanup?.retryAt || 0)) {
       outcomes.set(key, entry);
       continue;
@@ -773,7 +779,12 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
     // A new receipt can arrive while a sweep waits on GitHub or recovery. It
     // owns its new head; an old sweep must not delete or overwrite that work.
     if (!observed || JSON.stringify(observed) !== JSON.stringify(entry)) return [entry];
-    const outcome = outcomes.get(pendingMergeKey(entry));
+    const outcomeKey = pendingMergeKey(entry);
+    let outcome = outcomes.get(outcomeKey);
+    if (outcome?.assessmentWithheld && withheldGenerations.get(outcomeKey) !== assessmentHoldGeneration) {
+      const { assessmentWithheld: _stale, ...withoutHold } = outcome;
+      outcome = withoutHold;
+    }
     return outcome === undefined ? [entry] : outcome ? [outcome] : [];
   }));
   return result;
