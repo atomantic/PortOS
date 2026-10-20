@@ -1,6 +1,7 @@
 import { constants } from 'fs';
 import { lstat, open } from 'fs/promises';
 import { join } from 'path';
+import { isSafeGitRef } from '../lib/gitArgs.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { execGit } from '../lib/execGit.js';
 
@@ -62,12 +63,18 @@ export async function readLocalBranchPresence(repoPath, branch) {
           length += read.bytesRead;
         }
         if (BigInt(length) !== stat.size) return null;
-        const text = bytes.subarray(0, length).toString('utf8');
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
+        let canPeel = false;
         for (const line of text.split('\n')) {
-          if (!line || line.startsWith('#')) continue;
-          if (/^\^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(line)) continue;
+          if (!line || line.startsWith('#')) { canPeel = false; continue; }
+          if (/^\^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(line)) {
+            if (!canPeel) return null;
+            canPeel = false;
+            continue;
+          }
           const row = /^([a-f0-9]{40}(?:[a-f0-9]{24})?) (refs\/[^\s]+)$/.exec(line);
-          if (!row || row[2] === ref) return null;
+          if (!row || !isSafeGitRef(row[2]) || row[2].split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock')) || row[2] === ref) return null;
+          canPeel = true;
         }
         if (!same(identity(await packed.stat({ bigint: true })), packedBefore)) return null;
       } finally { await packed.close(); }

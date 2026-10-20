@@ -60,7 +60,11 @@ export async function captureCompletedCheckouts(agent, { success } = {}) {
   for (const branch of new Set(branches)) {
     if (typeof branch !== 'string' || !branch) continue;
     const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
-    if (holders.length !== 1 || (!claim && resolve(holders[0].path) !== resolve(meta.workspacePath || ''))) continue;
+    if (holders.length !== 1) continue;
+    if (!claim) {
+      const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
+      if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) continue;
+    }
     const target = { repoPath: meta.sourceWorkspace, branch, path: holders[0].path, head: holders[0].head };
     const first = await readCompletedCheckoutIdentity(target).catch(() => null);
     if (!first || !same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) continue;

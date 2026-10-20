@@ -32,6 +32,8 @@ const BRANCH_RECONCILE_TEMPLATE = [
   '{inFlightBranches}',
 ].join('\n');
 
+vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
+
 vi.mock('./taskPromptService.js', () => ({
   getTaskPrompt: vi.fn(async () => BRANCH_RECONCILE_TEMPLATE),
   getStagePrompt: vi.fn(async () => BRANCH_RECONCILE_TEMPLATE),
@@ -109,6 +111,7 @@ vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: {} })),
 }));
 
+import { emitLog } from './cosEvents.js';
 import { inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
@@ -173,6 +176,9 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch: 'fix/waiting', state: 'IN_REVIEW', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }] }));
     for (let i = 0; i < 70; i++) expect(await generate()).toBeNull();
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+    const parkedMessage = emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1];
+    expect(parkedMessage).toContain('delivery branch(es) awaiting completion (delivery-ci-or-review-pending)');
+    expect(parkedMessage).not.toContain('skipped by disabled action toggles');
     expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
       expect.objectContaining({ branch: 'fix/waiting', reason: 'delivery-ci-or-review-pending' }),
     ]) }));

@@ -612,8 +612,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     // toggle are the OTHER way "nothing in-flight" can lie — say so, or the user
     // sees a park while real branches sit there (the same invisibility that hid
     // the abandoned-worktree case).
-    const gatedSuffix = countSuffix(result.inFlight, 'in-flight branch(es) skipped by disabled action toggles', (b) => b.state);
-    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
+    const gatedSuffix = countSuffix(cognitiveInFlight.filter(branch => !allActionable.includes(branch)), 'in-flight branch(es) skipped by disabled action toggles', (b) => b.state);
+    const deliverySuffix = countSuffix(routineDeliveryHolds, 'delivery branch(es) awaiting completion', branch => branch.reason);
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${deliverySuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
     return { skip: true };
   }
   // Retain attempted revisions across caps/manual retries. A blocked prefix must

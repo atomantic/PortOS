@@ -49,6 +49,15 @@ describe('exact local branch absence accounting', () => {
     expect(await readLocalBranchPresence(root, 'claim/absent')).toBe(null);
     expect(count).toBe(2);
   });
+  it.each([
+    ['invalid ref grammar', Buffer.from(`${'a'.repeat(40)} refs/heads/a..b\n`)],
+    ['invalid encoding', Buffer.concat([Buffer.from(`${'a'.repeat(40)} refs/heads/`), Buffer.from([0xff]), Buffer.from('\n')])],
+    ['orphan peeled row', Buffer.from(`^${'a'.repeat(40)}\n`)],
+  ])('keeps %s in packed refs unknown rather than proving absence', async (_name, bytes) => {
+    await writeFile(join(root, '.git', 'packed-refs'), bytes);
+    expect(await readLocalBranchPresence(root, 'claim/absent')).toBe(null);
+  });
+
   it('refuses malformed packed metadata and unknown repository errors as absence proof', async () => {
     await writeFile(join(root, '.git', 'packed-refs'), `${'a'.repeat(40)} refs/heads/claim/absent trailing-token\n`);
     expect(await readLocalBranchPresence(root, 'claim/absent')).toBe(null);
