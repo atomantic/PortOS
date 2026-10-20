@@ -69,7 +69,7 @@ beforeEach(async () => {
   const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
   const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
   fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null,
-    metadataToken: 'f'.repeat(64) };
+    metadataToken: 'f'.repeat(64), finalizationToken: '7'.repeat(64) };
   const admission = {
     withCheckoutPublication: async (_repo, work) => { if (fixture.cut) throw new Error('checkout-retirement-reserved'); return work(); },
     reserveCheckoutRetirement: vi.fn(async (_repo, id) => {
@@ -96,9 +96,23 @@ beforeEach(async () => {
       metadataRecovery: { version: 1, digest: fixture.metadataToken, evidenceFile: 'private-proof.json', evidenceSha256: fixture.metadataToken },
       initialPlacements: { ...fixture.placement }, changeCounts: { residualCompressionRemoved: 3, rootProvenanceAdded: 1 }, changedPaths: 4,
     };
+    if (input.command === 'review-restored-finalization') {
+      if (fixture.failArchive) throw new Error('archive-changed');
+      return { restoredFinalization: { version: 1, evidenceFile: 'finalization.json',
+        evidenceSha256: fixture.finalizationToken, digest: fixture.finalizationToken },
+      placements: { ...fixture.placement }, changeCounts: { directoryMtimeChanged: 2, residualCompressionReappeared: 1 }, changedPaths: 3 };
+    }
+    if (input.command === 'verify-restored-finalization') {
+      if (fixture.failFinalization || input.restoredFinalization?.digest !== fixture.finalizationToken) throw new Error('finalization-evidence-changed');
+      return { verified: true, alreadyRestored: true, restoredFinalizationAccepted: true,
+        placements: Object.fromEntries(Object.entries(fixture.placement).map(([part, state]) => [part, { state }])) };
+    }
     if (['verify', 'move', 'status'].includes(input.command) && input.manifestSha256 !== 'e'.repeat(64)) throw new Error('archive-manifest-proof-changed');
+    if (fixture.delayedRestoreDrift && input.command === 'verify' && input.mode === 'restore'
+      && Object.values(fixture.placement).every(value => value === 'original')) throw new Error('source-content-or-identity-changed:working');
     if (fixture.metadataDrift && ['verify', 'move'].includes(input.command) && input.mode !== 'standalone'
       && input.metadataRecovery?.digest !== fixture.metadataToken) throw new Error('source-content-or-identity-changed:working');
+    const alreadyRestored = input.command === 'move' && input.direction === 'restore' && fixture.placement[input.part] === 'original';
     if (input.command === 'move') {
       if (fixture.failPart === input.part && input.direction === 'quarantine') throw new Error('move-refused');
       if (fixture.failRestorePart === input.part && input.direction === 'restore') throw new Error('restore-interrupted');
@@ -106,7 +120,9 @@ beforeEach(async () => {
     }
     if (fixture.failArchive && input.command === 'verify') throw new Error('archive-changed');
     return { ok: true, placement: fixture.placement, fingerprint: fixture.snapshot.fingerprint,
-      ...(input.metadataRecovery ? { postMoveObservation: { file: 'post-move.json', sha256: fixture.metadataToken } } : {}),
+      ...(input.metadataRecovery && !alreadyRestored ? {
+        postMoveObservation: { file: `${input.part}-post-move.json`, sha256: fixture.metadataToken, digest: fixture.metadataToken },
+      } : {}),
       placements: Object.fromEntries(Object.entries(fixture.placement).map(([part, state]) => [part, { state: state === 'quarantined' ? 'quarantine' : state }])) };
   });
   const deps = { root: () => root, fenced: work => work(), admission, native,
@@ -327,6 +343,145 @@ describe('initialized checkout transaction', () => {
     expect(await restarted.restoreMetadata({ ...freshInput, review: { digest: fresh.review.digest } }))
       .toMatchObject({ ok: true, restored: true });
     expect(fixture.cut).toBeNull();
+  });
+  const restoredWithDelayedDrift = async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.delayedRestoreDrift = true;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'source-content-or-identity-changed:working' });
+    const status = await fixture.service.status(input);
+    expect(status.phase).toBe('metadata-restored-working');
+    expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
+    return { ...input, journalDigest: status.journalDigest };
+  };
+  it('finalizes a retried restore using only its current observations while retaining earlier immutable evidence', async () => {
+    const original = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async input => {
+      const result = await original(input);
+      if (input.command === 'move' && input.direction === 'quarantine' && input.part === 'administration') {
+        fixture.metadataDrift = true;
+      }
+      return result;
+    });
+    const retired = await fixture.service.retire(await reviewed());
+    expect(retired).toMatchObject({ ok: false, reason: 'source-content-or-identity-changed:working' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
+    const status = await fixture.service.status({ appId: 'app', transactionId: retired.transactionId });
+    const input = { appId: 'app', transactionId: retired.transactionId, journalDigest: status.journalDigest };
+    const firstReview = await fixture.service.reviewMetadataRestore(input);
+    fixture.failRestorePart = 'working';
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: firstReview.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'restore-interrupted' });
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'original' });
+    const directory = join(root, input.transactionId);
+    const names = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const previousFile = join(directory, names.at(-1));
+    const previousBytes = await readFile(previousFile, 'utf8');
+    expect(JSON.parse(previousBytes).metadataRestoreObservations)
+      .toEqual([{ part: 'administration', proof: expect.objectContaining({ file: 'administration-post-move.json' }) }]);
+    const retryStatus = await fixture.service.status(input);
+    const retry = { ...input, journalDigest: retryStatus.journalDigest };
+    const nextReview = await fixture.service.reviewMetadataRestore(retry);
+    fixture.failRestorePart = null;
+    fixture.delayedRestoreDrift = true;
+    expect(await fixture.service.restoreMetadata({ ...retry, review: { digest: nextReview.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'source-content-or-identity-changed:working' });
+    const finalStatus = await fixture.service.status(input);
+    const finalInput = { ...input, journalDigest: finalStatus.journalDigest };
+    const finalReview = await fixture.service.reviewRestoredFinalization(finalInput);
+    expect(finalReview).toMatchObject({ ok: true, review: { postMoveObservations: [
+      { part: 'administration' }, { part: 'working', proof: { file: 'working-post-move.json' } },
+    ] } });
+    expect(finalReview.review.postMoveObservations).toHaveLength(2);
+    expect(await fixture.service.finalizeRestored({ ...finalInput, review: { digest: finalReview.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+    expect(await readFile(previousFile, 'utf8')).toBe(previousBytes);
+    expect(fixture.cut).toBeNull();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('finalizes already-restored originals only with a new review bound to the actual no-op and move evidence', async () => {
+    const input = await restoredWithDelayedDrift();
+    const before = fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move').length;
+    const prepared = await fixture.service.reviewRestoredFinalization(input);
+    expect(prepared).toMatchObject({ ok: true, review: { mode: 'finalize-already-restored',
+      postMoveObservations: [{ part: 'administration' }, { part: 'working', proof: { digest: fixture.metadataToken } }] } });
+    const result = await fixture.service.finalizeRestored({ ...input, review: { digest: prepared.review.digest } });
+    expect(result).toMatchObject({ ok: true, alreadyRestored: true, phase: 'restored-with-reviewed-finalization', archivesRetained: true });
+    expect(fixture.cut).toBeNull();
+    expect(fixture.headExists).toBe(true);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.native.mock.calls.filter(([row]) => row.command === 'move')).toHaveLength(before);
+    expect(fixture.deps.native).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'verify-restored-finalization', postMoveObservations: [null, expect.objectContaining({ file: 'working-post-move.json' })],
+    }));
+    expect(await readFile(join(root, input.transactionId, 'manifest.json'), 'utf8')).toBe('{}');
+    expect(await fixture.service.status(input)).toMatchObject({ restoredFinalizationComplete: true });
+  });
+  it.each(['delta', 'owner', 'ref', 'holder', 'cut', 'archive'])('retains the cut when finalization %s evidence changes', async change => {
+    const input = await restoredWithDelayedDrift();
+    const prepared = await fixture.service.reviewRestoredFinalization(input);
+    if (change === 'delta') fixture.finalizationToken = '8'.repeat(64);
+    if (change === 'owner') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+    if (change === 'ref') fixture.headExists = false;
+    if (change === 'holder') fixture.newHolder = true;
+    if (change === 'cut') fixture.cut.owner.id = 'different-owner';
+    if (change === 'archive') fixture.failArchive = true;
+    const releases = fixture.deps.admission.releaseCheckoutReservation.mock.calls.length;
+    expect(await fixture.service.finalizeRestored({ ...input, review: { digest: prepared.review.digest } })).toMatchObject({ ok: false, recoveryRequired: true });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.admission.releaseCheckoutReservation).toHaveBeenCalledTimes(releases);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('requires a new finalization approval after a durable approved phase is interrupted', async () => {
+    const input = await restoredWithDelayedDrift();
+    const prepared = await fixture.service.reviewRestoredFinalization(input);
+    fixture.failFinalization = true;
+    expect(await fixture.service.finalizeRestored({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'finalization-evidence-changed' });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status.phase).toBe('restored-finalization-approved');
+    expect(await restarted.finalizeRestored({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    const fresh = { ...input, journalDigest: status.journalDigest };
+    expect(await restarted.finalizeRestored({ ...fresh, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'restored-finalization-review-changed' });
+    fixture.failFinalization = false;
+    const next = await restarted.reviewRestoredFinalization(fresh);
+    expect(await restarted.finalizeRestored({ ...fresh, review: { digest: next.review.digest } })).toMatchObject({ ok: true });
+  });
+  it.each([false, true])('replays only final proof and release after uncertain release, cutAlreadyReleased=%s', async released => {
+    const input = await restoredWithDelayedDrift();
+    const prepared = await fixture.service.reviewRestoredFinalization(input);
+    fixture.deps.admission.releaseCheckoutReservation.mockImplementationOnce(async () => {
+      if (released) fixture.cut = null;
+      throw new Error('release-acknowledgement-lost');
+    });
+    expect(await fixture.service.finalizeRestored({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'release-acknowledgement-lost' });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status.phase).toBe('restored-with-reviewed-finalization');
+    const commands = fixture.deps.native.mock.calls.length;
+    expect(await restarted.finalizeRestored({ ...input, journalDigest: status.journalDigest, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: true, alreadyRestored: true });
+    expect(fixture.deps.native.mock.calls.slice(commands).map(([row]) => row.command)).toEqual(['lock', 'verify-restored-finalization']);
+    expect(fixture.cut).toBeNull();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('rechecks ownership after final native verification and retains the reservation on a new owner', async () => {
+    const input = await restoredWithDelayedDrift();
+    const prepared = await fixture.service.reviewRestoredFinalization(input);
+    const original = fixture.deps.native.getMockImplementation();
+    fixture.deps.native.mockImplementation(async value => {
+      const result = await original(value);
+      if (value.command === 'verify-restored-finalization') fixture.deps.ownership.mockResolvedValue({ ok: false, reason: 'active-owner' });
+      return result;
+    });
+    expect(await fixture.service.finalizeRestored({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'active-owner' });
+    expect(fixture.cut).not.toBeNull();
   });
   it('exposes only source-verified cancellation after durable preservation loses its proof journal', async () => {
     fixture.failProofJournal = true;

@@ -363,6 +363,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       ...(state.metadataRestoreReview ? { metadataRecovery: state.metadataRestoreReview.metadataRecovery,
         metadataChangeCounts: state.metadataRestoreReview.changeCounts,
         metadataRestored: state.phase === 'restored-with-metadata-transitions' } : {}),
+      ...(state.restoredFinalizationReview ? {
+        restoredFinalization: state.restoredFinalizationReview.restoredFinalization,
+        restoredFinalizationComplete: state.phase === 'restored-with-reviewed-finalization',
+      } : {}),
       ...(['branch-retired', 'retired'].includes(state.phase) ? { recoveryAction: 'retire-branch' } : {}) };
   };
 
@@ -480,7 +484,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (current.digest !== input.review?.digest) fail('metadata-recovery-review-changed');
     const { directory } = bound;
     let state = await appendStep(directory, bound.state, 'metadata-restore-approved',
-      { metadataRestoreReview: current, reservation });
+      { metadataRestoreReview: current, metadataRestoreObservations: [], reservation });
     const proof = { transactionDir: directory, manifestSha256: state.proof.manifestSha256,
       metadataRecovery: current.metadataRecovery };
     for (const part of ['administration', 'working']) {
@@ -502,7 +506,88 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     return { ok: true, transactionId: state.id, phase: state.phase, restored: true, archivesRetained: true,
       metadataTransitionsPreserved: true, metadataRecovery: current.metadataRecovery, archiveDir: directory };
   });
-  return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata };
+  const restoredFinalizationInputs = ({ directory, state, ctx }) => {
+    const prior = state.metadataRestoreReview;
+    const observations = state.metadataRestoreObservations;
+    const unsigned = { ...prior };
+    delete unsigned.digest;
+    if (!state.proof?.manifestSha256 || state.branchDeleted || !prior
+      || prior.mode !== 'restore-metadata-only' || prior.digest !== hash(unsigned)
+      || prior.transactionId !== state.id || prior.repoPath !== ctx.repoPath || !sameRelease(prior.release, state.release)
+      || !Array.isArray(observations) || observations.length !== 2
+      || observations.some((row, index) => row?.part !== ['administration', 'working'][index]
+        || (row.proof == null ? index !== 0 || prior.initialPlacements?.administration !== 'original'
+          : !/^[a-f0-9]{64}$/.test(row.proof.sha256 || '')
+            || !/^[a-f0-9]{64}$/.test(row.proof.digest || '')))) fail('restored-finalization-evidence-missing');
+    return { transactionDir: directory, manifestSha256: state.proof.manifestSha256,
+      metadataRecovery: prior.metadataRecovery, postMoveObservations: observations.map(row => row.proof ?? null) };
+  };
+  // A separate endpoint can acknowledge a narrowly reviewed post-restoration
+  // transition. It never passes that permission to a move or ordinary verifier.
+  const finalizationReview = async (bound, reservation) => {
+    const { state, ctx } = bound;
+    if (!['metadata-restored-working', 'restored-finalization-approved'].includes(state.phase)) fail('restored-finalization-phase-not-ready');
+    const input = restoredFinalizationInputs(bound);
+    const policy = await metadataRestoreSafety(bound);
+    const proof = await native({ command: 'review-restored-finalization', ...input });
+    if (proof.placements?.working !== 'original' || proof.placements?.administration !== 'original') fail('restored-finalization-originals-not-restored');
+    const evidence = { version: 1, mode: 'finalize-already-restored', transactionId: state.id,
+      repoPath: ctx.repoPath, release: state.release, journalDigest: hash(state), phase: state.phase, policy,
+      reservation, priorMetadataRestoreReview: state.metadataRestoreReview,
+      postMoveObservations: state.metadataRestoreObservations, restoredFinalization: proof.restoredFinalization,
+      placements: proof.placements, changeCounts: proof.changeCounts, changedPaths: proof.changedPaths };
+    return { digest: hash(evidence), ...evidence };
+  };
+  const withRestoredFinalization = (input, work, allowReleased = false) => fenced(async () => {
+    const directory = location(input.transactionId);
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      const bound = await loadBoundTransaction(input);
+      const gate = await admission();
+      const reservation = await gate.readCheckoutReservation(bound.ctx.repoPath, bound.state.id).catch(error => {
+        if (error.code === 'ENOENT' && allowReleased && bound.state.phase === 'restored-with-reviewed-finalization') return null;
+        throw error;
+      });
+      if (reservation && JSON.stringify(reservation) !== JSON.stringify(bound.state.reservation)) fail('restored-finalization-reservation-changed');
+      const run = async () => {
+        executor.assertHeld();
+        if (hash(await readJournal(directory)) !== hash(bound.state)) fail('retirement-journal-changed');
+        return work(bound, { executor, gate, reservation });
+      };
+      return reservation ? await gate.withCheckoutReservation(reservation, run)
+        : await gate.withCheckoutPublication(bound.ctx.repoPath, run);
+    } finally { await executor.release(); }
+  }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
+  const reviewRestoredFinalization = input => withRestoredFinalization(input,
+    async (bound, { reservation }) => ({ ok: true, review: await finalizationReview(bound, reservation) }));
+  const finalizeRestored = input => withRestoredFinalization(input, async (bound, { executor, gate, reservation }) => {
+    const { directory } = bound;
+    let state = bound.state;
+    const replay = state.phase === 'restored-with-reviewed-finalization';
+    const current = replay ? state.restoredFinalizationReview : await finalizationReview(bound, reservation);
+    const unsigned = { ...current };
+    delete unsigned.digest;
+    if (!current || current.mode !== 'finalize-already-restored' || current.digest !== hash(unsigned)
+      || current.digest !== input.review?.digest) fail('restored-finalization-review-changed');
+    if (!replay) state = await appendStep(directory, state, 'restored-finalization-approved', { restoredFinalizationReview: current });
+    const policy = await metadataRestoreSafety({ ...bound, state });
+    if (JSON.stringify(policy) !== JSON.stringify(current.policy)) fail('retirement-evidence-changed');
+    executor.assertHeld();
+    const proof = await native({ command: 'verify-restored-finalization', ...restoredFinalizationInputs({ ...bound, state }),
+      restoredFinalization: current.restoredFinalization });
+    if (proof.verified !== true || proof.alreadyRestored !== true || proof.restoredFinalizationAccepted !== true
+      || ['working', 'administration'].some(part => proof.placements?.[part]?.state !== 'original')) fail('restored-finalization-proof-refused');
+    const finalPolicy = await metadataRestoreSafety({ ...bound, state });
+    if (JSON.stringify(finalPolicy) !== JSON.stringify(current.policy)) fail('retirement-evidence-changed');
+    executor.assertHeld();
+    if (!replay) state = await appendStep(directory, state, 'restored-with-reviewed-finalization');
+    if (reservation) await gate.releaseCheckoutReservation(reservation);
+    return { ok: true, transactionId: state.id, phase: state.phase, restored: true, alreadyRestored: true,
+      archivesRetained: true, metadataTransitionsPreserved: true, restoredFinalization: current.restoredFinalization,
+      archiveDir: directory };
+  }, true);
+  return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
+    reviewRestoredFinalization, finalizeRestored };
 }
 
 const recovery = _createInitializedCheckoutRecovery();
@@ -517,3 +602,5 @@ export const reviewInitializedCheckoutBranch = recovery.reviewBranch;
 export const retireInitializedCheckoutBranch = recovery.retireBranch;
 export const reviewInitializedCheckoutMetadataRestore = recovery.reviewMetadataRestore;
 export const restoreInitializedCheckoutMetadata = recovery.restoreMetadata;
+export const reviewInitializedCheckoutRestoredFinalization = recovery.reviewRestoredFinalization;
+export const finalizeInitializedCheckoutRestored = recovery.finalizeRestored;

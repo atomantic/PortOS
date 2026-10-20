@@ -615,6 +615,127 @@ class NativeArchive(unittest.TestCase):
             self.assertTrue(archive.verify({**accepted, 'mode': 'restore'})['metadataRecoveryAccepted'])
         self.assertEqual((self.txn / 'manifest.json').read_bytes(), before)
 
+    def restored_finalization_fixture(self, move_administration=False):
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.apple.decmpfs', 'fixture-residual',
+                        str(self.work / 'base.txt')], check=True)
+        self.preserve()
+        for part in (('administration', 'working') if move_administration else ('working',)):
+            archive.move({**self.request, 'part': part, 'direction': 'quarantine'})
+        moved = self.txn / 'quarantine/working/base.txt'
+        if 'com.apple.decmpfs' in archive.raw_xattrs(moved):
+            subprocess.run(['/usr/bin/xattr', '-d', 'com.apple.decmpfs', str(moved)], check=True)
+        review = archive.review_metadata_recovery(self.request)
+        request = {**self.request, 'metadataRecovery': review['metadataRecovery']}
+        observations = [archive.move({**request, 'part': part, 'direction': 'restore'}).get('postMoveObservation')
+                        for part in ('administration', 'working')]
+        self.assertTrue(archive.verify({**request, 'mode': 'restore'})['verified'])
+        # Actual disposable-file operations reproduce a delayed reappearance and
+        # directory timestamp change after both original-inode moves succeeded.
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.apple.decmpfs', 'fixture-residual',
+                        str(self.work / 'base.txt')], check=True)
+        directory = self.work / 'empty'
+        info = directory.stat()
+        os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        return {**request, 'postMoveObservations': observations}
+
+    def test_restored_finalization_records_delayed_metadata_without_moving_or_rewriting_originals(self):
+        request = self.restored_finalization_fixture()
+        baseline = (self.txn / 'manifest.json').read_bytes()
+        before = archive.original_sources(self.txn, archive.load_transaction(request)[1]['facts'])
+        with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-review-changed'):
+            archive.verify({**request, 'mode': 'restore'})
+        result = subprocess.run([sys.executable, str(Path(archive.__file__))],
+                                input=json.dumps({**request, 'command': 'review-restored-finalization'}) + '\n',
+                                env=self.env, capture_output=True, text=True, check=True)
+        reviewed = json.loads(result.stdout)
+        self.assertEqual(reviewed['changeCounts'], {'directoryMtimeChanged': 1, 'residualCompressionReappeared': 1})
+        accepted = {**request, 'restoredFinalization': reviewed['restoredFinalization']}
+        evidence = json.loads((self.txn / reviewed['restoredFinalization']['evidenceFile']).read_text())
+        returned = next(row for row in evidence['changes'] if row.get('attribute') == 'com.apple.decmpfs')
+        self.assertEqual(archive.base64.b64decode(returned['originalBase64']), b'fixture-residual')
+        self.assertEqual(returned['afterBase64'], returned['originalBase64'])
+        with patch.object(archive, 'exclusive_rename', side_effect=AssertionError('no move allowed')):
+            self.assertTrue(archive.verify_restored_finalization(accepted)['restoredFinalizationAccepted'])
+            self.assertTrue(archive.verify_restored_finalization(accepted)['alreadyRestored'])
+        for command in ({'command': 'verify', 'mode': 'restore'},
+                        {'command': 'move', 'direction': 'restore', 'part': 'working'}):
+            result = subprocess.run([sys.executable, str(Path(archive.__file__))],
+                                    input=json.dumps({**accepted, **command}) + '\n',
+                                    env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout)['reason'], 'restored-finalization-separate-command-required')
+        self.assertEqual(archive.original_sources(self.txn, archive.load_transaction(request)[1]['facts']), before)
+        self.assertEqual((self.txn / 'manifest.json').read_bytes(), baseline)
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+
+    def test_restored_finalization_refuses_stale_snapshot_and_noneligible_changes(self):
+        request = self.restored_finalization_fixture()
+        review = archive.review_restored_finalization(request)
+        accepted = {**request, 'restoredFinalization': review['restoredFinalization']}
+        original_manifest = archive.manifest
+        mutations = {
+            'content': lambda row: row.update(sha256='0' * 64),
+            'file mtime': lambda row: row.update(mtimeNs=row['mtimeNs'] + 1),
+            'flags': lambda row: row.update(flags=row['flags'] | 0x20),
+            'ownership': lambda row: row.update(uid=row['uid'] + 1),
+            'acl': lambda row: row.update(acl='changed'),
+            'identity': lambda row: row['filesystemIdentity'].update(ino=0),
+            'security attribute': lambda row: row['xattrs'].update({'com.apple.quarantine': '0' * 64}),
+            'wrong compression': lambda row: row['xattrs'].update({'com.apple.decmpfs': '0' * 64}),
+        }
+        for name, mutation in mutations.items():
+            def observe(path, reject_links=False):
+                rows = original_manifest(path, reject_links)
+                if path == self.work:
+                    rows = copy.deepcopy(rows)
+                    mutation(next(row for row in rows if row['path'] == 'base.txt'))
+                return rows
+            with self.subTest(change=name), patch.object(archive, 'manifest', observe):
+                with self.assertRaisesRegex(RuntimeError, 'restored-finalization-source-content-or-identity-changed|restored-finalization-unsupported-attribute-change'):
+                    archive.review_restored_finalization(request)
+        directory = self.work / 'empty'
+        info = directory.stat()
+        os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+        with self.assertRaisesRegex(RuntimeError, 'restored-finalization-review-changed'):
+            archive.verify_restored_finalization(accepted)
+        refreshed = archive.review_restored_finalization(request)
+        self.assertNotEqual(refreshed['restoredFinalization']['digest'], review['restoredFinalization']['digest'])
+        self.assertTrue(archive.verify_restored_finalization(
+            {**request, 'restoredFinalization': refreshed['restoredFinalization']})['verified'])
+
+    def test_restored_finalization_requires_exact_prior_observations_and_raw_preimages(self):
+        request = self.restored_finalization_fixture(move_administration=True)
+        self.assertTrue(archive.review_restored_finalization(request)['restoredFinalization'])
+        for references in ([], request['postMoveObservations'][::-1],
+                           [request['postMoveObservations'][0]] * 2,
+                           [None, request['postMoveObservations'][1]],
+                           [request['postMoveObservations'][0], None]):
+            with self.subTest(references=references), self.assertRaisesRegex(RuntimeError, 'restored-finalization-postmove-proof|restored-finalization-evidence-invalid'):
+                archive.review_restored_finalization({**request, 'postMoveObservations': references})
+        reference = request['postMoveObservations'][0]
+        path = self.txn / reference['file']
+        encoded = path.read_bytes()
+        path.write_bytes(encoded + b' ')
+        with self.assertRaisesRegex(RuntimeError, 'restored-finalization-evidence-changed'):
+            archive.review_restored_finalization(request)
+        path.write_bytes(encoded)
+        attributes = archive.raw_xattrs
+        def invalid_raw(path):
+            values = attributes(path)
+            return {**values, 'com.apple.decmpfs': b'wrong'} if path == self.work / 'base.txt' else values
+        # Keep the observed manifest hashes stable to isolate the separate raw
+        # preimage check against a racing attribute read.
+        manifest = archive.manifest(self.work)
+        real_manifest = archive.manifest
+        def stable_manifest(path, reject_links=False):
+            return manifest if path == self.work else real_manifest(path, reject_links)
+        with patch.object(archive, 'raw_xattrs', invalid_raw), patch.object(archive, 'manifest', stable_manifest):
+            with self.assertRaisesRegex(RuntimeError, 'restored-finalization-preimage-missing-or-changed'):
+                archive.review_restored_finalization(request)
+        archive.exclusive_rename(self.work, self.txn / 'quarantine/working')
+        with self.assertRaisesRegex(RuntimeError, 'restored-finalization-original-placement-required'):
+            archive.review_restored_finalization(request)
+
     def test_fresh_process_refuses_foreign_rollback_target(self):
         self.preserve()
         archive.move({**self.request, 'part': 'working', 'direction': 'quarantine'})

@@ -10,7 +10,7 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
-const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn() }));
+const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn(), reviewInitializedCheckoutRestoredFinalization: vi.fn(), finalizeInitializedCheckoutRestored: vi.fn() }));
 vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
 
 vi.mock('../services/taskSchedule.js', () => ({
@@ -107,6 +107,22 @@ describe('CoS Schedule Routes', () => {
     initialized.restoreInitializedCheckoutMetadata.mockResolvedValue({ ok: false, reason: 'metadata-recovery-review-changed' });
     expect((await request(app).post(`${base}/restore-metadata`).send(approved)).status).toBe(409);
     expect(initialized.restoreInitializedCheckoutMetadata).toHaveBeenCalledWith(approved);
+  });
+
+  it('requires a distinct finalization digest and never accepts caller-supplied metadata allowances', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const input = { appId: 'app', transactionId: '2f800be9-682c-4726-813d-8d9ea0b2c1dc', journalDigest: 'a'.repeat(64) };
+    initialized.reviewInitializedCheckoutRestoredFinalization.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-restored-finalization`).send(input)).status).toBe(200);
+    expect(initialized.reviewInitializedCheckoutRestoredFinalization).toHaveBeenCalledWith(input);
+    expect((await request(app).post(`${base}/finalize-restored`).send(input)).status).toBe(400);
+    const approved = { ...input, review: { digest: 'b'.repeat(64) } };
+    expect((await request(app).post(`${base}/finalize-restored`).send({ ...approved, ignoreMtime: true })).status).toBe(400);
+    expect((await request(app).post(`${base}/finalize-restored`).send({ ...approved, review: { ...approved.review, acceptChanges: true } })).status).toBe(400);
+    expect(initialized.finalizeInitializedCheckoutRestored).not.toHaveBeenCalled();
+    initialized.finalizeInitializedCheckoutRestored.mockResolvedValue({ ok: false, reason: 'restored-finalization-review-changed' });
+    expect((await request(app).post(`${base}/finalize-restored`).send(approved)).status).toBe(409);
+    expect(initialized.finalizeInitializedCheckoutRestored).toHaveBeenCalledWith(approved);
   });
 
   describe('GET /api/cos/schedule', () => {

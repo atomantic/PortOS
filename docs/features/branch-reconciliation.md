@@ -172,6 +172,48 @@ rows. Existing malformed numbered rows are never silently ignored or replaced.
 After an interrupted recovery, read status again and obtain a new review for
 the new journal digest rather than replaying an old approval.
 
+### Finalizing originals that have already been restored
+
+Metadata can change after the post-move proof succeeds. In an observed case,
+directory modification times changed and some residual compression attributes
+returned with exactly their archived original bytes. The writer was not
+established. The restore's final verification correctly retained its reservation.
+
+When both original directories are already back at their exact original inode
+identities, a separate completion path can record this narrow delta without
+moving or repairing anything:
+
+1. `POST /review-restored-finalization` accepts the transaction identifiers and
+   fresh journal digest. It binds the previous accepted restore review and its
+   immutable post-move observations, verifies the archive, and captures a new
+   immutable full source snapshot under the existing reservation and executor.
+2. Independently review the new digest and complete evidence. Only directory
+   modification-time changes and reappearance of original residual
+   `com.apple.decmpfs` bytes are eligible. Reappeared attributes must match both
+   their prior raw preimages and the verified archive; the file must remain
+   uncompressed. Administration, file contents and modification times, paths,
+   identities, permissions, ownership, ACLs, flags, and all other attributes
+   remain exact. Unknown drift stays held.
+3. `POST /finalize-restored` accepts that separately reviewed digest. It repeats
+   the review, verifies the exact snapshot again, and rechecks the branch,
+   ownership, policy and reservation before recording completion and releasing
+   the exact reservation. It performs no directory moves, metadata writes,
+   branch changes or cleanup. Original manifests, raw values, observations,
+   archives and journal evidence remain retained.
+
+The bootstrap CLI exposes the same separate operations:
+
+```sh
+node scripts/recover-initialized-checkout.js review-finalization /absolute/request.json \
+  --install-root /absolute/PortOS --output /absolute/new-finalization-review.jsonl
+node scripts/recover-initialized-checkout.js finalize /absolute/approved-request.json \
+  --install-root /absolute/PortOS --output /absolute/new-finalization.jsonl
+```
+
+These operations do not relax normal retirement or restore-move checks, and
+finalization does not authorize branch deletion. Any subsequent retirement
+requires a fresh review and preservation proof for the current checkout.
+
 Managed checkout creation/adoption/removal, claim binding, the full workspace
 preparation through agent registration/spawn, and supported Git API writers
 share admission under the canonical common Git directory. Synthetic read-only

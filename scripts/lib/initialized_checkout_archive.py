@@ -923,7 +923,164 @@ def review_metadata_recovery(request):
             'changedPaths': len({(row['part'], row['path']) for row in changes})}
 
 
+def load_bound_evidence(root, reference, prefix):
+    if (not isinstance(reference, dict) or set(reference) != {'file', 'sha256', 'digest'}
+            or not isinstance(reference['digest'], str)
+            or not re.fullmatch(r'[0-9a-f]{64}', reference['digest'])
+            or reference['file'] != prefix + reference['digest'] + '.json'):
+        fail('restored-finalization-evidence-invalid')
+    path = root / reference['file']
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()
+                or info.st_size > 256 * 1024 ** 2):
+            fail('restored-finalization-evidence-unsafe')
+        encoded = source.read(256 * 1024 ** 2 + 1)
+    evidence = json.loads(encoded)
+    # All supported publishers use this canonical encoding. Exact equality also
+    # rejects duplicate JSON keys rather than interpreting an ambiguous ledger.
+    if (hashlib.sha256(encoded).hexdigest() != reference['sha256']
+            or digest(evidence) != reference['digest']
+            or encoded != (json.dumps(evidence, sort_keys=True) + '\n').encode('utf-8')):
+        fail('restored-finalization-evidence-changed')
+    return evidence
+
+
+def restored_finalization_context(root, saved, request):
+    prior = load_metadata_recovery(root, saved, request)
+    accepted = request['metadataRecovery']
+    canonical_prior = load_bound_evidence(root, {
+        'file': accepted['evidenceFile'], 'sha256': accepted['evidenceSha256'],
+        'digest': accepted['digest']}, 'metadata-recovery-')
+    if canonical_prior != prior:
+        fail('restored-finalization-prior-review-changed')
+    located, sources = original_sources(root, saved['facts'])
+    if any(row['state'] != 'original' for row in located.values()):
+        fail('restored-finalization-original-placement-required')
+    if metadata_recovery_changes(root, saved, located, prior['sources']) != prior['changes']:
+        fail('restored-finalization-prior-review-changed')
+    references = request.get('postMoveObservations')
+    if not isinstance(references, list) or len(references) != 2:
+        fail('restored-finalization-postmove-proof-required')
+    for part, reference in zip(('administration', 'working'), references):
+        # An already-original administration restore is an authenticated no-op,
+        # so the old move command legitimately produced no postmove artifact.
+        if (reference is None and part == 'administration'
+                and prior['initialPlacements'][part] == 'original'
+                and sources[part] == saved['facts']['sources'][part]):
+            continue
+        observation = load_bound_evidence(root, reference, 'metadata-recovery-postmove-')
+        positions = {
+            label: {'original': 'matching' if state == 'original' else 'absent',
+                    'quarantine': 'absent' if state == 'original' else 'matching', 'state': state}
+            for label, state in {'administration': 'original',
+                                 'working': 'original' if part == 'working' else 'quarantine'}.items()}
+        if observation != {'version': 1, 'manifestSha256': request['manifestSha256'],
+                           'acceptedMetadataRecovery': accepted, 'part': part,
+                           'placements': positions, 'sources': prior['sources']}:
+            fail('restored-finalization-postmove-proof-changed')
+    return prior, located, sources
+
+
+def restored_finalization_changes(root, saved, prior, sources):
+    # This is a record-only acceptance after both moves, never a move policy.
+    # Directory mtimes are evidence of an observed change, not a causal claim.
+    baseline = saved['facts']['sources']
+    if sources['administration'] != baseline['administration']:
+        fail('restored-finalization-administration-changed')
+    expected, actual = prior['sources']['working'], sources['working']
+    if len(expected) != len(actual):
+        fail('restored-finalization-source-layout-changed')
+    preimages = {(row['part'], row['path'], row['attribute']): row for row in prior['changes']}
+    changes, total = [], 0
+    for original, before, after in zip(baseline['working'], expected, actual):
+        excluded = {'xattrs', 'mtimeNs'} if before['kind'] == 'directory' else {'xattrs'}
+        if {k: v for k, v in before.items() if k not in excluded} != {
+                k: v for k, v in after.items() if k not in excluded}:
+            fail('restored-finalization-source-content-or-identity-changed')
+        if before['mtimeNs'] != after['mtimeNs']:
+            changes.append({'part': 'working', 'path': before['path'], 'field': 'mtimeNs',
+                            'before': before['mtimeNs'], 'after': after['mtimeNs']})
+        for name in sorted(set(before['xattrs']) | set(after['xattrs'])):
+            old, new = before['xattrs'].get(name), after['xattrs'].get(name)
+            if old == new:
+                continue
+            preimage = preimages.get(('working', before['path'], name), {})
+            if (name != 'com.apple.decmpfs' or old is not None or new is None
+                    or before['kind'] != 'file' or before['flags'] & 0x20
+                    or original['xattrs'].get(name) != new
+                    or preimage.get('beforeSha256') != new or preimage.get('afterSha256') is not None
+                    or 'beforeBase64' not in preimage):
+                fail('restored-finalization-unsupported-attribute-change:' + name)
+            archived = raw_xattrs(root / 'archive/working' / before['path']).get(name)
+            current = raw_xattrs(Path(saved['facts']['release']['path']) / before['path']).get(name)
+            if (archived is None or current != archived
+                    or hashlib.sha256(archived).hexdigest() != new
+                    or base64.b64encode(archived).decode('ascii') != preimage['beforeBase64']):
+                fail('restored-finalization-preimage-missing-or-changed')
+            total += len(archived) + len(current)
+            if total > 16 * 1024 ** 2:
+                fail('metadata-recovery-evidence-budget-exceeded')
+            changes.append({'part': 'working', 'path': before['path'], 'attribute': name,
+                            'beforeSha256': None, 'afterSha256': new,
+                            'originalSha256': original['xattrs'][name],
+                            'originalBase64': preimage['beforeBase64'],
+                            'afterBase64': base64.b64encode(current).decode('ascii')})
+    return changes
+
+
+def restored_finalization_snapshot(request):
+    if not re.fullmatch(r'[0-9a-f]{64}', request.get('manifestSha256', '')):
+        fail('restored-finalization-manifest-proof-required')
+    root, saved = load_transaction(request)
+    verify_saved_archive(root, saved)
+    prior, located, sources = restored_finalization_context(root, saved, request)
+    changes = restored_finalization_changes(root, saved, prior, sources)
+    verify_live_common(root, saved, restoring=True)
+    if original_sources(root, saved['facts']) != (located, sources):
+        fail('restored-finalization-observation-changed')
+    evidence = {'version': 1, 'manifestSha256': request['manifestSha256'],
+                'transactionIdentity': saved['transactionIdentity'],
+                'originalFingerprint': saved['facts']['fingerprint'],
+                'acceptedMetadataRecovery': request['metadataRecovery'],
+                'postMoveObservations': request['postMoveObservations'],
+                'placements': located, 'sources': sources, 'changes': changes}
+    return root, evidence
+
+
+def review_restored_finalization(request):
+    root, evidence = restored_finalization_snapshot(request)
+    stored = immutable_recovery_evidence(root, 'restored-finalization-', evidence)
+    return {'restoredFinalization': {'version': 1, 'evidenceFile': stored['file'],
+                                    'evidenceSha256': stored['sha256'], 'digest': stored['digest']},
+            'placements': {label: row['state'] for label, row in evidence['placements'].items()},
+            'changeCounts': {
+                'directoryMtimeChanged': sum(row.get('field') == 'mtimeNs' for row in evidence['changes']),
+                'residualCompressionReappeared': sum(row.get('attribute') == 'com.apple.decmpfs'
+                                                    for row in evidence['changes'])},
+            'changedPaths': len({(row['part'], row['path']) for row in evidence['changes']})}
+
+
+def verify_restored_finalization(request):
+    accepted = request.get('restoredFinalization')
+    if (not isinstance(accepted, dict)
+            or set(accepted) != {'version', 'evidenceFile', 'evidenceSha256', 'digest'}
+            or accepted['version'] != 1):
+        fail('restored-finalization-proof-invalid')
+    root, evidence = restored_finalization_snapshot(request)
+    recorded = load_bound_evidence(root, {'file': accepted['evidenceFile'],
+                                         'sha256': accepted['evidenceSha256'],
+                                         'digest': accepted['digest']}, 'restored-finalization-')
+    if recorded != evidence:
+        fail('restored-finalization-review-changed')
+    return {'verified': True, 'alreadyRestored': True, 'placements': evidence['placements'],
+            'fingerprint': evidence['originalFingerprint'], 'restoredFinalizationAccepted': True}
+
+
 def verify(request):
+    if 'restoredFinalization' in request:
+        fail('restored-finalization-separate-command-required')
     root, saved = load_transaction(request)
     facts = saved['facts']
     recovering = 'metadataRecovery' in request
@@ -1044,11 +1201,14 @@ def main():
     elif action == 'status':
         root, saved = load_transaction(request)
         result = {'placements': placements(root, saved['facts']), 'fingerprint': saved['facts']['fingerprint']}
-    elif action in ('preserve', 'verify', 'move', 'review-metadata-recovery'):
+    elif action in ('preserve', 'verify', 'move', 'review-metadata-recovery',
+                    'review-restored-finalization', 'verify-restored-finalization'):
         fd = lock_file(transaction(request['transactionDir']), 'backend.lock')
         try:
             result = {'preserve': preserve, 'verify': verify, 'move': move,
-                      'review-metadata-recovery': review_metadata_recovery}[action](request)
+                      'review-metadata-recovery': review_metadata_recovery,
+                      'review-restored-finalization': review_restored_finalization,
+                      'verify-restored-finalization': verify_restored_finalization}[action](request)
         finally:
             os.close(fd)
     else:
