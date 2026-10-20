@@ -1106,7 +1106,6 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
         await saveState(s);
       });
 
-      emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
       const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
@@ -1765,7 +1764,6 @@ export function applyAppWorktreeDefault(metadata, app) {
 }
 
 async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null } = {}) {
-  const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
   // First, check for any on-demand task requests for this app
@@ -1826,24 +1824,14 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     selectionReason = nextTypeResult.reason;
   }
 
-  // Record execution in the schedule service
-  await taskSchedule.recordExecution(`task:${nextType}`, app.id);
-
-  // Update app activity with new type
-  await updateAppActivity(app.id, {
-    lastImprovementType: nextType
-  });
-
-  emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
-
   // Delegate the actual task build to the per-type generator so the dynamic
   // blocks run on the idle-review path too: pr-watcher's PR poll +
   // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
   // {referenceData} injection. Without delegation this path replaced only the
   // generic placeholders, so a watcher type selected here would spawn a prompt
   // with the literal {prData}/{referenceData} markers and never poll. The
-  // recordExecution + activity bump above already accounted for the idle
-  // spawn; the per-type generator does not record execution itself.
+  // preparer owns skip cadence and success activity/logging; this caller
+  // records execution only when preparation produces a task.
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
     targetPullRequest,
@@ -1856,6 +1844,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     preflightCardId: stolenCardId
   });
   const { task, pendingPerpetualDispatch } = prepared;
+  if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (stolenRequest) {

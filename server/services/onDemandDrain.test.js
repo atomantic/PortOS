@@ -675,7 +675,7 @@ describe('atomic on-demand preparation ownership', () => {
     // A late loser must not close or reset a card while the winner is working.
     expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledTimes(1);
     expect(mocks.applyOnDemandRunResets).toHaveBeenCalledTimes(1);
-    expect(mocks.recordExecution).toHaveBeenCalledTimes(1);
+    expect(mocks.recordExecution).not.toHaveBeenCalled();
     expect(mocks.startPreflightCard).toHaveBeenCalledTimes(1);
     expect(mocks.reportPreflightStep).toHaveBeenCalledTimes(1);
     expect(mocks.finishPreflightCard).not.toHaveBeenCalled();
@@ -683,6 +683,7 @@ describe('atomic on-demand preparation ownership', () => {
 
     preparationRelease.resolve();
     await Promise.all(drains);
+    expect(mocks.recordExecution).toHaveBeenCalledTimes(1);
     expect(mocks.addTask).toHaveBeenCalledTimes(1);
     expect(engines[winner].spawned).toHaveLength(1);
     expect(engines[1 - winner].spawned).toEqual([]);
@@ -776,5 +777,22 @@ describe.each(ENGINES)('%s — historical queued Deep compatibility', (_name, ma
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledOnce();
     expect(spawned).toHaveLength(1);
+  });
+});
+
+
+describe.each(ENGINES)('%s — preparation owns skipped execution cadence (#12570)', (_name, makeAdapter) => {
+  it.each(['input-hook', 'pr-watcher'])('does not charge %s twice', async (gate) => {
+    const taskType = gate === 'pr-watcher' ? 'pr-watcher' : 'code-quality';
+    mocks.loadSchedule.mockResolvedValue({ tasks: { [taskType]: { enabled: true } } });
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ taskType })]);
+    mocks.prepareManagedAppImprovementTask.mockImplementation(async (_type, app) => {
+      // The preparer's cadence-bearing skip already records this run.
+      await mocks.recordExecution(taskType, app.id);
+      return { task: null, pendingPerpetualDispatch: null, skip: { gate } };
+    });
+    await drainOnDemandRequests({ state: STATE }, makeAdapter().adapter);
+    expect(mocks.recordExecution).toHaveBeenCalledExactlyOnceWith(taskType, APP.id);
+    expect(mocks.addTask).not.toHaveBeenCalled();
   });
 });
