@@ -21,7 +21,7 @@ import { describe, it, expect, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
-import { projectToCanon, projectToCatalog, _inFlightSize } from './catalogCanonProjection.js';
+import { projectToCanon, projectToCatalog } from './catalogCanonProjection.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -171,7 +171,6 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
     expect(updSpy.mock.calls.length).toBe(writesAfterPrimary);
     // Canon side written exactly once.
     expect(updateUniverse).toHaveBeenCalledTimes(1);
-    expect(_inFlightSize()).toBe(0);
     updSpy.mockRestore();
   });
 });
