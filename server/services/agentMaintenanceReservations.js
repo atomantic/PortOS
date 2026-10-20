@@ -15,8 +15,8 @@ export async function releaseAgentReservation(agentId) {
 }
 
 /**
- * Drop `agent` reservations whose agent is completed or no longer in state AND
- * whose admitting process is dead. A running/paused agent, a live owner pid and
+ * Drop `agent` reservations whose agent is completed, paused or no longer in state AND
+ * whose admitting process is dead. A running agent, a live owner pid and
  * an `unsettled` (uncertain-cleanup) record are never touched; operator
  * abandonment receipts stay the path for those.
  *
@@ -26,7 +26,8 @@ export async function releaseAgentReservation(agentId) {
 export async function reconcileStaleAgentReservations({ agents, admission = maintenance, pidAlive = isPidAlive }) {
   try {
     const statusById = new Map(agents.map(agent => [agent.id, agent.status]));
-    const ended = id => !statusById.has(id) || statusById.get(id) === 'completed';
+    // A paused agent has no process; pausing settles its reservation, so a dead-owner one is residue.
+    const ended = id => !statusById.has(id) || ['completed', 'paused'].includes(statusById.get(id));
     const stale = admission.operations().filter(op => op.kind === 'agent' && !op.unsettled
       && ended(op.resource) && !pidAlive(op.pid));
     if (stale.length === 0) return 0;

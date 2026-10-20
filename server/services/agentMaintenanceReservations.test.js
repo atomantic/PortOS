@@ -48,10 +48,10 @@ describe('reconcileStaleAgentReservations', () => {
     gateRef.gate.admit('provider', 'agent-done');
   };
 
-  it('releases completed or absent agents with a dead owner and nothing else', async () => {
+  it('releases completed, paused or absent agents with a dead owner and nothing else', async () => {
     seed();
-    expect(await reconcileStaleAgentReservations({ agents, pidAlive: () => false })).toBe(2);
-    expect(resources()).toEqual(['agent-done', 'agent-hurt', 'agent-live', 'agent-paused']);
+    expect(await reconcileStaleAgentReservations({ agents, pidAlive: () => false })).toBe(3);
+    expect(resources()).toEqual(['agent-done', 'agent-hurt', 'agent-live']);
     expect(gateRef.gate.status().blockers.filter(b => b.resource === 'agent-done').map(b => b.kind)).toEqual(['provider']);
   });
 
