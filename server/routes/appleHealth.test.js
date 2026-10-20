@@ -15,7 +15,11 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { createZip } from '../lib/zipWriter.js';
 
-const imports = vi.hoisted(() => ({ paths: [], impl: null }));
+const imports = vi.hoisted(() => ({ paths: [], impl: null, limits: undefined }));
+vi.mock('../lib/zipStream.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, createZipBudget: options => actual.createZipBudget(imports.limits ?? options) };
+});
 vi.mock('../services/appleHealthXml.js', () => ({
   importAppleHealthXml: vi.fn(async (filePath) => {
     imports.paths.push(filePath);
@@ -63,12 +67,43 @@ describe('POST /api/health/import/xml — ZIP extraction temp dir', () => {
   beforeEach(async () => {
     imports.paths = [];
     imports.impl = null;
+    imports.limits = undefined;
     preexisting = new Set(await extractDirs());
   });
 
   afterEach(async () => {
     const leaked = (await extractDirs()).filter((n) => !preexisting.has(n));
     expect(leaked).toEqual([]);
+  });
+
+  it('rejects a high-ratio XML member and removes the partial extraction', async () => {
+    const zip = createZip([{ name: 'export.xml', data: 'A'.repeat(1024 * 1024) }], { compress: true });
+    const res = await request(buildApp()).post('/api/health/import/xml')
+      .set('content-type', 'multipart/form-data; boundary=----portoshealth')
+      .send(multipart('----portoshealth', zip));
+    expect(res.status).toBe(413);
+    expect(imports.paths).toHaveLength(0);
+    // afterEach checks that the partial XML and extraction directory are gone.
+  });
+
+  it.each([{ maxTotalBytes: 5 }, { maxEntries: 1 }])('rejects aggregate clinical-record limits and cleans extraction: %j', async (limits) => {
+    imports.limits = limits;
+    const res = await postZip([
+      { name: 'export.xml', data: XML },
+      { name: 'clinical_records/a.json', data: '{} ' },
+      { name: 'clinical_records/b.json', data: '{} ' }
+    ]);
+    expect(res.status).toBe(413);
+    expect(imports.paths).toHaveLength(0);
+  });
+
+  it('rejects duplicate XML destinations without leaving an extracted file', async () => {
+    const res = await postZip([
+      { name: 'export.xml', data: XML },
+      { name: 'apple_health_export/export.xml', data: XML }
+    ]);
+    expect(res.status).toBe(400);
+    expect(imports.paths).toHaveLength(0);
   });
 
   it('gives back-to-back imports distinct extraction directories and cleans both up', async () => {
