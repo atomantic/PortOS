@@ -942,6 +942,21 @@ describe('useVideoGenForm', () => {
     expect(result.current.modelId).toBe(LTX2.id);
   });
 
+  it('restores a queued Runway text render without changing it to image mode', () => {
+    const { result, rerender } = render();
+    rerender({ models: MODELS, modelContext: MODEL_CONTEXT, availableLoras: [], runwayEnabled: true });
+    act(() => result.current.applyResumedParams({
+      mode: 'runway', videoMode: 'text', modelId: 'gen4.5', duration: 7, resolution: '720p',
+      prompt: 'a fox watches the rain',
+    }));
+    expect(result.current.hostedLane).toBe('runway');
+    expect(result.current.mode).toBe('text');
+    expect(result.current.runwayModelId).toBe('gen4.5');
+    expect(result.current.runwayDuration).toBe('7');
+    expect(result.current.runwayResolution).toBe('720p');
+    expect(result.current.prompt).toBe('a fox watches the rain');
+  });
+
   it('resolves a stored hosted backend whose key is no longer configured to the local lane', async () => {
     const { result, rerender } = render({ grokEnabled: false });
     const props = { models: MODELS, modelContext: MODEL_CONTEXT, availableLoras: [], grokEnabled: false };
