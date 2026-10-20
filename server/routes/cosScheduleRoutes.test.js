@@ -10,7 +10,7 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
-const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn(), reviewInitializedCheckoutRestoredFinalization: vi.fn(), finalizeInitializedCheckoutRestored: vi.fn() }));
+const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn(), reviewInitializedCheckoutRestoredFinalization: vi.fn(), finalizeInitializedCheckoutRestored: vi.fn(), reviewInitializedCheckoutQuarantineResumption: vi.fn(), resumeInitializedCheckoutQuarantine: vi.fn() }));
 vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
 
 vi.mock('../services/taskSchedule.js', () => ({
@@ -598,6 +598,23 @@ describe('CoS Schedule Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.templates).toHaveLength(1);
     });
+  });
+
+  it('validates purpose-specific quarantine review and resumption without caller-supplied native proof', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const input = { appId: 'app', transactionId: 'c96ce286-b5f3-49c3-8e51-f8c8e1b8bd3f', journalDigest: 'a'.repeat(64) };
+    initialized.reviewInitializedCheckoutQuarantineResumption.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-quarantine-resumption`).send(input)).status).toBe(200);
+    expect(initialized.reviewInitializedCheckoutQuarantineResumption).toHaveBeenCalledWith(input);
+    expect((await request(app).post(`${base}/resume-quarantine`).send(input)).status).toBe(400);
+    const approved = { ...input, review: { digest: 'b'.repeat(64), acceptSuperseded: true } };
+    for (const extra of [{ quarantineResumption: {} }, { direction: 'restore' }, { prUrl: 'https://example.com/pr' }]) {
+      expect((await request(app).post(`${base}/resume-quarantine`).send({ ...approved, ...extra })).status).toBe(400);
+    }
+    expect((await request(app).post(`${base}/resume-quarantine`).send({ ...approved, review: { ...approved.review, ignoreMtime: true } })).status).toBe(400);
+    initialized.resumeInitializedCheckoutQuarantine.mockResolvedValue({ ok: false, reason: 'retirement-review-changed' });
+    expect((await request(app).post(`${base}/resume-quarantine`).send(approved)).status).toBe(409);
+    expect(initialized.resumeInitializedCheckoutQuarantine).toHaveBeenCalledWith(approved);
   });
 
   describe('POST /api/cos/schedule/templates', () => {

@@ -18,7 +18,8 @@ async function fixture(action = 'review') {
   const apps = { apps: { 'portos-default': { repoPath: root } } };
   await writeFile(join(root, 'data/apps.json'), JSON.stringify(apps));
   await writeFile(join(root, 'data/cos/state.json'), JSON.stringify({ agents: {} }));
-  const body = { ...request, ...(['restore', 'finalize'].includes(action) ? { review: { digest: 'b'.repeat(64) } } : {}) };
+  const body = { ...request, ...(['restore', 'finalize', 'resume-quarantine'].includes(action)
+    ? { review: { digest: 'b'.repeat(64), ...(action === 'resume-quarantine' ? { acceptSuperseded: true } : {}) } } : {}) };
   const input = join(root, 'request.json');
   const output = join(root, 'result.jsonl');
   await writeFile(input, JSON.stringify(body));
@@ -26,12 +27,13 @@ async function fixture(action = 'review') {
 }
 
 describe('initialized checkout recovery CLI', () => {
-  it.each(['review', 'restore', 'review-finalization', 'finalize'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
+  it.each(['review', 'restore', 'review-finalization', 'finalize', 'review-quarantine', 'resume-quarantine'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
     const f = await fixture(action);
     const before = process.env.PORTOS_DATA_ROOT;
     const stdout = vi.fn();
     const method = { review: 'reviewMetadataRestore', restore: 'restoreMetadata',
-      'review-finalization': 'reviewRestoredFinalization', finalize: 'finalizeRestored' }[action];
+      'review-finalization': 'reviewRestoredFinalization', finalize: 'finalizeRestored',
+      'review-quarantine': 'reviewQuarantineResumption', 'resume-quarantine': 'resumeQuarantine' }[action];
     const load = vi.fn(async (deps, root) => {
       expect(root).toBe(f.root);
       expect(process.env.PORTOS_DATA_ROOT).toBe(f.root);
@@ -58,6 +60,19 @@ describe('initialized checkout recovery CLI', () => {
   it('requires a separate exact review for finalization and never falls back to restore', async () => {
     const f = await fixture('finalize');
     await writeFile(f.input, JSON.stringify(request));
+    const load = vi.fn();
+    expect(await runRecovery(f.args, { load, stdout: () => {} })).toBe(1);
+    expect(load).not.toHaveBeenCalled();
+    await expect(stat(f.output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['missing-review', 'nonboolean-supersession', 'caller-proof'])('refuses quarantine %s before loading the service', async change => {
+    const f = await fixture('resume-quarantine');
+    const body = { ...f.body };
+    if (change === 'missing-review') delete body.review;
+    if (change === 'nonboolean-supersession') body.review.acceptSuperseded = 'true';
+    if (change === 'caller-proof') body.review.quarantineResumption = { digest: 'c'.repeat(64) };
+    await writeFile(f.input, JSON.stringify(body));
     const load = vi.fn();
     expect(await runRecovery(f.args, { load, stdout: () => {} })).toBe(1);
     expect(load).not.toHaveBeenCalled();
