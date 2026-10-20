@@ -8,4 +8,4 @@ ftfy>=6.3,<7
 imageio>=2.36,<3
 imageio-ffmpeg>=0.5,<1
 av>=14,<17
-Pillow>=10,<13
+Pillow>=13.0.0,<14

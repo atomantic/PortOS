@@ -35,5 +35,5 @@ av==18.1.0
 
 # Keyframe decode (image / FFLF conditioning) and the frame arrays encode_video
 # writes.
-pillow==12.3.0
+pillow==13.0.0
 numpy==2.5.2
