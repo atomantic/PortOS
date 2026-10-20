@@ -81,6 +81,8 @@ import {
   applyLeanClaudeArgs,
   CODEX_WORKSPACE_NETWORK_KEY,
   CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
+  CODEX_PLUGINS_FEATURE_KEY,
+  CODEX_APPS_FEATURE_KEY,
 } from './providerModels.js';
 import {
   isCodexCommand,
@@ -1153,11 +1155,15 @@ const CLAUDE_REPAIR_ARGS = [
   '--setting-sources', 'user',
   '--disallowedTools', 'Bash', 'WebFetch', 'WebSearch',
 ];
-// Codex's OS sandbox: writes confined to the working directory, with network
-// and extra writable roots forced off even when the user's config.toml sets them.
+// Codex's OS sandbox confines its shell commands to the working directory
+// with network off. MCP servers, plugins and apps run outside that sandbox
+// (computer-use, node_repl), and an `mcp_servers` override cannot clear them,
+// so the user's config.toml is not loaded at all (auth still is) and the
+// plugin/app surfaces are disabled.
 const CODEX_REPAIR_ARGS = [
-  '--sandbox', 'workspace-write',
+  '--sandbox', 'workspace-write', '--ignore-user-config',
   '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`, '-c', `${CODEX_WORKSPACE_WRITABLE_ROOTS_KEY}=[]`,
+  '-c', `${CODEX_PLUGINS_FEATURE_KEY}=false`, '-c', `${CODEX_APPS_FEATURE_KEY}=false`,
 ];
 
 /**

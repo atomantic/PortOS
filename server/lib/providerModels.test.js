@@ -44,6 +44,8 @@ import {
   CODEX_AGENT_THREADS_KEY,
   CODEX_WORKSPACE_NETWORK_KEY,
   CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
+  CODEX_PLUGINS_FEATURE_KEY,
+  CODEX_APPS_FEATURE_KEY,
   isPortosSuppliedConfigKey,
   hasCodexUpdateCheckConfig,
   buildCodexStartupArgs,
@@ -752,6 +754,8 @@ describe('providerModels', () => {
         CODEX_UPDATE_CHECK_KEY,
         CODEX_WORKSPACE_NETWORK_KEY,
         CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
+        CODEX_PLUGINS_FEATURE_KEY,
+        CODEX_APPS_FEATURE_KEY,
       ].sort());
       // Guard against a third emitter appearing without a row: both builders
       // that produce `-c` are asserted to use a listed key.

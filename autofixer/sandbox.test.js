@@ -170,7 +170,7 @@ describe('buildFixPrompt — untrusted log fencing', () => {
 
 describe('pickRepairProvider — only an enforced restricted mode runs a repair', () => {
   const claude = { id: 'claude-code', type: 'cli', command: 'claude', args: ['--print', '--dangerously-skip-permissions', '--allowedTools', 'Bash', '--add-dir', '/example/live'] };
-  const codex = { id: 'codex', type: 'cli', command: 'codex', args: ['--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'danger-full-access', '--add-dir', '/example/live', '-C', '/example/live'] };
+  const codex = { id: 'codex', type: 'cli', command: 'codex', ignoreUserConfig: true, args: ['--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'danger-full-access', '--add-dir', '/example/live', '-C', '/example/live'] };
   const gemini = { id: 'gemini-cli', type: 'cli', command: 'gemini', args: ['--yolo'] };
   const agy = { id: 'antigravity-cli', type: 'cli', command: 'agy', args: ['--print', '--dangerously-skip-permissions'] };
   // The argv the runner actually spawns: buildCliArgs over the restricted clone.
@@ -208,7 +208,12 @@ describe('pickRepairProvider — only an enforced restricted mode runs a repair'
     expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('/example/live');
-    expect(argv.join(' ')).toContain('--sandbox workspace-write -c sandbox_workspace_write.network_access=false -c sandbox_workspace_write.writable_roots=[]');
+    expect(argv.join(' ')).toContain([
+      '--sandbox workspace-write --ignore-user-config',
+      '-c sandbox_workspace_write.network_access=false -c sandbox_workspace_write.writable_roots=[]',
+      '-c features.plugins=false -c features.apps=false',
+    ].join(' '));
+    expect(argv.filter((arg) => arg === '--ignore-user-config')).toHaveLength(1);
     expect(argv.at(-1)).toBe('-');
   });
 });

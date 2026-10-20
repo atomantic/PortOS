@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, access, symlink } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,8 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
   let port;
   let unixServer;
   let socketPath;
+  let home;
+  let keyStore;
 
   beforeAll(async () => {
     // Linux hides /tmp and /run behind tmpfs; /var/tmp keeps the socket below
@@ -28,6 +30,13 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     await mkdir(worktree, { recursive: true });
     await mkdir(outside);
     await writeFile(join(dataDir, 'providers.json'), '{"apiKey":"example-provider-key"}');
+    // A credential store reached through a symlink (~/.ssh → elsewhere).
+    home = join(root, 'home');
+    keyStore = join(root, 'key-store');
+    await mkdir(home);
+    await mkdir(keyStore);
+    await writeFile(join(keyStore, 'id_example'), 'example-private-key');
+    await symlink(keyStore, join(home, '.ssh'));
     server = createServer((socket) => socket.end('reached'));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = server.address().port;
@@ -44,7 +53,7 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     await rm(root, { recursive: true, force: true });
   });
 
-  const verify = (command) => runVerifyCommand(command, worktree, { dataDir, timeoutMs: 30000 });
+  const verify = (command) => runVerifyCommand(command, worktree, { dataDir, homeDir: home, timeoutMs: 30000 });
 
   it('runs a forking test command that writes inside the worktree', async () => {
     const result = await verify('echo built > out.txt && (cat out.txt) && sh -c "exit 0"');
@@ -76,6 +85,14 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     const net = await verify(connectProbe(`${port}, '127.0.0.1'`));
     expect(net.ok).toBe(false);
     expect(net.output).not.toContain('reached');
+  });
+
+  it('cannot read a symlinked credential store through the link or its target', async () => {
+    for (const path of [join(home, '.ssh', 'id_example'), join(keyStore, 'id_example')]) {
+      const result = await verify(`cat ${JSON.stringify(path)}`);
+      expect(result.ok).toBe(false);
+      expect(result.output).not.toContain('example-private-key');
+    }
   });
 
   it('cannot connect to a host pathname Unix socket', async () => {

@@ -541,10 +541,11 @@ function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
  * @param {object} [opts]
  * @param {string} [opts.dataDir]  PortOS data directory to hide from the command
  * @param {number} [opts.timeoutMs=300000]
+ * @param {string} [opts.homeDir]  host home whose credential stores are hidden (default: os.homedir())
  * @param {() => Promise<{ id: string|null, supported: boolean, reason: string|null }>} [opts.probe]
  * @returns {Promise<{ ok: boolean, code: number, output: string, contained: boolean, mechanism?: string }>}
  */
-export async function runVerifyCommand(command, cwd, { dataDir = null, timeoutMs = 300000, probe = probeVerifyContainment } = {}) {
+export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir = homedir(), timeoutMs = 300000, probe = probeVerifyContainment } = {}) {
   const mechanism = await probe();
   if (!mechanism.supported) {
     return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${mechanism.reason}` };
@@ -555,10 +556,13 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, timeoutMs
     const worktree = await realpath(cwd);
     const scratch = await realpath(scratchDir);
     const realOrSelf = (path) => realpath(path).catch(() => path);
-    const protectedPaths = autofixVerifyProtectedPaths({
+    const listed = autofixVerifyProtectedPaths({
       dataDir: dataDir ? await realOrSelf(dataDir) : null,
-      realHome: await realOrSelf(homedir()),
+      realHome: await realOrSelf(homeDir),
     });
+    // Seatbelt matches resolved paths: a symlinked store (~/.ssh → elsewhere)
+    // is protected only through its target, so list both.
+    const protectedPaths = [...new Set([...listed, ...await Promise.all(listed.map(realOrSelf))])];
     const env = autofixVerifyEnv({ scratch, path: process.env.PATH });
     const shell = ['/bin/sh', '-c', command];
     let launch;
