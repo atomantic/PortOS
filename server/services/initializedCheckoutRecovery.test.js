@@ -313,25 +313,56 @@ describe('initialized checkout transaction', () => {
       path: `/later/${index}`, branch: `later/${index}`, head: 'f'.repeat(40),
       branchDeleted: true, archiveDir: `/later-archives/${index}`,
     });
-    const newer = { ...release, createdAt: '2099-01-01T00:00:00.000Z' };
+    const newer = { ...release, reason: 'retirement-review-pending' };
     await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [newer] });
     const saved = JSON.parse(persisted.json);
     const outcome = saved.executions['task:branch-reconcile'].perApp.app.branchReconcileOutcome;
     const originalReceipts = structuredClone(outcome.retired);
     const originalIdentities = structuredClone(outcome.retirementReceiptIdentities);
     expect(originalReceipts.some(receipt => receipt.path === release.path)).toBe(false);
-    outcome.remaining = [newer]; outcome.retirementObligations = [newer];
-    persisted.json = JSON.stringify(saved);
+    const currentInventory = structuredClone(outcome.remaining);
+    const currentObligations = structuredClone(outcome.retirementObligations);
+    expect(currentObligations).toHaveLength(1);
+    expect(Number.isFinite(Date.parse(currentObligations[0].createdAt))).toBe(true);
     const restarted = _createInitializedCheckoutRecovery(fixture.deps);
     const status = await restarted.status(input);
     expect(await restarted.retireBranch({ ...input, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     const replayed = JSON.parse(persisted.json).executions['task:branch-reconcile'].perApp.app.branchReconcileOutcome;
     expect(replayed.retired).toEqual(originalReceipts);
     expect(replayed.retirementReceiptIdentities).toEqual(originalIdentities);
-    expect(replayed.remaining).toEqual([newer]);
-    expect(replayed.retirementObligations).toEqual([newer]);
+    expect(replayed.remaining).toEqual(currentInventory);
+    expect(replayed.retirementObligations).toEqual(currentObligations);
     expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
     expect(fixture.cut).toBeNull();
+  });
+  it('keeps a recreated checkout generation pending on old receipt replay and accepts its own new archive', async () => {
+    const { recordHeldCheckoutRetirement, recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+    persisted.json = JSON.stringify({ executions: {} });
+    const pending = { ...release, reason: 'retirement-review-pending' };
+    const first = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [pending] });
+    const firstCreated = first.retirementObligations[0].createdAt;
+    const receipt = { ...release, branchDeleted: true, archiveDir: '/archive/original' };
+    const retired = await recordHeldCheckoutRetirement('app', receipt);
+    expect(retired.retirementObligations).toEqual([]);
+    expect(retired.remaining).toEqual([]);
+    const originalTimestamp = retired.retired[0].retiredAt;
+    const recreated = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [pending] });
+    const generation = recreated.retirementObligations[0].createdAt;
+    expect(Date.parse(generation)).toBeGreaterThan(Date.parse(originalTimestamp));
+    expect(Date.parse(generation)).toBeGreaterThanOrEqual(Date.parse(firstCreated));
+    await recordHeldCheckoutRetirement('app', receipt);
+    expect(await getBranchReconcileOutcome('app')).toEqual(recreated);
+    // The fresh archive is a different retirement identity, with evidence later
+    // than this server-created generation. The old archive remains untouched.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(generation) + 1);
+      const completed = await recordHeldCheckoutRetirement('app', { ...receipt, archiveDir: '/archive/new-generation' });
+      expect(completed.retirementObligations).toEqual([]);
+      expect(completed.remaining).toEqual([]);
+      expect(completed.retired.find(row => row.archiveDir === receipt.archiveDir).retiredAt).toBe(originalTimestamp);
+      expect(Object.keys(completed.retirementReceiptIdentities)).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
   });
   it.each(['quarantined', 'branch-retired'])('rechecks the journal after executor acquisition in %s', async phase => {
     let input = await quarantinedReview();
