@@ -17,12 +17,14 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
+import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
+import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
@@ -240,11 +242,17 @@ async function queueWorktreeCreate(repo, fn) {
  */
 export function deleteCompletedLocalBranch(repoPath, branch, expectedHead) {
   return queueWorktreeCreate(repoPath, async () => {
+    if (PROTECTED_BRANCHES.includes(branch)) return false;
+    const { getDefaultBranch } = await import('./git.js');
+    const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
+    if (!defaultBranch || branch === defaultBranch) return false;
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return false;
     const ref = `refs/heads/${branch}`;
     if ((await execGit(['check-ref-format', ref], repoPath, { ignoreExitCode: true })).exitCode !== 0) return false;
     const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
     if (!isAbsolute(common)) return false;
+    const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
+    if (!await preservation.verify()) return false;
     const result = await execGit(['push',
       '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
       `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
@@ -1228,6 +1236,12 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold) {
   const worktreePath = join(WORKTREES_DIR, agentId);
   const warnings = [];
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+  const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
+    ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
+  if (protectedReason) return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
+    warnings: [`Worktree preserved — ${protectedReason}`] };
   const owner = await ownershipHold();
   if (owner) return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
     warnings: [`Worktree preserved — ${owner}`] };
@@ -1240,6 +1254,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
     const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
     if (!base) return 'default-branch-unavailable';
+    if (PROTECTED_BRANCHES.includes(branchName) || branchName === base) return 'protected-branch';
     const target = await resolveMergeTarget(sourceWorkspace, base);
     const head = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
     if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';

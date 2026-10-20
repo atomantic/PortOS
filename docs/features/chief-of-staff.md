@@ -125,6 +125,9 @@ The Git page's merged badge is a display hint. Delete merged branches and
 completion cleanup use the same retirement path: resolve the current checkout,
 re-read ownership and policy, verify the exact commit's merge evidence, archive
 and verify ignored content, private Git evidence and reflog-only commit objects.
+Before local ref deletion, a separate archive preserves the shared branch
+reflog verbatim and bundles every historical commit it names, including for
+branches without a checkout. Missing objects or changed archive bytes hold the ref.
 Local ref retirement uses Git’s checked-out-branch guard and an exact-head lease
 inside the worktree creation queue. Remote deletion binds its fresh proof and
 exact-head lease to one captured, matching fetch/push endpoint. Recovery refs retain original commit objects even for a squash

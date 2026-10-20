@@ -1319,17 +1319,27 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, opts) {
-  if (opts.claimOwners === undefined) opts = {
-    ...opts, claimOwners: { readAgents: readClaimOwnershipAgents },
-  };
+  const supplied = opts.claimOwners;
+  if (supplied === null || (supplied !== undefined && (typeof supplied !== 'object'
+    || Array.isArray(supplied) || (supplied.readAgents !== undefined && typeof supplied.readAgents !== 'function')))) {
+    return { ok: false, reason: 'claim-ownership-unreadable' };
+  }
+  // A caller's snapshot can add a hold, never grant retirement permission.
+  if (supplied && Object.hasOwn(supplied, 'agents')) {
+    const snapshotHold = claimCheckoutOwnerReason({
+      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents: supplied.agents,
+    });
+    if (snapshotHold) return { ok: false, reason: snapshotHold };
+  }
+  const reader = supplied?.readAgents || readClaimOwnershipAgents;
+  const readAgents = () => Promise.resolve().then(reader).catch(() => null);
+  opts = { ...opts, claimOwners: { ...supplied, readAgents } };
   // A live claim run may still be finishing this branch (CI wait, merge handoff,
   // its own cleanup) — never remove its checkout or ref from under it. The scan's
   // answer is stale by now, so with a registry reader the owners are re-read
   // under the lock binding takes: a bind lands before this check or after the
   // removal, never between them.
   if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
-  const readAgents = opts.claimOwners?.readAgents;
-  if (!readAgents) return retireBranchNow(repoPath, b, opts);
   return withClaimOwnershipLock(async () => {
     const agents = await readAgents().catch(() => null);
     const reason = claimCheckoutOwnerReason({
@@ -1373,9 +1383,8 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
   if (b.worktreePath) {
     // Never tear down a worktree outside the managed roots (see
     // reconcileWorktreeRoots), one that's locked, a RECENT human /claim session,
-    // or an active CoS agent workspace. An abandoned claim worktree (clean and older
-    // than the window) falls through and IS retired; that's the "cleaned 0
-    // forever" leak this exists to close.
+    // or an active CoS agent workspace. Passing the age/location gate is only
+    // eligibility: manual claims still require exact completion evidence below.
     const gate = {
       path: b.worktreePath,
       locked: b.worktreeLocked,
@@ -1399,7 +1408,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
     if (requireCleanWorktree && dirty) return { ok: false, reason: 'worktree-dirty' };
   }
   if (mergedRetirement && b.worktreePath) {
-    if (allowLiveClaim && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
+    if (isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
       const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
       const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
       // Registry absence cannot prove a manual CLI or external task finished.
@@ -1428,7 +1437,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       }
       const policyHold = await readPolicyHold();
       if (policyHold) return policyHold;
-      if (mergedRetirement && allowLiveClaim && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
+      if (mergedRetirement && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
         const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
         const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
         const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);

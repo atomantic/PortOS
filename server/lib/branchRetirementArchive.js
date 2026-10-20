@@ -1,0 +1,94 @@
+/** Preserve shared branch reflogs and their objects before branch retirement.
+ * Worktree-private archives do not cover logs/refs/heads, which Git removes
+ * with the branch. This leaf also covers branches that have no checkout.
+ */
+import { lstat, readFile, mkdir, chmod } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { execGit } from './execGit.js';
+import { PATHS } from './paths.js';
+import { sha256File, writeFileGuarded } from './fileCore.js';
+
+const MAX_REFLOG_BYTES = 25 * 1024 * 1024;
+const MAX_RECOVERY_HEADS = 1024;
+const git = (repoPath, args) => execGit(args, repoPath).then(result => result.stdout.trim());
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+async function readReflog(path) {
+  const info = await lstat(path).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!info) return { bytes: null, identity: null };
+  if (!info.isFile() || info.size > MAX_REFLOG_BYTES) throw new Error('branch reflog cannot be archived');
+  const bytes = await readFile(path);
+  const identity = {
+    dev: info.dev, ino: info.ino, mode: info.mode, size: info.size,
+    mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, sha256: digest(bytes),
+  };
+  return { bytes, identity };
+}
+
+export async function preserveBranchRetirement(repoPath, commonGitDir, branch, expectedHead, { cosDir = PATHS.cos } = {}) {
+  const storage = await execGit(['config', '--get', 'extensions.refStorage'], repoPath, { ignoreExitCode: true });
+  if ((storage.exitCode !== 0 && storage.exitCode !== 1) || (storage.stdout.trim() && storage.stdout.trim() !== 'files')) {
+    throw new Error('branch reflog storage is unsupported');
+  }
+  const ref = `refs/heads/${branch}`;
+  if (await git(repoPath, ['rev-parse', '--verify', ref]) !== expectedHead) throw new Error('branch head changed');
+  const source = join(commonGitDir, 'logs', 'refs', 'heads', ...branch.split('/'));
+  const before = await readReflog(source);
+  const recoveryHeads = new Set([expectedHead]);
+  for (const line of (before.bytes?.toString('utf8') || '').split('\n').filter(Boolean)) {
+    const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?) ([a-f0-9]{40}(?:[a-f0-9]{24})?) /.exec(line);
+    if (!match) throw new Error('branch reflog entry cannot be preserved');
+    for (const head of match.slice(1)) if (!/^0+$/.test(head)) recoveryHeads.add(head);
+  }
+  if (recoveryHeads.size > MAX_RECOVERY_HEADS) throw new Error('too many branch recovery objects');
+  const id = randomUUID();
+  const archiveDir = join(cosDir, 'branch-retirement-archives', id);
+  await mkdir(archiveDir, { recursive: true, mode: 0o700 });
+  await chmod(archiveDir, 0o700);
+  if (before.bytes) {
+    const copy = join(archiveDir, 'reflog');
+    await writeFileGuarded(copy, before.bytes, { flag: 'wx', mode: 0o600 });
+    if (digest(await readFile(copy)) !== before.identity.sha256) throw new Error('branch reflog archive mismatch');
+  }
+  const bundle = join(archiveDir, 'commits.bundle');
+  const recoveryRefs = [];
+  try {
+    for (const head of recoveryHeads) {
+      if (await git(repoPath, ['cat-file', '-t', head]) !== 'commit') throw new Error('branch recovery object is not a commit');
+      const recoveryRef = `refs/portos/branch-archive/${id}/${head}`;
+      await git(repoPath, ['update-ref', recoveryRef, head, '']);
+      recoveryRefs.push({ ref: recoveryRef, head });
+    }
+    await git(repoPath, ['bundle', 'create', bundle, ...recoveryRefs.map(entry => entry.ref)]);
+    await git(repoPath, ['bundle', 'verify', bundle]);
+    const heads = await git(repoPath, ['bundle', 'list-heads', bundle]);
+    const bundled = new Set(heads.split('\n').map(line => line.split(' ')[0]));
+    if ([...recoveryHeads].some(head => !bundled.has(head))) throw new Error('branch bundle recovery head mismatch');
+  } finally {
+    for (const entry of recoveryRefs) await git(repoPath, ['update-ref', '-d', entry.ref, entry.head]);
+  }
+  await chmod(bundle, 0o600);
+  const bundleSha256 = await sha256File(bundle);
+  const manifestPath = join(archiveDir, 'manifest.json');
+  const manifest = `${JSON.stringify({
+    version: 1, repoPath, commonGitDir, branch, expectedHead, archivedAt: new Date().toISOString(),
+    reflog: { present: before.bytes !== null, source, identity: before.identity },
+    recoveryHeads: [...recoveryHeads], bundleSha256,
+    restore: 'git -C <repo> fetch <archive>/commits.bundle refs/portos/branch-archive/<archive-id>/<head>:refs/heads/<restored-branch>',
+  }, null, 2)}\n`;
+  await writeFileGuarded(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
+  const verify = () => Promise.all([
+    git(repoPath, ['rev-parse', '--verify', ref]), readReflog(source),
+    sha256File(bundle), readFile(manifestPath, 'utf8'),
+    before.bytes ? sha256File(join(archiveDir, 'reflog')) : null,
+  ]).then(([head, current, bundleHash, currentManifest, reflogHash]) =>
+    head === expectedHead && JSON.stringify(current.identity) === JSON.stringify(before.identity)
+    && bundleHash === bundleSha256 && currentManifest === manifest
+    && (!before.bytes || reflogHash === before.identity.sha256)).catch(() => false);
+  if (!await verify()) throw new Error('branch reflog or archive changed during archival');
+  return { archiveDir, verify };
+}

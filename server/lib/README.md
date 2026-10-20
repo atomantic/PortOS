@@ -25,6 +25,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `branchRetirementArchive.js` | `preserveBranchRetirement` preserves the shared branch reflog verbatim, records its filesystem metadata, and verifies a standalone bundle containing the current tip and every old/new reflog commit before local branch retirement. Its final verifier holds changed refs or reflogs; unsupported storage, missing objects and archive failures retain the branch. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |

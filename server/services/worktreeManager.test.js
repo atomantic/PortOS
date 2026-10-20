@@ -4,6 +4,8 @@ import { dirname, join } from 'path';
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
 const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
+const preserveBranchMock = vi.fn(async () => ({ archiveDir: '/branch-archive', verify: async () => true }));
+vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: (...args) => preserveCheckoutMock(...args) }));
 const completionOwnersMock = vi.fn(async () => []);
 vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
@@ -44,6 +46,7 @@ vi.mock('./git.js', () => ({
 
 const {
   shouldRefuseDefaultBranchMerge,
+  deleteCompletedLocalBranch,
   isHumanClaimWorktree,
   classifyWorktreeDirt,
   isGitLockError,
@@ -67,6 +70,27 @@ const { win32 } = await import('path');
 const { existsSync, realpathSync } = await import('fs');
 const { lstat, readdir, rm, stat, readlink, symlink, unlink } = await import('fs/promises');
 const { PATHS } = await import('../lib/fileUtils.js');
+
+describe('completed branch archival boundary', () => {
+  const head = 'a'.repeat(40);
+  beforeEach(() => {
+    execGitMock.mockReset().mockImplementation(async args => ({
+      stdout: args.includes('--git-common-dir') ? '/repo/.git' : '', exitCode: 0,
+    }));
+    getDefaultBranchMock.mockResolvedValue('main');
+    preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
+  });
+  afterEach(() => {
+    preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
+  });
+  it.each(['archive failure', 'archive verification failure'])('never sends the deletion when there is an %s', async failure => {
+    if (failure === 'archive failure') preserveBranchMock.mockRejectedValue(new Error('archive disk full'));
+    else preserveBranchMock.mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => false });
+    expect(await deleteCompletedLocalBranch('/repo', 'done', head)).toBe(false);
+    expect(preserveBranchMock).toHaveBeenCalledWith('/repo', '/repo/.git', 'done', head);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
+  });
+});
 
 describe('Worktree dependency preparation', () => {
   const directories = ['client', 'server', 'admin', 'uninstalled', 'assets', '.hidden', 'node_modules', 'nested'];
@@ -1038,6 +1062,21 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       expect(execGitMock.mock.calls.some(([args]) => ['checkout', 'worktree', 'branch'].includes(args[0]))).toBe(false);
     }
   );
+
+  it.each([
+    ['main', 'main', 'protected-branch'],
+    ['release', 'main', 'protected-branch'],
+    ['trunk', 'trunk', 'protected-branch'],
+    ['cos/task-1/agent-x', null, 'default-branch-unavailable'],
+  ])('retains %s before trusting erroneous cleanup metadata (default %s)', async (branch, base, reason) => {
+    getDefaultBranchMock.mockResolvedValue(base);
+    const result = await removeWorktree('agent-x', '/repo', branch, { merge: true });
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain(reason);
+    expect(preserveCheckoutMock).not.toHaveBeenCalled();
+    expect(execGitMock.mock.calls.some(([args]) => ['merge', 'push', 'checkout'].includes(args[0])
+      || (args[0] === 'worktree' && ['remove', 'prune'].includes(args[1])))).toBe(false);
+  });
 
   it.each(['active', 'unreadable', 'arrives-during-archive'])('preserves a finalizing checkout when ownership is %s', async state => {
     const otherOwner = { id: 'agent-other', status: 'running', workspacePath: join(PATHS.worktrees, 'agent-x'), metadata: { sourceWorkspace: '/repo', worktreeBranch: 'cos/task-1/agent-x' } };

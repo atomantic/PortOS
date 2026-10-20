@@ -11,7 +11,7 @@
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, chmod } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -25,6 +25,8 @@ import {
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
 afterAll(cleanupTempDataRoots);
+import { PATHS } from '../lib/paths.js';
+import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 import { hasBranchMergeEvidence } from './git.js';
 import { reapMergedWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
@@ -95,6 +97,98 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
     await execGit(['update-ref', 'refs/heads/done', advanced, head], dir);
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
     expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(advanced);
+  });
+
+  it('retains protected and custom default refs even without holders', async () => {
+    await execGit(['branch', 'release'], dir);
+    await execGit(['branch', 'trunk'], dir);
+    const head = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['update-ref', 'refs/remotes/origin/trunk', head], dir);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], dir);
+    for (const branch of ['release', 'trunk']) {
+      expect(await deleteCompletedLocalBranch(dir, branch, head)).toBe(false);
+      expect((await execGit(['rev-parse', branch], dir)).stdout.trim()).toBe(head);
+    }
+  });
+
+  it('retains a ref when the repository default cannot be established', async () => {
+    await execGit(['branch', '-m', 'main', 'trunk'], dir);
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it('preserves the full shared branch reflog and orphaned historical commit objects without a checkout', async () => {
+    await execGit(['checkout', '-b', 'done'], dir);
+    await commitFile(dir, 'history.txt', 'original evidence', 'original commit');
+    const original = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await writeFile(join(dir, 'history.txt'), 'amended evidence');
+    await execGit(['add', 'history.txt'], dir);
+    await execGit(['commit', '--amend', '-m', 'amended commit'], dir);
+    const head = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['checkout', 'main'], dir);
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const reflog = join(common, 'logs', 'refs', 'heads', 'done');
+    const evidence = await readFile(reflog);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
+    expect(existsSync(reflog)).toBe(false);
+    const archiveRoot = join(PATHS.cos, 'branch-retirement-archives');
+    const archives = await Promise.all((await readdir(archiveRoot)).map(async id => ({
+      path: join(archiveRoot, id), manifest: JSON.parse(await readFile(join(archiveRoot, id, 'manifest.json'), 'utf8')),
+    })));
+    const archive = archives.find(entry => entry.manifest.repoPath === dir && entry.manifest.expectedHead === head);
+    expect(archive).toBeDefined();
+    expect(await readFile(join(archive.path, 'reflog'))).toEqual(evidence);
+    expect(archive.manifest.recoveryHeads).toEqual(expect.arrayContaining([original, head]));
+    const restored = join(dir, 'restored.git');
+    await execGit(['init', '--bare', restored], dir);
+    await execGit(['--git-dir', restored, 'fetch', join(archive.path, 'commits.bundle'), '+refs/*:refs/*'], dir);
+    expect((await execGit(['--git-dir', restored, 'show', `${original}:history.txt`], dir)).stdout).toBe('original evidence');
+    expect((await execGit(['--git-dir', restored, 'show', `${head}:history.txt`], dir)).stdout).toBe('amended evidence');
+  });
+
+  it('retains the branch when a reflog recovery object is missing', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const log = join(common, 'logs', 'refs', 'heads', 'done');
+    await writeFile(log, `${'b'.repeat(40)} ${head} Test <test@example.com> 1 +0000\tmissing historical object\n`);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect(await readFile(log, 'utf8')).toContain('missing historical object');
+  });
+
+  it('refuses a changed shared reflog even when the branch tip is unchanged', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
+    expect(await preserved.verify()).toBe(true);
+    const log = join(common, 'logs', 'refs', 'heads', 'done');
+    await writeFile(log, `${await readFile(log, 'utf8')}${head} ${head} Test <test@example.com> 1 +0000\tnew recovery evidence\n`);
+    expect(await preserved.verify()).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it.each(['reflog', 'commits.bundle', 'manifest.json'])('refuses an archive whose %s changes before retirement', async name => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
+    await writeFile(join(preserved.archiveDir, name), 'changed after archival');
+    expect(await preserved.verify()).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it('holds the branch on archive storage failure', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const blocked = join(dir, 'not-a-directory');
+    await writeFile(blocked, 'keep');
+    await expect(preserveBranchRetirement(dir, common, 'done', head, { cosDir: blocked })).rejects.toThrow();
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
   });
 
   it('preserves the repository receiver deletion policy', async () => {

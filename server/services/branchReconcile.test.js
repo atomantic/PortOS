@@ -134,6 +134,7 @@ import {
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { preserveMergedCheckout } from './heldCheckoutRecovery.js';
+import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
@@ -154,6 +155,7 @@ async function cleanupMerged(repo, target, branches, options) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
@@ -443,7 +445,8 @@ describe('cleanupMerged', () => {
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
-  it('keeps legacy snapshot-only callers behind locked / human-claim / active-agent gates', async () => {
+  it('keeps snapshot-only callers behind locked / completion-proof / active-agent gates', async () => {
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const activeAgentIds = new Set(['agent-abc12345']);
     const res = await cleanupMerged('/repo', 'main', [
@@ -454,14 +457,14 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([
       { branch: 'locked-b', path: '/repo/data/cos/worktrees/locked', reason: 'worktree-locked' },
-      { branch: 'claim-b', path: '/repo/data/cos/worktrees/claim-foo', reason: 'worktree-human-claim' },
+      { branch: 'claim-b', path: '/repo/data/cos/worktrees/claim-foo', reason: 'claim-completion-unverified' },
       { branch: 'active-b', path: '/repo/data/cos/worktrees/agent-abc12345', reason: 'worktree-active-agent' }
     ]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('reaps an ABANDONED claim worktree (merged + clean + stale age)', async () => {
+  it('reaps an old claim worktree with verified completion evidence', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(gitFixtureResult('', 0)); // clean
     const res = await cleanupMerged('/repo', 'main', [
@@ -509,7 +512,7 @@ describe('cleanupMerged', () => {
     expect(execGh).not.toHaveBeenCalled();
   });
 
-  it('reaps the invalid empty-issue claim immediately when merged and clean', async () => {
+  it('reaps the invalid empty-issue claim when merged, clean, and completion is verified', async () => {
     expect(isMalformedClaimBranch('claim/issue-')).toBe(true);
     expect(isMalformedClaimBranch('claim/issue-42')).toBe(false);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
@@ -524,26 +527,22 @@ describe('cleanupMerged', () => {
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', RETIRE_HEAD);
   });
 
-  it('still protects a RECENT claim worktree for snapshot-only callers even when merged + clean, and says when the hold lifts', async () => {
+  it('retains a recent unverified claim for snapshot-only callers without a time-based expiry', async () => {
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(gitFixtureResult('', 0)); // clean
-    const before = Date.now();
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-9999', worktreePath: '/repo/data/cos/worktrees/claim-issue-9999', worktreeAgeMs: 60 * 1000 } // 1 min old
     ], { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toHaveLength(1);
-    expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-9999', reason: 'worktree-human-claim' });
-    // The whole point of retryAt: the caller can park until the grace window
-    // lapses instead of sleeping to the next recheck. ~7 days minus 1 minute out.
-    const retryMs = Date.parse(res.skipped[0].retryAt);
-    expect(retryMs).toBeGreaterThan(before + 6.9 * 24 * 60 * 60 * 1000);
-    expect(retryMs).toBeLessThanOrEqual(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-9999', reason: 'claim-completion-unverified' });
+    expect(res.skipped[0]).not.toHaveProperty('retryAt');
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('reaps a SHIPPED claim once idle, but not while dirty, un-shipped, or still busy', async () => {
+  it('requires completion proof for shipped claims and preserves dirty or actively owned checkouts', async () => {
     const HOUR = 60 * 60 * 1000;
     const shipped = (over) => ({
       worktreePath: '/repo/data/cos/worktrees/claim-x', worktreeAgeMs: 2 * HOUR, upstreamGone: true, ...over
@@ -561,23 +560,30 @@ describe('cleanupMerged', () => {
     expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', path: '/repo/data/cos/worktrees/claim-x', reason: 'worktree-dirty' }]);
 
     execGit.mockImplementation(gitFixtureResult('', 0)); // clean
-    // No completion proof — never pushed, remote ref still on origin, or the
-    // remote could not be read. The week-long window still applies.
+    // Neither age nor upstream disappearance substitutes for a receipt bound
+    // to this checkout's exact head and incarnation.
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
     const unshipped = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-2', ...shipped({ upstreamGone: false }) }
     ], { claimOwners: { agents: [] } });
     expect(unshipped.cleaned).toEqual([]);
-    expect(unshipped.skipped[0]).toMatchObject({ branch: 'claim/issue-2', reason: 'worktree-human-claim' });
+    expect(unshipped.skipped[0]).toMatchObject({ branch: 'claim/issue-2', reason: 'claim-completion-unverified' });
 
-    // Shipped but touched a minute ago — a claim process mid-teardown, or a peer
-    // machine merged the PR while this session is still running. Held, and the
-    // caller is told when the short window lapses.
+    // A remote branch deleted by a peer still leaves this local unverified
+    // checkout held, even if it is clean and recently touched.
     const busy = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-3', ...shipped({ worktreeAgeMs: 60 * 1000 }) }
     ], { claimOwners: { agents: [] } });
     expect(busy.cleaned).toEqual([]);
-    expect(busy.skipped[0]).toMatchObject({ branch: 'claim/issue-3', reason: 'worktree-human-claim' });
-    expect(Date.parse(busy.skipped[0].retryAt)).toBeLessThanOrEqual(Date.now() + SHIPPED_CLAIM_IDLE_MS);
+    expect(busy.skipped[0]).toMatchObject({ branch: 'claim/issue-3', reason: 'claim-completion-unverified' });
+    expect(busy.skipped[0]).not.toHaveProperty('retryAt');
+
+    hasCompletedCheckoutEvidence.mockResolvedValue(true);
+    const active = await cleanupMerged('/repo', 'main', [
+      { branch: 'claim/issue-4', ...shipped() }
+    ], { claimOwners: { agents: [] }, activeAgentIds: new Set(['claim-x']) });
+    expect(active.cleaned).toEqual([]);
+    expect(active.skipped[0]).toMatchObject({ branch: 'claim/issue-4', reason: 'worktree-active-agent' });
   });
 
   it('omits retryAt for holds that do NOT lift on a clock', async () => {
@@ -1173,7 +1179,7 @@ describe('reconcile', () => {
   // PRs had merged (deleting their remote branches) sat with their worktrees
   // intact, and every run reported "cleaned 0 / merged branches held back" for a
   // week because the claim grace window outranked the fact that they were done.
-  it('cleans a SHIPPED claim end to end instead of parking on the grace window', async () => {
+  it('cleans a shipped claim with verified completion evidence end to end', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-4348', isDefault: false, current: false, tracking: 'origin/claim/issue-4348', merged: true }
     ]);
@@ -1202,7 +1208,8 @@ describe('reconcile', () => {
   // The fail-safe half of the same signal: "we could not read origin" must never
   // read as "the remote branch is gone", or an unreachable network would start
   // reaping claim worktrees that were never shipped.
-  it('does NOT treat an unreadable remote as proof a claim shipped', async () => {
+  it('does NOT treat an unreadable remote as proof a claim completed', async () => {
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-4348', isDefault: false, current: false, tracking: 'origin/claim/issue-4348', merged: true }
     ]);
@@ -1213,16 +1220,15 @@ describe('reconcile', () => {
     execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 } : args[0] === 'ls-remote'
       ? { stdout: '', exitCode: 1 } // ls-remote failed → listRemoteHeads returns null
       : { stdout: '', exitCode: 0 });
-    // Idle long enough that the SHORT window would have released it — so the only
-    // thing holding it back is the unreadable remote, which is what this pins.
+    // Idle beyond the old short window, but with no exact completion receipt.
     worktreeMtimeMs = Date.now() - 4 * 60 * 60 * 1000;
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
-    // A snapshot-only caller cannot replace the human-claim age protection
-    // with a fresh registry proof under the binding lock.
+    // A snapshot-only caller cannot substitute missing remote or ownership
+    // data for exact successful completion evidence.
     const res = await reconcile('/repo', { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
-    expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-4348', reason: 'worktree-human-claim' });
+    expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-4348', reason: 'claim-completion-unverified' });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
