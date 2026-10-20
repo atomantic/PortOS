@@ -64,8 +64,8 @@ async function readReviewEvidence(workspace) {
   const content = await readFile(resolve(workspace, relative), 'utf-8').catch((err) => (err.code === 'ENOENT' ? null : undefined));
   if (content === null) return { status: null, head: null };
   const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1].trim());
-  const statuses = values(/^REVIEW_STATUS=([^\r\n]*)$/gm);
-  const heads = values(/^REVIEW_HEAD=([^\r\n]*)$/gm);
+  const statuses = values(/^REVIEW_STATUS=(.*)$/gm);
+  const heads = values(/^REVIEW_HEAD=(.*)$/gm);
   return {
     status: statuses.length === 1 ? statuses[0] : 'unreadable',
     head: heads.length === 1 ? heads[0].toLowerCase() : null,

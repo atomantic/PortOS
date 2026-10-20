@@ -334,9 +334,9 @@ describe('pending-merge handoff', () => {
     expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
   });
 
-  it('queues current-head optional quota/no-verdict evidence without inventing a clean verdict', async () => {
+  it.each(['\n', '\r\n'])('queues current-head optional quota/no-verdict evidence without inventing a clean verdict (line ending %j)', async (newline) => {
     f.optionalReviewers = ['codex'];
-    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`);
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive${newline}REVIEW_HEAD=${HEAD}${newline}`);
     expect(await handedOff()).toMatchObject({ queued: true });
     expect(pending()[0].handoff).toMatchObject({ reviewStatus: 'optional-inconclusive', headSha: HEAD });
     greenChecks();
