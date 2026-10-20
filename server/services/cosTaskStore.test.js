@@ -40,7 +40,9 @@ const mock = vi.hoisted(() => ({
   reviewDefaults: { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' },
   reviewCalls: [],
   // Captures cross-peer LI execution verdicts consumed by mergePeerTasks (#2779).
-  liVerdicts: []
+  liVerdicts: [],
+  // In-memory stand-in for the cos_task_archive table, per source.
+  archive: { user: new Map(), internal: new Map() }
 }));
 
 // existsSync is driven by the in-memory file map; readFileSync stays real so
@@ -105,6 +107,34 @@ vi.mock('./cos.js', () => ({
   updateTask: (...args) => updateTask(...args),
 }));
 
+// The archive adapter is a PostgreSQL/JSON store; this suite mocks the filesystem
+// wholesale, so it gets an in-memory table with the same ordering and `before`
+// cursor semantics as the real adapter.
+vi.mock('./cosTaskArchive.js', () => {
+  const sources = ['user', 'internal'];
+  const byIdDesc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+  return {
+    archiveTasks: vi.fn(async (source, tasks) => { for (const task of tasks) mock.archive[source].set(task.id, task); }),
+    getArchivedTask: vi.fn(async (taskId, source = null) => {
+      for (const candidate of source ? [source] : sources) {
+        if (mock.archive[candidate].has(taskId)) return { source: candidate, task: structuredClone(mock.archive[candidate].get(taskId)) };
+      }
+      return null;
+    }),
+    getArchivedIds: vi.fn(async (source, ids) => new Set(ids.filter((id) => mock.archive[source].has(id)))),
+    listArchivedTasks: vi.fn(async (source, { before = null, offset = 0, limit = 25 } = {}) => [...mock.archive[source].values()]
+      .filter((task) => before == null || task.id < before).sort(byIdDesc).slice(offset, offset + limit).map((task) => structuredClone(task))),
+    countArchivedTasks: vi.fn(async (source) => mock.archive[source].size),
+    listArchivedSummaries: vi.fn(async () => sources.flatMap((source) => [...mock.archive[source].values()]
+      .map((task) => ({ source, id: task.id, description: task.description || '' })))),
+    deleteArchivedTask: vi.fn(async (taskId, source = null) => {
+      let removed = false;
+      for (const candidate of source ? [source] : sources) removed = mock.archive[candidate].delete(taskId) || removed;
+      return removed;
+    }),
+  };
+});
+
 vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
@@ -149,6 +179,8 @@ import {
   isReapableBlockedFailure,
   isReapableInvestigation,
   sweepResolvedFailureTasks,
+  archiveCompletedTasks,
+  findTaskWithSource,
   reconcileLegacyForgeMaintenanceTasks,
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
@@ -171,6 +203,7 @@ beforeEach(() => {
   mock.afterWrite = null;
   mock.files = new Map();
   mock.mtimes = new Map();
+  mock.archive = { user: new Map(), internal: new Map() };
   mock.parseCalls = 0;
   // The parse cache is module-level state; a leftover entry from the previous
   // test would answer for a path this test just re-created from scratch.
@@ -2936,4 +2969,175 @@ it('round-trips the server-owned audit disposition contract through persisted ta
     metadata: { app: 'example', analysisType: 'security', fileIssues: false, auditDispositionVersion: 1 } }, 'internal', { raw: true });
   const reloaded = await getTaskById(created.id);
   expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: '1', fileIssues: 'false' });
+});
+
+// Completed-task archive. TASKS.md / COS-TASKS.md keep the open queue plus a recent
+// window of completed tasks; older completed tasks move to the archive with their
+// full records. The fake archive above mirrors the real adapter's contract.
+describe('cosTaskStore completed-task archive', () => {
+  const DAY = 86_400_000;
+  const CLOCK = Date.parse('2026-10-20T12:00:00Z');
+  const id = (n) => `task-example-${String(n).padStart(4, '0')}`;
+  const done = (n, ageDays, extra = {}) => ({
+    id: id(n), description: `Example task ${n}`, status: 'completed', priority: 'MEDIUM',
+    metadata: { updatedAt: new Date(CLOCK - ageDays * DAY).toISOString(), prompt: `Prompt body ${n}.` }, ...extra,
+  });
+  const pending = (n) => ({ id: id(n), description: `Example task ${n}`, status: 'pending', priority: 'MEDIUM', metadata: {} });
+  const writeUser = (tasks) => mock.files.set(USER_FILE, generateTasksMarkdown(tasks));
+  const fileIds = (file = USER_FILE) => parseTasksMarkdown(mock.files.get(file)).map((task) => task.id);
+  const archiveIds = (source = 'user') => [...mock.archive[source].keys()].sort();
+
+  describe('archiveCompletedTasks', () => {
+    it('moves only completed tasks past both the age and newest-N floor, with their full records', async () => {
+      writeUser([pending(1), done(2, 10), done(3, 9), done(4, 8), done(5, 1), done(6, 0)]);
+      // keepNewest 1 leaves the 1-day-old task rank-eligible, so only the age floor keeps it.
+      const res = await archiveCompletedTasks({ now: CLOCK, keepNewest: 1 });
+      expect(res).toEqual({ archived: 3 });
+      expect(archiveIds()).toEqual([id(2), id(3), id(4)]);
+      expect(mock.archive.user.get(id(2)).metadata.prompt).toBe('Prompt body 2.');
+      expect(fileIds().sort()).toEqual([id(1), id(5), id(6)]);
+      expect(mock.events.some((e) => e.name === 'tasks:changed' && e.payload.action === 'archived')).toBe(true);
+    });
+
+    it('keeps the newest completed tasks however old they are, and treats undated tasks as oldest', async () => {
+      writeUser([done(1, 30), done(2, 20), done(3, 10), done(4, 5), { ...done(5, 0), metadata: {} }]);
+      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 4 })).toEqual({ archived: 1 });
+      expect(archiveIds()).toEqual([id(5)]);
+    });
+
+    it('drains the oldest first under the per-sweep limit and is idempotent once drained', async () => {
+      writeUser([done(1, 40), done(2, 30), done(3, 20), done(4, 10), done(5, 5)]);
+      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0, limit: 2 })).toEqual({ archived: 2 });
+      expect(archiveIds()).toEqual([id(1), id(2)]);
+      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0, limit: 10 })).toEqual({ archived: 3 });
+      expect(fileIds()).toEqual([]);
+      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).toEqual({ archived: 0 });
+    });
+
+    it('leaves a duplicate, never a loss, when the file rewrite dies after the archive write', async () => {
+      writeUser([done(1, 10), done(2, 9)]);
+      mock.atomicFailure = new Error('disk full');
+      await expect(archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).rejects.toThrow('disk full');
+      expect(archiveIds()).toEqual([id(1), id(2)]);
+      expect(fileIds().sort()).toEqual([id(1), id(2)]);
+      mock.atomicFailure = null;
+      expect(await archiveCompletedTasks({ now: CLOCK, keepNewest: 0 })).toEqual({ archived: 2 });
+      expect(fileIds()).toEqual([]);
+      expect(archiveIds()).toEqual([id(1), id(2)]);
+    });
+
+    it('does nothing when a task file does not exist', async () => {
+      expect(await archiveCompletedTasks({ now: CLOCK })).toEqual({ archived: 0 });
+    });
+  });
+
+  describe('reads fall through to the archive', () => {
+    const seedSplit = () => {
+      // Archive holds the oldest ids, the file holds the recent window.
+      for (const n of [1, 2, 3, 4]) mock.archive.user.set(id(n), done(n, 20));
+      writeUser([pending(9), done(5, 1), done(6, 1), done(7, 0)]);
+    };
+
+    it('pages completed history across the file window and the archive, newest id first', async () => {
+      seedSplit();
+      const first = await getTaskView({ kind: 'completed', source: 'user', limit: 5 });
+      expect(first.items.map((task) => task.id)).toEqual([id(7), id(6), id(5), id(4), id(3)]);
+      expect(first.total).toBe(7);
+      expect(first.nextCursor).toBe(id(3));
+      const second = await getTaskView({ kind: 'completed', source: 'user', cursor: first.nextCursor, limit: 5 });
+      expect(second.items.map((task) => task.id)).toEqual([id(2), id(1)]);
+      expect(second.nextCursor).toBeNull();
+    });
+
+    it('counts archived history in the queue and bare views, and returns a selected archived task', async () => {
+      seedSplit();
+      const queue = await getTaskView({ kind: 'queue', selected: id(2) });
+      expect(queue.user.completedCount).toBe(7);
+      expect(queue.user.tasks.map((task) => task.id).sort()).toEqual([id(2), id(9)]);
+      expect(queue.user.tasks.find((task) => task.id === id(2)).metadata.prompt).toBe('Prompt body 2.');
+      const bare = await getTaskView({ kind: 'bare' });
+      expect(bare.user.completedCount).toBe(7);
+      expect(bare.user.completedNextCursor).toBeNull();
+      expect(bare.user.tasks.map((task) => task.id)).toHaveLength(8);
+    });
+
+    it('finds an archived task by id, preferring the file copy and the user queue', async () => {
+      seedSplit();
+      const found = await findTaskWithSource(id(2));
+      expect(found).toMatchObject({ source: 'user', task: { id: id(2), status: 'completed' } });
+      expect(await getTaskById(id(2))).toMatchObject({ id: id(2), taskType: 'user' });
+      mock.archive.user.set(id(5), { ...done(5, 20), description: 'stale archived copy' });
+      expect((await getTaskById(id(5))).description).toBe('Example task 5');
+      expect(await getTaskById(id(99))).toBeNull();
+    });
+
+    it('deletes an archived task and reports an unknown one as not found', async () => {
+      seedSplit();
+      expect(await deleteTask(id(2), 'user')).toEqual({ success: true, taskId: id(2) });
+      expect(archiveIds()).toEqual([id(1), id(3), id(4)]);
+      expect(await deleteTask(id(2), 'user')).toEqual({ error: 'Task not found' });
+    });
+  });
+
+  describe('archived tasks stay usable', () => {
+    it('reopens an archived task: pulls it back into the file, applies the edit, and drops the archive row', async () => {
+      mock.archive.user.set(id(1), done(1, 20));
+      writeUser([pending(2)]);
+      const result = await updateTask(id(1), { status: 'pending', description: 'Reopened task' }, 'user', { now: CLOCK });
+      expect(result).toMatchObject({ id: id(1), status: 'pending', description: 'Reopened task' });
+      expect(fileIds().sort()).toEqual([id(1), id(2)]);
+      expect(archiveIds()).toEqual([]);
+      expect(mock.events.some((e) => e.name === 'tasks:changed' && e.payload.type === 'user')).toBe(true);
+    });
+
+    it('keeps the archive row when the update is refused before the file write', async () => {
+      mock.archive.user.set(id(1), done(1, 20));
+      writeUser([pending(2)]);
+      const result = await updateTask(id(1), { status: 'pending' }, 'user', { now: CLOCK, expectedStatus: 'blocked' });
+      expect(result).toMatchObject({ statusChanged: true });
+      expect(archiveIds()).toEqual([id(1)]);
+      expect(fileIds()).toEqual([id(2)]);
+    });
+
+    it('still reports an id that is in neither store as not found', async () => {
+      writeUser([pending(2)]);
+      expect(await updateTask(id(9), { status: 'pending' }, 'user', { now: CLOCK })).toEqual({ error: 'Task not found' });
+    });
+
+    it('deletes both copies of a task caught between the archive write and the file rewrite', async () => {
+      mock.archive.user.set(id(1), done(1, 20));
+      writeUser([pending(2), done(1, 20)]);
+      expect(await deleteTask(id(1), 'user')).toEqual({ success: true, taskId: id(1) });
+      expect(fileIds()).toEqual([id(2)]);
+      expect(archiveIds()).toEqual([]);
+    });
+
+    it('deletes an archived task even when its task file is gone', async () => {
+      mock.archive.user.set(id(1), done(1, 20));
+      expect(await deleteTask(id(1), 'user')).toEqual({ success: true, taskId: id(1) });
+      expect(await deleteTask(id(1), 'user')).toEqual({ error: 'Task file not found' });
+    });
+
+    it('windows by offset across the file tasks, then the archive newest first, with a combined total', async () => {
+      for (const n of [1, 2, 3, 4]) mock.archive.user.set(id(n), done(n, 20));
+      writeUser([pending(9), done(5, 1)]);
+      const first = await getTaskView({ kind: 'window', offset: 0, limit: 3 });
+      expect(first.user.tasks.map((task) => task.id)).toEqual([id(9), id(5), id(4)]);
+      expect(first.totals.user).toBe(6);
+      const second = await getTaskView({ kind: 'window', offset: 3, limit: 5 });
+      expect(second.user.tasks.map((task) => task.id)).toEqual([id(3), id(2), id(1)]);
+      const fileOnly = await getTaskView({ kind: 'window', offset: 0, limit: 1 });
+      expect(fileOnly.user.tasks.map((task) => task.id)).toEqual([id(9)]);
+    });
+  });
+
+  it('does not let a peer resurrect a completed task this machine archived', async () => {
+    mock.archive.user.set(id(1), done(1, 20));
+    writeUser([pending(2)]);
+    const wire = (task) => ({ id: task.id, taskType: 'user', status: task.status, priority: task.priority, description: task.description, metadata: task.metadata });
+    const res = await mergePeerTasks('user', [wire(done(1, 20)), wire(done(3, 1)), wire(pending(4))], { now: CLOCK });
+    expect(res.changed).toBe(true);
+    // The archived completion stays out; an unarchived completion and a new open task still adopt.
+    expect(fileIds().sort()).toEqual([id(2), id(3), id(4)]);
+  });
 });

@@ -342,6 +342,19 @@ CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
   archive_date TEXT
 );
 
+-- Machine-local archive of completed CoS tasks moved out of TASKS.md /
+-- COS-TASKS.md. Full task records (prompt bodies included) live in `task`;
+-- `description` is a light projection. Never enters federation payloads.
+CREATE TABLE IF NOT EXISTS cos_task_archive (
+  source TEXT NOT NULL CHECK (source IN ('user', 'internal')),
+  task_id TEXT COLLATE "C" NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  completed_at TIMESTAMPTZ,
+  archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  task JSONB NOT NULL,
+  PRIMARY KEY (source, task_id)
+);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.
