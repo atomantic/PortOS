@@ -21,6 +21,7 @@ class FakeSocket {
     this.options = options;
     this.sent = [];
     this.terminated = false;
+    this.readyState = 0; // CONNECTING until `open`
     this.listeners = new Map();
     createdSockets.push(this);
   }
@@ -33,7 +34,19 @@ class FakeSocket {
 
   removeAllListeners() { this.listeners.clear(); }
   send(payload) { this.sent.push(payload); }
-  terminate() { this.terminated = true; }
+  // Mirrors `ws`: terminating a CONNECTING socket aborts the handshake and emits
+  // `error` on the next tick — an unhandled 'error' event throws when nothing listens.
+  terminate() {
+    this.terminated = true;
+    if (this.readyState !== 0) return;
+    this.readyState = 2;
+    process.nextTick(() => {
+      if (!this.listeners.get('error')?.length) {
+        throw new Error('Unhandled \'error\' event: WebSocket was closed before the connection was established');
+      }
+      this.fire('error', new Error('WebSocket was closed before the connection was established'));
+    });
+  }
   close() { this.terminated = true; }
 
   fire(event, ...args) {
@@ -42,6 +55,7 @@ class FakeSocket {
 
   // Walk the documented handshake: open → ready → subscriptions.updated.
   handshake() {
+    this.readyState = 1;
     this.fire('open');
     this.fire('message', JSON.stringify({ type: 'ready', version: 1, chatIDs: [], app: { state: false } }));
     this.fire('message', JSON.stringify({ type: 'subscriptions.updated', requestID: 'r1', chatIDs: ['*'] }));
@@ -355,6 +369,43 @@ describe('beeperSocket — silence watchdog (injected time)', () => {
     latest().handshake();
     latest().fire('close', 1006);
     expect(clock.delaysFor((timer) => timer.ms !== SILENCE_TIMEOUT_MS)).toEqual([500]);
+  });
+
+  // Terminating a CONNECTING socket makes `ws` emit `error` on the next tick;
+  // an uncaught one exits the server and PM2 restart-loops it.
+  describe('terminating a socket mid-handshake', () => {
+    const uncaught = [];
+    const onUncaught = (err) => { uncaught.push(err); };
+    beforeEach(() => {
+      uncaught.length = 0;
+      process.on('uncaughtException', onUncaught);
+    });
+    afterEach(() => { process.off('uncaughtException', onUncaught); });
+    const flushTick = () => new Promise((resolve) => setImmediate(resolve));
+
+    it.each([401, 503])('does not crash the process on an HTTP %i upgrade rejection', async (statusCode) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      await start();
+      const first = latest();
+
+      first.fire('unexpected-response', {}, { statusCode });
+      await flushTick();
+
+      expect(first.terminated).toBe(true);
+      expect(uncaught).toEqual([]);
+    });
+
+    it('does not crash the process when the silence watchdog fires before the handshake completes', async () => {
+      await start();
+      const first = latest();
+
+      expect(clock.runTimersWithDelay(SILENCE_TIMEOUT_MS)).toBe(1);
+      await flushTick();
+
+      expect(first.terminated).toBe(true);
+      expect(uncaught).toEqual([]);
+    });
   });
 });
 
