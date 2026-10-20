@@ -207,14 +207,14 @@ export function AgentsPage() {
             {agents.map(agent => (
               <Fragment key={agent.pid}>
                 <tr className="border-b border-port-border/50 hover:bg-port-border/20">
-                  <td className="px-4 py-4">
+                  <td className="px-1 py-4 sm:px-4">
                     <button
                       onClick={() => toggleExpand(agent.pid)}
                       aria-expanded={expandedPid === agent.pid}
                       aria-label={`${expandedPid === agent.pid ? 'Collapse' : 'Expand'} details for agent ${agent.pid}`}
-                      className="text-gray-400 hover:text-white transition-transform"
+                      className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 text-gray-400 hover:text-white transition-transform"
                     >
-                      <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
+                      <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
                     </button>
                   </td>
                   <td className="px-4 py-4 font-mono text-white">{agent.pid}</td>
