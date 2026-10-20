@@ -227,6 +227,19 @@ describe('persistent mind CoS-task capability', () => {
     expect(catalog.providers[0].models.map((model) => model.id)).toEqual(['qwen3-coder:30b']);
   });
 
+  it('keeps the record list when LM Studio is down and returns an empty list with error', async () => {
+    mocks.providers = [{
+      id: 'opencode-lmstudio', name: 'OpenCode (LM Studio)', type: 'cli', enabled: true, command: 'opencode',
+      lmstudioBacked: true, models: ['qwen2.5-coder-7b-instruct', 'llama-3.2-3b-instruct'], defaultModel: 'qwen2.5-coder-7b-instruct',
+    }];
+    mocks.listManagedBackendModels.mockResolvedValue({ models: [], error: 'LM Studio is unavailable' });
+
+    const catalog = await readPersistentMindTaskCatalog();
+    expect(mocks.listManagedBackendModels).toHaveBeenCalledWith('lmstudio');
+    expect(catalog.providers[0].models.map((model) => model.id))
+      .toEqual(['qwen2.5-coder-7b-instruct', 'llama-3.2-3b-instruct']);
+  });
+
   // A cloud provider enumerates its own catalog, so a retired id is still refused.
   it('still refuses a retired model on a non-local provider', async () => {
     const [result] = await executePersistentMindTaskRequests({
