@@ -21,7 +21,7 @@
 import { createReadStream, realpathSync } from 'node:fs';
 import { lstat, stat, readlink, readdir, readFile, chmod } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sha256File, writeFileGuarded } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
@@ -75,13 +75,41 @@ async function snapshotAdministration(path, missingRoot = null) {
   return { files, symlinks, fingerprint };
 }
 
-async function retirementPolicy(repoPath, branch, opts) {
+async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
   const { readBranchCompletionPolicies, reviewedRetirementPolicy, mergedReceiptRetirementPolicy } = await import('./branchCompletionPolicy.js');
   const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
   if (opts.mergedReceipt) return mergedReceiptRetirementPolicy({ repoPath, branch, agents: policies,
     tip: opts.mergedReceipt.expectedHeadSha });
-  return reviewedRetirementPolicy({ repoPath, branch, agents: policies });
+  const checkoutIdentities = {};
+  if (reviewIdentity.verifiedPrHead === reviewIdentity.tip && reviewIdentity.tip && Array.isArray(policies)) {
+    const paths = new Set([reviewIdentity.checkoutPath, repoPath]);
+    for (const agent of policies) {
+      const meta = agent?.metadata || {};
+      const scopes = [meta.worktreeBranch, meta.jiraBranch, meta.claimBranch, meta.branchCompletionPolicy?.branch,
+        ...(Array.isArray(meta.claimBranches) ? meta.claimBranches : []),
+        ...(Array.isArray(meta.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
+      if (scopes.includes(branch) && isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+    }
+    // A failed identity read or excessive history cannot prove distinctness.
+    // Missing paths resolve through their existing canonical ancestor, the same
+    // identity rule used to locate missing checkout administration below.
+    if (paths.size <= 1000) {
+      const entries = [...paths];
+      for (let offset = 0; offset < entries.length; offset += 25) {
+        await Promise.all(entries.slice(offset, offset + 25).map(async path => {
+          const facts = await missingPathIdentity(path).catch(() => null);
+          if (facts) checkoutIdentities[path] = JSON.stringify({ dev: facts.dev, ino: facts.ino, tail: facts.tail });
+        }));
+      }
+    }
+  }
+  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
 }
+
+const policyReviewIdentity = (release, prUrl, forge) => ({
+  checkoutPath: release.path, tip: release.head, prUrl,
+  verifiedPrHead: forge?.prUrl === prUrl ? forge.prHead : null,
+});
 
 async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = false }, opts = {}) {
   if (!release.branch || PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
@@ -90,12 +118,15 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
   const owner = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
-  const policy = await retirementPolicy(repoPath, release.branch, opts);
+  const { buildCheckoutRetirementReview, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, { forgeAccount: opts.forgeAccount })
+    .catch(error => ({ error }));
+  if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
+  const policy = await retirementPolicy(repoPath, release.branch, opts, policyReviewIdentity(release, prUrl, forge));
   if (policy.reason) return { ok: false, reason: policy.reason };
-  const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   return Promise.all([snapshotContent(release.path), snapshotAdministration(release.path)])
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
-      contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, opts))
+      contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
@@ -505,8 +536,8 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     if (hold) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: hold };
     if (review) {
       const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
-      const policy = await retirementPolicy(repoPath, branch, opts);
       const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, { forgeAccount: opts.forgeAccount }).catch(() => null);
+      const policy = await retirementPolicy(repoPath, branch, opts, policyReviewIdentity(release, review.prUrl, forge));
       if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {
         return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };
       }
