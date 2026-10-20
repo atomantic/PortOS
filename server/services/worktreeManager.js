@@ -578,7 +578,8 @@ export async function readWorktreeStatus(worktreePath) {
   if (present === null) return null;
   const top = await execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim()).catch(() => null);
   if (!top || !pathsEqual(top, worktreePath)) return null;
-  const status = await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], worktreePath, { ignoreExitCode: true }).catch(() => null);
+  const status = await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], worktreePath,
+    { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).catch(() => null);
   return status?.exitCode === 0 ? status.stdout : null;
 }
 

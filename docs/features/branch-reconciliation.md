@@ -99,10 +99,15 @@ The native backend preserves file bytes, permissions, ownership, timestamps,
 ACLs, xattrs, supported flags, empty directories, hard links and symlink targets
 without following symlink dependencies. It retains original identity evidence;
 only the standalone copy's Git pointers are rewritten to its isolated stores.
-An OS-added `com.apple.provenance` attribute on a copy is retained and recorded
-with its exact hash; changed existing attributes, missing attributes and other
-additions still refuse preservation. No provenance or quarantine attribute is
-removed or rewritten. Original and quarantined metadata stay exact. Every later
+OS-added `com.apple.provenance` on a copy is retained with its exact hash. When
+the OS replaces an existing provenance value, version 3 also preserves the exact
+original bytes in the bound manifest as canonical base64 and checks their hash
+against the captured source. Archive and restore copies record separate values
+when the OS replaces it twice. These retained original bytes are recovery
+evidence; the backend never installs them onto the copy. Missing attributes,
+changes to any other attribute, and unrecorded additions still refuse preservation.
+No provenance or quarantine attribute is removed or rewritten by this backend.
+Original and quarantined metadata stay exact. Every later
 archive verification or move is bound to the exact manifest hash journaled after
 preservation. If that journal write is interrupted before any move, status
 exposes an unverified-archive hold and a digest for source-verified cancellation;

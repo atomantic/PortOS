@@ -11,8 +11,9 @@
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, chmod } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, chmod, lstat, readlink, utimes, rename } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
@@ -27,8 +28,8 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
 import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
-import { hasBranchMergeEvidence } from './git.js';
-import { reapMergedWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
+import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
+import { reapMergedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
@@ -46,6 +47,22 @@ async function commitFile(dir, name, content, message) {
   await writeFile(join(dir, name), content);
   await execGit(['add', '.'], dir);
   await execGit(['commit', '-m', message], dir);
+}
+
+// Reading metadata excludes atime, which a filesystem may update on reads.
+async function snapshotTree(root) {
+  const rows = [];
+  const walk = async (path, relative) => {
+    const info = await lstat(path, { bigint: true });
+    rows.push({ path: relative, mode: info.mode, ino: info.ino, mtime: info.mtimeNs, ctime: info.ctimeNs,
+      content: info.isFile() ? createHash('sha256').update(await readFile(path)).digest('hex')
+        : info.isSymbolicLink() ? await readlink(path) : null });
+    if (info.isDirectory()) {
+      for (const child of (await readdir(path)).sort()) await walk(join(path, child), `${relative}/${child}`);
+    }
+  };
+  await walk(root, '');
+  return rows;
 }
 
 /**
@@ -236,7 +253,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
     const ancestor = await execGit(['merge-base', '--is-ancestor', 'squashed', 'main'], dir, { ignoreExitCode: true });
     expect(ancestor.exitCode).not.toBe(0);
 
-    expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(true);
+    const before = await snapshotTree(dir);
+    const ownedScratch = await mkdtemp(join(tmpdir(), 'portos-probe-observe-'));
+    const useTemp = path => {
+      for (const key of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(key, path);
+    };
+    try {
+      useTemp(ownedScratch);
+      expect(await Promise.all(Array.from({ length: 3 }, () => hasBranchMergeEvidence(dir, 'squashed', 'main'))))
+        .toEqual([true, true, true]);
+      expect(await snapshotTree(dir)).toEqual(before);
+      expect((await readdir(ownedScratch)).filter(name => name.startsWith('portos-merge-probe-'))).toEqual([]);
+
+      // Allocation and post-allocation Git failures must not establish evidence,
+      // leak scratch, or fall back to writing synthetic objects in the real repo.
+      useTemp(join(dir, 'missing-temp-root'));
+      expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(false);
+      useTemp(ownedScratch);
+      vi.stubEnv('GIT_AUTHOR_NAME', '');
+      expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(false);
+      expect(await snapshotTree(dir)).toEqual(before);
+      expect((await readdir(ownedScratch)).filter(name => name.startsWith('portos-merge-probe-'))).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(ownedScratch, { recursive: true, force: true });
+    }
   });
 
   it('detects a multi-commit rebase merge after the target branch advanced', async () => {
@@ -270,6 +311,77 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
     expect(await hasBranchMergeEvidence(dir, 'nope', 'main')).toBe(false);
     expect(await hasBranchMergeEvidence(dir, 'main', 'nope')).toBe(false);
     expect(await hasBranchMergeEvidence(dir, 'main', 'main')).toBe(false);
+  });
+});
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('read-only inspection of initialized linked checkouts', () => {
+  let root;
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    root = null;
+  });
+
+  it('keeps private indexes and directories unchanged while reporting fresh parent/submodule dirt', async () => {
+    root = await mkdtemp(join(tmpdir(), 'portos-status-readonly-'));
+    const repo = join(root, process.platform === 'win32' ? 'repo space;name' : 'repo space:quoted"name');
+    const moduleRepo = join(root, 'module');
+    const checkout = join(root, 'linked');
+    await materializeGitRepo(repo);
+    await materializeGitRepo(moduleRepo);
+    await execGit(['-c', 'protocol.file.allow=always', 'submodule', 'add', moduleRepo, 'lib/module'], repo);
+    await execGit(['commit', '-am', 'add fixture module'], repo);
+    await execGit(['checkout', '-b', 'squashed'], repo);
+    await commitFile(repo, 'first.txt', 'one\n', 'first');
+    await commitFile(repo, 'second.txt', 'two\n', 'second');
+    await execGit(['checkout', 'main'], repo);
+    await execGit(['merge', '--squash', 'squashed'], repo);
+    await execGit(['commit', '-m', 'combined'], repo);
+    await execGit(['worktree', 'add', '--detach', checkout, 'squashed'], repo);
+    await execGit(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'], checkout);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim();
+    const moduleAdmin = (await execGit(['rev-parse', '--absolute-git-dir'], join(checkout, 'lib/module'))).stdout.trim();
+    const sharedObjects = join(root, 'shared objects');
+    const alternate = join(root, 'alternate objects');
+    await rename(join(repo, '.git/objects'), sharedObjects);
+    await mkdir(join(repo, '.git/objects/info'), { recursive: true });
+    await mkdir(join(alternate, 'info'), { recursive: true });
+    await writeFile(join(repo, '.git/objects/info/alternates'), `${alternate}\n`);
+    await writeFile(join(alternate, 'info/alternates'), `${sharedObjects}\n`);
+    const files = [join(checkout, 'initial.txt'), join(checkout, 'lib/module/initial.txt')];
+
+    // Reproduce why an apparently read-only status can change preservation
+    // evidence: stale stat caches are refreshed through index.lock by default.
+    for (const file of files) await utimes(file, new Date('2001-01-01'), new Date('2001-01-01'));
+    const indexesBefore = await Promise.all([admin, moduleAdmin].map(path => readFile(join(path, 'index'))));
+    await execGit(['status', '--porcelain', '--ignore-submodules=none'], checkout,
+      { env: { ...process.env, GIT_OPTIONAL_LOCKS: '1' } });
+    const indexesAfter = await Promise.all([admin, moduleAdmin].map(path => readFile(join(path, 'index'))));
+    for (let i = 0; i < indexesBefore.length; i++) expect(indexesAfter[i]).not.toEqual(indexesBefore[i]);
+
+    for (const file of files) await utimes(file, new Date('2002-01-01'), new Date('2002-01-01'));
+    const before = await snapshotTree(root);
+    expect((await getStatus(checkout)).clean).toBe(true);
+    expect(await getStatusPorcelain(checkout)).toBe('');
+    expect(await readWorktreeStatus(checkout)).toBe('');
+    try {
+      vi.stubEnv('GIT_OBJECT_DIRECTORY', join(moduleAdmin, 'objects'));
+      expect(await hasBranchMergeEvidence(checkout, 'squashed', 'main')).toBe(true);
+    } finally { vi.unstubAllEnvs(); }
+    expect(await snapshotTree(root)).toEqual(before);
+
+    await writeFile(files[0], 'changed parent\n');
+    await writeFile(files[1], 'changed module\n');
+    await writeFile(join(checkout, 'untracked.txt'), 'preserve me\n');
+    const dirtyBefore = await snapshotTree(root);
+    const status = await getStatus(checkout);
+    expect(status.clean).toBe(false);
+    expect(status.files.map(file => file.path)).toEqual(expect.arrayContaining(['initial.txt', 'lib/module', 'untracked.txt']));
+    for (const result of [await getStatusPorcelain(checkout), await readWorktreeStatus(checkout)]) {
+      expect(result).toContain(' M initial.txt');
+      expect(result).toContain(' M lib/module');
+      expect(result).toContain('?? untracked.txt');
+    }
+    expect(await snapshotTree(root)).toEqual(dirtyBefore);
   });
 });
 

@@ -5,10 +5,10 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -638,6 +638,117 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', 'restored-legacy'], repo)).stdout.trim()).toBe(c.release.head);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
+
+  function reusedBranchOwners(c) {
+    const current = { id: 'current-review-owner', status: 'completed', result: { success: true },
+      startedAt: '2026-03-01T00:00:00Z', completedAt: '2026-03-01T01:00:00Z',
+      metadata: { sourceWorkspace: repo, workspacePath: c.release.path, worktreeBranch: c.release.branch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl } } };
+    // Reused quality branches retain older records with no explicit policy,
+    // including unsuccessful launches. Distinct completed checkout incarnations
+    // are history; neither their age nor a success summary grants permission.
+    const prior = Array.from({ length: 33 }, (_, index) => ({
+      id: `prior-owner-${index}`, status: 'completed', result: { success: index !== 0 },
+      startedAt: '2026-02-01T00:00:00Z', completedAt: '2026-02-01T01:00:00Z',
+      metadata: { sourceWorkspace: repo, workspacePath: join(external, `prior-${index}`), worktreeBranch: c.release.branch },
+    }));
+    injected.policies = [current, ...prior, {
+      id: 'unscoped-successful-recovery', status: 'completed', result: { success: true },
+      metadata: { workspacePath: repo, recoveryOrigin: { subsystem: 'repository-cleanup', parentAgentId: current.id } },
+    }];
+    return current;
+  }
+
+  it('retires a freshly reviewed reused-branch incarnation with a standalone archive and exact receipt', async () => {
+    const c = await reviewedCheckout('quality-reused', { gitlink: true });
+    reusedBranchOwners(c);
+    const shared = join(scratch, 'shared-dependencies');
+    await mkdir(shared);
+    await writeFile(join(shared, 'untouched'), 'shared installation\n');
+    if (SYMLINKS) {
+      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nnode_modules\n');
+      for (const relative of ['node_modules', 'server/node_modules', 'client/node_modules', 'autofixer/node_modules']) {
+        await mkdir(dirname(join(c.path, relative)), { recursive: true });
+        await symlink(shared, join(c.path, relative), 'dir');
+      }
+    }
+    await writeFile(join(c.path, 'staged.txt'), 'unique staged content\n');
+    await execGit(['add', 'staged.txt'], c.path);
+    const index = await readFile(join(c.admin, 'index'));
+    const reflog = await readFile(join(c.admin, 'logs/HEAD'));
+    const policiesBefore = structuredClone(injected.policies);
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { policy: {
+      policies: [{ id: 'current-review-owner' }], reviewedPr: { tip: c.release.head, prUrl: c.forge.prUrl },
+    } } });
+    expect(prepared.review.policy.priorCheckouts).toHaveLength(33);
+    expect(prepared.review.comparison.localPatch).toContain('original feature');
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.release.path)).toBe(false);
+    expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: c.release.path, branch: c.release.branch, head: c.release.head,
+        archiveDir: result.archiveDir, branchDeleted: true }),
+    ]));
+    expect(injected.policies).toEqual(policiesBefore);
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
+    if (SYMLINKS) {
+      expect(manifest.captured.symlinks.filter(link => link.path.endsWith('node_modules'))).toHaveLength(4);
+      expect(manifest.captured.files.some(file => file.path.includes('node_modules/'))).toBe(false);
+    }
+    expect(await readFile(join(shared, 'untouched'), 'utf8')).toBe('shared installation\n');
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/index'))).toEqual(index);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/logs/HEAD'))).toEqual(reflog);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(result.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'standalone');
+    await execGit(['init', restored], scratch);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    await execGit(['checkout', '--detach', c.release.head], restored);
+    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
+    await execGit(['apply', join(result.archiveDir, 'worktree.diff')], restored);
+    await cp(join(result.archiveDir, 'files'), restored, { recursive: true });
+    for (const link of manifest.captured.symlinks) {
+      await mkdir(dirname(join(restored, link.path)), { recursive: true });
+      await symlink(link.target, join(restored, link.path));
+    }
+    expect((await execGit(['rev-parse', 'HEAD'], restored)).stdout.trim()).toBe(c.release.head);
+    expect(await readdir(join(restored, 'vendor'))).toEqual([]);
+    expect((await execGit(['show', ':staged.txt'], restored)).stdout).toBe('unique staged content\n');
+    expect(await readFile(join(restored, 'initial.txt'), 'utf8')).toBe('tracked edit\n');
+    expect(await readFile(join(restored, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await readFile(join(restored, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    if (SYMLINKS) expect(await readFile(join(restored, 'server/node_modules/untouched'), 'utf8')).toBe('shared installation\n');
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
+
+  it.each(['head-mismatch', 'same-checkout-failed', 'ambiguous-history', 'current-manual', 'current-active', 'checkout-alias', 'primary-alias'])(
+    'keeps the full original checkout when reused-branch proof changes: %s', async change => {
+      const c = await reviewedCheckout('quality-held');
+      const current = reusedBranchOwners(c);
+      const prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+      if (change === 'head-mismatch') c.forge.prHead = c.forge.changeBase;
+      if (change === 'same-checkout-failed') injected.policies[1].metadata.workspacePath = c.release.path;
+      if (change === 'ambiguous-history') delete injected.policies[1].metadata.workspacePath;
+      if (change === 'current-manual') current.metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'current-active') current.status = 'running';
+      if (change === 'checkout-alias' || change === 'primary-alias') {
+        const alias = join(external, 'historical-alias');
+        await symlink(change === 'checkout-alias' ? c.path : repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        injected.policies[1].metadata.workspacePath = alias;
+      }
+      expect(await c.confirm(prepared.review)).toMatchObject({ ok: false });
+      expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+      expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+      expect(await archives()).toEqual([]);
+    });
 
   it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
     const c = await reviewedCheckout('changed-review', { gitlink: true });

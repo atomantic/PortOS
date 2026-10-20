@@ -1,6 +1,8 @@
 import { existsSync } from 'fs';
-import { join, resolve } from 'path';
-import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
+import { mkdtemp } from 'fs/promises';
+import { tmpdir } from 'os';
+import { delimiter, join, resolve } from 'path';
+import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -51,6 +53,7 @@ export async function getStatus(dir, { paths = [] } = {}) {
   const result = await execGit(
     ['status', '--porcelain', ...(paths.length ? ['--', ...paths] : [])],
     dir,
+    { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
   );
   // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
   const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
@@ -84,7 +87,8 @@ export async function getStatus(dir, { paths = [] } = {}) {
  * of `files[]` would just double the payload on every dirty tree.
  */
 export async function getStatusPorcelain(dir) {
-  return (await execGit(['status', '--porcelain'], dir)).stdout;
+  return (await execGit(['status', '--porcelain'], dir,
+    { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } })).stdout;
 }
 
 /**
@@ -1536,7 +1540,12 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   // not prove that a feature branch landed anywhere else.
   if (!branch || !target || (branch === target && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(branch))) return false;
 
-  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true })
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' };
+  // An inherited writer's quarantine/object override must not redirect a
+  // repository inspection away from this checkout's own common object store.
+  delete env.GIT_OBJECT_DIRECTORY;
+  const readOptions = { ignoreExitCode: true, env };
+  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
 
@@ -1545,14 +1554,14 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
 
   // Fast path: branch tip already reachable from target (normal / ff / no-ff merge,
   // or the branch carries no unique commits).
-  const ancestor = await execGit(['merge-base', '--is-ancestor', branchSha, targetSha], dir, { ignoreExitCode: true })
+  const ancestor = await execGit(['merge-base', '--is-ancestor', branchSha, targetSha], dir, readOptions)
     .then(r => r.exitCode === 0)
     .catch(() => false);
   if (ancestor) return true;
 
   // Rebase/cherry-pick path: does target contain every branch commit as an
   // individual patch-equivalent commit?
-  const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, { ignoreExitCode: true })
+  const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, readOptions)
     .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (individualCherry === null) return false;
@@ -1561,34 +1570,47 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   }
 
   // Squash path: does target already contain the branch's combined patch?
-  const mergeBase = await execGit(['merge-base', targetSha, branchSha], dir, { ignoreExitCode: true })
+  const mergeBase = await execGit(['merge-base', targetSha, branchSha], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
   if (!mergeBase) return false;
   // No unique work beyond the merge base → nothing would be lost.
   if (mergeBase === branchSha) return true;
 
-  const branchTree = await execGit(['rev-parse', `${branchSha}^{tree}`], dir, { ignoreExitCode: true })
+  const branchTree = await execGit(['rev-parse', `${branchSha}^{tree}`], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
   if (!branchTree) return false;
 
-  // Write a synthetic commit object with the branch's full tree atop the merge base.
-  // commit-tree uses the repo's configured identity; if that's unset it fails and
-  // no merge evidence is established (the worktree is preserved).
-  // This immutable object addition moves no refs or checkout state. A concurrent
-  // complete-checkout archive still refuses if its exact common-store snapshot drifts.
-  const synthesized = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, { ignoreExitCode: true })
-    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
-    .catch(() => null);
-  if (!synthesized) return false;
+  // Polling must not add dangling synthetic commits to the shared object store:
+  // that invalidates an otherwise stable preservation snapshot. Both commands
+  // use a private object directory with the original store as a read alternate.
+  return probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOptions).catch(() => false);
+}
 
-  const combinedCherry = await execGit(['cherry', targetSha, synthesized], dir, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
-    .catch(() => null);
-  if (combinedCherry === null) return false;
-  if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged
-  return combinedCherry.split('\n').every(line => line.startsWith('-'));
+async function probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOptions) {
+  const objects = await execGit(['rev-parse', '--path-format=absolute', '--git-path', 'objects'], dir, readOptions);
+  if (objects.exitCode !== 0 || !objects.stdout.trim()) return false;
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-merge-probe-'));
+  try {
+    const options = { ...readOptions, env: { ...readOptions.env,
+      GIT_OBJECT_DIRECTORY: scratch,
+      // Git accepts C-quoted entries, including paths containing the platform
+      // list separator, quotes or backslashes. Existing alternates remain valid.
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [JSON.stringify(objects.stdout.trim()),
+        readOptions.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter)
+    } };
+    // Preserve configured-identity behavior: an unavailable identity fails closed.
+    const synthetic = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, options);
+    if (synthetic.exitCode !== 0 || !synthetic.stdout.trim()) return false;
+    const result = await execGit(['cherry', targetSha, synthetic.stdout.trim()], dir, options);
+    if (result.exitCode !== 0) return false;
+    const lines = result.stdout.trim();
+    return lines === '' || lines.split('\n').every(line => line.startsWith('-'));
+  } finally {
+    // Only this invocation's exclusively created scratch directory is removed.
+    await rmGuarded(scratch, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 // Backward-compatible name for callers using the original evidence predicate.

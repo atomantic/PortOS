@@ -4,6 +4,8 @@
 Never deletes original checkouts or Git administration. A move is one reversible
 RENAME_EXCL; the caller must journal and fence each half of the transaction.
 """
+import base64
+import binascii
 import ctypes
 import errno
 import fcntl
@@ -191,8 +193,50 @@ def same_copy(actual, expected):
     return portable(actual) == portable(expected)
 
 
-def copy_augmentations(actual, expected):
-    """Record only OS-added provenance; never discard or normalize source attrs."""
+def provenance_value(encoded):
+    """Decode only bounded canonical metadata evidence, never apply it to a file."""
+    if not isinstance(encoded, str) or len(encoded) > 24 * 1024 ** 2:
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if len(raw) > 16 * 1024 ** 2 or base64.b64encode(raw).decode('ascii') != encoded:
+        return None
+    return raw
+
+
+def source_provenance(root, rows):
+    """Save original preimages before copying, bound to the captured source hash."""
+    originals, size = {}, 0
+    for row in rows:
+        expected = row['xattrs'].get('com.apple.provenance')
+        if expected is None:
+            continue
+        raw = raw_xattrs(root / row['path']).get('com.apple.provenance')
+        if raw is None or hashlib.sha256(raw).hexdigest() != expected:
+            fail('source-provenance-changed')
+        size += len(raw)
+        if size > 16 * 1024 ** 2:
+            fail('provenance-evidence-budget-exceeded')
+        originals[row['path']] = base64.b64encode(raw).decode('ascii')
+    return originals
+
+
+def recorded_provenance(records):
+    originals = {}
+    for row in records:
+        if 'originalBase64' not in row:
+            continue
+        values = row['originalBase64']
+        if not isinstance(values, dict) or set(values) != {'com.apple.provenance'} or row['path'] in originals:
+            fail('invalid-provenance-preimage-layout')
+        originals[row['path']] = values['com.apple.provenance']
+    return originals
+
+
+def copy_augmentations(actual, expected, originals=None):
+    """Record provenance additions, or v3 replacements with exact saved preimages."""
     if len(actual) != len(expected):
         return None
     additions = []
@@ -202,13 +246,24 @@ def copy_augmentations(actual, expected):
         extra = set(attrs) - set(original)
         if extra - {'com.apple.provenance'}:
             return None
-        if extra:
+        replaced = ('com.apple.provenance' in original and 'com.apple.provenance' in attrs
+                    and original['com.apple.provenance'] != attrs['com.apple.provenance'])
+        compared_attrs = {key: value for key, value in attrs.items() if key not in extra}
+        if extra or replaced:
             value = attrs['com.apple.provenance']
             if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
                 return None
-            additions.append({'path': copied['path'], 'xattrs': {'com.apple.provenance': value}})
-        without_added = {**copied, 'xattrs': {key: value for key, value in attrs.items() if key not in extra}}
-        if not same_copy([without_added], [source]):
+            record = {'path': copied['path'], 'xattrs': {'com.apple.provenance': value}}
+            if replaced:
+                encoded = originals.get(source['path']) if originals is not None else None
+                raw = provenance_value(encoded)
+                if raw is None or hashlib.sha256(raw).hexdigest() != original['com.apple.provenance']:
+                    return None
+                record['originalBase64'] = {'com.apple.provenance': encoded}
+                compared_attrs['com.apple.provenance'] = original['com.apple.provenance']
+            additions.append(record)
+        comparison = {**copied, 'xattrs': compared_attrs}
+        if not same_copy([comparison], [source]):
             return None
     return additions
 
@@ -568,21 +623,25 @@ def preserve(request):
     private_json(root / 'source.json', before)
     augmentations = {'archive': {'common': {}}, 'restore': {}}
     for label, source in [('working', work), ('administration', admin)]:
+        originals = source_provenance(source, before['sources'][label])
         copy_tree(source, root / 'archive' / label)
-        added = copy_augmentations(manifest(root / 'archive' / label), before['sources'][label])
+        added = copy_augmentations(manifest(root / 'archive' / label), before['sources'][label], originals)
         if added is None:
             fail('archive-metadata-mismatch:' + label)
         augmentations['archive'][label] = added
     (root / 'archive' / 'common').mkdir(mode=0o700)
     for name, expected_rows in before['sources']['common'].items():
+        originals = source_provenance(common / name, expected_rows)
         copy_tree(common / name, root / 'archive' / 'common' / name)
-        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected_rows)
+        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected_rows, originals)
         if added is None:
             fail('shared-archive-metadata-mismatch:' + name)
         augmentations['archive']['common'][name] = added
     for label in ('working', 'administration', 'common'):
+        archived = manifest(root / 'archive' / label)
+        originals = source_provenance(root / 'archive' / label, archived)
         copy_tree(root / 'archive' / label, root / 'restore' / label)
-        added = copy_augmentations(manifest(root / 'restore' / label), manifest(root / 'archive' / label))
+        added = copy_augmentations(manifest(root / 'restore' / label), archived, originals)
         if added is None:
             fail('restore-copy-metadata-mismatch')
         # Historical pre-relocation evidence; saved.restored below is the exact
@@ -612,7 +671,7 @@ def preserve(request):
     restored = {label: manifest(restore / label) for label in ('working', 'administration', 'common')}
     durable_tree(root / 'archive')
     durable_tree(restore)
-    saved = {'version': 2, 'transactionIdentity': identity(root), 'facts': before,
+    saved = {'version': 3, 'transactionIdentity': identity(root), 'facts': before,
              'copyAugmentations': augmentations, 'restored': restored, 'restoreProof': proof}
     check_restore_augmentations(root, saved)
     manifest_sha = private_json(root / 'manifest.json', saved)
@@ -632,11 +691,11 @@ def load_transaction(request):
     if len(encoded) > limit:
         fail('invalid-archive-manifest')
     saved = json.loads(encoded)
-    if saved['version'] not in (1, 2) or saved['transactionIdentity'] != identity(root):
+    if saved['version'] not in (1, 2, 3) or saved['transactionIdentity'] != identity(root):
         fail('transaction-incarnation-changed')
     # A bound v2 archive cannot evade its journal proof by declaring itself v1.
     # Hash the exact bytes parsed, never a second path read after parsing.
-    if (saved['version'] == 2 or 'manifestSha256' in request) and request.get('manifestSha256') != hashlib.sha256(encoded).hexdigest():
+    if (saved['version'] >= 2 or 'manifestSha256' in request) and request.get('manifestSha256') != hashlib.sha256(encoded).hexdigest():
         fail('archive-manifest-proof-changed')
     for label in ('archive', 'restore', 'quarantine'):
         safe_path(str(root / label))
@@ -673,7 +732,8 @@ def check_restore_augmentations(root, saved):
     for label in ('working', 'administration', 'common'):
         archived = manifest(root / 'archive' / label)
         attrs = lambda rows: [{'path': row['path'], 'xattrs': row['xattrs']} for row in rows]
-        added = copy_augmentations(attrs(saved['restored'][label]), attrs(archived))
+        originals = recorded_provenance(records['restore'][label]) if saved['version'] == 3 else None
+        added = copy_augmentations(attrs(saved['restored'][label]), attrs(archived), originals)
         if added is None or added != records['restore'][label]:
             fail('restore-copy-augmentation-changed:' + label)
 
@@ -681,15 +741,17 @@ def check_restore_augmentations(root, saved):
 def verify_saved_archive(root, saved):
     check_restore_augmentations(root, saved)
     facts = saved['facts']
-    recorded = saved['copyAugmentations']['archive'] if saved['version'] == 2 else None
+    recorded = saved['copyAugmentations']['archive'] if saved['version'] >= 2 else None
     for label in ('working', 'administration'):
         expected_added = recorded[label] if recorded is not None else []
-        added = copy_augmentations(manifest(root / 'archive' / label), facts['sources'][label])
+        originals = recorded_provenance(expected_added) if saved['version'] == 3 else None
+        added = copy_augmentations(manifest(root / 'archive' / label), facts['sources'][label], originals)
         if added is None or added != expected_added:
             fail('archive-changed:' + label)
     for name, expected in facts['sources']['common'].items():
         expected_added = recorded['common'][name] if recorded is not None else []
-        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected)
+        originals = recorded_provenance(expected_added) if saved['version'] == 3 else None
+        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected, originals)
         if added is None or added != expected_added:
             fail('common-archive-changed:' + name)
     if sorted(p.name for p in (root / 'archive/common').iterdir()) != sorted(facts['sources']['common']):
