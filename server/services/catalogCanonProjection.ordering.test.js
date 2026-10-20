@@ -133,14 +133,13 @@ describe('catalog projection ordering through persisted universe writes', () => 
       edited = await updateUniverse(universeId, (cur) => ({
         characters: cur.characters.map((entry) => ({ ...entry, name: 'Universe edit' })),
       }));
+      expect(row.name).toBe('Universe edit');
+      expect(catalog.updateIngredient).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
       await projection;
     }
     expect(await persistedEntry()).toMatchObject({ name: 'Universe edit', updatedAt: edited.characters[0].updatedAt });
-    // The independent in-flight reverse-sync suppression remains tracked in #12502.
-    // Once that projection ends, an ordinary canon save still carries the edit.
-    await updateUniverse(universeId, (cur) => ({ characters: cur.characters }));
     expect(row.name).toBe('Universe edit');
   });
 

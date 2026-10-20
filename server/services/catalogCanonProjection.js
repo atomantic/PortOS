@@ -25,12 +25,10 @@
  *     lag the authoritative row on the same request.
  *
  * Loop safety. projectToCanon calls updateUniverse, and updateUniverse calls
- * projectToCatalog — an A→B→A cycle. A module-level in-flight guard (`Set` of
- * ingredient ids currently being projected, plus a per-call `guardToken`)
- * breaks it: projectToCatalog skips any entry whose ingredientId is guarded, so
- * the catalog row that a projectToCanon is reading FROM is never written back
- * to inside the same logical operation. Net effect for a single user edit: each
- * side is written EXACTLY ONCE (asserted in catalogCanonProjection.test.js).
+ * projectToCatalog — an A→B→A cycle. Each call carries its canonical id and
+ * aliases through updateUniverse so only that operation's own echo is skipped.
+ * Independent canon edits still run the normal freshness checks, even while a
+ * forward projection for the same ingredient is pending.
  *
  * Conflict policy. LWW on `updatedAt` (no field-level merge). projectToCatalog
  * only writes when the embedded entry's `updatedAt` is newer-or-equal to the
@@ -54,13 +52,6 @@ const CANON_ARRAY_KEYS = Object.freeze(Object.values(BIBLE_FIELD));
 // both directions so a round-trip is shape-stable and we never smuggle a stale
 // `schemaVersion` from one store into the other.
 const NON_PAYLOAD_KEYS = ['id', 'ingredientId', 'createdAt', 'updatedAt', 'name', 'schemaVersion'];
-
-// In-flight re-entrancy guard. Holds ingredient ids currently mid-projection so
-// the A→B→A cycle (projectToCanon → updateUniverse → projectToCatalog) can't
-// write the originating catalog row a second time. A `Set` (not a single flag)
-// because a multi-universe catalog edit projects into N universes and a single
-// canon edit can touch multiple ingredients.
-const inFlight = new Set();
 
 /**
  * Build the catalog `payload` from an embedded canon entry (strip the control
@@ -97,68 +88,63 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
   if (await getCatalogIdentityAccess(ingredientId)) return { universes: 0, written: 0, skipped: 1 };
   const identityIds = new Set(await catalogDB.getIngredientIdentityIds(ingredientId));
 
-  for (const id of identityIds) inFlight.add(id);
   const stats = { universes: 0, written: 0, skipped: 0 };
-  try {
-    const refs = await catalogDB.listRefsForIngredient(ingredientId);
-    const universeIds = [...new Set(
-      refs.filter((r) => r.refKind === 'universe' && r.refId).map((r) => r.refId),
-    )];
-    if (universeIds.length === 0) return stats;            // no-universe-ref → silent no-op
+  const refs = await catalogDB.listRefsForIngredient(ingredientId);
+  const universeIds = [...new Set(
+    refs.filter((r) => r.refKind === 'universe' && r.refId).map((r) => r.refId),
+  )];
+  if (universeIds.length === 0) return stats;            // no-universe-ref → silent no-op
 
-    const name = updatedIngredient.name;
-    const payload = entryToPayload(updatedIngredient.payload || {});
-    const updatedAt = updatedIngredient.updatedAt;
-    const sourceAt = Date.parse(updatedAt || '');
+  const name = updatedIngredient.name;
+  const payload = entryToPayload(updatedIngredient.payload || {});
+  const updatedAt = updatedIngredient.updatedAt;
+  const sourceAt = Date.parse(updatedAt || '');
 
-    for (const universeId of universeIds) {
-      stats.universes++;
-      // Mutator form: replace the mirrored payload on every embedded entry that
-      // carries this ingredientId, across all canon arrays. Preserve only the
-      // canon entry's control fields: merging onto the whole entry would retain
-      // fields removed by an edit or revision restore and let stale canon data
-      // leak back into Catalog on the next reverse projection. `silent: true`
-      // suppresses the per-universe peer-sync fan-out so a catalog edit that
-      // touches N universes doesn't emit N recordUpdated events. `guardToken`
-      // threads the originating ingredientId so updateUniverse's synchronous
-      // projectToCatalog skips it (loop break).
-      let touched = false;
-      const result = await updateUniverse(universeId, async (cur) => {
-        // Read without taking the catalog write queue: reverse projection already
-        // runs inside this universe queue. Waiting on both queues can deadlock.
-        const current = await catalogDB.getIngredient(ingredientId);
-        if (!current || current.id !== ingredientId || !Number.isFinite(sourceAt)
-          || Date.parse(current.updatedAt || '') !== sourceAt
-          || current.name !== name
-          || !isDeepStrictEqual(entryToPayload(current.payload || {}), payload)) return null;
-        const patch = {};
-        for (const arrayKey of CANON_ARRAY_KEYS) {
-          const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
-          if (!list.some((e) => identityIds.has(e?.ingredientId))) continue;
-          patch[arrayKey] = list.map((e) => {
-            if (!identityIds.has(e?.ingredientId)) return e;
-            // Alias-backed entries are archived context, not newer edits of
-            // the canonical identity; an explicit catalog edit refreshes them.
-            if (e.ingredientId === ingredientId && Date.parse(e.updatedAt || '') > sourceAt) return e;
-            touched = true;
-            const controlFields = Object.fromEntries(
-              NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
-            );
-            return { ...controlFields, ...payload, name, ingredientId, updatedAt };
-          });
-        }
-        return touched ? patch : null;
-      }, { silent: true, canonProjectionGuard: ingredientId }).catch((err) => {
-        console.error(`🔁 projectToCanon: universe ${universeId} update failed: ${err.message}`);
-        return null;
-      });
-      if (result && touched) stats.written++;
-      else stats.skipped++;
-    }
-    return stats;
-  } finally {
-    for (const id of identityIds) inFlight.delete(id);
+  for (const universeId of universeIds) {
+    stats.universes++;
+    // Mutator form: replace the mirrored payload on every embedded entry that
+    // carries this ingredientId, across all canon arrays. Preserve only the
+    // canon entry's control fields: merging onto the whole entry would retain
+    // fields removed by an edit or revision restore and let stale canon data
+    // leak back into Catalog on the next reverse projection. `silent: true`
+    // suppresses the per-universe peer-sync fan-out so a catalog edit that
+    // touches N universes doesn't emit N recordUpdated events. `guardToken`
+    // threads the originating ingredientId so updateUniverse's synchronous
+    // projectToCatalog skips it (loop break).
+    let touched = false;
+    const result = await updateUniverse(universeId, async (cur) => {
+      // Read without taking the catalog write queue: reverse projection already
+      // runs inside this universe queue. Waiting on both queues can deadlock.
+      const current = await catalogDB.getIngredient(ingredientId);
+      if (!current || current.id !== ingredientId || !Number.isFinite(sourceAt)
+        || Date.parse(current.updatedAt || '') !== sourceAt
+        || current.name !== name
+        || !isDeepStrictEqual(entryToPayload(current.payload || {}), payload)) return null;
+      const patch = {};
+      for (const arrayKey of CANON_ARRAY_KEYS) {
+        const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
+        if (!list.some((e) => identityIds.has(e?.ingredientId))) continue;
+        patch[arrayKey] = list.map((e) => {
+          if (!identityIds.has(e?.ingredientId)) return e;
+          // Alias-backed entries are archived context, not newer edits of
+          // the canonical identity; an explicit catalog edit refreshes them.
+          if (e.ingredientId === ingredientId && Date.parse(e.updatedAt || '') > sourceAt) return e;
+          touched = true;
+          const controlFields = Object.fromEntries(
+            NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
+          );
+          return { ...controlFields, ...payload, name, ingredientId, updatedAt };
+        });
+      }
+      return touched ? patch : null;
+    }, { silent: true, canonProjectionGuard: ingredientId, canonProjectionIdentityIds: [...identityIds] }).catch((err) => {
+      console.error(`🔁 projectToCanon: universe ${universeId} update failed: ${err.message}`);
+      return null;
+    });
+    if (result && touched) stats.written++;
+    else stats.skipped++;
   }
+  return stats;
 }
 
 /**
@@ -171,12 +157,13 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
  *                 objects }` subset) read straight after the write.
  *   guardToken  — when set (a projectToCanon-originated write), the entry whose
  *                 ingredientId equals it is skipped (loop break).
+ *   guardIdentityIds — aliases captured by that originating operation, also skipped.
  *
  * LWW: writes the catalog row only when the embedded entry's `updatedAt` is
  * newer-or-equal to the stored row's. Best-effort per entry (logged on
  * failure); returns `{ written, skipped }`.
  */
-export async function projectToCatalog(universeId, canonArrays, { guardToken = null } = {}) {
+export async function projectToCatalog(universeId, canonArrays, { guardToken = null, guardIdentityIds = [] } = {}) {
   const stats = { written: 0, skipped: 0 };
   if (!canonArrays || typeof canonArrays !== 'object') return stats;
 
@@ -184,6 +171,8 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
   // the loop break up front, so the batched lookup below asks only for rows we
   // could actually write. A universe with N canon entries used to cost N
   // single-row SELECTs here (#3941); it now costs one.
+  const guardedIds = new Set(guardIdentityIds);
+  if (guardToken) guardedIds.add(guardToken);
   const candidates = [];
   for (const arrayKey of CANON_ARRAY_KEYS) {
     const list = Array.isArray(canonArrays[arrayKey]) ? canonArrays[arrayKey] : [];
@@ -192,7 +181,7 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
       if (!ingredientId) continue;
       // Loop break: skip the ingredient the originating projectToCanon is
       // writing FROM (its catalog row is already authoritative this request).
-      if (ingredientId === guardToken || inFlight.has(ingredientId)) {
+      if (guardedIds.has(ingredientId)) {
         stats.skipped++;
         continue;
       }
@@ -251,10 +240,4 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
     }
   }
   return stats;
-}
-
-// Test seam — lets the unit suite assert the guard set drains to empty after a
-// projection round-trip (no leaked in-flight tokens).
-export function _inFlightSize() {
-  return inFlight.size;
 }

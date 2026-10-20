@@ -426,6 +426,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // ORIGINATED from a catalog→canon projection. Threaded into projectToCatalog
   // below so the originating catalog row isn't written back a second time
   // (breaks the projectToCanon → updateUniverse → projectToCatalog loop).
+  // `canonProjectionIdentityIds` carries aliases scoped to that same operation.
   // `options.replaceCategories: true` replaces the whole `categories` map with
   // the patch's instead of unioning it per-key. Used by the conflict-journal
   // "restore mine" path so a faithful restore of the archived snapshot drops a
@@ -445,7 +446,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // the share-bucket importer's remote LWW apply passes it, so the winning
   // source revision's clock survives and the next one can still win (#10761).
   const {
-    silent = false, canonProjectionGuard = null, replaceCategories = false,
+    silent = false, canonProjectionGuard = null, canonProjectionIdentityIds = [], replaceCategories = false,
     touchesCanon = true, updatedAt: incomingUpdatedAt = null,
   } = options;
   const s = store();
@@ -667,7 +668,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     if (touchesCanon && (isMutator || 'characters' in patch || 'places' in patch || 'objects' in patch)) {
       try {
         const { projectToCatalog } = await import('../catalogCanonProjection.js');
-        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard });
+        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard, guardIdentityIds: canonProjectionIdentityIds });
       } catch (err) {
         console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
       }
