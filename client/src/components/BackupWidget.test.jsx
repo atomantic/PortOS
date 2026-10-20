@@ -97,6 +97,19 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
   });
 
+  it('labels an interrupted snapshot and offers neither download nor restore', async () => {
+    mockGetBackupSnapshots.mockResolvedValue([
+      { id: '2026-08-25T12-00-00', fileCount: 0, incomplete: false, failed: true, interrupted: true },
+    ]);
+    renderWidget();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+    expect(screen.queryByText('Still being written…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download snapshot/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
+  });
+
   it('keeps failed snapshots downloadable for salvage but disables restore', async () => {
     mockGetBackupSnapshots.mockResolvedValue([
       { id: '2026-08-25T12-00-00', fileCount: 2, failed: true, incomplete: false },

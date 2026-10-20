@@ -269,7 +269,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
       compare: (prev, next) => prev != null && equalListByKeys(prev, next, [
-        'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed',
+        'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed', 'interrupted',
       ]),
     },
   );
@@ -323,7 +323,9 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               <div className="text-xs text-gray-300 font-mono truncate">{snap.id}</div>
               <div className="text-xs text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</div>
               <div className="text-xs text-gray-600">
-                {snap.incomplete
+                {snap.interrupted
+                  ? 'Interrupted'
+                  : snap.incomplete
                   ? 'Still being written…'
                   : snap.failed
                     ? 'Backup failed — download available for salvage'
@@ -336,7 +338,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
                 // Deliberately disabled across every row, not just this one:
                 // each download spawns a tar over the whole snapshot on the
                 // same external drive, so two at once only thrash the disk.
-                disabled={downloadingId !== null || snap.incomplete}
+                disabled={downloadingId !== null || snap.incomplete || snap.interrupted}
                 aria-label={`Download snapshot ${snap.id} from ${snapshotSourceLabel(snap)}`}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
@@ -345,8 +347,10 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
               <button
                 onClick={() => setSelectedId(selectedId === snapshotIdentity(snap) ? null : snapshotIdentity(snap))}
-                disabled={snap.incomplete || snap.failed || restoringSnapshotId !== null}
-                title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                disabled={snap.incomplete || snap.failed || snap.interrupted || restoringSnapshotId !== null}
+                title={snap.interrupted
+                  ? 'An interrupted backup snapshot cannot be restored'
+                  : snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -354,7 +358,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
             </div>
           </div>
-          {selectedId === snapshotIdentity(snap) && !snap.incomplete && !snap.failed && (
+          {selectedId === snapshotIdentity(snap) && !snap.incomplete && !snap.failed && !snap.interrupted && (
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}
