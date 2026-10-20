@@ -185,6 +185,11 @@ export function codeAnimationSeccompFilter(arch) {
     [0x06, 0, 0, EPERM],
     [0x06, 0, 0, ALLOW],
   ];
+  return encodeSeccompProgram(instructions);
+}
+
+/** Encode classic BPF `[code, jt, jf, k]` instructions as a `struct sock_filter` array. */
+export function encodeSeccompProgram(instructions) {
   const bytes = Buffer.alloc(instructions.length * 8);
   instructions.forEach(([code, jt, jf, k], index) => {
     bytes.writeUInt16LE(code, index * 8);

@@ -80,6 +80,7 @@ import {
   OPENCODE_BUILD_AGENT,
   applyLeanClaudeArgs,
   CODEX_WORKSPACE_NETWORK_KEY,
+  CODEX_WORKSPACE_WRITABLE_ROOTS_KEY,
 } from './providerModels.js';
 import {
   isCodexCommand,
@@ -1152,9 +1153,12 @@ const CLAUDE_REPAIR_ARGS = [
   '--setting-sources', 'user',
   '--disallowedTools', 'Bash', 'WebFetch', 'WebSearch',
 ];
-// Codex's OS sandbox: writes confined to the working directory, network off
-// even when the user's config.toml enables it for workspace-write.
-const CODEX_REPAIR_ARGS = ['--sandbox', 'workspace-write', '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`];
+// Codex's OS sandbox: writes confined to the working directory, with network
+// and extra writable roots forced off even when the user's config.toml sets them.
+const CODEX_REPAIR_ARGS = [
+  '--sandbox', 'workspace-write',
+  '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`, '-c', `${CODEX_WORKSPACE_WRITABLE_ROOTS_KEY}=[]`,
+];
 
 /**
  * Saved provider argv for a file-editing repair driven by untrusted input
@@ -1172,13 +1176,14 @@ export function restrictedRepairArgs(provider) {
   const saved = stripApprovalBypassArgs(Array.isArray(provider.args) ? provider.args : []).args;
   if (isClaudeCommand(command)) {
     const cleared = dropOptions(
-      dropOptions(saved, ['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--mcp-config'], { variadic: true }),
+      dropOptions(saved, ['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--mcp-config', '--add-dir'], { variadic: true }),
       ['--permission-mode', '--setting-sources'],
     ).filter((arg) => arg !== '--strict-mcp-config');
     return { mode: 'claude-disallowed-tools', args: [...cleared, ...CLAUDE_REPAIR_ARGS] };
   }
   if (isCodexCommand(command)) {
-    const cleared = dropOptions(saved, ['--sandbox', '-s']);
+    // --add-dir widens the writable roots; --cd moves the workspace root itself.
+    const cleared = dropOptions(saved, ['--sandbox', '-s', '--add-dir', '--cd', '-C']);
     // Options must follow the subcommand; the builder appends `exec` only when absent.
     const withExec = cleared.includes('exec') ? cleared : ['exec', ...cleared];
     return { mode: 'codex-workspace-write', args: [...withExec, ...CODEX_REPAIR_ARGS] };

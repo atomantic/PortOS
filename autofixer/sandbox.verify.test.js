@@ -15,9 +15,13 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
   let outside;
   let server;
   let port;
+  let unixServer;
+  let socketPath;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'autofix-verify-real-'));
+    // Linux hides /tmp and /run behind tmpfs; /var/tmp keeps the socket below
+    // reachable through the read-only root, so the seccomp filter is what's tested.
+    root = await mkdtemp(join(process.platform === 'linux' ? '/var/tmp' : tmpdir(), 'autofix-verify-real-'));
     dataDir = join(root, 'data');
     worktree = join(dataDir, 'autofixer', 'worktrees', 'example');
     outside = join(root, 'outside');
@@ -27,11 +31,16 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     server = createServer((socket) => socket.end('reached'));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = server.address().port;
+    // A host pathname socket (Docker, a database) outside every writable root.
+    socketPath = join(outside, 's.sock');
+    unixServer = createServer((socket) => socket.end('reached'));
+    await new Promise((resolve) => unixServer.listen(socketPath, resolve));
   });
 
   afterAll(async () => {
     vi.unstubAllEnvs();
     await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => unixServer.close(resolve));
     await rm(root, { recursive: true, force: true });
   });
 
@@ -53,6 +62,8 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     expect(result.output).not.toMatch(new RegExp(`^HOME=${process.env.HOME}$`, 'm'));
   });
 
+  const connectProbe = (target) => `${JSON.stringify(process.execPath)} -e "require('net').connect(${target}).on('data', (d) => { console.log(String(d)); process.exit(0); }).on('error', () => process.exit(3))"`;
+
   it('cannot write outside the worktree, read the PortOS data directory, or reach loopback', async () => {
     const write = await verify(`echo x > ${JSON.stringify(join(outside, 'escaped'))}`);
     expect(write.ok).toBe(false);
@@ -62,8 +73,14 @@ describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 
     expect(read.ok).toBe(false);
     expect(read.output).not.toContain('example-provider-key');
 
-    const net = await verify(`${JSON.stringify(process.execPath)} -e "require('net').connect(${port}, '127.0.0.1').on('data', (d) => { console.log(String(d)); process.exit(0); }).on('error', () => process.exit(3))"`);
+    const net = await verify(connectProbe(`${port}, '127.0.0.1'`));
     expect(net.ok).toBe(false);
     expect(net.output).not.toContain('reached');
+  });
+
+  it('cannot connect to a host pathname Unix socket', async () => {
+    const unix = await verify(connectProbe(`'${socketPath}'`));
+    expect(unix.ok).toBe(false);
+    expect(unix.output).not.toContain('reached');
   });
 });

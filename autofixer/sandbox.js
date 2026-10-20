@@ -41,6 +41,7 @@ import {
 } from '../server/lib/codeAnimationContainment.js';
 import {
   autofixVerifyBubblewrapArgs, autofixVerifyEnv, autofixVerifyProtectedPaths, autofixVerifySeatbeltProfile,
+  autofixVerifySeccompFilter,
 } from '../server/lib/autofixVerifyContainment.js';
 
 // ---------------------------------------------------------------------------
@@ -472,6 +473,9 @@ export async function probeVerifyContainment() {
     return codeAnimationContainmentMechanism('darwin', await canExecute(CODE_ANIMATION_SEATBELT));
   }
   if (process.platform !== 'linux') return codeAnimationContainmentMechanism(process.platform, false);
+  if (!['x64', 'arm64'].includes(process.arch)) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'the verify seccomp filter requires x64 or arm64' });
+  }
   if (!(await canExecute(CODE_ANIMATION_BUBBLEWRAP))) {
     return codeAnimationContainmentMechanism('linux', false, { reason: 'install bubblewrap (/usr/bin/bwrap) to verify autofixes' });
   }
@@ -487,13 +491,15 @@ export async function probeVerifyContainment() {
 
 // Run a contained command as its own process group so a timeout reaches every
 // process the test runner started, not just the sandbox launcher.
-function runGroup(file, args, { cwd, env, timeoutMs }) {
+function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
   return new Promise((resolve) => {
     let output = '';
     let settled = false;
     let child;
     try {
-      child = spawn(file, args, { cwd, env, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(file, args, {
+        cwd, env, detached: true, windowsHide: true, stdio: seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+      });
     } catch (err) {
       resolve({ ok: false, code: -1, output: `[verify] ${err.message}` });
       return;
@@ -506,6 +512,12 @@ function runGroup(file, args, { cwd, env, timeoutMs }) {
       killGroup();
       done({ ok: false, code: -1, output: `${output}\n[verify] timed out after ${timeoutMs}ms` });
     }, timeoutMs);
+    if (seccomp) {
+      // bwrap reads the filter from fd 3; a refused setup can close it early,
+      // which surfaces as bwrap's nonzero exit.
+      child.stdio[3].on('error', () => {});
+      child.stdio[3].end(seccomp);
+    }
     child.stdout?.on('data', (d) => { output += d.toString(); });
     child.stderr?.on('data', (d) => { output += d.toString(); });
     child.on('error', (err) => done({ ok: false, code: -1, output: `${output}\n[verify] ${err.message}` }));
@@ -519,7 +531,7 @@ function runGroup(file, args, { cwd, env, timeoutMs }) {
  * command string is trusted config, but the files it executes (tests, npm
  * lifecycle scripts) were just written by an agent driven by untrusted logs,
  * so it runs only under OS containment (`autofixVerifyContainment.js`): no
- * network, writes confined to the worktree and a private scratch dir, no reads
+ * network or host Unix sockets, writes confined to the worktree and a private scratch dir, no reads
  * of the PortOS data directory or host credential stores, and an environment
  * built from nothing — no provider key or PortOS token. Without an enforced
  * mechanism the verify is refused, which blocks promotion.
@@ -550,9 +562,11 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, timeoutMs
     const env = autofixVerifyEnv({ scratch, path: process.env.PATH });
     const shell = ['/bin/sh', '-c', command];
     let launch;
+    let seccomp = null;
     if (mechanism.id === 'macos-seatbelt') {
       launch = [CODE_ANIMATION_SEATBELT, ['-p', autofixVerifySeatbeltProfile({ worktree, scratch, protectedPaths }), ...shell]];
     } else {
+      seccomp = autofixVerifySeccompFilter(process.arch);
       const present = await Promise.all(protectedPaths.map(async (path) => [path, await stat(path).catch(() => null)]));
       const bwrapArgs = autofixVerifyBubblewrapArgs({
         worktree, scratch, env,
@@ -561,7 +575,7 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, timeoutMs
       });
       launch = [CODE_ANIMATION_BUBBLEWRAP, [...bwrapArgs, ...shell]];
     }
-    const result = await runGroup(launch[0], launch[1], { cwd: worktree, env, timeoutMs });
+    const result = await runGroup(launch[0], launch[1], { cwd: worktree, env, timeoutMs, seccomp });
     return { ...result, contained: true, mechanism: mechanism.id };
   } finally {
     await rm(scratchDir, { recursive: true, force: true }).catch(() => {});

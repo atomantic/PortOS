@@ -7,7 +7,9 @@
  * (`codeAnimationContainment.js`) cannot host it; this profile keeps the same
  * mechanisms (macOS Seatbelt, Linux bubblewrap, refusal elsewhere) with these
  * bounds instead:
- *   - no network, including loopback and Unix sockets (PortOS's API);
+ *   - no network, including loopback and pathname Unix sockets (PortOS's API,
+ *     a Docker or database socket): Seatbelt denies them, and on Linux a
+ *     network namespace plus a seccomp filter refusing AF_UNIX sockets;
  *   - writes only to the worktree and a private scratch home/tmp;
  *   - no reads of the PortOS data directory (providers, settings, keys) or the
  *     host user's credential stores; the rest of the host stays readable so
@@ -19,7 +21,7 @@
  * Pure: no filesystem, process or settings access. Paths must be realpaths.
  */
 import { join, posix } from 'node:path';
-import { seatbeltPathLiteral } from './codeAnimationContainment.js';
+import { encodeSeccompProgram, seatbeltPathLiteral } from './codeAnimationContainment.js';
 
 /** Host-user credential stores, relative to the real home directory. */
 export const AUTOFIX_VERIFY_PROTECTED_HOME_PATHS = Object.freeze([
@@ -72,14 +74,40 @@ ${denied ? `(deny file-read* ${denied})\n` : ''}(allow file-read* (subpath ${lit
 }
 
 /**
- * bubblewrap argv up to the command. `protectedDirs` / `protectedFiles` must
+ * Linux seccomp program for the verify command: `socket(AF_UNIX, …)` fails
+ * with EPERM, so a host pathname socket visible through the read-only root
+ * cannot be connected to. `socketpair` (child-process stdio) stays allowed.
+ * Unknown ABIs (including x32) are killed rather than bypassing the check.
+ */
+export function autofixVerifySeccompFilter(arch) {
+  const abi = { x64: { audit: 0xc000003e, socket: 41 }, arm64: { audit: 0xc00000b7, socket: 198 } }[arch];
+  if (!abi) throw new Error('Autofix verify seccomp supports only x64 and arm64.');
+  const ALLOW = 0x7fff0000, KILL = 0x80000000, EPERM = 0x00050001, AF_UNIX = 1;
+  return encodeSeccompProgram([
+    [0x20, 0, 0, 4],                    // seccomp_data.arch
+    [0x15, 1, 0, abi.audit],
+    [0x06, 0, 0, KILL],
+    [0x20, 0, 0, 0],                    // seccomp_data.nr
+    [0x35, 0, 1, 0x40000000],           // x32/invalid syscall range
+    [0x06, 0, 0, KILL],
+    [0x15, 0, 3, abi.socket],
+    [0x20, 0, 0, 16],                   // socket domain, args[0] low word
+    [0x15, 0, 1, AF_UNIX],
+    [0x06, 0, 0, EPERM],
+    [0x06, 0, 0, ALLOW],
+  ]);
+}
+
+/**
+ * bubblewrap argv up to the command; the caller writes
+ * `autofixVerifySeccompFilter` to fd 3. `protectedDirs` / `protectedFiles` must
  * exist (bwrap mounts over them): directories become empty tmpfs, files
  * become /dev/null. The worktree and scratch are bound writable last.
  */
 export function autofixVerifyBubblewrapArgs({ worktree, scratch, env, protectedDirs = [], protectedFiles = [] }) {
   const args = [
-    '--unshare-all', '--die-with-parent', '--new-session', '--cap-drop', 'ALL', '--clearenv',
-    '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
+    '--unshare-all', '--die-with-parent', '--new-session', '--cap-drop', 'ALL', '--clearenv', '--seccomp', '3',
+    '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/run',
   ];
   for (const dir of protectedDirs) args.push('--tmpfs', dir);
   for (const file of protectedFiles) args.push('--ro-bind', '/dev/null', file);
