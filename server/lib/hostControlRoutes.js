@@ -630,6 +630,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/history/:id/trim-start',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',
+  // Music Video ffmpeg renders: final render, per-shot segments, shot preview
+  // concat with the song, excerpt encode, and platform encodes/thumbnails (#12514).
+  'POST /api/music-video/:id/render',
+  'POST /api/music-video/:id/shots/:sceneId/render',
+  'POST /api/music-video/:id/shot-renders/preview',
+  'POST /api/music-video/:id/excerpt',
+  'POST /api/music-video/:id/publish-kit/build',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
