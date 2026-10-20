@@ -53,7 +53,9 @@ const MERGED_AT = '2026-10-20T02:16:47Z';
 const task = { id: 'task-agent-1', metadata: { app: 'app1' } };
 
 const run = (agentId = 'agent-1') => auditClaimMergeGate({ agentId, task, agentState: { ...f.agent, id: agentId } });
-const check = (overrides) => ({ name: 'build', status: 'completed', conclusion: 'success', suite: 1, completed_at: '2026-10-20T02:10:00Z', ...overrides });
+let runId = 0;
+const check = (overrides) => ({ id: ++runId, name: 'build', status: 'completed', conclusion: 'success', suite: 1,
+  started_at: '2026-10-20T02:09:30Z', completed_at: '2026-10-20T02:10:00Z', ...overrides });
 const lease = (overrides) => ({ repository: 'github.com/example/repo', outcome: 'merged',
   acquiredAt: '2026-10-20T02:16:30Z', releasedAt: '2026-10-20T02:16:55Z', ...overrides });
 
@@ -182,7 +184,11 @@ describe('post-merge gate audit', () => {
       // A push workflow on the merge commit was never something the merge could wait for.
       check({ name: 'post-merge deploy', suite: 2, conclusion: 'failure', completed_at: '2026-10-20T02:31:00Z' }),
     ];
-    f.statuses = [{ name: 'ci/legacy', status: 'completed', conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' }];
+    // Newest first, as the statuses API lists them.
+    f.statuses = [
+      { context: 'ci/legacy', state: 'failure', created_at: '2026-10-20T02:20:00Z' },
+      { context: 'ci/legacy', state: 'pending', created_at: '2026-10-20T02:10:00Z' },
+    ];
     await run();
     expect(f.agent.metadata.mergeGateViolations).toEqual([expect.objectContaining({
       codes: ['no-admission-lease', 'checks-not-green-at-merge'], notGreenAtMerge: ['ci/legacy'],
@@ -190,6 +196,67 @@ describe('post-merge gate audit', () => {
     expect(f.tasks).toHaveLength(1);
     expect(f.tasks[0].context).toContain('ci/legacy');
     expect(f.tasks[0].context).not.toContain('post-merge deploy');
+  });
+
+  it('judges a check as the merge saw it, not by what a rerun or re-posted status says since', async () => {
+    f.agent.metadata.mergeAdmissionHistory = [lease()];
+    f.checks = [
+      check({ name: 'unit' }),
+      // Rerun of a green attempt, started and failing after the merge.
+      check({ name: 'unit', status: 'in_progress', conclusion: null, started_at: '2026-10-20T02:40:00Z', completed_at: null }),
+      check({ name: 'lint' }),
+      check({ name: 'lint', conclusion: 'failure', started_at: '2026-10-20T02:41:00Z', completed_at: '2026-10-20T02:42:00Z' }),
+    ];
+    f.statuses = [
+      { context: 'ci/legacy', state: 'failure', created_at: '2026-10-20T02:50:00Z' },
+      { context: 'ci/legacy', state: 'success', created_at: '2026-10-20T02:12:00Z' },
+      { context: 'ci/legacy', state: 'pending', created_at: '2026-10-20T02:10:00Z' },
+    ];
+    expect(await run()).toMatchObject({ audited: 1, violations: 0 });
+    expect(f.tasks).toEqual([]);
+  });
+
+  it('flags a merge on a check that was red at the merge even when a later rerun went green', async () => {
+    f.agent.metadata.mergeAdmissionHistory = [lease()];
+    f.checks = [
+      check({ conclusion: 'failure' }),
+      check({ started_at: '2026-10-20T02:30:00Z', completed_at: '2026-10-20T02:35:00Z' }),
+    ];
+    expect(await run()).toMatchObject({ violations: 1 });
+    expect(f.agent.metadata.mergeGateViolations[0]).toMatchObject({ codes: ['checks-not-green-at-merge'], notGreenAtMerge: ['build'] });
+    expect(f.tasks).toEqual([]);
+  });
+
+  it('does not count a check suite created moments after the merge against it', async () => {
+    f.agent.metadata.mergeAdmissionHistory = [lease()];
+    f.suites = [{ id: 1, created_at: '2026-10-20T02:09:00Z' }, { id: 2, created_at: '2026-10-20T02:17:00Z' }];
+    f.checks = [check(), check({ name: 'post-merge deploy', suite: 2, status: 'in_progress', conclusion: null, completed_at: null })];
+    expect(await run()).toMatchObject({ violations: 0 });
+  });
+
+  it('reads the run record again after the forge reads so a coordinator mark that landed meanwhile exempts the merge', async () => {
+    const unmarked = { receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z' };
+    f.agent.metadata.mergeHandoffReceipts = [unmarked];
+    const marked = { ...unmarked, coordinatorMergedAt: MERGED_AT };
+    execGhMock.mockImplementationOnce(async () => JSON.stringify(f.prs)).mockImplementation(async (args) => {
+      if (args[0] === 'pr') return JSON.stringify(f.prs);
+      // The coordinator's mark lands while the check reads are in flight.
+      f.agent = { ...f.agent, metadata: { ...f.agent.metadata, mergeHandoffReceipts: [marked] } };
+      const path = args.find((arg) => String(arg).startsWith('repos/'));
+      const rows = path.includes('/check-suites') ? f.suites : path.includes('/statuses') ? f.statuses : f.checks;
+      return rows.map((c) => JSON.stringify(c)).join('\n');
+    });
+    expect(await run()).toMatchObject({ audited: 1, violations: 0 });
+    expect(f.tasks).toEqual([]);
+  });
+
+  it('holds the verdict on a just-merged head whose handoff receipt the coordinator has not marked yet', async () => {
+    f.agent.metadata.mergeHandoffReceipts = [{ receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z' }];
+    f.prs = [{ ...f.prs[0], mergedAt: new Date(Date.now() - 10 * 1000).toISOString() }];
+    f.checks = [check({ completed_at: '2026-10-20T02:10:00Z' })];
+    expect(await run()).toMatchObject({ audited: 0, violations: 0, unresolved: true });
+    expect(f.agent.metadata.mergeGateViolations).toBeUndefined();
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([expect.objectContaining({ kind: 'audit', agentId: 'agent-1' })]);
   });
 
   it('keeps an audit the forge could not answer and completes it from the durable sweep', async () => {

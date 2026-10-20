@@ -24,7 +24,7 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { assessMergeGate, classifyHeadChecks, MERGE_GATE_VIOLATIONS } from '../lib/mergeGateAudit.js';
+import { assessMergeGate, awaitsCoordinatorMark, classifyHeadChecks, foldHeadChecks, MERGE_GATE_VIOLATIONS } from '../lib/mergeGateAudit.js';
 
 // A flagged head whose checks never settle is dropped after this long; the
 // sweep owns it until then.
@@ -36,6 +36,10 @@ const MERGE_GATE_POLL_CAP = 15;
 const LIST_LIMIT = 50;
 const SHORT_SHA = 12;
 
+// The coordinator marks its receipt just after its merge call returns; a merge
+// this recent whose receipt is still unmarked is judged on the next sweep.
+const COORDINATOR_MARK_GRACE_MS = 2 * 60 * 1000;
+
 const MERGED_PR_FIELDS = 'number,url,headRefOid,mergedAt,baseRefName';
 
 const readList = (value) => (Array.isArray(value) ? value : []);
@@ -43,11 +47,12 @@ const auditKey = (pr) => `${pr.number}@${String(pr.headRefOid).toLowerCase()}`;
 const watchKey = (repository, headSha) => `${repository}#${String(headSha).toLowerCase()}`;
 const readWatches = (app) => readList(app?.mergeGateWatches).filter((watch) => isPlainObject(watch) && watch.key);
 
-// Commit statuses (CI that reports through the status API rather than check
-// runs) are mapped onto the check-run shape.
-const CHECK_RUN_JQ = '.check_runs[] | {name, status, conclusion, suite: .check_suite.id, completed_at}';
+// Every attempt and every posted status, not the latest per name: the audit asks
+// what existed at the merge, and a rerun or re-posted context since then replaces
+// the answer. Commit statuses cover CI that reports outside the check-run API.
+const CHECK_RUN_JQ = '.check_runs[] | {id, name, status, conclusion, suite: .check_suite.id, started_at, completed_at}';
 const CHECK_SUITE_JQ = '.check_suites[] | {id, created_at}';
-const STATUS_JQ = '.statuses[] | {name: .context, status: (if .state == "pending" then "in_progress" else "completed" end), conclusion: (if .state == "error" then "failure" else .state end), completed_at: .updated_at}';
+const STATUS_JQ = '.[] | {context, state, created_at}';
 
 async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
   const raw = await execGh([
@@ -58,21 +63,16 @@ async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
   return rows.every(isPlainObject) ? rows : null;
 }
 
-/**
- * The check runs and commit statuses of `headSha`, or null when any read failed.
- * Each run carries its suite's `created_at`; a status has no creation time worth
- * trusting (its context flips pending to success in place) and carries none.
- */
-async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha }) {
+/** The checks of `headSha` as they stood at `mergedAt` (`foldHeadChecks`), or null when any read failed. */
+async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha, mergedAt }) {
   const base = `repos/${origin.fullName}/commits/${headSha}`;
   const [runs, suites, statuses] = await Promise.all([
-    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-runs?per_page=100`, jq: CHECK_RUN_JQ }),
+    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-runs?filter=all&per_page=100`, jq: CHECK_RUN_JQ }),
     readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-suites?per_page=100`, jq: CHECK_SUITE_JQ }),
-    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/status?per_page=100`, jq: STATUS_JQ }),
+    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/statuses?per_page=100`, jq: STATUS_JQ }),
   ]);
   if (!runs || !suites || !statuses) return null;
-  const created = new Map(suites.map((suite) => [suite.id, suite.created_at]));
-  return [...runs.map(({ suite, ...run }) => ({ ...run, created_at: created.get(suite) ?? null })), ...statuses];
+  return foldHeadChecks({ runs, suites, statuses }, mergedAt);
 }
 
 async function readMergedPrs({ repoSpec, forgeExec, branch, since }) {
@@ -85,6 +85,11 @@ async function readMergedPrs({ repoSpec, forgeExec, branch, since }) {
   // A reused branch name can carry an earlier run's PR.
   return prs.filter((pr) => isPlainObject(pr) && /^[0-9a-f]{40}$/i.test(String(pr.headRefOid || ''))
     && Number.isFinite(Date.parse(pr.mergedAt)) && (since === null || Date.parse(pr.mergedAt) >= since));
+}
+
+async function getAgentRecord(agentId) {
+  const lifecycle = await import('./cosAgentLifecycle.js');
+  return lifecycle.getAgentRecord(agentId);
 }
 
 /** A lease the run still holds (it exited without releasing), from the trusted admission state. */
@@ -208,14 +213,21 @@ export async function auditClaimMergeGate({ agentId, task, agentState }) {
     if (prs === null) { unresolved = true; continue; }
     for (const pr of prs.filter((candidate) => !audited.has(auditKey(candidate)))) {
       const headSha = String(pr.headRefOid).toLowerCase();
-      const checks = await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha });
+      const checks = await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha, mergedAt: pr.mergedAt });
       // No verdict without readable evidence; the durable sweep retries the audit.
       if (checks === null) { unresolved = true; continue; }
+      // The coordinator may have merged and marked its receipt while the forge was
+      // being read, so judge against the run's record as it stands now.
+      const current = (await getAgentRecord(agentId).catch(() => null))?.metadata || metadata;
+      const receipts = readList(current.mergeHandoffReceipts);
+      if (awaitsCoordinatorMark({ receipts, prUrl: pr.url, headSha }) && Date.now() - Date.parse(pr.mergedAt) < COORDINATOR_MARK_GRACE_MS) {
+        unresolved = true;
+        continue;
+      }
       const heldLease = await readHeldLease({ ...agentState, id: agentId }, repository);
       const verdict = assessMergeGate({
-        repository, prUrl: pr.url, headSha, mergedAt: pr.mergedAt, checks, heldLease,
-        receipts: readList(metadata.mergeHandoffReceipts),
-        history: [...readList(metadata.mergeAdmissionHistory), ...(metadata.lastMergeAdmission ? [metadata.lastMergeAdmission] : [])],
+        repository, prUrl: pr.url, headSha, mergedAt: pr.mergedAt, checks, heldLease, receipts,
+        history: [...readList(current.mergeAdmissionHistory), ...(current.lastMergeAdmission ? [current.lastMergeAdmission] : [])],
       });
       newAudits.push(auditKey(pr));
       if (verdict.violations.length === 0) continue;
@@ -310,7 +322,6 @@ let sweepInFlight = null;
 // True once the audit ran to a verdict. A run whose record is gone cannot be
 // audited again; the entry waits out its TTL like any other unreadable evidence.
 async function retryPendingAudit(watch, app) {
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(watch.agentId).catch(() => null);
   if (!agentState) return false;
   const result = await auditClaimMergeGate({ agentId: watch.agentId, task: { id: watch.taskId, metadata: { app: app.id } }, agentState })
@@ -340,7 +351,7 @@ async function sweepApp(app) {
       if (await retryPendingAudit(watch, app)) settledKeys.add(watch.key);
       continue;
     }
-    const checks = classifyHeadChecks(await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha: watch.headSha }), watch.mergedAt);
+    const checks = classifyHeadChecks(await readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha: watch.headSha, mergedAt: watch.mergedAt }), watch.mergedAt);
     if (checks.failing.length > 0) {
       const queued = await fileRecoveryTask(watch, checks.failing, app).then(() => true, (err) => {
         emitLog('warn', `🚦 Merge-gate recovery for PR #${watch.prNumber} not queued: ${err.message}`, { agentId: watch.agentId });
