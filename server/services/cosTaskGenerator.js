@@ -1220,7 +1220,7 @@ export async function queueDueInstallWideImprovementTasks({
     const taskKey = taskType;
     if (existingTaskTypes.has(taskKey)) {
       if (blockedTaskTypes.has(taskKey)) {
-        emitLog('info', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
+        emitLog('warn', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
       } else {
         emitLog('debug', `Install-wide improvement task ${taskType} already queued`);
       }
@@ -1326,7 +1326,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
     const appBusy = appsWithPendingImprovement.has(app.id);
     if (appBusy && cronTasks.length === 0) {
       if (appsWithBlockedImprovement.has(app.id)) {
-        emitLog('info', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
+        emitLog('warn', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
       } else {
         emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
       }
@@ -1372,7 +1372,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       const taskKey = `app:${app.id}:${nextType}`;
       if (existingTaskTypes.has(taskKey)) {
         if (blockedTaskTypes.has(taskKey)) {
-          emitLog('info', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
+          emitLog('warn', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
         } else {
           emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
         }
