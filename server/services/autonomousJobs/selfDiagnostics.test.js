@@ -6,6 +6,7 @@ import {
   buildDiagnosticsIssueTitle,
   buildDiagnosticsIssueBody,
   findMonitoringIssue,
+  pruneMalformedLabels,
   runSelfDiagnostics,
   MONITORING_LABEL,
   NEEDS_ATTENTION_LABEL,
@@ -230,6 +231,68 @@ describe('findMonitoringIssue', () => {
 
     const empty = makeExec([{ match: argsHave('issue', 'list'), result: { code: 0, stdout: '' } }])
     expect(await findMonitoringIssue({ exec: empty })).toEqual({ ok: true, issue: null })
+  })
+})
+
+describe('pruneMalformedLabels', () => {
+  it('deletes only unreferenced malformed names and leaves legitimate spaced labels alone', async () => {
+    const exec = makeExec([
+      { match: argsHave('label', 'list'), result: { code: 0, stdout: JSON.stringify([
+        { name: 'good first issue' },
+        { name: 'help wanted' },
+        { name: 'model:light D4C5F9' },
+        { name: 'effort:medium --color 76C7C7' },
+        { name: 'security 0366D6 Proposed from a security audit' }
+      ]) } },
+      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('pr', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('label', 'delete'), result: { code: 0, stdout: '' } }
+    ])
+
+    const result = await pruneMalformedLabels({ exec })
+    expect(result).toEqual({ pruned: 3, skipped: 0 })
+    const deleted = exec.mock.calls.filter(([, args]) => args.includes('delete')).map(([, args]) => args[2])
+    expect(deleted).toEqual(['model:light D4C5F9', 'effort:medium --color 76C7C7', 'security 0366D6 Proposed from a security audit'])
+  })
+
+  it('keeps malformed labels used by either an issue or a pull request', async () => {
+    const exec = makeExec([
+      { match: argsHave('label', 'list'), result: { code: 0, stdout: JSON.stringify([
+        { name: 'model:light D4C5F9' },
+        { name: 'effort:medium 76C7C7' }
+      ]) } },
+      { match: argsHave('issue', 'list', 'model:light D4C5F9'), result: { code: 0, stdout: '[{"number":12}]' } },
+      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('pr', 'list', 'model:light D4C5F9'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('pr', 'list', 'effort:medium 76C7C7'), result: { code: 0, stdout: '[{"number":34}]' } },
+      { match: argsHave('pr', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('label', 'delete'), result: { code: 0, stdout: '' } }
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await pruneMalformedLabels({ exec })
+    expect(result).toEqual({ pruned: 0, skipped: 2 })
+    expect(exec.mock.calls.some(([, args]) => args.includes('delete'))).toBe(false)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls.map(([line]) => line)).toEqual(expect.arrayContaining([
+      expect.stringContaining('issue #12'),
+      expect.stringContaining('PR #34')
+    ]))
+    warn.mockRestore()
+  })
+
+  it('fails closed when either usage check fails', async () => {
+    const exec = makeExec([
+      { match: argsHave('label', 'list'), result: { code: 0, stdout: '[{"name":"model:light D4C5F9"}]' } },
+      { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
+      { match: argsHave('pr', 'list'), result: { code: 1, stdout: '', stderr: 'unavailable' } }
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await pruneMalformedLabels({ exec })
+    expect(result).toEqual({ pruned: 0, skipped: 1 })
+    expect(exec.mock.calls.some(([, args]) => args.includes('delete'))).toBe(false)
+    warn.mockRestore()
   })
 })
 

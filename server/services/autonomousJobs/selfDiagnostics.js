@@ -203,6 +203,68 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
   }
 }
 
+const MALFORMED_LABEL = /^\S+ (?:--color )?#?[0-9A-Fa-f]{6}(?: .*)?$/
+
+/**
+ * Remove labels accidentally created by passing a whole "name color description"
+ * string as one CLI argument. A label is deleted only after both issue and PR
+ * searches succeed and report no usage; any ambiguous read is fail-closed.
+ */
+export async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } = {}) {
+  const { code, stdout, stderr } = await exec('gh', ['label', 'list', '--limit', '500', '--json', 'name'], { cwd })
+  if (code !== 0) {
+    console.warn(`⚠️ Self-diagnostics: could not list labels for pruning: ${stderr.trim()}`)
+    return { pruned: 0, skipped: 0 }
+  }
+
+  const labels = safeJSONParse(stdout, null, { logError: false })
+  if (!Array.isArray(labels) || labels.some(label => typeof label?.name !== 'string')) {
+    console.warn('⚠️ Self-diagnostics: could not parse labels for pruning')
+    return { pruned: 0, skipped: 0 }
+  }
+
+  let pruned = 0
+  let skipped = 0
+  for (const { name } of labels) {
+    if (!MALFORMED_LABEL.test(name)) continue
+
+    const usage = await Promise.all([
+      exec('gh', ['issue', 'list', '--state', 'all', '--label', name, '--limit', '1', '--json', 'number'], { cwd }),
+      exec('gh', ['pr', 'list', '--state', 'all', '--label', name, '--limit', '1', '--json', 'number'], { cwd })
+    ])
+    const [issues, pullRequests] = usage
+    const issueNumbers = issues.code === 0 ? safeJSONParse(issues.stdout, null, { logError: false }) : null
+    const prNumbers = pullRequests.code === 0 ? safeJSONParse(pullRequests.stdout, null, { logError: false }) : null
+    if (!Array.isArray(issueNumbers) || !Array.isArray(prNumbers) ||
+      issueNumbers.some(item => !Number.isInteger(item?.number)) ||
+      prNumbers.some(item => !Number.isInteger(item?.number))) {
+      skipped++
+      console.warn(`⚠️ Self-diagnostics: could not verify usage for malformed label ${JSON.stringify(name)}; leaving it in place`)
+      continue
+    }
+    if (issueNumbers.length || prNumbers.length) {
+      skipped++
+      const usages = [
+        ...issueNumbers.map(item => `issue #${item.number}`),
+        ...prNumbers.map(item => `PR #${item.number}`)
+      ]
+      console.warn(`⚠️ Self-diagnostics: malformed label ${JSON.stringify(name)} is in use by ${usages.join(', ')}; leaving it in place`)
+      continue
+    }
+
+    const deleted = await exec('gh', ['label', 'delete', name, '--yes'], { cwd })
+    if (deleted.code !== 0) {
+      skipped++
+      console.warn(`⚠️ Self-diagnostics: failed to delete malformed label ${JSON.stringify(name)}: ${deleted.stderr.trim()}`)
+      continue
+    }
+    pruned++
+  }
+
+  console.log(`🧹 Pruned ${pruned} malformed labels`)
+  return { pruned, skipped }
+}
+
 /**
  * Self-diagnostics handler (SCRIPT_HANDLERS['self-diagnostics']).
  *
@@ -263,13 +325,14 @@ export async function runSelfDiagnostics({
     const editArgs = ['issue', 'edit', String(found.issue.number), '--body', body]
     const addingLabel = hasFailures && !found.issue.labels.includes(NEEDS_ATTENTION_LABEL)
     if (addingLabel) {
+      await ensureDiagnosticsLabels({ cwd, exec })
       editArgs.push('--add-label', NEEDS_ATTENTION_LABEL)
     } else if (!hasFailures && found.issue.labels.includes(NEEDS_ATTENTION_LABEL)) {
       editArgs.push('--remove-label', NEEDS_ATTENTION_LABEL)
     }
+    await pruneMalformedLabels({ cwd, exec })
     // Only pre-create labels when we're about to attach one (gh needs it to exist);
     // a body-only or remove-label edit doesn't (the label already exists then).
-    if (addingLabel) await ensureDiagnosticsLabels({ cwd, exec })
     const { code, stderr } = await exec('gh', editArgs, { cwd })
     if (code !== 0) {
       console.warn(`⚠️ Self-diagnostics: failed to update issue #${found.issue.number}: ${stderr.trim()}`)
@@ -281,11 +344,13 @@ export async function runSelfDiagnostics({
 
   if (!hasFailures) {
     // Nothing failing and no existing summary — don't create noise.
+    await pruneMalformedLabels({ cwd, exec })
     console.log('🩺 Self-diagnostics: no failures and no existing summary issue — nothing to file')
     return { failingCount: 0, categories: [], issue: null }
   }
 
   await ensureDiagnosticsLabels({ cwd, exec })
+  await pruneMalformedLabels({ cwd, exec })
   const createArgs = ['issue', 'create', '--title', title, '--body', body, '--label', MONITORING_LABEL, '--label', NEEDS_ATTENTION_LABEL]
   const { code, stdout, stderr } = await exec('gh', createArgs, { cwd })
   if (code !== 0) {
