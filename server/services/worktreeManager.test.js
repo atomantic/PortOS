@@ -1008,7 +1008,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       join(PATHS.worktrees, 'agent-x')
     );
     expect(execGitMock).toHaveBeenCalledWith(
-      ['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'], '/repo'
+      ['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'], '/repo', { timeout: WORKTREE_ADD_TIMEOUT_MS }
     );
   });
 
@@ -1278,9 +1278,11 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
   });
 
   // git refuses to move a locked worktree or one with initialized submodules —
-  // never throw at the spawn path, just decline so the caller builds a fresh tree.
+  // Decline at the spawn path; the caller preserves any surviving branch holder.
   it('returns null rather than throwing when git refuses the move', async () => {
-    execGitMock.mockRejectedValue(new Error('working trees containing submodules cannot be moved'));
+    execGitMock.mockImplementation(args => args[0] === 'worktree' && args[1] === 'move'
+      ? Promise.reject(new Error('working trees containing submodules cannot be moved'))
+      : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }));
 
     await expect(adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead')).resolves.toBeNull();
   });
@@ -1301,7 +1303,7 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
 
     const result = await adoptWorktree('agent-new', '/repo', NEW_TREE, 'cos/task-1/agent-dead');
 
-    expect(execGitMock).not.toHaveBeenCalled();
+    expect(execGitMock).toHaveBeenCalledExactlyOnceWith(['status', '--porcelain', '--untracked-files=no'], NEW_TREE);
     expect(result).toMatchObject({ worktreePath: NEW_TREE, adopted: true });
   });
 
@@ -1331,6 +1333,21 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
     await adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead');
 
     expect(execGitMock).not.toHaveBeenCalledWith(expect.arrayContaining(['checkout']), expect.anything());
+  });
+
+  it('refuses a damaged tree even when it already sits at the destination', async () => {
+    scriptPaths({ source: true, target: true });
+    execGitMock.mockResolvedValue({ stdout: Array.from({ length: 100 }, (_, i) => ` D file-${i}`).join('\n') });
+
+    await expect(adoptWorktree('agent-new', '/repo', NEW_TREE, 'cos/task-1/agent-dead')).resolves.toBeNull();
+    expect(execGitMock).toHaveBeenCalledExactlyOnceWith(['status', '--porcelain', '--untracked-files=no'], NEW_TREE);
+  });
+
+  it('preserves the tree when its status cannot be inspected', async () => {
+    execGitMock.mockRejectedValue(new Error('index unreadable'));
+
+    await expect(adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead')).resolves.toBeNull();
+    expect(execGitMock).toHaveBeenCalledExactlyOnceWith(['status', '--porcelain', '--untracked-files=no'], DEAD_TREE);
   });
 
   it('returns null on incomplete input instead of guessing', async () => {
@@ -1639,7 +1656,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
 
     expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']), { claimOwners: { agents: [] } })).toBe(1);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
-      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
+      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo', { timeout: WORKTREE_ADD_TIMEOUT_MS }]]);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
       .toEqual([[['branch', '-D', 'cos/task/agent-dead'], '/repo']]);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'status').map(([, cwd]) => cwd))
@@ -1672,7 +1689,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
 
     expect(await cleanupOrphanedWorktrees('/repo', () => new Set(live), { claimOwners })).toBe(1);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
-      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
+      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo', { timeout: WORKTREE_ADD_TIMEOUT_MS }]]);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
       .toEqual([[['branch', '-D', 'cos/task/agent-dead'], '/repo']]);
   });

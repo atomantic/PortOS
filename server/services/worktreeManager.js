@@ -120,7 +120,9 @@ const WORKTREE_ADD_RETRY_DELAY_MS = 250;
 // while the worktree and branch it just gave up on exist on disk, which then
 // defeats the orphan-branch cleanup ("Cannot delete branch … checked out at …").
 // Ten minutes is far above any healthy add and still bounded. Applies to
-// `worktree move` too — it routes through this same wrapper.
+// `worktree move` too — it routes through this same wrapper. Removal also
+// deletes the full checkout (including ignored output), so it uses this ceiling
+// to avoid leaving a partially deleted tree when the metadata timeout expires.
 //
 // EXPORTED because it is the ceiling `STALE_GIT_LOCK_MIN_AGE_MS` is sized
 // against: the longest a git command PortOS launches can legitimately still be
@@ -390,7 +392,7 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 
     return null;
   };
   heldReason = await check();
-  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
+  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
     heldReason = await check();
@@ -965,8 +967,9 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
  *
  * Returns null (never throws) whenever adoption isn't possible — the source tree
  * is gone, the target path is occupied, or git refuses the move (a locked worktree,
- * or one with initialized submodules). Callers fall back to a fresh worktree, which
- * is the pre-existing behavior.
+ * or one with initialized submodules), or its status suggests a partial removal.
+ * The refused tree and branch stay intact for recovery: a fresh attachment to
+ * that same branch will remain blocked while this checkout holds it.
  *
  * @param {string} agentId - the RETRYING agent (names the destination directory)
  * @param {string} sourceWorkspace - the parent git repository
@@ -992,13 +995,32 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
     existingBranch: true, adopted: true, instanceId
   };
 
-  // Already at the destination (a retry that re-entered prep) — nothing to move.
-  if (pathsEqual(existingWorktreePath, targetPath)) return adopted;
-
-  if (existsSync(targetPath)) {
+  if (!pathsEqual(existingWorktreePath, targetPath) && existsSync(targetPath)) {
     console.log(`🌳 Cannot adopt worktree for ${agentId} — ${targetPath} is already occupied`);
     return null;
   }
+
+  // A killed removal can leave thousands of unstaged deletions. The resume
+  // prompt attributes all surviving changes to the agent, so do not hand it a
+  // likely damaged checkout. Keep intentional small deletions and staged work;
+  // this conservative threshold requires operator recovery for ambiguous bulk
+  // deletions instead of silently restoring or detaching somebody's work.
+  const status = await execGit(['status', '--porcelain', '--untracked-files=no'], existingWorktreePath)
+    .then(r => r.stdout)
+    .catch(() => null);
+  if (status === null) {
+    console.warn(`⚠️ Cannot adopt worktree for ${agentId} — status unreadable; preserved for recovery`);
+    return null;
+  }
+  const trackedChanges = status.split(/\r?\n/).filter(Boolean);
+  const deletions = trackedChanges.filter(line => line.startsWith(' D ')).length;
+  if (deletions >= 100 && deletions > trackedChanges.length / 2) {
+    console.warn(`⚠️ Cannot adopt worktree for ${agentId} — ${deletions} unstaged tracked deletions suggest an interrupted removal; preserved for recovery`);
+    return null;
+  }
+
+  // Re-entered prep still needs the damage check before resuming in place.
+  if (pathsEqual(existingWorktreePath, targetPath)) return adopted;
 
   await ensureDir(WORKTREES_DIR);
 
