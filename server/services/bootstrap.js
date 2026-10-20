@@ -869,7 +869,9 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
   // One canonical "where do I open this" banner — :5555 is always user-facing
   // (HTTP or HTTPS), :PORTOS_HTTP_PORT (default 5553) is the loopback HTTP
   // mirror that only spawns when HTTPS is active. See docs/PORTS.md.
-  console.log(`🚀 PortOS listening on :${port} (${httpsEnabled ? 'https' : 'http'})`);
+  // A smoke boot requests port 0 (#12543), so log the port actually bound.
+  const boundPort = httpServer.address()?.port ?? port;
+  console.log(`🚀 PortOS listening on :${boundPort} (${httpsEnabled ? 'https' : 'http'})`);
   // Which code is up. One PM2-managed portos-server serves :5555 for the whole
   // machine while any number of worktrees hold different code, so `pm2 logs
   // portos-server` should answer "which commit is this?" without a request
@@ -901,11 +903,15 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
       .catch((err) => logBootstrapFailure('❌ Build identity probe failed', err));
   }
   if (!httpsEnabled) {
-    console.log(`   🌐 http://localhost:${port}`);
+    console.log(`   🌐 http://localhost:${boundPort}`);
     console.log(`⚠️  HTTP only — getUserMedia (mic) won't work over Tailscale IP. Run "npm run setup:cert" to enable HTTPS.`);
     return;
   }
-  const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
+  // Only the boot smoke may ask for a kernel-assigned mirror (#12543); elsewhere
+  // 0, empty or invalid keeps meaning the shipped default.
+  const localHttpPort = isSmokeBoot() && process.env.PORTOS_HTTP_PORT === '0'
+    ? 0
+    : Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
   // Lead with the URL that works from THIS machine with no cert warnings:
   // the loopback HTTP mirror. http://localhost:${port} does NOT work in
   // HTTPS mode (the :${port} socket speaks TLS only), so local users who
