@@ -86,7 +86,21 @@ beforeEach(async () => {
   };
   const native = vi.fn(async input => {
     if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
-    if (input.command === 'inspect') return { ...fixture.snapshot };
+    if (input.command === 'inspect') {
+      if (fixture.inspectRefusal) throw new Error(fixture.inspectRefusal);
+      return { ...fixture.snapshot };
+    }
+    if (input.command === 'verify-original-placement') {
+      if (fixture.cancelRefusal) throw new Error(fixture.cancelRefusal);
+      return { verified: true, originalsUnmoved: true, archiveVerified: false,
+        contentAndMetadataUnverified: true, partialArchivesRetained: true };
+    }
+    if (input.command === 'verify-unmoved-preservation') {
+      if (fixture.cancelRefusal) throw new Error(fixture.cancelRefusal);
+      if ((await readdir(input.transactionDir)).includes('manifest.json')) throw new Error('preservation-already-bound');
+      return { verified: true, originalsUnmoved: true, archiveVerified: false,
+        reviewedFingerprint: input.expected.fingerprint, observedFingerprint: fixture.snapshot.fingerprint };
+    }
     if (input.command === 'preserve') {
       if (fixture.failPreserve) throw new Error('archive-no-space');
       await writeFile(join(input.transactionDir, 'manifest.json'), '{}', { mode: 0o600 });
@@ -237,6 +251,78 @@ describe('initialized checkout transaction', () => {
     expect(status.placement).toEqual({ preserved: false });
     expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
+  });
+  it('cancels by original placement without hydration and replays interrupted release after restart', async () => {
+    fixture.failPreserve = true;
+    const result = await fixture.service.retire(await reviewed());
+    fixture.snapshot.fingerprint = '9'.repeat(64);
+    const input = { appId: 'app', transactionId: result.transactionId };
+    const status = await fixture.service.status(input);
+    // A full source scan itself may hydrate compressed files and change mtime.
+    // Cancellation must not depend on that scan or certify its data as archived.
+    fixture.inspectRefusal = 'source-changed-during-scan';
+    fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));
+    expect(await fixture.service.cancelPreservation({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'release-interrupted' });
+    expect(fixture.cut).not.toBeNull();
+    const rows = (await readdir(join(root, result.transactionId))).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const saved = JSON.parse(await readFile(join(root, result.transactionId, rows.at(-1)), 'utf8'));
+    expect(saved).toMatchObject({ phase: 'restored', cancelledUnboundPreservation: true,
+      cancellationProof: { verified: true, originalsUnmoved: true, archiveVerified: false,
+        contentAndMetadataUnverified: true, partialArchivesRetained: true } });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const fresh = await restarted.status(input);
+    expect(await restarted.cancelPreservation({ ...input, journalDigest: fresh.journalDigest }))
+      .toMatchObject({ ok: true, cancelled: true, archiveVerified: false, contentAndMetadataUnverified: true });
+    expect(fixture.cut).toBeNull();
+  });
+  it.each(['preservation-original-content-changed', 'preservation-originals-may-have-moved'])(
+    'retains failed-copy reservation when native cancellation refuses %s', async reason => {
+      fixture.failPreserve = true;
+      const result = await fixture.service.retire(await reviewed());
+      fixture.snapshot.fingerprint = '9'.repeat(64);
+      fixture.cancelRefusal = reason;
+      const input = { appId: 'app', transactionId: result.transactionId };
+      const status = await fixture.service.status(input);
+      expect(await fixture.service.restore({ ...input, journalDigest: status.journalDigest }))
+        .toMatchObject({ ok: false, reason });
+      expect(fixture.cut).not.toBeNull();
+      expect((await fixture.service.status(input)).phase).toBe('reserved');
+    });
+  it('never releases a replaced reservation while cancelling a failed copy', async () => {
+    fixture.failPreserve = true;
+    const result = await fixture.service.retire(await reviewed());
+    fixture.cut = { ...fixture.cut, owner: { ...fixture.cut.owner, generation: 'other' } };
+    const input = { appId: 'app', transactionId: result.transactionId };
+    const status = await fixture.service.status(input);
+    expect(await fixture.service.restore({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-reservation-changed' });
+    expect(fixture.cut.owner.generation).toBe('other');
+  });
+  it('does not create an unbound replacement when an unfinished cancellation loses its recorded cut', async () => {
+    fixture.failPreserve = true;
+    const result = await fixture.service.retire(await reviewed());
+    fixture.cut = null;
+    const input = { appId: 'app', transactionId: result.transactionId };
+    const status = await fixture.service.status(input);
+    fixture.deps.admission.reserveCheckoutRetirement.mockClear();
+    expect(await fixture.service.restore({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-reservation-missing' });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).not.toHaveBeenCalled();
+    expect(fixture.cut).toBeNull();
+    expect((await fixture.service.status(input)).journalDigest).toBe(status.journalDigest);
+  });
+  it('the recovery CLI cancellation cannot restore or release an already quarantined transaction', async () => {
+    const result = await fixture.service.retire(await reviewed());
+    const input = { appId: 'app', transactionId: result.transactionId };
+    const status = await fixture.service.status(input);
+    fixture.deps.native.mockClear();
+    fixture.deps.admission.reserveCheckoutRetirement.mockClear();
+    expect(await fixture.service.cancelPreservation({ ...input, journalDigest: status.journalDigest }))
+      .toMatchObject({ ok: false, reason: 'retirement-cancellation-phase-invalid' });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).not.toHaveBeenCalled();
+    expect(fixture.deps.native.mock.calls.map(([call]) => call.command)).toEqual(['lock']);
+    expect(fixture.placement).toEqual({ working: 'quarantined', administration: 'quarantined' });
   });
   const interruptedMetadata = async () => {
     fixture.failPart = 'administration';
@@ -801,7 +887,7 @@ describe('initialized checkout transaction', () => {
     await expect(restarted.verifyArchive(input)).rejects.toThrow('archive-manifest-proof-changed');
     const oldSnapshot = fixture.snapshot;
     fixture.snapshot = { ...oldSnapshot, fingerprint: 'f'.repeat(64) };
-    expect(await restarted.restore(input)).toMatchObject({ ok: false, reason: 'retirement-source-changed' });
+    expect(await restarted.restore(input)).toMatchObject({ ok: false, reason: 'preservation-already-bound' });
     expect(fixture.cut).not.toBeNull();
     fixture.snapshot = oldSnapshot;
     fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));

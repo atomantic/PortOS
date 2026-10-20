@@ -27,13 +27,14 @@ async function fixture(action = 'review') {
 }
 
 describe('initialized checkout recovery CLI', () => {
-  it.each(['review', 'restore', 'review-finalization', 'finalize', 'review-quarantine', 'resume-quarantine'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
+  it.each(['review', 'restore', 'review-finalization', 'finalize', 'review-quarantine', 'resume-quarantine', 'cancel-preservation'])('pins the existing install, journals intent first, and invokes only guarded %s', async action => {
     const f = await fixture(action);
     const before = process.env.PORTOS_DATA_ROOT;
     const stdout = vi.fn();
     const method = { review: 'reviewMetadataRestore', restore: 'restoreMetadata',
       'review-finalization': 'reviewRestoredFinalization', finalize: 'finalizeRestored',
-      'review-quarantine': 'reviewQuarantineResumption', 'resume-quarantine': 'resumeQuarantine' }[action];
+      'review-quarantine': 'reviewQuarantineResumption', 'resume-quarantine': 'resumeQuarantine',
+      'cancel-preservation': 'cancelPreservation' }[action];
     const load = vi.fn(async (deps, root) => {
       expect(root).toBe(f.root);
       expect(process.env.PORTOS_DATA_ROOT).toBe(f.root);

@@ -128,6 +128,102 @@ class NativeArchive(unittest.TestCase):
         (admission / 'writer.lock').write_text('owned service bookkeeping')
         self.assertEqual(archive.inspect(self.request), before)
 
+    def test_unbound_cancellation_accepts_shared_updates_without_touching_originals_or_evidence(self):
+        before = archive.inspect(self.request, full=True)
+        self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}
+        archive.private_json(self.txn / 'source.json', before)
+        (self.txn / 'quarantine').mkdir(mode=0o700)
+        (self.txn / 'partial-copy').write_bytes(b'incomplete evidence')
+        objects = Path(before['commonGitDir']) / 'objects'
+        info = objects.stat()
+        os.utime(objects, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000000))
+        self.git(self.repo, 'update-ref', 'refs/heads/independent-work', 'HEAD')
+        observed = archive.inspect(self.request, full=True)
+        proof = archive.verify_unmoved_preservation(self.request)
+        self.assertTrue(proof['verified'])
+        self.assertTrue(proof['originalsUnmoved'])
+        self.assertFalse(proof['archiveVerified'])
+        self.assertNotEqual(proof['sharedBeforeSha256'], proof['sharedAfterSha256'])
+        self.assertEqual(archive.inspect(self.request, full=True), observed)
+        self.assertEqual((self.txn / 'partial-copy').read_bytes(), b'incomplete evidence')
+        self.assertFalse((self.txn / 'manifest.json').exists())
+        # Changes to original bytes or placement never borrow this exception.
+        for target, content, refusal in (
+            (self.work / 'new-data', b'new work', 'preservation-original-content-changed'),
+            (self.txn / 'quarantine' / 'working', b'move evidence', 'preservation-originals-may-have-moved'),
+            (self.txn / 'manifest.json', b'bound proof', 'preservation-already-bound'),
+        ):
+            with self.subTest(refusal=refusal):
+                parent_time = target.parent.stat()
+                target.write_bytes(content)
+                with self.assertRaisesRegex(RuntimeError, refusal):
+                    archive.verify_unmoved_preservation(self.request)
+                target.unlink()
+                os.utime(target.parent, ns=(parent_time.st_atime_ns, parent_time.st_mtime_ns))
+        saved = (self.txn / 'source.json').read_bytes()
+        tampered = copy.deepcopy(before)
+        tampered['sources']['working'][0]['mode'] ^= 1
+        (self.txn / 'source.json').write_text(json.dumps(tampered))
+        with self.assertRaisesRegex(RuntimeError, 'preservation-source-proof-changed'):
+            archive.verify_unmoved_preservation(self.request)
+        (self.txn / 'source.json').write_bytes(saved)
+        self.assertTrue(archive.verify_unmoved_preservation(self.request)['verified'])
+        self.git(self.repo, 'update-ref', 'refs/heads/feature/fixture', 'HEAD^')
+        with self.assertRaisesRegex(RuntimeError, 'release-head-or-branch-changed'):
+            archive.verify_unmoved_preservation(self.request)
+
+    def test_cancel_original_placement_never_hydrates_or_certifies_changed_file_data(self):
+        before = archive.inspect(self.request, full=True)
+        self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}
+        # An interrupted executor may not have begun its copy.
+        self.assertFalse(archive.verify_original_placement(self.request)['sourceCaptureRecorded'])
+        archive.private_json(self.txn / 'source.json', before)
+        (self.txn / 'quarantine').mkdir(mode=0o700)
+        partial = self.txn / 'partial-copy'
+        partial.write_bytes(b'unverified partial evidence')
+        original = self.work / 'base.txt'
+        original.write_bytes(b'new local work must remain here\n')
+        info = original.stat()
+        os.utime(original, ns=(info.st_atime_ns, info.st_mtime_ns + 108))
+        # Model the observed read-time metadata race. Cancellation must never
+        # enter the byte/metadata scanner; preservation and restore still do.
+        with patch.object(archive, 'manifest', side_effect=RuntimeError('source-changed-during-scan')):
+            proof = archive.verify_original_placement(self.request)
+        self.assertTrue(proof['originalsUnmoved'])
+        self.assertTrue(proof['contentAndMetadataUnverified'])
+        self.assertTrue(proof['partialArchivesRetained'])
+        self.assertFalse(proof['archiveVerified'])
+        self.assertNotIn('observedFingerprint', proof)
+        self.assertEqual(original.read_bytes(), b'new local work must remain here\n')
+        self.assertEqual(partial.read_bytes(), b'unverified partial evidence')
+        with self.assertRaisesRegex(RuntimeError, 'preservation-original-content-changed'):
+            archive.verify_unmoved_preservation(self.request)
+        for target, refusal in (
+            (self.txn / 'quarantine' / 'working', 'preservation-originals-may-have-moved'),
+            (self.txn / 'manifest.json', 'preservation-already-bound'),
+        ):
+            target.write_bytes(b'evidence')
+            with self.assertRaisesRegex(RuntimeError, refusal):
+                archive.verify_original_placement(self.request)
+            target.unlink()
+        saved = (self.txn / 'source.json').read_bytes()
+        tampered = copy.deepcopy(before)
+        tampered['sources']['working'][0]['mode'] ^= 1
+        (self.txn / 'source.json').write_text(json.dumps(tampered))
+        with self.assertRaisesRegex(RuntimeError, 'preservation-source-proof-changed'):
+            archive.verify_original_placement(self.request)
+        (self.txn / 'source.json').write_bytes(saved)
+        moved = self.scratch / 'original-work-retained'
+        self.work.rename(moved)
+        shutil.copytree(moved, self.work, symlinks=True)
+        with self.assertRaisesRegex(RuntimeError, 'preservation-original-identity-or-git-changed'):
+            archive.verify_original_placement(self.request)
+        shutil.rmtree(self.work)
+        moved.rename(self.work)
+        self.git(self.repo, 'update-ref', 'refs/heads/feature/fixture', 'HEAD^')
+        with self.assertRaisesRegex(RuntimeError, 'release-head-or-branch-changed'):
+            archive.verify_original_placement(self.request)
+
     def test_common_runtime_sockets_are_outside_capture_but_private_and_captured_sockets_hold(self):
         facts = archive.inspect(self.request)
         common = Path(facts['commonGitDir'])

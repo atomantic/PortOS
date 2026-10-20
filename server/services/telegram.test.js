@@ -634,4 +634,82 @@ describe('telegram service', () => {
       expect(fu.writes[0].data.checkins[1]).toMatchObject({ goalId: 'g2', response: 'g2 answer' });
     });
   });
+
+  describe('reconnect backoff', () => {
+    async function connectThenDropNetwork() {
+      vi.useFakeTimers();
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+      h.getMe.mockClear();
+      h.getMe.mockRejectedValue(new Error('network down'));
+      h.sendMessage.mockRejectedValue(new Error('network down'));
+      return telegram;
+    }
+
+    it('arms exactly one reconnect timer for a burst of failed sends', async () => {
+      const telegram = await connectThenDropNetwork();
+      const baseline = vi.getTimerCount();
+
+      for (let i = 0; i < 3; i++) await telegram.sendMessage(`msg ${i}`);
+
+      expect(vi.getTimerCount()).toBe(baseline + 1);
+      await telegram.cleanup();
+      // cleanup() can cancel it because it is the only one
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('keeps retrying with a growing delay after a failed reconnect, stops at 10, and resets on success', async () => {
+      const telegram = await connectThenDropNetwork();
+      await telegram.sendMessage('first'); // attempt 1 armed: 5s
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(h.getMe).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.getMe).toHaveBeenCalledTimes(1);
+
+      // attempt 2 is armed with a 10s delay, not dropped
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(h.getMe).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.getMe).toHaveBeenCalledTimes(2);
+
+      // attempts 3..10 keep failing until the cap leaves nothing armed
+      await vi.advanceTimersByTimeAsync(5_000 * (3 + 4 + 5 + 6 + 7 + 8 + 9 + 10));
+      expect(h.getMe).toHaveBeenCalledTimes(10);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(h.getMe).toHaveBeenCalledTimes(10);
+
+      // A later successful connection resets the counter: the next outage starts at 5s again.
+      h.getMe.mockResolvedValue({ username: 'example_bot' });
+      await telegram.init(false);
+      expect(telegram.getStatus().connected).toBe(true);
+      h.getMe.mockRejectedValue(new Error('network down'));
+      h.getMe.mockClear();
+      h.sendMessage.mockRejectedValue(new Error('network down'));
+      await telegram.sendMessage('again');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.getMe).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not restart the manual bot after switching to the MCP bridge', async () => {
+      const telegram = await connectThenDropNetwork();
+      await telegram.sendMessage('first');
+
+      // Even a timer that survives (cleanup not run) must not bring the bot back.
+      cfg.settings.telegram.method = 'mcp-bridge';
+      h.getMe.mockResolvedValue({ username: 'example_bot' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.getMe).not.toHaveBeenCalled();
+      expect(telegram.getStatus().connected).toBe(false);
+
+      // And the routes' cleanup() leaves no pending reconnect.
+      cfg.settings.telegram.method = undefined;
+      await telegram.init(false);
+      h.sendMessage.mockRejectedValue(new Error('network down'));
+      await telegram.sendMessage('second');
+      await telegram.cleanup();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
 });

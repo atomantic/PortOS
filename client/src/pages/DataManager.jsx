@@ -23,28 +23,68 @@ import { DATA_KINDS, DATA_KIND_ORDER, HATCH_STYLE, dataKindOf } from '../compone
 // TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
 // echoes the same wording). The dedupe in the rendering call sites handles
 // the series/issue cohort coupling.
-const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
+const TOMBSTONE_KIND_PLURAL = {
+  universe: 'universes',
+  series: 'series',
+  issue: 'issues',
+  mediaCollection: 'media collections',
+  author: 'authors',
+  artist: 'artists',
+  album: 'albums',
+  track: 'tracks',
+  creativeDirectorProject: 'creative director projects',
+  moodBoard: 'mood boards',
+  fableLoom: 'looms',
+  writersRoomWork: 'writers room works',
+  writersRoomFolder: 'writers room folders',
+  writersRoomExercise: 'writers room exercises',
+  musicVideoProject: 'music videos',
+  commissionFeedback: 'commission feedback',
+  creativeCommission: 'commissions',
+  deck: 'decks',
+};
 
-// Manual "GC tombstones now" trigger. The 60s orchestrator sweep keeps its
-// 24h grace — this button passes graceMs:0 so a user who just mass-deleted
+function kindList(kinds) {
+  return [...new Set(kinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
+}
+
+// Names the paused peers from `heldByPausedPeers`. Resume or remove releases
+// the deletes they have not received; pausing does not.
+function pausedHoldSentence(held) {
+  if (!Array.isArray(held) || held.length === 0) return '';
+  const ids = held.map((row) => row?.instanceId).filter(Boolean);
+  const kinds = [...new Set(held.flatMap((row) => (Array.isArray(row?.kinds) ? row.kinds : [])))];
+  const who = ids.length === 1 ? `Paused peer ${ids[0]} is` : `Paused peers ${ids.join(', ')} are`;
+  return `${who} holding ${kindList(kinds) || 'deleted records'}. Resume or remove the peer to release them.`;
+}
+
+function waitingSentence(refusedLabel) {
+  return `Still waiting on ${refusedLabel}. Open Instances, select the peer, and turn on that category under Sync Categories so it receives the deletion, or remove the peer. Pausing does not release the hold.`;
+}
+
+// Manual "clean up deleted records now" trigger. The orchestrator sweep keeps
+// its 24h grace — this button passes graceMs:0 so a user who just mass-deleted
 // doesn't wait a day for the bytes to leave disk. The button disables only
-// when every cohort is refused (snapshot-mode peer with no per-record sub
-// in both `universe` and `pipeline`): partial progress is still useful.
+// when every snapshot cohort is refused: partial progress is still useful.
 function TombstoneGcSection() {
   const [refused, setRefused] = useState(null); // null = still loading
+  const [heldByPausedPeers, setHeldByPausedPeers] = useState([]);
   const mountedRef = useMounted();
   const backfillTimerRef = useRef(null);
 
   const fetchStatus = useCallback(() => {
     api.getTombstoneSweepStatus({ silent: true })
-      .then((r) => { if (mountedRef.current && Array.isArray(r?.refused)) setRefused(r.refused); })
+      .then((r) => {
+        if (!mountedRef.current || !Array.isArray(r?.refused)) return;
+        setRefused(r.refused);
+        setHeldByPausedPeers(Array.isArray(r.heldByPausedPeers) ? r.heldByPausedPeers : []);
+      })
       .catch(() => { if (mountedRef.current) setRefused((prev) => prev ?? []); });
   }, [mountedRef]);
 
-  // Subscribe to peer-state changes so toggling a snapshot-mode peer's
-  // sync category (or disabling it) re-evaluates the refusal status
-  // without a page reload — otherwise the button stays stuck disabled
-  // even after the user has resolved the underlying refusal condition.
+  // Subscribe to peer-state changes so a category change, resume, or removal
+  // re-evaluates who is holding deletes. Pausing a peer does not release them.
+  // Without this the button stays stuck disabled after the hold is resolved.
   //
   // This is DataManager's only `instances:*` consumer, so it must hold its
   // own `instances:subscribe` — it previously only listened for
@@ -95,9 +135,13 @@ function TombstoneGcSection() {
     } else if (refusedKinds.length === 0) {
       toast('Nothing is ready to clean up.');
     }
+    const heldSentence = pausedHoldSentence(heldByPausedPeers);
     if (refusedKinds.length > 0) {
-      const refusedLabel = [...new Set(refusedKinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
-      toast.warning(`Still waiting on ${refusedLabel}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off. Cleanup stays off so a peer that has not received the deletion cannot bring the record back.`);
+      const refusedLabel = kindList(refusedKinds);
+      const waiting = waitingSentence(refusedLabel);
+      toast.warning(heldSentence ? `${waiting} ${heldSentence}` : `${waiting} Cleanup stays off so a peer that has not received the deletion cannot bring the record back.`);
+    } else if (heldSentence) {
+      toast.warning(heldSentence);
     }
     setRefused(refusedKinds);
     return result;
@@ -111,10 +155,12 @@ function TombstoneGcSection() {
     && refused.includes('series')
     && refused.includes('mediaCollection');
   const disabled = sweeping || refused == null || allRefused;
-  const refusedLabel = [...new Set((refused ?? []).map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
+  const refusedLabel = kindList(refused ?? []);
+  const heldSentence = pausedHoldSentence(heldByPausedPeers);
+  const waiting = waitingSentence(refusedLabel);
   const title = allRefused
-    ? `Still waiting on ${refusedLabel}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off so a peer that has not received the deletion cannot bring the record back.`
-    : 'Runs cleanup immediately instead of waiting 24 hours. It runs only for kinds every connected peer is already receiving.';
+    ? `${waiting}${heldSentence ? ` ${heldSentence}` : ''} Cleanup stays off so a peer that has not received the deletion cannot bring the record back.`
+    : `Runs cleanup immediately instead of waiting 24 hours. It runs only for kinds every connected peer is already receiving.${heldSentence ? ` ${heldSentence}` : ''}`;
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
@@ -126,6 +172,11 @@ function TombstoneGcSection() {
         <p className="mt-1 text-gray-500 text-xs">
           Remove the leftover record of Universes, Pipeline series and issues, and Media Collections you already deleted. Automatic cleanup waits 24 hours. This runs it now.
         </p>
+        {(allRefused || heldSentence) && (
+          <p className="mt-1 text-gray-500 text-xs">
+            {allRefused ? `${waiting}${heldSentence ? ` ${heldSentence}` : ''}` : heldSentence}
+          </p>
+        )}
       </div>
       <button
         onClick={runSweep}

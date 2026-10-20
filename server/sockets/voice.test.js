@@ -712,10 +712,53 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     await flushMicrotasks();
 
     expect(capturedSignal.aborted).toBe(true);
-    expect(socket.emitted.some((e) => e.event === 'voice:interrupt' && e.payload.reason === 'barge-in')).toBe(true);
+    expect(socket.emitted.some((e) => e.event === 'voice:tts:cancel' && e.payload.reason === 'barge-in')).toBe(true);
+    expect(socket.emitted.some((e) => e.event === 'voice:interrupt')).toBe(false);
 
     releaseFirstTurn({});
     await flushMicrotasks();
+  });
+
+  it('caller-speech onset after runTurn has resolved emits voice:tts:cancel on speaking edge only', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:call:attach');
+    // Idle frames are dropped, so the onset edge is only observable once the
+    // call is listening — the same connected phase the in-flight barge-in uses.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    runTurn.mockResolvedValueOnce({ text: 'Hello there' });
+
+    // Complete a turn so call.busy returns to false
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).toHaveBeenCalledTimes(1);
+
+    socket.emitted.length = 0;
+
+    // Caller begins speaking again while call.busy is false:
+    socket.fire('voice:call:audio', { pcm: loudFrame() });
+    await flushMicrotasks();
+
+    const cancels = socket.emitted.filter((e) => e.event === 'voice:tts:cancel' && e.payload?.reason === 'barge-in');
+    expect(cancels).toHaveLength(1);
+    expect(socket.emitted.some((e) => e.event === 'voice:interrupt')).toBe(false);
+
+    // Subsequent loud frame during the same utterance must not emit another cancel (onset edge only)
+    socket.fire('voice:call:audio', { pcm: loudFrame() });
+    await flushMicrotasks();
+    const cancelsAfterSecondFrame = socket.emitted.filter((e) => e.event === 'voice:tts:cancel' && e.payload?.reason === 'barge-in');
+    expect(cancelsAfterSecondFrame).toHaveLength(1);
   });
 });
 

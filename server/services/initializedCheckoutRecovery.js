@@ -496,33 +496,62 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
 
   // Explicit recovery restores the exact original inodes. It does not erase
   // archives or auto-finish an interrupted ref deletion on stale forge evidence.
-  const restore = input => fenced(async () => {
+  const restore = (input, { cancelOnly = false } = {}) => fenced(async () => {
     const directory = location(input.transactionId);
     const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
     const gate = await admission();
     try {
       let state = await readJournal(directory);
       if (hash(state) !== input.journalDigest) fail('retirement-journal-changed');
+      if (cancelOnly && (state.proof?.manifestSha256 || !(['intent', 'reserved'].includes(state.phase)
+        || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)))) fail('retirement-cancellation-phase-invalid');
       const ctx = await context(input.appId);
       if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
       await ensureOwner(ctx, state.release, false);
       // A completed quarantine released its cut. An interrupted one retains it.
+      let newReservation = false;
       const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(async error => {
         if (error.code !== 'ENOENT') throw error;
+        if (['intent', 'reserved', 'preserved'].includes(state.phase) && state.reservation) fail('retirement-reservation-missing');
+        newReservation = true;
         return gate.reserveCheckoutRetirement(ctx.repoPath, state.id);
       });
       return await gate.withCheckoutReservation(reservation, async () => {
         // Preservation can fail before a native manifest exists. No move is
         // ever attempted before its fsynced intent; only those early phases
-        // may cancel the cut after a fresh unchanged-source inspection.
+        // may cancel the cut. Explicit cancellation proves placement without
+        // reading/hydrating working bytes; it neither restores nor certifies them.
         if (['intent', 'reserved', 'preserved'].includes(state.phase)
           || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)) {
-          const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
-          if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) fail('retirement-source-changed');
+          if (state.phase !== 'restored' && !newReservation && state.reservation
+            && JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
+          let cancellationProof;
+          if (cancelOnly) {
+            cancellationProof = await native({ command: 'verify-original-placement',
+              repoPath: ctx.repoPath, release: state.release, transactionDir: directory,
+              expected: state.review.snapshot });
+            if (cancellationProof.verified !== true || cancellationProof.originalsUnmoved !== true
+              || cancellationProof.archiveVerified !== false || cancellationProof.contentAndMetadataUnverified !== true
+              || cancellationProof.partialArchivesRetained !== true) fail('retirement-cancellation-proof-invalid');
+          } else {
+            const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
+            if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) {
+              // Ordinary restore retains its original unchanged-content proof.
+              if (state.proof?.manifestSha256 || state.phase === 'preserved') fail('retirement-source-changed');
+              cancellationProof = await native({ command: 'verify-unmoved-preservation',
+                repoPath: ctx.repoPath, release: state.release, transactionDir: directory,
+                expected: state.review.snapshot });
+              if (cancellationProof.verified !== true || cancellationProof.originalsUnmoved !== true) fail('retirement-source-changed');
+            }
+          }
+          await ensureOwner(ctx, state.release, true);
+          executor.assertHeld();
           state = await appendStep(directory, state, 'restored', { reservation,
-            cancelledUnboundPreservation: !state.proof?.manifestSha256 });
+            cancelledUnboundPreservation: !state.proof?.manifestSha256,
+            ...(cancellationProof ? { cancellationProof } : {}) });
           await gate.releaseCheckoutReservation(reservation);
-          return { ok: true, transactionId: state.id, restored: true, archivesRetained: true };
+          return { ok: true, transactionId: state.id, restored: true, archivesRetained: true,
+            ...(cancelOnly ? { cancelled: true, archiveVerified: false, contentAndMetadataUnverified: true } : {}) };
         }
         const { listWorktrees } = await import('./worktreeManager.js');
         const trees = await (deps.listWorktrees || listWorktrees)(ctx.repoPath);
@@ -916,7 +945,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   };
   const automatic = async (input, options) => recoverAutomatically(input, options)
     .catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
-  return { discover, recoverAutomatically: automatic, review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
+  return { discover, recoverAutomatically: automatic, review, retire, status, restore,
+    cancelPreservation: input => restore(input, { cancelOnly: true }), verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
     reviewRestoredFinalization, finalizeRestored, reviewQuarantineResumption, resumeQuarantine };
 }
 

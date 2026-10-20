@@ -11,7 +11,7 @@
 //           | voice:speak | voice:output:primary | voice:output:detached
 // Call host (FaceTime Audio bridge):
 // Inbound:  voice:call:attach | voice:call:audio | voice:call:detach | voice:call:hangup
-// Outbound: voice:call:state | voice:call:tts
+// Outbound: voice:call:state | voice:call:tts | voice:tts:cancel
 // Meeting capture (same page, same audio bridge, no LLM — STT only):
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
@@ -572,13 +572,16 @@ export const registerVoiceHandlers = (socket) => {
           call.endpointer = createCallEndpointer();
           return;
         }
+        const wasSpeaking = Boolean(call.endpointer.speaking);
         const utterance = call.endpointer.push(view);
-        // Barge-in: the caller talking over a reply cancels it, exactly as
-        // pressing the widget's interrupt does.
-        if (call.endpointer.speaking && call.busy) {
-          call.ctrl?.abort();
-          state.pendingDestructive = null;
-          socket.emit('voice:interrupt', { reason: 'barge-in' });
+        // Barge-in: caller speech onset cancels playback on the host socket
+        // whether or not a reply turn is still actively generating.
+        if (!wasSpeaking && call.endpointer.speaking) {
+          socket.emit('voice:tts:cancel', { reason: 'barge-in' });
+          if (call.busy) {
+            call.ctrl?.abort();
+            state.pendingDestructive = null;
+          }
         }
         if (!utterance) return;
         noteCallerSpeech();

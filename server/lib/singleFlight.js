@@ -25,9 +25,16 @@
  * on both settle paths and swallows the cleanup branch's copy of the rejection,
  * while each caller's own `await run(...)` still observes the original reject.
  *
+ * `exclusive: true` keeps different keys from running at the same time: a
+ * call whose key differs from the in-flight one waits for it to settle, then
+ * joins or starts its own. For work that must never overlap at all, such as
+ * starting one daemon, where the key only says whether a caller can share the
+ * result (`ollamaManager.startServer` keys on its launch env).
+ *
+ * @param {{ exclusive?: boolean }} [options]
  * @returns {{ run: <T>(key: any, fn: () => Promise<T>) => Promise<T> }}
  */
-export function createSingleFlight() {
+export function createSingleFlight({ exclusive = false } = {}) {
   const inFlight = new Map(); // key -> shared in-flight promise
 
   function run(key, fn) {
@@ -44,5 +51,16 @@ export function createSingleFlight() {
     return work;
   }
 
-  return { run };
+  // Registers synchronously when nothing is in flight: an async body runs
+  // up to its first await, so two back-to-back calls cannot both start.
+  async function runExclusive(key, fn) {
+    while (inFlight.size) {
+      const existing = inFlight.get(key);
+      if (existing) return existing;
+      await Promise.allSettled([...inFlight.values()]);
+    }
+    return run(key, fn);
+  }
+
+  return { run: exclusive ? runExclusive : run };
 }
