@@ -3,6 +3,7 @@
  * Sync, pregate, push and CI run outside the lease; it spans only the final
  * verify-and-merge, so holds take seconds (#10803).
  */
+import { forkLocalBranch } from '../lib/forkHead.js';
 import { randomUUID } from 'node:crypto';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -194,12 +195,12 @@ async function verifiedReviewCoordinator(agent, repository) {
     || !isTruthyMeta(meta?.reviewLoopFollowUp) || isTruthyMeta(meta?.reviewLoopLeaveOpen)
     || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
     || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
-    || agent.metadata?.worktreeBranch !== target.branch || !agent.metadata?.workspacePath) return false;
+    || agent.metadata?.worktreeBranch !== forkLocalBranch(target.branch, meta.forkHead) || !agent.metadata?.workspacePath) return false;
   const pr = parsePullRequestUrl(target.url);
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository
     || String(meta.reviewLoopPRNumber) !== String(pr.number)
     || meta.reviewLoopPRHost !== pr.host || meta.reviewLoopPROwner !== pr.owner || meta.reviewLoopPRRepo !== pr.repo) return false;
-  if (!await checkoutOnBranch(agent.metadata.workspacePath, target.branch, repository)) return false;
+  if (!await checkoutOnBranch(agent.metadata.workspacePath, forkLocalBranch(target.branch, meta.forkHead), repository)) return false;
   if (!meta.forkHead && !meta.reviewLoopForkTarget && !target.fork && !target.workspacePath) return true;
   if (target.workspacePath !== agent.metadata.workspacePath || !agent.metadata.sourceWorkspace
     || agent.metadata.sourceWorkspace === target.workspacePath || target.fork?.url !== target.url) return false;

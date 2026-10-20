@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { forkLocalBranch } from '../lib/forkHead.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'feature/fix', workspaceRepo: 'example/repo', originHost: 'github.com', row: null, head: null, upstream: null, remote: null, pushRemote: null }));
@@ -37,7 +38,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
 vi.mock('./git.js', () => ({ parsePullRequestUrl, isRepo: async () => true, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
 vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktreeDirt: vi.fn(),
   listWorktrees: async () => [], findAdoptableWorktreeForBranch: async () => null, releaseIdleSiblingNextHolder: async () => null,
-  createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: options.existingBranch })),
+  createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead) })),
 }));
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { createWorktree } from './worktreeManager.js';
@@ -53,6 +54,7 @@ async function launch(overrides = {}) {
     prUrl: 'https://github.com/example/repo/pull/42', prBranch: 'feature/fix',
     sourceWorkspace: '/repos/source', reviewers: [], ...overrides });
   const persisted = f.tasks[task.id];
+  f.branch = forkLocalBranch(f.row?.headRefName || 'feature/fix', overrides.forkHead);
   const workspace = await prepareAgentWorkspace({ agentId: 'review-agent', task: persisted });
   expect(workspace.outcome).toBe('ready');
   const metadata = buildAgentRegistration({ task: persisted, provider: { id: 'test' }, modelSelection: {},
@@ -144,12 +146,14 @@ describe('fork follow-up creation through workspace, registration and admission'
     // Another same-repository coordinator cannot enter while the fork holds.
     const same = structuredClone(f.state.agents['review-agent']);
     same.id = 'same'; same.taskId = 'same-task';
-    same.metadata.reviewLoopMergeTarget = { url: f.row.url, branch: f.branch };
+    same.metadata.worktreeBranch = 'feature/fix';
+    same.metadata.reviewLoopMergeTarget = { url: f.row.url, branch: 'feature/fix' };
     const sameTask = structuredClone(f.tasks[f.state.agents['review-agent'].taskId]);
     sameTask.id = same.taskId; delete sameTask.metadata.forkHead; delete sameTask.metadata.reviewLoopForkTarget;
     f.tasks[sameTask.id] = sameTask; f.state.agents.same = same; persist();
     expect((await claimMergeAdmission({ agentId: 'same', action: 'acquire' })).admitted).toBe(false);
     await admission('release', forkLease.token, { outcome: 'merged' });
+    f.branch = 'feature/fix';
     const sameLease = await claimMergeAdmission({ agentId: 'same', action: 'acquire' });
     expect(sameLease.admitted).toBe(true);
     expect((await admission('acquire')).admitted).toBe(false);

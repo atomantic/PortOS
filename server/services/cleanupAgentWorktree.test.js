@@ -209,9 +209,11 @@ vi.mock('./prWatcher.js', () => ({
 
 // The `if-missing` net's OTHER half: a FAILED run may still have opened its PR
 // before it died, and cleanup hands that orphan to the same follow-up machinery.
+const getPullRequestStateMock = vi.fn();
 const findPullRequestForBranchMock = vi.fn().mockResolvedValue({ status: 'unavailable' });
 vi.mock('./github.js', () => ({
-  findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args)
+  findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args),
+  getPullRequestState: (...args) => getPullRequestStateMock(...args)
 }));
 
 // `deleteMergedRemoteCopy` reads the remote-tracking ref and runs its
@@ -1271,6 +1273,20 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
   });
 
   // --- skipMerge tests for review-loop follow-up cleanup ---
+
+  it.each(['OPEN', 'MERGED'])('cleans a fork local branch only after its exact PR is %s', async state => {
+    getAgent.mockResolvedValue(mockWorktreeAgent({ worktreeBranch: 'fork/contributor/main' }));
+    getPullRequestStateMock.mockResolvedValueOnce({ status: 'known', state });
+    const originalTask = { metadata: { reviewLoopFollowUp: true, reviewLoopPRNumber: 42, reviewLoopPRBranch: 'main',
+      forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } } };
+    await cleanupAgentWorktree('agent-1', true, { prCreation: 'never', skipMerge: true, originalTask });
+    expect(getPullRequestStateMock).toHaveBeenCalledWith('42', expect.objectContaining({ cwd: '/mock/workspace' }));
+    expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
+    if (state === 'MERGED') {
+      expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'fork/contributor/main', { merge: false, preserveBranchWithCommits: false });
+    } else expect(removeWorktree).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
+  });
 
   it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {
     // The follow-up agent already merged via `gh pr merge`; re-merging the worktree

@@ -1,7 +1,7 @@
 /** Fork review authority is captured from the forge, then rechecked at admission. */
 import { getOriginInfo, parseGitRemoteUrl } from '../lib/gitRemote.js';
 import { detectForgeCli, parsePullRequestUrl } from '../lib/gitForge.js';
-import { forkHeadFromGithubPr, forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
+import { forkHeadFromGithubPr, forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { execGit } from '../lib/execGit.js';
 import { readBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { safeJSONParse } from '../lib/jsonIo.js';
@@ -63,7 +63,7 @@ export async function verifyForkReviewMergeTarget({ target, taskTarget, forkHead
   const live = await readTarget(target.url, sourceWorkspace);
   if (!live || live.branch !== branch || live.baseBranch !== target.baseBranch
     || live.headRepositoryId !== target.headRepositoryId || !coordinatesMatch(live.forkHead, target.forkHead)) return null;
-  const upstream = await readBranchUpstream(workspacePath, branch);
+  const upstream = await readBranchUpstream(workspacePath, forkLocalBranch(branch, forkHead));
   const remote = forkRemoteName(target.forkHead.ownerLogin);
   if (!remote || upstream.remote !== remote || upstream.merge !== `refs/heads/${branch}`) return null;
   const read = args => execGit(args, workspacePath, { timeout: 10000 }).then(r => r.stdout.trim()).catch(() => null);

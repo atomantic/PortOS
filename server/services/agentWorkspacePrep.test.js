@@ -444,6 +444,18 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     findAdoptableWorktreeForBranch.mockResolvedValue(null);
   });
 
+  it('recovers the namespaced fork holder without adopting the base repository main checkout', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: 'fork/contributor/main', adopted: true });
+    const task = resumeTask({ existingBranch: 'fork/contributor/main',
+      forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(result.outcome).toBe('ready');
+    expect(findAdoptableWorktreeForBranch).toHaveBeenCalledWith(expect.any(String), 'fork/contributor/main', expect.any(Object));
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'fork/contributor/main');
+    expect(createWorktree).not.toHaveBeenCalled();
+  });
+
   it('adopts the interrupted run’s worktree instead of creating a new one', async () => {
     findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
     adoptWorktree.mockResolvedValue({
