@@ -167,6 +167,7 @@ function makeExec(routes) {
     for (const r of routes) {
       if (r.match(args)) return r.result
     }
+    if (argsHave('label', 'list')(args)) return { code: 0, stdout: '[]', stderr: '' }
     return { code: 0, stdout: '', stderr: '' }
   })
 }
@@ -240,6 +241,7 @@ describe('pruneMalformedLabels', () => {
       { match: argsHave('label', 'list'), result: { code: 0, stdout: JSON.stringify([
         { name: 'good first issue' },
         { name: 'help wanted' },
+        { name: 'needs decade' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
         { name: 'security 0366D6 Proposed from a security audit' }
@@ -294,6 +296,20 @@ describe('pruneMalformedLabels', () => {
     expect(exec.mock.calls.some(([, args]) => args.includes('delete'))).toBe(false)
     warn.mockRestore()
   })
+
+  it('skips comma-containing labels because gh label filters split on commas', async () => {
+    const exec = makeExec([{
+      match: argsHave('label', 'list'),
+      result: { code: 0, stdout: '[{"name":"security 0366D6 Audit, high risk"}]' }
+    }])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await pruneMalformedLabels({ exec })
+    expect(result).toEqual({ pruned: 0, skipped: 1 })
+    expect(exec.mock.calls.some(([, args]) => args.includes('issue') || args.includes('pr') || args.includes('delete'))).toBe(false)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot safely verify comma-containing'))
+    warn.mockRestore()
+  })
 })
 
 describe('runSelfDiagnostics', () => {
@@ -328,6 +344,11 @@ describe('runSelfDiagnostics', () => {
     // or the claim queue would spend agent runs on them.
     const labels = createCall[1].flatMap((arg, i, args) => (arg === '--label' ? [args[i + 1]] : []))
     expect(labels).toEqual([MONITORING_LABEL, NEEDS_ATTENTION_LABEL])
+    const labelEnsureCalls = exec.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create')
+    const pruneCall = exec.mock.calls.find(([, args]) => args[0] === 'label' && args[1] === 'list')
+    expect(labelEnsureCalls.length).toBe(2)
+    expect(exec.mock.calls.indexOf(labelEnsureCalls[1])).toBeLessThan(exec.mock.calls.indexOf(pruneCall))
+    expect(exec.mock.calls.indexOf(pruneCall)).toBeLessThan(exec.mock.calls.indexOf(createCall))
   })
 
   it('reuses (edits) an existing monitoring issue instead of filing a duplicate', async () => {
@@ -346,6 +367,26 @@ describe('runSelfDiagnostics', () => {
     const editCall = exec.mock.calls.find(c => c[1].includes('edit'))
     expect(editCall[1]).toContain('--body')
     expect(editCall[1]).not.toContain('--add-label')
+    const pruneCall = exec.mock.calls.find(([, args]) => args[0] === 'label' && args[1] === 'list')
+    expect(exec.mock.calls.indexOf(pruneCall)).toBeLessThan(exec.mock.calls.indexOf(editCall))
+  })
+
+  it('ensures labels before pruning and editing when the attention label must be added', async () => {
+    const exec = makeExec([
+      { match: argsHave('issue', 'list'), result: { code: 0, stdout: JSON.stringify([
+        { number: 7, title: 't', body: `<!-- lil-slug: ${DIAGNOSTICS_SLUG} -->`, labels: [{ name: 'monitoring' }] }
+      ]) } },
+      { match: argsHave('label', 'create'), result: { code: 0, stdout: '' } },
+      { match: argsHave('issue', 'edit'), result: { code: 0, stdout: '' } }
+    ])
+
+    await runSelfDiagnostics({ forgeGate: okForge, loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    const ensureCall = exec.mock.calls.find(([, args]) => args[0] === 'label' && args[1] === 'create')
+    const pruneCall = exec.mock.calls.find(([, args]) => args[0] === 'label' && args[1] === 'list')
+    const editCall = exec.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'edit')
+    expect(editCall[1]).toContain('--add-label')
+    expect(exec.mock.calls.indexOf(ensureCall)).toBeLessThan(exec.mock.calls.indexOf(pruneCall))
+    expect(exec.mock.calls.indexOf(pruneCall)).toBeLessThan(exec.mock.calls.indexOf(editCall))
   })
 
   it('does NOT file when the issue read failed (avoids duplicate on a transient gh blip)', async () => {
@@ -364,6 +405,7 @@ describe('runSelfDiagnostics', () => {
     expect(res.failingCount).toBe(0)
     expect(res.issue).toBeNull()
     expect(exec.mock.calls.find(c => c[1].includes('create') && c[1].includes('issue'))).toBeUndefined()
+    expect(exec.mock.calls.some(([, args]) => args[0] === 'label' && args[1] === 'list')).toBe(true)
   })
 
   it('clears the needs-attention label when the windowed failing set empties — even with lifetime failures on record (#2617)', async () => {

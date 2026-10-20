@@ -203,7 +203,7 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
   }
 }
 
-const MALFORMED_LABEL = /^\S+ (?:--color )?#?[0-9A-Fa-f]{6}(?: .*)?$/
+const MALFORMED_LABEL = /^\S+ (?:(--color )?#?([0-9A-Fa-f]{6}))(?: .*)?$/
 
 /**
  * Remove labels accidentally created by passing a whole "name color description"
@@ -226,7 +226,18 @@ export async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } =
   let pruned = 0
   let skipped = 0
   for (const { name } of labels) {
-    if (!MALFORMED_LABEL.test(name)) continue
+    const malformed = name.match(MALFORMED_LABEL)
+    // A bare six-letter word such as "decade" also consists of hex digits.
+    // Keep it unless the label has the explicit --color flag or a digit makes
+    // the token look like an actual color value.
+    if (!malformed || (!malformed[1] && !/[0-9]/.test(malformed[2]))) continue
+    // gh's --label filters split commas into multiple labels, so those names
+    // cannot be checked safely through the issue/pr list commands.
+    if (name.includes(',')) {
+      skipped++
+      console.warn(`⚠️ Self-diagnostics: cannot safely verify comma-containing malformed label ${JSON.stringify(name)}; leaving it in place`)
+      continue
+    }
 
     const usage = await Promise.all([
       exec('gh', ['issue', 'list', '--state', 'all', '--label', name, '--limit', '1', '--json', 'number'], { cwd }),
@@ -331,8 +342,6 @@ export async function runSelfDiagnostics({
       editArgs.push('--remove-label', NEEDS_ATTENTION_LABEL)
     }
     await pruneMalformedLabels({ cwd, exec })
-    // Only pre-create labels when we're about to attach one (gh needs it to exist);
-    // a body-only or remove-label edit doesn't (the label already exists then).
     const { code, stderr } = await exec('gh', editArgs, { cwd })
     if (code !== 0) {
       console.warn(`⚠️ Self-diagnostics: failed to update issue #${found.issue.number}: ${stderr.trim()}`)
