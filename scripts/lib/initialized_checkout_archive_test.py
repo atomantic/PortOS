@@ -136,13 +136,13 @@ class NativeArchive(unittest.TestCase):
         # started; sockets and stores belong exclusively to this fixture.
         def bind(path):
             listener = socket.socket(socket.AF_UNIX)
+            self.addCleanup(listener.close)
             previous = Path.cwd()
             try:
                 os.chdir(path.parent)
                 listener.bind(path.name)
             finally:
                 os.chdir(previous)
-            self.addCleanup(listener.close)
             return listener
 
         excluded = (common / 'fsmonitor--daemon.ipc',
@@ -439,6 +439,181 @@ class NativeArchive(unittest.TestCase):
                                       'direction': 'restore'})['alreadyRestored'])
         self.assertEqual(archive.identity(self.work), before)
         self.assertEqual(self.git(self.work, 'rev-parse', 'HEAD'), self.request['release']['head'])
+
+    def metadata_recovery_fixture(self):
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.apple.decmpfs', 'fixture-residual',
+                        str(self.work / 'base.txt')], check=True)
+        self.preserve()
+        before = (self.txn / 'manifest.json').read_bytes()
+        archive.move({**self.request, 'part': 'working', 'direction': 'quarantine'})
+        moved = self.txn / 'quarantine/working/base.txt'
+        # This deliberately mutates only the new disposable fixture to reproduce
+        # metadata removal after rename; recovery never performs an xattr write.
+        if 'com.apple.decmpfs' in archive.raw_xattrs(moved):
+            subprocess.run(['/usr/bin/xattr', '-d', 'com.apple.decmpfs', str(moved)], check=True)
+        with self.assertRaisesRegex(RuntimeError, 'source-content-or-identity-changed'):
+            archive.verify({**self.request, 'mode': 'restore'})
+        return before
+
+    def test_metadata_recovery_preserves_preimages_and_restores_same_inodes_across_processes(self):
+        before = self.metadata_recovery_fixture()
+        def process(request):
+            result = subprocess.run([sys.executable, str(Path(archive.__file__))],
+                                    input=json.dumps(request) + '\n', env=self.env,
+                                    capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+        review = process({**self.request, 'command': 'review-metadata-recovery'})
+        proof = review['metadataRecovery']
+        evidence_path = self.txn / proof['evidenceFile']
+        evidence = json.loads(evidence_path.read_text())
+        self.assertEqual(archive.sha(evidence_path), proof['evidenceSha256'])
+        self.assertEqual(archive.digest(evidence), proof['digest'])
+        removed = next(row for row in evidence['changes'] if row['attribute'] == 'com.apple.decmpfs')
+        self.assertEqual(archive.base64.b64decode(removed['beforeBase64']), b'fixture-residual')
+        self.assertEqual(review['initialPlacements'], {'working': 'quarantine', 'administration': 'original'})
+        accepted = {**self.request, 'metadataRecovery': proof}
+        for request in ({**accepted, 'command': 'verify'},
+                        {**accepted, 'command': 'move', 'part': 'working', 'direction': 'quarantine'}):
+            result = subprocess.run([sys.executable, str(Path(archive.__file__))],
+                                    input=json.dumps(request) + '\n', env=self.env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout)['reason'], 'metadata-recovery-restore-only')
+        unchanged_identity = archive.identity(self.txn / 'quarantine/working')
+        self.assertTrue(process({**accepted, 'command': 'move', 'part': 'administration',
+                                 'direction': 'restore'})['alreadyRestored'])
+        moved = process({**accepted, 'command': 'move', 'part': 'working', 'direction': 'restore'})
+        observation = moved['postMoveObservation']
+        self.assertEqual(archive.sha(self.txn / observation['file']), observation['sha256'])
+        self.assertTrue(process({**accepted, 'command': 'verify', 'mode': 'restore'})['metadataRecoveryAccepted'])
+        self.assertEqual(archive.identity(self.work), unchanged_identity)
+        self.assertNotIn('com.apple.decmpfs', archive.raw_xattrs(self.work / 'base.txt'))
+        self.assertEqual(archive.raw_xattrs(self.txn / 'archive/working/base.txt')['com.apple.decmpfs'], b'fixture-residual')
+        self.assertEqual((self.txn / 'manifest.json').read_bytes(), before)
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        self.assertEqual(self.git(self.work, 'rev-parse', 'HEAD'), self.request['release']['head'])
+        # The old transaction remains exact rather than silently adopting the
+        # reviewed transition as its new default source baseline.
+        with self.assertRaisesRegex(RuntimeError, 'source-content-or-identity-changed'):
+            archive.verify({**self.request, 'mode': 'restore'})
+
+    def test_metadata_recovery_publishes_complete_evidence_without_overwriting_interrupted_or_foreign_records(self):
+        before = self.metadata_recovery_fixture()
+        write = archive.private_json
+        partial = []
+        def interrupt_staging(path, evidence):
+            if path.name.endswith('.staging'):
+                with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as out:
+                    out.write(b'{"interrupted":')
+                    out.flush()
+                    os.fsync(out.fileno())
+                partial.append(path)
+                raise RuntimeError('fixture interrupted staging write')
+            return write(path, evidence)
+        with patch.object(archive, 'private_json', interrupt_staging):
+            with self.assertRaisesRegex(RuntimeError, 'fixture interrupted staging'):
+                archive.review_metadata_recovery(self.request)
+        self.assertEqual(list(self.txn.glob('metadata-recovery-*.json')), [])
+        reviewed = archive.review_metadata_recovery(self.request)
+        evidence_path = self.txn / reviewed['metadataRecovery']['evidenceFile']
+        self.assertEqual(archive.sha(evidence_path), reviewed['metadataRecovery']['evidenceSha256'])
+        self.assertEqual(partial[0].read_bytes(), b'{"interrupted":')
+        self.assertEqual((self.txn / 'manifest.json').read_bytes(), before)
+        self.assertTrue(archive.verify({**self.request, 'mode': 'restore',
+                                       'metadataRecovery': reviewed['metadataRecovery']})['verified'])
+
+        rename = archive.exclusive_rename
+        evidence = {'fixture': 'concurrent complete evidence'}
+        def racing_publication(staged, destination):
+            write(destination, evidence)
+            return rename(staged, destination)
+        with patch.object(archive, 'exclusive_rename', racing_publication):
+            shared = archive.immutable_recovery_evidence(self.txn, 'fixture-concurrent-', evidence)
+        self.assertEqual(json.loads((self.txn / shared['file']).read_text()), evidence)
+        self.assertEqual(len(list(self.txn.glob('.fixture-concurrent-*.staging'))), 1)
+        foreign = {'fixture': 'foreign evidence, retain unchanged'}
+        def conflicting_publication(staged, destination):
+            write(destination, foreign)
+            return rename(staged, destination)
+        with patch.object(archive, 'exclusive_rename', conflicting_publication):
+            with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-evidence-changed'):
+                archive.immutable_recovery_evidence(self.txn, 'fixture-conflicting-', evidence)
+        collision = self.txn / ('fixture-conflicting-' + archive.digest(evidence) + '.json')
+        self.assertEqual(json.loads(collision.read_text()), foreign)
+        self.assertEqual(len(list(self.txn.glob('.fixture-conflicting-*.staging'))), 1)
+
+    def test_metadata_recovery_rejects_stale_review_and_unclassified_source_changes(self):
+        self.metadata_recovery_fixture()
+        review = archive.review_metadata_recovery(self.request)
+        accepted = {**self.request, 'mode': 'restore', 'metadataRecovery': review['metadataRecovery']}
+        original_manifest = archive.manifest
+        def observe(patch_row):
+            def observed(path, reject_links=False):
+                rows = original_manifest(path, reject_links)
+                if path == self.txn / 'quarantine/working':
+                    rows = copy.deepcopy(rows)
+                    row = next(value for value in rows if value['path'] == 'base.txt')
+                    patch_row(row)
+                return rows
+            return observed
+        mutations = {
+            'content': lambda row: row.update(sha256='0' * 64),
+            'mode': lambda row: row.update(mode=row['mode'] ^ 0o100),
+            'flags': lambda row: row.update(flags=row['flags'] | 0x20),
+            'acl': lambda row: row.update(acl='changed'),
+            'identity': lambda row: row['filesystemIdentity'].update(ino=0),
+            'security attribute': lambda row: row['xattrs'].update({'com.apple.quarantine': '0' * 64}),
+            'nonroot provenance': lambda row: row['xattrs'].update({'com.apple.provenance': '0' * 64}),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(change=name), patch.object(archive, 'manifest', observe(mutation)):
+                with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-review-changed'):
+                    archive.verify(accepted)
+                with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-source-content-or-identity-changed|metadata-recovery-unsupported-attribute-change'):
+                    archive.review_metadata_recovery(self.request)
+        evidence_path = self.txn / review['metadataRecovery']['evidenceFile']
+        encoded = evidence_path.read_bytes()
+        evidence_path.write_bytes(encoded + b' ')
+        with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-evidence-changed'):
+            archive.verify(accepted)
+        evidence_path.write_bytes(encoded)
+        attrs = archive.raw_xattrs
+        def changed_preimage(path):
+            values = attrs(path)
+            return {**values, 'com.apple.decmpfs': b'wrong'} if path == self.txn / 'archive/working/base.txt' else values
+        with patch.object(archive, 'raw_xattrs', changed_preimage):
+            with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-preimage-missing-or-changed'):
+                archive.verify(accepted)
+        self.assertFalse(self.work.exists())
+        self.assertTrue((self.txn / 'quarantine/working/base.txt').exists())
+
+    def test_metadata_recovery_records_unexpected_postmove_change_and_requires_new_review(self):
+        before = self.metadata_recovery_fixture()
+        first = archive.review_metadata_recovery(self.request)
+        attrs = archive.raw_xattrs
+        def moved_provenance(path):
+            values = attrs(path)
+            # Model a platform-generated root-only addition observed after the
+            # exclusive rename, without writing security metadata on any file.
+            return {**values, 'com.apple.provenance': b'postmove provenance'} if path == self.work else values
+        with patch.object(archive, 'raw_xattrs', moved_provenance):
+            with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-postmove-changed:'):
+                archive.move({**self.request, 'metadataRecovery': first['metadataRecovery'],
+                              'part': 'working', 'direction': 'restore'})
+            observations = list(self.txn.glob('metadata-recovery-postmove-*.json'))
+            self.assertEqual(len(observations), 1)
+            self.assertTrue(self.work.exists())
+            self.assertFalse((self.txn / 'quarantine/working').exists())
+            with self.assertRaisesRegex(RuntimeError, 'metadata-recovery-review-changed'):
+                archive.verify({**self.request, 'mode': 'restore',
+                                'metadataRecovery': first['metadataRecovery']})
+            refreshed = archive.review_metadata_recovery(self.request)
+            self.assertNotEqual(refreshed['metadataRecovery']['digest'], first['metadataRecovery']['digest'])
+            self.assertEqual(refreshed['changeCounts']['rootProvenanceAdded'], 1)
+            accepted = {**self.request, 'metadataRecovery': refreshed['metadataRecovery']}
+            self.assertTrue(archive.move({**accepted, 'part': 'working', 'direction': 'restore'})['alreadyRestored'])
+            self.assertTrue(archive.verify({**accepted, 'mode': 'restore'})['metadataRecoveryAccepted'])
+        self.assertEqual((self.txn / 'manifest.json').read_bytes(), before)
 
     def test_fresh_process_refuses_foreign_rollback_target(self):
         self.preserve()

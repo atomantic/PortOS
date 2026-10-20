@@ -107,7 +107,7 @@ when the OS replaces it twice. These retained original bytes are recovery
 evidence; the backend never installs them onto the copy. Missing attributes,
 changes to any other attribute, and unrecorded additions still refuse preservation.
 No provenance or quarantine attribute is removed or rewritten by this backend.
-Original and quarantined metadata stay exact. Every later
+Normal retirement and rollback require exact original and quarantined metadata. Every later
 archive verification or move is bound to the exact manifest hash journaled after
 preservation. If that journal write is interrupted before any move, status
 exposes an unverified-archive hold and a digest for source-verified cancellation;
@@ -117,10 +117,65 @@ Git operations, insufficient space and unsupported metadata hold the operation.
 A full parent store copy and a second standalone restore require bounded free
 space; there is no cache deletion fallback.
 
+### Reviewed recovery after a move changes metadata
+
+On Darwin, an exclusive directory rename can remove residual
+`com.apple.decmpfs` attributes even when `UF_COMPRESSED` was unset. The normal
+transaction refuses further moves when this changes its captured original
+manifest. A source content change is never treated as that metadata transition.
+
+While the interrupted transaction still owns its exact repository reservation:
+
+1. `POST /review-metadata-restore` accepts `appId`, `transactionId` and the current
+   `journalDigest`. It holds the native executor lock and existing reservation,
+   checks current ownership and the unchanged branch, verifies the standalone
+   archive, and creates immutable private evidence for the full observed delta.
+2. Independently inspect that evidence before accepting the returned review
+   digest. Only removed residual compression attributes on regular files whose
+   compressed flag was unset, and a provenance addition on an original root
+   directory, are eligible. Original raw compression bytes must still match the
+   captured hashes in the verified archive. All content, inode identities,
+   timestamps, permissions, ownership, ACLs, flags, other attributes and paths
+   remain exact. Nothing rewrites the original manifest or installs attributes.
+3. `POST /restore-metadata` takes the same identifiers and `review: {digest}`.
+   It repeats the review under both locks, journals the accepted evidence, and
+   restores original inodes with exclusive renames. Post-move observations are
+   retained. A changed review, unknown metadata transition, new holder, changed
+   branch or uncertain reservation refuses further work.
+4. Success is `restored-with-metadata-transitions`, with archives and the
+   metadata evidence retained. The exact reservation is released only after
+   final proof. This restores a checkout; it never deletes or recreates a ref,
+   proves a PR merged, or authorizes another retirement. Obtain a fresh
+   retirement review after restoration.
+
+If the installed server predates this recovery capability, run the supported
+`scripts/recover-initialized-checkout.js` from an independently reviewed checkout
+of this version. It uses the same service, native lock and existing reservation;
+it does not patch the running server or clear a reservation manually:
+
+```sh
+node scripts/recover-initialized-checkout.js review /absolute/request.json \
+  --install-root /absolute/PortOS --output /absolute/new-review.jsonl
+node scripts/recover-initialized-checkout.js restore /absolute/approved-request.json \
+  --install-root /absolute/PortOS --output /absolute/new-restore.jsonl
+```
+
+The request file contains only the API fields above. Each output must be new;
+it records a durable pending intent before execution and then a response. A
+pending-only record means inspect the transaction before any retry. The CLI
+requires an existing self-install registry and trusted owner state, and refuses
+an absent or uncertain reservation. It never initializes a different data tree.
+Journal rows are fully written and synced to private staging files before
+exclusive hardlink publication to their numbered names. Staging files remain
+as evidence, including partial writes; recovery reads only committed numbered
+rows. Existing malformed numbered rows are never silently ignored or replaced.
+After an interrupted recovery, read status again and obtain a new review for
+the new journal digest rather than replaying an old approval.
+
 Managed checkout creation/adoption/removal, claim binding, the full workspace
 preparation through agent registration/spawn, and supported Git API writers
-share admission under the canonical common Git directory. Read-only merge proof
-may add immutable commit objects; concurrent additions conservatively invalidate
+share admission under the canonical common Git directory. Synthetic read-only
+merge proofs use a private temporary object store. Concurrent Git writes conservatively invalidate
 an exact archive snapshot rather than authorize removing changed evidence. A pending
 reservation survives restart. Normal writers release their permits only after
 settlement; timeout, overflow or signal termination retain an uncertain permit

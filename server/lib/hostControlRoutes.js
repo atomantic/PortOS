@@ -420,6 +420,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire',
   'GET /api/cos/schedule/branch-reconcile/initialized-checkouts/status',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore-metadata',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/verify-archive',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-branch',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire-branch',
