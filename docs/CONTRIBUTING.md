@@ -129,6 +129,13 @@ same signal. After every stage, on POSIX, pregate also kills anything still
 left in that stage's group, with a warning, so no stage's processes run into
 the next one or past pregate.
 
+`npm run pregate` is `exec node scripts/pregate.js`, so no shell wrapper sits
+between npm and pregate: a SIGTERM sent to the whole process group (a CI
+cancel, `kill -TERM -<pgid>`) cannot kill the wrapper and let npm return while
+pregate is still settling its stage. On Windows, where `cmd.exe` has no
+`exec`, the repository-root `exec.cmd` shim (found first in the working
+directory) runs the same command.
+
 After the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
 `pregate` commit status on the pushed head, bound to the validated tree and
