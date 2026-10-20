@@ -200,14 +200,14 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
           expected: prepared.review.snapshot, transactionDir: directory });
         state = await appendStep(directory, state, 'preserved', { proof: preserved });
         await verifyFacts(ctx, state, true);
-        await native({ command: 'verify', transactionDir: directory });
+        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
         for (const part of ['working', 'administration']) {
           executor.assertHeld();
           state = await appendStep(directory, state, `quarantine-${part}-intent`);
-          await native({ command: 'move', transactionDir: directory, part, direction: 'quarantine' });
+          await native({ command: 'move', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, part, direction: 'quarantine' });
           state = await appendStep(directory, state, `quarantined-${part}`);
         }
-        await native({ command: 'verify', transactionDir: directory });
+        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
         await verifyFacts(ctx, state, false);
         executor.assertHeld();
         // Keep the original ref available for exact in-place rollback. A later
@@ -237,7 +237,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const branchReview = async ({ directory, state, ctx }) => {
     if (state.phase !== 'quarantined' || state.branchDeleted) fail('retirement-branch-phase-not-ready');
     const policy = await ensureOwner(ctx, state.release, false);
-    const proof = await native({ command: 'verify', transactionDir: directory, mode: 'restore' });
+    const proof = await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
     if (['working', 'administration'].some(part => proof.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
     const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
     if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
@@ -267,8 +267,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       const verify = async () => {
         executor.assertHeld();
         await ensureOwner(ctx, state.release, false);
-        await native({ command: 'verify', transactionDir: directory, mode: 'standalone' });
-        const placement = await native({ command: 'status', transactionDir: directory });
+        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'standalone' });
+        const placement = await native({ command: 'status', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
         if (['working', 'administration'].some(part => placement.placements?.[part]?.state !== 'quarantine')) fail('retirement-originals-not-quarantined');
         const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
         if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('branch-has-new-holder');
@@ -336,7 +336,14 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       if (error.code === 'ENOENT') return false;
       throw error;
     });
-    const placement = hasManifest ? await native({ command: 'status', transactionDir: directory }) : { preserved: false };
+    // A manifest can be durable before its proof reaches the journal. Only a
+    // proven pre-move phase may expose cancellation metadata without trusting
+    // that archive; restore still requires a fresh, unchanged-source inspect.
+    const unboundPreservation = hasManifest && !state.proof?.manifestSha256
+      && ['intent', 'reserved', 'preserved'].includes(state.phase);
+    const cancelledUnboundPreservation = state.phase === 'restored' && state.cancelledUnboundPreservation === true;
+    const placement = unboundPreservation || (hasManifest && cancelledUnboundPreservation) ? { preserved: false, unverifiedArchive: true }
+      : hasManifest ? await native({ command: 'status', manifestSha256: state.proof?.manifestSha256, transactionDir: directory }) : { preserved: false };
     let branchRef;
     if (state.phase === 'branch-retirement-intent') {
       const result = await (deps.execGit || execGit)(['show-ref', '--verify', '--quiet', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
@@ -344,6 +351,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     }
     return { ok: true, transactionId, phase: state.phase, release: state.release, placement,
       branchDeleted: state.branchDeleted ?? null, journalDigest: hash(state),
+      ...(unboundPreservation ? { recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' } : {}),
       ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
       ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
       ...(['branch-retired', 'retired'].includes(state.phase) ? { recoveryAction: 'retire-branch' } : {}) };
@@ -355,7 +363,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (hash(state) !== input.journalDigest) fail('retirement-journal-changed');
     const ctx = await context(input.appId);
     if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
-    const proof = await native({ command: 'verify', transactionDir: directory, mode: 'standalone' });
+    const proof = await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'standalone' });
     return { ok: true, transactionId: state.id, standaloneCheckoutPath: proof.restorePath,
       verified: true, branchDeleted: state.branchDeleted ?? false, proof };
   };
@@ -381,17 +389,19 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         // Preservation can fail before a native manifest exists. No move is
         // ever attempted before its fsynced intent; only those early phases
         // may cancel the cut after a fresh unchanged-source inspection.
-        if (['intent', 'reserved', 'preserved'].includes(state.phase)) {
+        if (['intent', 'reserved', 'preserved'].includes(state.phase)
+          || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)) {
           const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
           if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) fail('retirement-source-changed');
-          state = await appendStep(directory, state, 'restored', { reservation });
+          state = await appendStep(directory, state, 'restored', { reservation,
+            cancelledUnboundPreservation: !state.proof?.manifestSha256 });
           await gate.releaseCheckoutReservation(reservation);
           return { ok: true, transactionId: state.id, restored: true, archivesRetained: true };
         }
         const { listWorktrees } = await import('./worktreeManager.js');
         const trees = await (deps.listWorktrees || listWorktrees)(ctx.repoPath);
         if (trees.some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch && tree.path !== state.release.path)) fail('branch-has-new-holder');
-        await native({ command: 'verify', transactionDir: directory, mode: 'restore' });
+        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
         const ref = `refs/heads/${state.release.branch}`;
         const runGit = deps.execGit || execGit;
         const existing = await runGit(['rev-parse', '--verify', ref], ctx.repoPath, { ignoreExitCode: true });
@@ -399,10 +409,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         for (const part of ['administration', 'working']) {
           executor.assertHeld();
           state = await appendStep(directory, state, `restore-${part}-intent`, { reservation });
-          await native({ command: 'move', transactionDir: directory, part, direction: 'restore' });
+          await native({ command: 'move', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, part, direction: 'restore' });
           state = await appendStep(directory, state, `restored-${part}`);
         }
-        await native({ command: 'verify', transactionDir: directory, mode: 'restore' });
+        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
         state = await appendStep(directory, state, 'restored');
         await gate.releaseCheckoutReservation(reservation);
         return { ok: true, transactionId: state.id, restored: true, archivesRetained: true };

@@ -72,8 +72,10 @@ beforeEach(async () => {
     if (input.command === 'preserve') {
       if (fixture.failPreserve) throw new Error('archive-no-space');
       await writeFile(join(input.transactionDir, 'manifest.json'), '{}', { mode: 0o600 });
-      return { ok: true, restoreProof: { verified: true } };
+      if (fixture.failProofJournal) fixture.failNextJournal = true;
+      return { ok: true, manifestSha256: 'e'.repeat(64), restoreProof: { verified: true } };
     }
+    if (['verify', 'move', 'status'].includes(input.command) && input.manifestSha256 !== 'e'.repeat(64)) throw new Error('archive-manifest-proof-changed');
     if (input.command === 'move') {
       if (fixture.failPart === input.part && input.direction === 'quarantine') throw new Error('move-refused');
       fixture.placement[input.part] = input.direction === 'quarantine' ? 'quarantined' : 'original';
@@ -163,6 +165,42 @@ describe('initialized checkout transaction', () => {
     expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
   });
+  it('exposes only source-verified cancellation after durable preservation loses its proof journal', async () => {
+    fixture.failProofJournal = true;
+    const result = await fixture.service.retire(await reviewed());
+    expect(result).toMatchObject({ ok: false, reason: 'journal-write-interrupted', recoveryRequired: true });
+    const directory = join(root, result.transactionId);
+    expect(await readFile(join(directory, 'manifest.json'), 'utf8')).toBe('{}');
+    expect(fixture.cut).not.toBeNull();
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status({ appId: 'app', transactionId: result.transactionId });
+    expect(status).toMatchObject({ phase: 'reserved', placement: { preserved: false, unverifiedArchive: true },
+      recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' });
+    expect(status.journalDigest).toMatch(/^[a-f0-9]{64}$/);
+    const input = { appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest };
+    await expect(restarted.verifyArchive(input)).rejects.toThrow('archive-manifest-proof-changed');
+    const oldSnapshot = fixture.snapshot;
+    fixture.snapshot = { ...oldSnapshot, fingerprint: 'f'.repeat(64) };
+    expect(await restarted.restore(input)).toMatchObject({ ok: false, reason: 'retirement-source-changed' });
+    expect(fixture.cut).not.toBeNull();
+    fixture.snapshot = oldSnapshot;
+    fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));
+    expect(await restarted.restore(input)).toMatchObject({ ok: false, reason: 'release-interrupted' });
+    expect(fixture.cut).not.toBeNull();
+    const afterReleaseFailure = _createInitializedCheckoutRecovery(fixture.deps);
+    const cancelled = await afterReleaseFailure.status(input);
+    expect(cancelled).toMatchObject({ phase: 'restored', placement: { preserved: false, unverifiedArchive: true } });
+    expect(await afterReleaseFailure.restore({ ...input, journalDigest: cancelled.journalDigest }))
+      .toMatchObject({ ok: true, restored: true, archivesRetained: true });
+    expect(fixture.cut).toBeNull();
+    expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
+    expect(fixture.deps.native.mock.calls.some(([call]) => call.command === 'move' || call.command === 'status')).toBe(false);
+    expect(await readFile(join(directory, 'manifest.json'), 'utf8')).toBe('{}');
+    const completed = await restarted.status({ appId: 'app', transactionId: result.transactionId });
+    expect(completed).toMatchObject({ phase: 'restored', placement: { preserved: false, unverifiedArchive: true } });
+    expect(completed.recoveryRequired).toBeUndefined();
+    expect(fixture.deps.native.mock.calls.some(([call]) => call.command === 'status')).toBe(false);
+  });
   it('requires a fresh accepted review and an explicit supersession decision', async () => {
     const input = await reviewed();
     fixture.facts.defaultHead = 'e'.repeat(40);
@@ -197,7 +235,7 @@ describe('initialized checkout transaction', () => {
     fixture.deps.execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
     const input = { appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest };
     expect(await fixture.service.verifyArchive(input)).toMatchObject({ ok: true, verified: true });
-    expect(fixture.deps.native).toHaveBeenLastCalledWith({ command: 'verify', transactionDir: join(root, result.transactionId), mode: 'standalone' });
+    expect(fixture.deps.native).toHaveBeenLastCalledWith({ command: 'verify', manifestSha256: 'e'.repeat(64), transactionDir: join(root, result.transactionId), mode: 'standalone' });
     expect(fixture.deps.execGit).not.toHaveBeenCalled();
   });
   const quarantinedReview = async () => {

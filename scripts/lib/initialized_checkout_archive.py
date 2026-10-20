@@ -191,6 +191,28 @@ def same_copy(actual, expected):
     return portable(actual) == portable(expected)
 
 
+def copy_augmentations(actual, expected):
+    """Record only OS-added provenance; never discard or normalize source attrs."""
+    if len(actual) != len(expected):
+        return None
+    additions = []
+    for copied, source in zip(actual, expected):
+        attrs = copied.get('xattrs', {})
+        original = source.get('xattrs', {})
+        extra = set(attrs) - set(original)
+        if extra - {'com.apple.provenance'}:
+            return None
+        if extra:
+            value = attrs['com.apple.provenance']
+            if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
+                return None
+            additions.append({'path': copied['path'], 'xattrs': {'com.apple.provenance': value}})
+        without_added = {**copied, 'xattrs': {key: value for key, value in attrs.items() if key not in extra}}
+        if not same_copy([without_added], [source]):
+            return None
+    return additions
+
+
 def fsync_dir(path):
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -200,12 +222,13 @@ def fsync_dir(path):
 
 
 def private_json(path, data):
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'w') as out:
-        json.dump(data, out, sort_keys=True)
-        out.write('\n')
+    encoded = (json.dumps(data, sort_keys=True) + '\n').encode('utf-8')
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as out:
+        out.write(encoded)
         out.flush()
         os.fsync(out.fileno())
     fsync_dir(path.parent)
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def read_pointer(path, prefix='', directory=True):
@@ -466,8 +489,8 @@ def rewrite_copy(path, text):
     # Only isolated proof pointers are rewritten; archive pointer bytes remain exact.
     if not stat.S_ISREG(path.lstat().st_mode):
         fail('restore-pointer-not-regular')
-    with path.open('w') as out:
-        out.write(text)
+    with path.open('wb') as out:
+        out.write(text.encode('utf-8') if isinstance(text, str) else text)
         out.flush()
         os.fsync(out.fileno())
 
@@ -543,19 +566,28 @@ def preserve(request):
     # Persist the complete source evidence before copying. Failure leaves a
     # recognizable incomplete archive; retry never overwrites any part.
     private_json(root / 'source.json', before)
+    augmentations = {'archive': {'common': {}}, 'restore': {}}
     for label, source in [('working', work), ('administration', admin)]:
         copy_tree(source, root / 'archive' / label)
-        if not same_copy(manifest(root / 'archive' / label), before['sources'][label]):
+        added = copy_augmentations(manifest(root / 'archive' / label), before['sources'][label])
+        if added is None:
             fail('archive-metadata-mismatch:' + label)
+        augmentations['archive'][label] = added
     (root / 'archive' / 'common').mkdir(mode=0o700)
     for name, expected_rows in before['sources']['common'].items():
         copy_tree(common / name, root / 'archive' / 'common' / name)
-        if not same_copy(manifest(root / 'archive' / 'common' / name, True), expected_rows):
+        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected_rows)
+        if added is None:
             fail('shared-archive-metadata-mismatch:' + name)
+        augmentations['archive']['common'][name] = added
     for label in ('working', 'administration', 'common'):
         copy_tree(root / 'archive' / label, root / 'restore' / label)
-        if not same_copy(manifest(root / 'archive' / label), manifest(root / 'restore' / label)):
+        added = copy_augmentations(manifest(root / 'restore' / label), manifest(root / 'archive' / label))
+        if added is None:
             fail('restore-copy-metadata-mismatch')
+        # Historical pre-relocation evidence; saved.restored below is the exact
+        # post-relocation expectation used by every later restore verification.
+        augmentations['restore'][label] = added
     restore = root / 'restore'
     rewrite_copy(restore / 'working' / '.git', 'gitdir: ' + str(restore / 'administration') + '\n')
     rewrite_copy(restore / 'administration' / 'commondir', str(restore / 'common') + '\n')
@@ -563,7 +595,15 @@ def preserve(request):
     for m in before['modules']:
         store, tree = restore / 'administration' / m['administrationPath'], restore / 'working' / m['path']
         rewrite_copy(tree / '.git', 'gitdir: ' + str(store) + '\n')
-        git(store, tree, 'config', '--file', str(store / 'config'), 'core.worktree', str(tree))
+        # Git config publishes through lock/rename, which can discard inherited
+        # xattrs. Generate only replacement bytes outside the proof tree, then
+        # rewrite the isolated config in place without changing its metadata.
+        scratch = root / 'relocated-module-config'
+        with os.fdopen(os.open(scratch, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as out:
+            out.write((store / 'config').read_bytes())
+        git(store, tree, 'config', '--file', str(scratch), 'core.worktree', str(tree))
+        rewrite_copy(store / 'config', scratch.read_bytes())
+        scratch.unlink()
     proof = proof_repositories(root, before)
     # Check source metadata again after both full copies and offline proof.
     after = inspect(request, full=True)
@@ -572,21 +612,32 @@ def preserve(request):
     restored = {label: manifest(restore / label) for label in ('working', 'administration', 'common')}
     durable_tree(root / 'archive')
     durable_tree(restore)
-    saved = {'version': 1, 'transactionIdentity': identity(root), 'facts': before,
-             'restored': restored, 'restoreProof': proof}
-    private_json(root / 'manifest.json', saved)
-    return {'manifestPath': str(root / 'manifest.json'), 'fingerprint': before['fingerprint'],
+    saved = {'version': 2, 'transactionIdentity': identity(root), 'facts': before,
+             'copyAugmentations': augmentations, 'restored': restored, 'restoreProof': proof}
+    check_restore_augmentations(root, saved)
+    manifest_sha = private_json(root / 'manifest.json', saved)
+    return {'manifestSha256': manifest_sha, 'manifestPath': str(root / 'manifest.json'), 'fingerprint': before['fingerprint'],
             'administrationFingerprint': before['administrationFingerprint'], 'restoreProof': proof}
 
 
 def load_transaction(request):
     root = transaction(request['transactionDir'])
     path = root / 'manifest.json'
-    if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > 256 * 1024 ** 2:
+    limit = 256 * 1024 ** 2
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            fail('invalid-archive-manifest')
+        encoded = source.read(limit + 1)
+    if len(encoded) > limit:
         fail('invalid-archive-manifest')
-    saved = json.loads(path.read_text())
-    if saved['version'] != 1 or saved['transactionIdentity'] != identity(root):
+    saved = json.loads(encoded)
+    if saved['version'] not in (1, 2) or saved['transactionIdentity'] != identity(root):
         fail('transaction-incarnation-changed')
+    # A bound v2 archive cannot evade its journal proof by declaring itself v1.
+    # Hash the exact bytes parsed, never a second path read after parsing.
+    if (saved['version'] == 2 or 'manifestSha256' in request) and request.get('manifestSha256') != hashlib.sha256(encoded).hexdigest():
+        fail('archive-manifest-proof-changed')
     for label in ('archive', 'restore', 'quarantine'):
         safe_path(str(root / label))
     return root, saved
@@ -610,13 +661,36 @@ def placements(root, facts):
     return result
 
 
+def check_restore_augmentations(root, saved):
+    if saved['version'] == 1:
+        return
+    records = saved['copyAugmentations']
+    if (set(records) != {'archive', 'restore'}
+            or set(records['archive']) != {'working', 'administration', 'common'}
+            or set(records['archive']['common']) != set(saved['facts']['sources']['common'])
+            or set(records['restore']) != {'working', 'administration', 'common'}):
+        fail('invalid-copy-augmentation-layout')
+    for label in ('working', 'administration', 'common'):
+        archived = manifest(root / 'archive' / label)
+        attrs = lambda rows: [{'path': row['path'], 'xattrs': row['xattrs']} for row in rows]
+        added = copy_augmentations(attrs(saved['restored'][label]), attrs(archived))
+        if added is None or added != records['restore'][label]:
+            fail('restore-copy-augmentation-changed:' + label)
+
+
 def verify_saved_archive(root, saved):
+    check_restore_augmentations(root, saved)
     facts = saved['facts']
+    recorded = saved['copyAugmentations']['archive'] if saved['version'] == 2 else None
     for label in ('working', 'administration'):
-        if not same_copy(manifest(root / 'archive' / label), facts['sources'][label]):
+        expected_added = recorded[label] if recorded is not None else []
+        added = copy_augmentations(manifest(root / 'archive' / label), facts['sources'][label])
+        if added is None or added != expected_added:
             fail('archive-changed:' + label)
     for name, expected in facts['sources']['common'].items():
-        if not same_copy(manifest(root / 'archive' / 'common' / name, True), expected):
+        expected_added = recorded['common'][name] if recorded is not None else []
+        added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected)
+        if added is None or added != expected_added:
             fail('common-archive-changed:' + name)
     if sorted(p.name for p in (root / 'archive/common').iterdir()) != sorted(facts['sources']['common']):
         fail('common-archive-layout-changed')

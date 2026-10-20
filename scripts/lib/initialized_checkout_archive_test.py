@@ -1,5 +1,6 @@
 """Disposable native integration fixtures; never use an installed checkout."""
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -9,10 +10,35 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('archive', Path(__file__).with_name('initialized_checkout_archive.py'))
 archive = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(archive)
+
+
+class CopyMetadata(unittest.TestCase):
+    def test_only_new_provenance_is_recorded_and_original_evidence_is_exact(self):
+        source = {'path': 'evidence', 'kind': 'file', 'sha256': 'a' * 64,
+                  'mode': 0o600, 'xattrs': {'fixture.original': 'b' * 64}}
+        copied = {**source, 'xattrs': {**source['xattrs'], 'com.apple.provenance': 'c' * 64}}
+        self.assertEqual(archive.copy_augmentations([copied], [source]),
+                         [{'path': 'evidence', 'xattrs': {'com.apple.provenance': 'c' * 64}}])
+        self.assertEqual(archive.copy_augmentations([source], [source]), [])
+        for invalid in (
+            {**copied, 'sha256': 'd' * 64},
+            {**copied, 'mode': 0o644},
+            {**copied, 'path': 'other'},
+            {**copied, 'xattrs': {'com.apple.provenance': 'c' * 64}},
+            {**copied, 'xattrs': {**copied['xattrs'], 'fixture.original': 'd' * 64}},
+            {**copied, 'xattrs': {**copied['xattrs'], 'unknown.attribute': 'd' * 64}},
+            {**copied, 'xattrs': {**copied['xattrs'], 'com.apple.provenance': 'invalid'}},
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(archive.copy_augmentations([invalid], [source]))
+        for invalid in (source, {**copied, 'xattrs': {**copied['xattrs'], 'com.apple.provenance': 'd' * 64}}):
+            self.assertIsNone(archive.copy_augmentations([invalid], [copied]))
+        self.assertIsNone(archive.copy_augmentations([], [source]))
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'Darwin metadata/rename ABI required')
@@ -69,7 +95,9 @@ class NativeArchive(unittest.TestCase):
 
     def preserve(self):
         self.request['expected'] = archive.inspect(self.request)
-        return archive.preserve(self.request)
+        proof = archive.preserve(self.request)
+        self.request['manifestSha256'] = proof['manifestSha256']
+        return proof
 
     def test_admission_bookkeeping_does_not_change_source_review(self):
         before = archive.inspect(self.request)
@@ -136,6 +164,131 @@ class NativeArchive(unittest.TestCase):
                     archive.verify(self.request)
             finally:
                 path.unlink()
+
+    def test_recorded_copy_provenance_is_strict_on_archive_and_restore_rechecks(self):
+        raw = archive.raw_xattrs
+        change = {'mode': None}
+        def observed(path):
+            attrs = raw(path)
+            if path.is_relative_to(self.txn / 'archive') or path.is_relative_to(self.txn / 'restore'):
+                # Simulate the OS copy augmentation at the metadata observation
+                # boundary; never set/remove provenance on the real filesystem.
+                if path != self.txn / 'archive/working/ignored':
+                    attrs = {**attrs, 'com.apple.provenance': b'copy provenance'}
+                if path == self.txn / 'archive/working/base.txt':
+                    if change['mode'] == 'missing':
+                        attrs = {key: value for key, value in attrs.items() if key != 'com.apple.provenance'}
+                    if change['mode'] == 'changed':
+                        attrs = {**attrs, 'com.apple.provenance': b'changed'}
+                    if change['mode'] == 'unknown':
+                        attrs = {**attrs, 'fixture.unrecorded': b'unrecorded'}
+                if path == self.txn / 'archive/working/ignored' and change['mode'] == 'new':
+                    attrs = {**attrs, 'com.apple.provenance': b'late addition'}
+                if path == self.txn / 'restore/working/ignored' and change['mode'] == 'restore':
+                    attrs = {**attrs, 'com.apple.provenance': b'changed restore'}
+            return attrs
+        original = archive.inspect(self.request)
+        module_config = Path(original['privateGitDir']) / original['modules'][0]['administrationPath'] / 'config'
+        subprocess.run(['/usr/bin/xattr', '-w', 'fixture.module.config', 'inherited', str(module_config)], check=True)
+        original = archive.inspect(self.request)
+        with patch.object(archive, 'raw_xattrs', observed):
+            self.preserve()
+            saved = json.loads((self.txn / 'manifest.json').read_text())
+            self.assertEqual(saved['version'], 2)
+            self.assertTrue(saved['copyAugmentations']['archive']['working'])
+            config_path = original['modules'][0]['administrationPath'] + '/config'
+            copied_config = next(row for row in saved['restored']['administration'] if row['path'] == config_path)
+            self.assertEqual(copied_config['xattrs']['fixture.module.config'], archive.hashlib.sha256(b'inherited').hexdigest())
+            self.assertEqual(copied_config['xattrs']['com.apple.provenance'], archive.hashlib.sha256(b'copy provenance').hexdigest())
+            self.assertEqual(saved['copyAugmentations']['restore']['working'][0]['path'], 'ignored')
+            self.assertEqual(archive.inspect(self.request), original)
+            self.assertTrue(archive.verify(self.request)['verified'])
+            self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+            for mode in ('removed-record', 'changed-hash', 'new-record'):
+                altered = copy.deepcopy(saved)
+                rows = altered['copyAugmentations']['archive']['working']
+                if mode == 'removed-record':
+                    rows.pop()
+                elif mode == 'changed-hash':
+                    rows[0]['xattrs']['com.apple.provenance'] = '0' * 64
+                else:
+                    rows.append({'path': 'unrecorded', 'xattrs': {'com.apple.provenance': '0' * 64}})
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'archive-changed'):
+                    archive.verify_saved_archive(self.txn, altered)
+            for mode in ('missing', 'changed', 'unknown', 'new', 'restore'):
+                change['mode'] = mode
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'archive-changed|restore-proof-changed|restore-copy-augmentation-changed'):
+                    archive.verify({**self.request, 'mode': 'standalone'})
+            change['mode'] = None
+            with self.assertRaisesRegex(RuntimeError, 'archive-manifest-proof-changed'):
+                archive.verify({key: value for key, value in self.request.items() if key != 'manifestSha256'})
+            manifest_path = self.txn / 'manifest.json'
+            original_manifest = manifest_path.read_bytes()
+            altered = copy.deepcopy(saved)
+            for row in altered['copyAugmentations']['archive']['working']:
+                if row['path'] == 'base.txt':
+                    row['xattrs']['com.apple.provenance'] = archive.hashlib.sha256(b'changed').hexdigest()
+            manifest_path.write_text(json.dumps(altered))
+            change['mode'] = 'changed'
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'archive-manifest-proof-changed'):
+                    archive.verify({**self.request, 'mode': 'standalone'})
+            finally:
+                manifest_path.write_bytes(original_manifest)
+                change['mode'] = None
+            for part in ('working', 'administration'):
+                archive.move({**self.request, 'part': part, 'direction': 'quarantine'})
+            self.assertEqual(archive.manifest(self.txn / 'quarantine/working'), saved['facts']['sources']['working'])
+            for part in ('administration', 'working'):
+                archive.move({**self.request, 'part': part, 'direction': 'restore'})
+            self.assertEqual(archive.inspect(self.request), original)
+
+    def test_manifest_proof_binds_exact_written_and_parsed_bytes(self):
+        # Simulate replacement after the producer fsync: the returned proof must
+        # still describe the saved bytes, and consuming the replacement holds.
+        original_sync = archive.fsync_dir
+        changed = {'done': False, 'written': None}
+        path = self.txn / 'manifest.json'
+        def replace_after_write(directory):
+            original_sync(directory)
+            if directory == self.txn and path.exists() and not changed['done']:
+                changed['done'] = True
+                changed['written'] = path.read_bytes()
+                path.write_bytes(changed['written'] + b' ')
+        with patch.object(archive, 'fsync_dir', replace_after_write):
+            proof = self.preserve()
+        self.assertEqual(proof['manifestSha256'], archive.hashlib.sha256(changed['written']).hexdigest())
+        with self.assertRaisesRegex(RuntimeError, 'archive-manifest-proof-changed'):
+            archive.load_transaction(self.request)
+        path.write_bytes(changed['written'])
+        original_loads = json.loads
+        replacement = changed['written'] + b' '
+        def replace_after_read(encoded):
+            path.write_bytes(replacement)
+            return original_loads(encoded)
+        # A digest from a later path read must not bless earlier parsed bytes.
+        with patch.object(archive.json, 'loads', replace_after_read), self.assertRaisesRegex(RuntimeError, 'archive-manifest-proof-changed'):
+            archive.load_transaction({**self.request, 'manifestSha256': archive.hashlib.sha256(replacement).hexdigest()})
+
+    def test_version_one_archive_does_not_accept_unrecorded_copy_provenance(self):
+        self.preserve()
+        saved = json.loads((self.txn / 'manifest.json').read_text())
+        self.assertFalse(any(saved['copyAugmentations']['archive'][part]
+                             for part in ('working', 'administration')))
+        self.assertFalse(any(saved['copyAugmentations']['archive']['common'].values()))
+        saved['version'] = 1
+        del saved['copyAugmentations']
+        (self.txn / 'manifest.json').write_text(json.dumps(saved))
+        with self.assertRaisesRegex(RuntimeError, 'archive-manifest-proof-changed'):
+            archive.verify(self.request)
+        del self.request['manifestSha256']  # Genuine legacy callers have no bound v2 proof.
+        self.assertTrue(archive.verify(self.request)['verified'])
+        raw = archive.raw_xattrs
+        def augmented(path):
+            attrs = raw(path)
+            return {**attrs, 'com.apple.provenance': b'unrecorded'} if path == self.txn / 'archive/working/base.txt' else attrs
+        with patch.object(archive, 'raw_xattrs', augmented), self.assertRaisesRegex(RuntimeError, 'archive-changed'):
+            archive.verify({**self.request, 'mode': 'standalone'})
 
     def test_restore_is_offline_and_preserves_staged_private_and_metadata(self):
         subprocess.run(['/usr/bin/xattr', '-w', 'fixture.attribute', 'preserved', str(self.work / 'ignored')], check=True)
