@@ -17,7 +17,6 @@ import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManage
 import { getActiveAgentIds } from '../agentState.js'
 import { sweepStaleDoneSentinels } from '../agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
-import { resolveAgentApiEnv } from '../agentApiAuth.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
 // Loaded lazily to keep the built-in handler registry free of an import cycle:
@@ -36,6 +35,8 @@ async function runMoltworldExploration() {
   const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'moltworld-explore.mjs')
   const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
 
+  // Lazy: agentApiAuth pulls in the session/auth stack, which this registry must not load at import time.
+  const { resolveAgentApiEnv } = await import('../agentApiAuth.js');
   const apiEnv = await resolveAgentApiEnv();
 
   return new Promise((resolve, reject) => {
