@@ -118,8 +118,13 @@
  *     the path-based Gmail mbox import. Rename/notes/mode PATCHes, bucket
  *     export into an operator-chosen bucket, and the upload-based importers
  *     stay open: they name no host path.
- *   - browser: navigate uses the configured browser with its URL/IP guards;
- *     downloads DELETE removes data. Harness models/refresh re-reads the
+ *   - browser (#12488): the managed profile carries the operator's signed-in
+ *     sessions and saves downloads silently, so navigate, the page list and
+ *     the downloads list/file reads are gated (steering it or reading what it
+ *     saved is operator work; the URL/IP guards only stop private-network
+ *     targets). `GET /api/browser` stays open but omits page and download
+ *     listings for a caller without host control. Downloads DELETE only
+ *     removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
  *   - local-llm (#8798): install/delete/migrate and llama-server download-model
  *     (including cancel/remove), mtplx models/pull/remove and slotstream
@@ -700,6 +705,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/browser/launch',
   'POST /api/browser/restart',
   'POST /api/browser/stop',
+  'POST /api/browser/navigate',
+  'GET /api/browser/pages',
+  'GET /api/browser/downloads',
+  'GET /api/browser/downloads/:name',
   'POST /api/harnesses/action',
   'POST /api/local-llm/laya-mlx/install',
   'POST /api/local-llm/security-guard/install',

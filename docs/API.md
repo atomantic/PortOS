@@ -656,16 +656,16 @@ return an `{ items, total }` envelope.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/browser` | Get browser status |
+| GET | `/browser` | Get browser status. Callers without host control get `contentRedacted: true` with empty `pages` and download `files` (host control also gates `/browser/downloads` and `/browser/downloads/:name`) |
 | GET | `/browser/config` | Get browser configuration |
 | PUT | `/browser/config` | Update browser configuration |
 | POST | `/browser/launch` | Launch browser instance |
 | POST | `/browser/stop` | Stop browser instance |
 | POST | `/browser/restart` | Restart browser instance |
-| POST | `/browser/navigate` | Navigate browser to URL |
+| POST | `/browser/navigate` | Navigate browser to URL (host control: the profile carries the operator's signed-in sessions) |
 | GET | `/browser/health` | Get browser health status |
 | GET | `/browser/process` | Get browser process info |
-| GET | `/browser/pages` | Get open browser pages |
+| GET | `/browser/pages` | Get open browser pages (host control) |
 | GET | `/browser/version` | Get browser version info |
 | GET | `/browser/logs` | Get browser logs |
 

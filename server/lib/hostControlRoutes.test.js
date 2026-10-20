@@ -224,7 +224,6 @@ describe('X (Twitter) review and browser automation policy', () => {
 // of silently falling through the inventory's one-way "listed routes exist" check.
 describe('browser/runtime/database mutation inventory (#8798, #8897)', () => {
   const dataOrInference = [
-    'POST /api/browser/navigate',
     'DELETE /api/browser/downloads/:name',
     'POST /api/harnesses/models/refresh',
     ...[

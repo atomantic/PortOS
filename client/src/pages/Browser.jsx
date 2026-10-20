@@ -20,6 +20,9 @@ import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatte
 import { pluralize } from '../lib/textUtils';
 
 const STATUS_EVENTS = ['browser:changed'];
+// Mirrors HOST_CONTROL_FORBIDDEN_MESSAGE; the status read stays open but omits
+// page and download listings for a caller without host control (#12488).
+const HOST_CONTROL_NOTE = 'Open pages and downloads need an operator session, or a local connection when no password is set. Set an instance password to use them remotely.';
 const readStatus = () => getBrowserStatus({ silent: true });
 
 function deriveMacAppBundle(chromePath) {
@@ -543,7 +546,9 @@ export default function BrowserPage() {
             </button>
             {showPages && (
               <div className="border-t border-port-border">
-                {!status?.pages || status.pages.length === 0 ? (
+                {status?.contentRedacted ? (
+                  <div className="p-4 text-sm text-gray-500">{HOST_CONTROL_NOTE}</div>
+                ) : !status?.pages || status.pages.length === 0 ? (
                   <div className="p-4 text-sm text-gray-500">
                     {isConnected ? 'No pages open' : 'Browser not connected'}
                   </div>
@@ -597,7 +602,9 @@ export default function BrowserPage() {
                     <span className="font-mono truncate">{status.downloads.downloadDir}</span>
                   </div>
                 )}
-                {!status?.downloads?.files || status.downloads.files.length === 0 ? (
+                {status?.contentRedacted ? (
+                  <div className="p-4 text-sm text-gray-500">{HOST_CONTROL_NOTE}</div>
+                ) : !status?.downloads?.files || status.downloads.files.length === 0 ? (
                   <div className="p-4 text-sm text-gray-500">No downloads</div>
                 ) : (
                   <div className="divide-y divide-port-border">
