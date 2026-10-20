@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, readdir, readFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -70,6 +70,41 @@ describe('chatgptZipImport service', () => {
     await expect(extractChatgptZip(zipPath, { assetDir, maxAssetBytes: PNG.length + 1 }))
       .rejects.toMatchObject({ status: 413 });
     expect(await readdir(assetDir)).toEqual([]);
+  });
+
+  // Windows CI opens/closes `.part` handles slowly enough that cleanup ran
+  // before the failed member's stream settled (#12701). A delayed open makes
+  // that ordering deterministic.
+  it('removes a failed member\'s partial file even when its open lands late', async () => {
+    // Every stream the import opens, so the assertion waits for each handle
+    // to close instead of racing whatever open/close is still pending.
+    const streamsClosed = [];
+    vi.resetModules();
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
+      const real = await importOriginal();
+      return {
+        ...real,
+        createWriteStreamGuarded: async (p, o) => {
+          await new Promise((r) => setTimeout(r, 50));
+          const stream = await real.createWriteStreamGuarded(p, o);
+          streamsClosed.push(new Promise((r) => stream.once('close', r)));
+          return stream;
+        },
+      };
+    });
+    try {
+      const { extractChatgptZip: extract } = await import('./chatgptZipImport.js');
+      const zipPath = await writeZip([['file-first.dat', PNG], ['file-second.dat', PNG]]);
+      const assetDir = join(TMP, 'assets');
+      await expect(extract(zipPath, { assetDir, maxAssetBytes: PNG.length + 1 }))
+        .rejects.toMatchObject({ status: 413 });
+      await vi.waitFor(() => expect(streamsClosed).toHaveLength(2));
+      await Promise.all(streamsClosed);
+      expect(await readdir(assetDir)).toEqual([]);
+    } finally {
+      vi.doUnmock('../lib/fileUtils.js');
+      vi.resetModules();
+    }
   });
 
   describe('sniffExtension', () => {
