@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { statSync } from 'fs';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -19,6 +20,11 @@ import { certPaths } from '../../lib/certPaths.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
+
+function isExistingDirectory(p) {
+  if (typeof p !== 'string' || !p) return false;
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
 
 // Stable ID for the PortOS app — always present, never deletable. Defined in
 // `lib/appIdentity.js` so a caller that only needs to name PortOS (a CoS task's
@@ -154,6 +160,15 @@ async function loadApps() {
     // A literal `__PORTOS_ROOT__` is not a real user override — force repoPath
     // to the live checkout. Concrete custom paths are preserved (expand left them).
     if (containsPortosRootToken(data.apps[PORTOS_APP_ID].repoPath)) {
+      data.apps[PORTOS_APP_ID].repoPath = baseline.repoPath;
+      dirty = true;
+    }
+    // A restored snapshot from another checkout carries that checkout's absolute
+    // path. A repoPath that is not an existing directory cannot be a working
+    // override, so rebind to the running checkout (#12483).
+    const storedRepoPath = data.apps[PORTOS_APP_ID].repoPath;
+    if (storedRepoPath !== baseline.repoPath && !isExistingDirectory(storedRepoPath)) {
+      console.warn(`⚠️ PortOS app repoPath ${storedRepoPath} is not a directory; resetting to ${baseline.repoPath}`);
       data.apps[PORTOS_APP_ID].repoPath = baseline.repoPath;
       dirty = true;
     }
