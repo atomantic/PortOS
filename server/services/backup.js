@@ -1196,6 +1196,7 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
  * @returns {Promise<{ pruned: number }>}
  */
 async function pruneOldSnapshots(destPath, retentionCount) {
+  const unlimited = retentionCount === null || retentionCount === undefined;
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
   // A completed snapshot was just written here; even ENOENT is a failed
   // inventory, not proof that there is nothing to prune. Keep paths private.
@@ -1211,6 +1212,9 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     const { incomplete, failed, interrupted } = await snapshotState(snapshotDir, id, true);
     if (interrupted) return { id, snapshotDir, interrupted: true };
     if (incomplete || failed) return null;
+    // Unlimited retention prunes only interrupted snapshots; completed ones are
+    // never candidates, so their manifests need no admission check.
+    if (unlimited) return { id, snapshotDir };
     // Share restore's structural admission, without hashing old payloads.
     // Only confirmed absence is legacy; JSON null is an invalid manifest.
     const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
@@ -1237,7 +1241,7 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   const newestHealthyId = healthy[0]?.id;
   const toDelete = [
     ...(newestHealthyId ? descriptors.filter(d => d.interrupted && d.id.localeCompare(newestHealthyId) < 0) : []),
-    ...(retentionCount === null || retentionCount === undefined ? [] : healthy.slice(retentionCount)),
+    ...(unlimited ? [] : healthy.slice(retentionCount)),
   ];
   let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
