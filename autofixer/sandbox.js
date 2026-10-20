@@ -29,7 +29,7 @@
 
 import { spawn } from 'child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
-import { writeFile, rm, mkdir, mkdtemp, readdir, realpath, stat, access } from 'fs/promises';
+import { writeFile, rm, mkdir, mkdtemp, readdir, realpath, lstat, access } from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import { join, isAbsolute, normalize, resolve, dirname } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -480,7 +480,7 @@ export async function probeVerifyContainment() {
     return codeAnimationContainmentMechanism('linux', false, { reason: 'install bubblewrap (/usr/bin/bwrap) to verify autofixes' });
   }
   const child = spawn(CODE_ANIMATION_BUBBLEWRAP, ['--unshare-all', '--die-with-parent', '--ro-bind', '/', '/', '--', '/bin/true'], {
-    cwd: '/', env: {}, stdio: ['ignore', 'ignore', 'ignore'],
+    cwd: '/', env: {}, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
   });
   const { code } = await waitForChild(child, { timeoutMs: 5000, capture: false });
   return codeAnimationContainmentMechanism('linux', false, {
@@ -571,11 +571,14 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
       launch = [CODE_ANIMATION_SEATBELT, ['-p', autofixVerifySeatbeltProfile({ worktree, scratch, protectedPaths }), ...shell]];
     } else {
       seccomp = autofixVerifySeccompFilter(process.arch);
-      const present = await Promise.all(protectedPaths.map(async (path) => [path, await stat(path).catch(() => null)]));
+      // bwrap mounts over each path, so a symlink is skipped: its resolved
+      // target is already listed and is what the mount must cover.
+      const present = (await Promise.all(protectedPaths.map(async (path) => [path, await lstat(path).catch(() => null)])))
+        .filter(([, info]) => info && !info.isSymbolicLink());
       const bwrapArgs = autofixVerifyBubblewrapArgs({
         worktree, scratch, env,
         protectedDirs: present.filter(([, info]) => info?.isDirectory()).map(([path]) => path),
-        protectedFiles: present.filter(([, info]) => info && !info.isDirectory()).map(([path]) => path),
+        protectedFiles: present.filter(([, info]) => !info.isDirectory()).map(([path]) => path),
       });
       launch = [CODE_ANIMATION_BUBBLEWRAP, [...bwrapArgs, ...shell]];
     }

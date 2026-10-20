@@ -7,6 +7,9 @@ import { probeVerifyContainment, runVerifyCommand } from './sandbox.js';
 
 // The real OS boundary an agent-written test file or npm lifecycle script meets.
 const mechanism = await probeVerifyContainment();
+if (process.env.PORTOS_REQUIRE_LINUX_CONTAINMENT === '1' && mechanism.id !== 'linux-bubblewrap') {
+  throw new Error(`Real Linux containment is required by this test job: ${mechanism.reason}`);
+}
 
 describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 'no containment'}`, () => {
   let root;

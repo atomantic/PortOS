@@ -610,6 +610,7 @@ export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-his
 export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
+  'autofixer/sandbox.verify.test.js',
   'server/lib/codeAnimationContainment.test.js',
   'server/routes/codeAnimationExecution.test.js',
   'server/services/codeAnimation/containedWorker.test.js',
