@@ -1294,6 +1294,50 @@ def unrelated_tracking_changes(root, saved, common, expected, observed):
     return True
 
 
+def verify_live_resolution_cache(path, expected):
+    """Recovery leaves this shared conflict-resolution cache entirely live.
+
+    Its original bytes remain checked in verify_saved_archive. Concurrent Git
+    resolutions may update or prune entries; none are read by recovery's Git
+    commands. Keep the root incarnation/security and a bounded no-follow shape.
+    """
+    original = next((row for row in expected if row['path'] == ''), None)
+    def root_security():
+        info = path.lstat()
+        return {'path': '', 'kind': 'directory' if stat.S_ISDIR(info.st_mode) else 'unsafe',
+                'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid, 'gid': info.st_gid,
+                'flags': info.st_flags, 'acl': acl(path),
+                'xattrs': {k: hashlib.sha256(v).hexdigest() for k, v in raw_xattrs(path).items()},
+                'filesystemIdentity': identity(path)}
+    pinned = {k: v for k, v in (original or {}).items() if k != 'mtimeNs'}
+    if root_security() != pinned:
+        fail('shared-resolution-cache-root-changed')
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        held = os.fstat(fd)
+        if (held.st_dev, held.st_ino) != (pinned['filesystemIdentity']['dev'], pinned['filesystemIdentity']['ino']):
+            fail('shared-resolution-cache-root-changed')
+        count, size = 0, 0
+        def failed_walk(_error):
+            fail('shared-resolution-cache-unreadable')
+        for _, directories, files, directory_fd in os.fwalk('.', dir_fd=fd, follow_symlinks=False, onerror=failed_walk):
+            for name in directories + files:
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                count += 1
+                if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    fail('shared-resolution-cache-unsafe-entry')
+                if stat.S_ISREG(info.st_mode):
+                    size += info.st_size
+                    if info.st_nlink != 1:
+                        fail('shared-resolution-cache-hardlink')
+                if count > MAX_FILES or size > MAX_BYTES:
+                    fail('shared-resolution-cache-budget-exceeded')
+        if root_security() != pinned:
+            fail('shared-resolution-cache-root-changed')
+    finally:
+        os.close(fd)
+
+
 def verify_common_metadata(saved, mutable_shared, root=None):
     facts = saved['facts']
     common = safe_path(facts['commonGitDir'])
@@ -1302,6 +1346,9 @@ def verify_common_metadata(saved, mutable_shared, root=None):
         fail('common-store-incarnation-changed')
     for name, expected in facts['sources']['common'].items():
         if name not in mutable_shared:
+            if name == 'rr-cache' and mutable_shared:
+                verify_live_resolution_cache(common / name, expected)
+                continue
             observed = manifest(common / name, True)
             if observed != expected and not (
                     name == 'config' and mutable_shared

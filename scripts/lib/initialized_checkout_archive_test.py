@@ -1167,6 +1167,11 @@ class NativeArchive(unittest.TestCase):
             self.assertNotEqual(self.git(tree, 'rev-parse', recovery_ref), self.git(tree, 'rev-parse', 'HEAD'))
 
     def test_quarantine_recovery_preserves_unrelated_tracking_creation_and_cleanup(self):
+        cache = self.repo / '.git/rr-cache'
+        conflict = cache / ('a' * 40)
+        conflict.mkdir(parents=True)
+        (conflict / 'preimage').write_text('old conflict\n')
+        (conflict / 'postimage').write_text('old resolution\n')
         self.git(self.repo, 'branch', 'other/finished')
         self.git(self.repo, 'config', 'branch.other/finished.remote', 'origin')
         self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/finished')
@@ -1180,6 +1185,10 @@ class NativeArchive(unittest.TestCase):
         self.git(self.repo, 'update-ref', 'refs/heads/other/active', active_head)
         self.git(self.repo, 'config', 'branch.other/active.remote', 'origin')
         self.git(self.repo, 'config', 'branch.other/active.merge', 'refs/heads/other/active')
+        (conflict / 'thisimage').write_text('concurrent conflict\n')
+        (conflict / 'postimage').write_text('new resolution\n')
+        (conflict / 'preimage').unlink()
+        current_cache = archive.manifest(cache, True)
         current = archive.manifest(self.repo / '.git/config', True)
         # This is a real atomic Git config rewrite, not a mocked metadata delta.
         self.assertNotEqual(archived_bytes, (self.repo / '.git/config').read_bytes())
@@ -1190,6 +1199,10 @@ class NativeArchive(unittest.TestCase):
         self.assertTrue(archive.resume_quarantine(request)['moved'])
         self.assertTrue(archive.verify_completed_quarantine(request)['verified'])
         self.assertEqual(archive.manifest(self.repo / '.git/config', True), current)
+        self.assertEqual(archive.manifest(cache, True), current_cache)
+        archived_cache = self.txn / 'archive/common/rr-cache' / ('a' * 40)
+        self.assertEqual((archived_cache / 'preimage').read_text(), 'old conflict\n')
+        self.assertEqual((archived_cache / 'postimage').read_text(), 'old resolution\n')
         self.assertEqual(self.git(self.repo, 'rev-parse', 'refs/heads/other/active'), active_head)
         self.assertEqual(archived.read_bytes(), archived_bytes)
         self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
@@ -1197,6 +1210,43 @@ class NativeArchive(unittest.TestCase):
         # Ordinary preservation still demands exact common metadata.
         with self.assertRaisesRegex(RuntimeError, 'common-store-changed'):
             archive.verify_common_metadata(saved, set(), self.txn)
+
+    def test_shared_resolution_cache_recovery_keeps_archive_root_and_structure_strict(self):
+        cache = self.repo / '.git/rr-cache'
+        conflict = cache / ('a' * 40)
+        conflict.mkdir(parents=True)
+        (conflict / 'preimage').write_text('original\n')
+        request = self.quarantine_resumption_fixture()
+        (conflict / 'thisimage').write_text('concurrent\n')
+        _, saved = archive.load_transaction(request)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:rr-cache'):
+            archive.verify_common_metadata(saved, set(), self.txn)
+        mode = cache.stat().st_mode & 0o777
+        os.chmod(cache, mode ^ 0o040)
+        with self.assertRaisesRegex(RuntimeError, 'shared-resolution-cache-root-changed'):
+            archive.verify_quarantine_resumption(request)
+        os.chmod(cache, mode)
+        retained = self.scratch / 'retained-cache'
+        cache.rename(retained)
+        cache.mkdir()
+        with self.assertRaisesRegex(RuntimeError, 'shared-resolution-cache-root-changed'):
+            archive.verify_quarantine_resumption(request)
+        cache.rmdir()
+        retained.rename(cache)
+        unsafe = conflict / 'unsafe'
+        unsafe.symlink_to(self.scratch)
+        with self.assertRaisesRegex(RuntimeError, 'git-administration-symlink'):
+            archive.verify_quarantine_resumption(request)
+        unsafe.unlink()
+        os.mkfifo(unsafe)
+        with self.assertRaisesRegex(RuntimeError, 'special-git-file-unsupported'):
+            archive.verify_quarantine_resumption(request)
+        unsafe.unlink()
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        archived = self.txn / 'archive/common/rr-cache' / ('a' * 40) / 'preimage'
+        archived.write_text('tampered\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-archive-changed:rr-cache'):
+            archive.verify_quarantine_resumption(request)
 
     def test_shared_tracking_exception_rejects_target_global_additions_live_refs_metadata_and_races(self):
         self.git(self.repo, 'branch', 'other/finished')
