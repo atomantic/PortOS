@@ -194,6 +194,7 @@ beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
   fs.readdir.mockImplementation(actual.readdir);
   fs.access.mockImplementation(actual.access);
+  fs.readFile.mockImplementation(actual.readFile);
   fs.unlink.mockImplementation(actual.unlink);
   fs.writeFile.mockImplementation(actual.writeFile);
 });
@@ -661,11 +662,11 @@ describe('deleteSnapshot', () => {
     await fs.rm(destRoot, { recursive: true, force: true });
   });
 
-  async function makeSnapshot(source, id, { marker } = {}) {
+  async function makeSnapshot(source, id, { marker, markerContent = '' } = {}) {
     const dir = joinPath(destRoot, 'snapshots', source, id);
     await fs.mkdir(joinPath(dir, 'data'), { recursive: true });
     await fs.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt: '2026-01-01T00:00:00Z', fileCount: 0 }));
-    if (marker) await fs.writeFile(joinPath(dir, marker), '');
+    if (marker) await fs.writeFile(joinPath(dir, marker), markerContent);
     return dir;
   }
 
@@ -691,9 +692,32 @@ describe('deleteSnapshot', () => {
       .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
   });
 
-  it('refuses a snapshot that is still being written (409 SNAPSHOT_INCOMPLETE), leaving it on disk', async () => {
-    const dir = await makeSnapshot(machineHost, '2026-06-08T15-18-34', { marker: '.in-progress' });
-    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost }))
+  // Only the server process runs runBackup, so in this machine's namespace an
+  // in-progress marker another process wrote (or the legacy empty one) is a
+  // run that a restart killed (#12618).
+  it.each([
+    ['the legacy empty marker', ''],
+    ['another process token', 'previous-process-token'],
+  ])('reports a dead run left by %s as interrupted: never restorable or downloadable, but deletable', async (_label, markerContent) => {
+    const id = '2026-06-08T15-18-34';
+    const dir = await makeSnapshot(machineHost, id, { marker: '.in-progress', markerContent });
+
+    const [snapshot] = await listSnapshots(destRoot);
+    expect(snapshot).toMatchObject({ id, incomplete: false, failed: false, interrupted: true });
+    await expect(openSnapshotStream(destRoot, id, { source: machineHost }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INTERRUPTED' });
+    await expect(restoreSnapshot(destRoot, id, { source: machineHost, dryRun: true }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INTERRUPTED' });
+
+    await deleteSnapshot(destRoot, id, { source: machineHost });
+    await expect(fs.stat(dir)).rejects.toThrow();
+  });
+
+  it("keeps another machine's in-progress snapshot incomplete (409 SNAPSHOT_INCOMPLETE), leaving it on disk", async () => {
+    const dir = await makeSnapshot('previous-machine', '2026-06-08T15-18-34', { marker: '.in-progress' });
+    const [snapshot] = await listSnapshots(destRoot);
+    expect(snapshot).toMatchObject({ incomplete: true, interrupted: false });
+    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: 'previous-machine' }))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     await expect(fs.stat(dir)).resolves.toBeDefined();
   });
@@ -740,12 +764,14 @@ describe('openSnapshotStream', () => {
     return proc;
   }
 
-  // Same directory, but a marker left behind by a crashed run.
-  function crashedSnapshot() {
+  // Same directory, but an in-progress marker whose owner cannot be read: it
+  // is never presumed dead, so it stays incomplete.
+  function unreadableMarkerSnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
     fs.access.mockImplementation((path) => String(path).endsWith('.failed')
       ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
       : Promise.resolve());                             // .in-progress present
+    fs.readFile.mockRejectedValue(Object.assign(new Error('unreadable'), { code: 'EIO' }));
   }
 
   const ended = (stream) => new Promise((resolveEnd) => stream.once('end', resolveEnd));
@@ -787,10 +813,8 @@ describe('openSnapshotStream', () => {
     }
   });
 
-  it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
-    // activeSnapshotId is module state and resets on restart; the marker is what
-    // still says "this tree was never finished" after PM2 restarts mid-backup.
-    crashedSnapshot();
+  it('refuses a snapshot whose .in-progress marker owner cannot be read', async () => {
+    unreadableMarkerSnapshot();
 
     await expect(openSnapshotStream('/dest', 'snap-1'))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
@@ -4389,8 +4413,10 @@ describe('runBackup lifecycle', () => {
       expect(await pending).toBeInstanceOf(Error);
       if (state !== 'reservation') expect(await fsp.readFile(joinPath(oldDir, 'portos-db.sql'), 'utf8')).toBe('old dump');
       if (state === 'failed') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('old failure');
-      if (state === 'interrupted' || state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
+      if (state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
       else await expect(fsp.access(guard)).rejects.toThrow();
+      // The new run converged the dead run's snapshot to a durable failure.
+      if (state === 'interrupted') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('interrupted by restart');
     } finally {
       vi.useRealTimers();
     }
@@ -4842,6 +4868,9 @@ describe('runBackup lifecycle', () => {
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     await expect(restore(destRoot, snapshotId, { dryRun: true }))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    const { deleteSnapshot: remove } = await import('./backup.js');
+    await expect(remove(destRoot, snapshotId))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     // Only the rsync — neither guard reached tar or a second rsync.
     expect(spawn).toHaveBeenCalledTimes(1);
 
@@ -4973,11 +5002,12 @@ describe('runBackup lifecycle', () => {
     expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
     await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
       .resolves.toBeUndefined();
-    // The on-disk guard, not process state, must block restore after restart.
+    // The on-disk guard, not process state, must block restore after restart,
+    // where the dead process's token makes the snapshot interrupted.
     vi.resetModules();
     const { restoreSnapshot: restoreAfterRestart } = await import('./backup.js');
     await expect(restoreAfterRestart(destRoot, snapshotId, { dryRun: true }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_INCOMPLETE' });
+      .rejects.toMatchObject({ code: 'SNAPSHOT_INTERRUPTED' });
   });
 
   it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
@@ -5204,29 +5234,53 @@ describe('runBackup lifecycle', () => {
 
   // -----------------------------------------------------------------------
   // Retention pruning (#8334) — after a dump-successful run, the oldest COMPLETED
-  // snapshots on THIS machine beyond retentionCount are deleted. Failed,
-  // in-progress, and other-source snapshots must never be touched, and
-  // retentionCount null/undefined must never prune anything (an existing
-  // install with no stored value keeps everything — see backupConfig.js).
+  // snapshots on THIS machine beyond retentionCount are deleted. Failed and
+  // other-source snapshots must never be touched, and retentionCount
+  // null/undefined must never prune a completed snapshot (an existing install
+  // with no stored value keeps everything — see backupConfig.js). Interrupted
+  // snapshots older than the newest completed one are always pruned (#12618).
   // -----------------------------------------------------------------------
   describe('retention pruning', () => {
-    async function seedSnapshot(source, id, { generatedAt, marker } = {}) {
+    async function seedSnapshot(source, id, { generatedAt, marker, markerContent = '' } = {}) {
       const fsp = await actualFs();
       const dir = joinPath(destRoot, 'snapshots', source, id);
       await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
       if (generatedAt) {
         await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0, files: {} }));
       }
-      if (marker) await fsp.writeFile(joinPath(dir, marker), '');
+      if (marker) await fsp.writeFile(joinPath(dir, marker), markerContent);
       return dir;
     }
 
-    it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/in-progress/other-source snapshots', async () => {
+    async function completeRun(options) {
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, null, options);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      return pending;
+    }
+
+    it('prunes interrupted snapshots older than the new completed one even under unlimited retention', async () => {
+      const fsp = await actualFs();
+      const completed = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const interrupted = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { marker: '.in-progress', markerContent: 'previous-process-token' });
+      const otherMachine = await seedSnapshot('previous-machine', '2020-01-02T00-00-00', { marker: '.in-progress' });
+
+      const result = await completeRun({ retentionCount: null });
+
+      expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 1 });
+      await expect(fsp.stat(interrupted)).rejects.toThrow();
+      await expect(fsp.stat(completed)).resolves.toBeDefined();
+      await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/other-source snapshots', async () => {
       const fsp = await actualFs();
       const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
       const old3 = await seedSnapshot(machineHost, '2020-01-03T00-00-00', { generatedAt: '2020-01-03T00:00:00.000Z' });
-      const incomplete = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
+      const interrupted = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
       const failed = await seedSnapshot(machineHost, '2020-01-05T00-00-00', { generatedAt: '2020-01-05T00:00:00.000Z', marker: '.failed' });
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
@@ -5244,18 +5298,19 @@ describe('runBackup lifecycle', () => {
       await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
       pgDump.emit('close', 0);
       const result = await pending;
-      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 3 });
 
       // Keeps the newest 2 completed snapshots on this machine: the run just
-      // created and old3. old1 and old2 are pruned.
+      // created and old3. old1 and old2 are pruned, and the interrupted one
+      // goes without spending the budget.
       await expect(fsp.stat(old1)).rejects.toThrow();
       await expect(fsp.stat(old2)).rejects.toThrow();
       await expect(fsp.stat(old3)).resolves.toBeDefined();
       const newSnapshotDir = joinPath(destRoot, 'snapshots', machineHost, result.snapshotId);
       await expect(fsp.stat(newSnapshotDir)).resolves.toBeDefined();
 
-      // Never touched: still-being-written, failed, and another machine's namespace.
-      await expect(fsp.stat(incomplete)).resolves.toBeDefined();
+      await expect(fsp.stat(interrupted)).rejects.toThrow();
+      // Never touched: failed, and another machine's namespace.
       await expect(fsp.stat(failed)).resolves.toBeDefined();
       await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
     });

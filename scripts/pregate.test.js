@@ -956,6 +956,24 @@ describe('uncoveredSuites', () => {
     expect(probed.find(({ suite }) => suite === 'db').remedy).toBe(UNCOVERED_SUITES.db);
   });
 
+  it('reports a probe lifecycle failure apart from a missing prerequisite and keeps browser uncovered', () => {
+    const probeFailed = uncoveredSuites(selected, {
+      prerequisites: { browser: { ok: false, reason: 'Chrome with H.264 probe failed (teardown-failed)', category: 'probe-failed' } },
+    }).find(({ suite }) => suite === 'browser');
+    expect(probeFailed.reason).toBe('probe failed: Chrome with H.264 probe failed (teardown-failed)');
+    expect(probeFailed.category).toBe('probe-failed');
+    expect(probeFailed.remedy).not.toBe(UNCOVERED_SUITES.browser);
+    expect(probeFailed.remedy).not.toMatch(/installed/);
+
+    const missing = uncoveredSuites(selected, {
+      prerequisites: { browser: { ok: false, reason: 'missing ffmpeg', category: 'missing' } },
+    }).find(({ suite }) => suite === 'browser');
+    expect(missing).toMatchObject({ reason: 'prerequisite missing: missing ffmpeg', category: 'missing', remedy: UNCOVERED_SUITES.browser });
+
+    const skip = Object.fromEntries([probeFailed].map(({ suite }) => [suite, true]));
+    expect(resolvePlanStages(selected, { skip }).some((stage) => stage.suite === 'browser')).toBe(false);
+  });
+
   it('turns a failed probe into a skipped stage and a receipt that names it, never a green claim', () => {
     const prerequisites = { db: { ok: false, reason: 'Postgres not reachable (ECONNREFUSED)' } };
     const uncovered = uncoveredSuites(selected, { prerequisites, options: { skipBrowser: true, skipBuild: true, skipSmoke: true } });

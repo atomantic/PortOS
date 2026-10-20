@@ -9,13 +9,19 @@
  */
 
 import { describe, it as vitestIt, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, symlinkSync, truncateSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
 import { makePathsProxy, mockNoPeerSync, mockNoPeers, mockTestIdentity, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
-const fileUtilsMock = vi.hoisted(() => ({ atomicWrite: vi.fn(), realAtomicWrite: null }));
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+const pngBytes = label => Buffer.concat([PNG, Buffer.from(label)]);
+
+const fileUtilsMock = vi.hoisted(() => ({
+  atomicWrite: vi.fn(), realAtomicWrite: null,
+}));
 
 function sha256Hex(buf) {
   return createHash('sha256').update(buf).digest('hex');
@@ -115,7 +121,7 @@ describe('sharing round-trip', () => {
     mkdirSync(tempData, { recursive: true });
     mkdirSync(join(tempData, 'images'), { recursive: true });
     mkdirSync(join(tempData, 'videos'), { recursive: true });
-    writeFileSync(join(tempData, 'images', 'fakeasset.png'), 'PNGSTUB');
+    writeFileSync(join(tempData, 'images', 'fakeasset.png'), pngBytes('PNGSTUB'));
     tempBucket = mkdtempSync(join(tmpdir(), 'portos-sharing-roundtrip-bucket-'));
     tempBuckets.add(tempBucket);
   });
@@ -130,6 +136,192 @@ describe('sharing round-trip', () => {
     } finally {
       rmSync(tempData, { recursive: true, force: true });
     }
+  });
+
+  function writeAssetManifest(assetRefs, id = 'asset-ingress') {
+    const filename = `${id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify({
+      id, senderInstanceId: 'example-peer', kind: 'media', recordIds: [], assetRefs,
+    }));
+    return filename;
+  }
+
+  for (const mode of ['auto-merge', 'inbox']) {
+    it(`imports verified v1/v2 images, reference sheets and videos through ${mode}`, async () => {
+      const bucket = await buckets.createBucket({ name: 'Verified assets', path: tempBucket, mode });
+      const mp4 = Buffer.from('000000186674797069736f6d0000020069736f6d6d703432', 'hex');
+      const refs = [];
+      for (const version of [1, 2]) {
+        for (const kind of ['image', 'image-ref', 'video']) {
+          const ref = `${kind}-v${version}.${kind === 'video' ? 'mp4' : 'png'}`;
+          const bytes = kind === 'video' ? mp4 : pngBytes(ref);
+          const hash = version === 2 ? sha256Hex(bytes) : undefined;
+          const dir = join(tempBucket, 'assets', hash ? 'blobs' : kind === 'video' ? 'videos' : 'images');
+          mkdirSync(dir, { recursive: true });
+          const source = join(dir, hash || ref);
+          writeFileSync(source, bytes);
+          if (kind !== 'video') writeFileSync(hash ? `${source}.metadata.json` : join(dir, buckets.imageSidecarName(ref)), '{"prompt":"example"}');
+          refs.push({ kind, ref, ...(hash ? { hash } : {}) });
+        }
+      }
+      const filename = writeAssetManifest(refs);
+      expect(await importer.processManifest(bucket.id, filename)).toMatchObject({ processed: true });
+      if (mode === 'inbox') {
+        // Force promotion to publish again, rather than merely use existing files.
+        for (const dir of ['images', 'image-refs', 'videos']) rmSync(join(tempData, dir), { recursive: true, force: true });
+        await importer.promoteInboxItem(bucket.id, 'asset-ingress');
+        expect(await importer.listInbox(bucket.id)).toEqual([]);
+      }
+      for (const { kind, ref } of refs) {
+        const dir = join(tempData, kind === 'video' ? 'videos' : kind === 'image-ref' ? 'image-refs' : 'images');
+        expect(readFileSync(join(dir, ref))).toEqual(kind === 'video' ? mp4 : pngBytes(ref));
+        if (kind !== 'video') expect(JSON.parse(readFileSync(join(dir, buckets.imageSidecarName(ref)), 'utf8'))).toEqual({ prompt: 'example' });
+      }
+    });
+  }
+
+  for (const scenario of [
+    'v2 symlink', 'legacy symlink', 'blobs directory symlink', 'assets directory symlink',
+    'internal directory symlink', 'nonregular blob',
+    'hash mismatch', 'video playlist', 'image playlist', 'reference non-image',
+    'sidecar symlink', 'sidecar playlist', 'oversized blob', 'oversized sidecar',
+  ]) {
+    it(`defers ${scenario} without publishing unverified bytes`, async () => {
+      const bucket = await buckets.createBucket({ name: 'Untrusted assets', path: tempBucket, mode: 'auto-merge' });
+      const kind = scenario === 'video playlist' ? 'video' : scenario === 'reference non-image' ? 'image-ref' : 'image';
+      const ref = { kind, ref: 'untrusted.png' };
+      const good = pngBytes('verified');
+      const hash = sha256Hex(good);
+      const legacy = scenario === 'legacy symlink';
+      if (!legacy) ref.hash = hash;
+      const dir = join(tempBucket, 'assets', legacy ? 'images' : 'blobs');
+      mkdirSync(dir, { recursive: true });
+      let source = join(dir, legacy ? ref.ref : hash);
+      writeFileSync(source, good);
+      const outside = join(tempData, 'outside.png');
+      writeFileSync(outside, good);
+      if (scenario === 'v2 symlink' || legacy) {
+        rmSync(source);
+        symlinkSync(outside, source, 'file');
+      } else if (scenario.endsWith('directory symlink')) {
+        const original = scenario === 'assets directory symlink' ? join(tempBucket, 'assets') : dir;
+        const outsideDir = join(scenario === 'internal directory symlink' ? tempBucket : tempData, 'outside-dir');
+        mkdirSync(outsideDir);
+        if (scenario === 'assets directory symlink') mkdirSync(join(outsideDir, 'blobs'));
+        writeFileSync(join(outsideDir, scenario === 'assets directory symlink' ? 'blobs' : '', hash), good);
+        rmSync(original, { recursive: true });
+        symlinkSync(outsideDir, original, process.platform === 'win32' ? 'junction' : 'dir');
+      } else if (scenario === 'nonregular blob') {
+        rmSync(source);
+        mkdirSync(source);
+      } else if (scenario === 'hash mismatch') {
+        writeFileSync(source, pngBytes('different'));
+      } else if (scenario === 'video playlist' || scenario === 'image playlist' || scenario === 'reference non-image') {
+        const bytes = Buffer.from(scenario === 'reference non-image' ? 'not an image' : '#EXTM3U\n#EXT-X-TARGETDURATION:10\nexample.ts\n');
+        ref.hash = sha256Hex(bytes);
+        source = join(dir, ref.hash);
+        writeFileSync(source, bytes);
+      } else if (scenario === 'sidecar symlink') {
+        symlinkSync(outside, `${source}.metadata.json`, 'file');
+      } else if (scenario === 'sidecar playlist') {
+        writeFileSync(`${source}.metadata.json`, 'ffconcat version 1.0\nfile example.mp4\n');
+      } else if (scenario.startsWith('oversized')) {
+        const oversized = scenario === 'oversized sidecar' ? `${source}.metadata.json` : source;
+        writeFileSync(oversized, '');
+        truncateSync(oversized, (scenario === 'oversized sidecar' ? SIDECAR_MAX_BYTES : ASSET_PULL_MAX_BYTES) + 1);
+      }
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await importer.processManifest(bucket.id, writeAssetManifest([ref]));
+        expect(result).toMatchObject({ processed: true, pending: true, outcome: { pendingAssets: [{ kind, ref: ref.ref }] } });
+        const targetDir = join(tempData, kind === 'video' ? 'videos' : kind === 'image-ref' ? 'image-refs' : 'images');
+        expect(existsSync(join(targetDir, ref.ref))).toBe(false);
+        expect(existsSync(join(targetDir, buckets.imageSidecarName(ref.ref)))).toBe(false);
+        expect(warn.mock.calls.filter(([line]) => line.startsWith('⚠️ sharing.importer: refused asset'))).toEqual([
+          [`⚠️ sharing.importer: refused asset ${kind}/${JSON.stringify(ref.ref)}`],
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  it('publishes the verified buffer when the bucket path changes before publication', async () => {
+    const bucket = await buckets.createBucket({ name: 'Publication race', path: tempBucket, mode: 'auto-merge' });
+    const ref = { kind: 'image', ref: 'verified-race.png', hash: sha256Hex(PNG) };
+    const source = buckets.bucketBlobPath(tempBucket, ref.hash);
+    mkdirSync(join(tempBucket, 'assets', 'blobs'), { recursive: true });
+    writeFileSync(source, PNG);
+    const target = join(tempData, 'images', ref.ref);
+    let replaced = false;
+    fileUtilsMock.atomicWrite.mockImplementation((path, ...args) => {
+      if (path.startsWith(join(tempData, 'images', '.sharing-'))) {
+        replaced = true;
+        rmSync(source);
+        symlinkSync(join(tempData, 'outside.png'), source, 'file');
+        writeFileSync(join(tempData, 'outside.png'), 'unverified replacement');
+      }
+      return fileUtilsMock.realAtomicWrite(path, ...args);
+    });
+    expect(await importer.processManifest(bucket.id, writeAssetManifest([ref]))).toMatchObject({ processed: true });
+    expect(replaced).toBe(true);
+    expect(readFileSync(target)).toEqual(PNG);
+  });
+
+  it('leaves no final or temporary file after a failed publication, then imports on retry', async () => {
+    const bucket = await buckets.createBucket({ name: 'Publication failure', path: tempBucket, mode: 'auto-merge' });
+    const ref = { kind: 'image', ref: 'retry.png', hash: sha256Hex(PNG) };
+    mkdirSync(join(tempBucket, 'assets', 'blobs'), { recursive: true });
+    writeFileSync(buckets.bucketBlobPath(tempBucket, ref.hash), PNG);
+    const filename = writeAssetManifest([ref]);
+    const imageDir = join(tempData, 'images');
+    fileUtilsMock.atomicWrite.mockImplementation(async (path, ...args) => {
+      if (path.startsWith(join(imageDir, '.sharing-'))) {
+        await fileUtilsMock.realAtomicWrite(path, 'partial bytes');
+        throw Object.assign(new Error('simulated disk full'), { code: 'ENOSPC' });
+      }
+      return fileUtilsMock.realAtomicWrite(path, ...args);
+    });
+    await expect(importer.processManifest(bucket.id, filename)).rejects.toThrow('simulated disk full');
+    expect(existsSync(join(imageDir, ref.ref))).toBe(false);
+    const { readdirSync } = await import('fs');
+    expect(readdirSync(imageDir).filter(name => name.startsWith('.sharing-'))).toEqual([]);
+    fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
+    await importer.processManifest(bucket.id, filename);
+    expect(readFileSync(join(imageDir, ref.ref))).toEqual(PNG);
+  });
+
+  it('preserves a destination created while verified bytes are being staged', async () => {
+    const bucket = await buckets.createBucket({ name: 'Concurrent publication', path: tempBucket, mode: 'auto-merge' });
+    const ref = { kind: 'image', ref: 'existing.png', hash: sha256Hex(PNG) };
+    mkdirSync(join(tempBucket, 'assets', 'blobs'), { recursive: true });
+    writeFileSync(buckets.bucketBlobPath(tempBucket, ref.hash), PNG);
+    const target = join(tempData, 'images', ref.ref);
+    const existing = pngBytes('existing');
+    fileUtilsMock.atomicWrite.mockImplementation((path, ...args) => {
+      if (path.startsWith(join(tempData, 'images', '.sharing-'))) writeFileSync(target, existing);
+      return fileUtilsMock.realAtomicWrite(path, ...args);
+    });
+    await importer.processManifest(bucket.id, writeAssetManifest([ref]));
+    expect(readFileSync(target)).toEqual(existing);
+  });
+
+  it('revalidates bucket bytes during promotion even when a local file already exists', async () => {
+    const bucket = await buckets.createBucket({ name: 'Inbox integrity', path: tempBucket, mode: 'inbox' });
+    const ref = { kind: 'image', ref: 'promote.png' };
+    const dir = join(tempBucket, 'assets', 'images');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ref.ref), PNG);
+    await importer.processManifest(bucket.id, writeAssetManifest([ref]));
+    writeFileSync(join(dir, ref.ref), '#EXTM3U\nexample.ts\n');
+    await expect(importer.promoteInboxItem(bucket.id, 'asset-ingress')).rejects.toMatchObject({
+      code: 'SHARING_ASSETS_PENDING', missingAssets: [ref],
+    });
+    expect(readFileSync(join(tempData, 'images', ref.ref))).toEqual(PNG);
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+    writeFileSync(join(dir, ref.ref), PNG);
+    await importer.promoteInboxItem(bucket.id, 'asset-ingress');
+    expect(await importer.listInbox(bucket.id)).toEqual([]);
   });
 
   it('preserves local video holds while importing bundled media-job records', async () => {
@@ -175,7 +367,7 @@ describe('sharing round-trip', () => {
     expect(existsSync(join(tempBucket, 'manifests', exp.filename))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'series', `${s.id}.json`))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'issues', `${iss.id}.json`))).toBe(true);
-    const fakeHash = sha256Hex('PNGSTUB');
+    const fakeHash = sha256Hex(pngBytes('PNGSTUB'));
     expect(existsSync(join(tempBucket, 'assets', 'blobs', fakeHash))).toBe(true);
 
     // Process as inbox (the bucket mode is 'inbox'). The manifest should
@@ -592,7 +784,7 @@ describe('sharing round-trip', () => {
     // collection. Each item.ref points at a real file in tempData/images
     // (we seeded 'fakeasset.png' in beforeEach, but for variety, add another).
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'second.png'), 'PNG2');
+    fs.writeFileSync(join(tempData, 'images', 'second.png'), pngBytes('PNG2'));
     const collection = await mediaCollections.findOrCreateCollectionByName({
       name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
     });
@@ -607,7 +799,7 @@ describe('sharing round-trip', () => {
     const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', manifestFile), 'utf-8'));
     expect(manifest.collection).toMatchObject({ universeId: u.id });
     expect(manifest.collection.items).toHaveLength(2);
-    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNG2')))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex(pngBytes('PNG2'))))).toBe(true);
 
     // Drop the local collection + universe, then re-process: the importer
     // should recreate both, find-or-create the local collection by
@@ -639,8 +831,8 @@ describe('sharing round-trip', () => {
     const s = await series.createSeries({ name: 'Indie Saga', logline: 'L' });
 
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'cover-a.png'), 'COVA');
-    fs.writeFileSync(join(tempData, 'images', 'cover-b.png'), 'COVB');
+    fs.writeFileSync(join(tempData, 'images', 'cover-a.png'), pngBytes('COVA'));
+    fs.writeFileSync(join(tempData, 'images', 'cover-b.png'), pngBytes('COVB'));
     const collection = await mediaCollections.findOrCreateSeriesCollection({
       seriesId: s.id, seriesName: s.name,
     });
@@ -653,8 +845,8 @@ describe('sharing round-trip', () => {
     expect(manifest.collection).toMatchObject({ seriesId: s.id });
     expect(manifest.collection.universeId).toBeUndefined();
     expect(manifest.collection.items.map((i) => i.ref).sort()).toEqual(['cover-a.png', 'cover-b.png']);
-    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('COVA')))).toBe(true);
-    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('COVB')))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex(pngBytes('COVA'))))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex(pngBytes('COVB'))))).toBe(true);
 
     // Drop the local collection + series, then re-process: importer
     // restores the series and find-or-creates the local per-series
@@ -690,8 +882,8 @@ describe('sharing round-trip', () => {
     const s = await series.createSeries({ name: 'Series', universeId: u.id });
 
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'uni.png'), 'UNI');
-    fs.writeFileSync(join(tempData, 'images', 'ser.png'), 'SER');
+    fs.writeFileSync(join(tempData, 'images', 'uni.png'), pngBytes('UNI'));
+    fs.writeFileSync(join(tempData, 'images', 'ser.png'), pngBytes('SER'));
 
     const uniColl = await mediaCollections.findOrCreateUniverseCollection({
       universeId: u.id, universeName: u.name,
@@ -724,7 +916,7 @@ describe('sharing round-trip', () => {
     const s = await series.createSeries({ name: 'Bound', universeId: u.id });
 
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'stale.png'), 'STALE');
+    fs.writeFileSync(join(tempData, 'images', 'stale.png'), pngBytes('STALE'));
     // Stamp a seriesId collection directly (simulating a leftover from a
     // prior universeless phase). No universe collection exists.
     const serColl = await mediaCollections.findOrCreateSeriesCollection({
@@ -753,7 +945,7 @@ describe('sharing round-trip', () => {
 
     // Sender side: universeless series + per-series collection with one cover.
     const s = await series.createSeries({ name: 'WillLink', logline: 'L' });
-    fs.writeFileSync(join(tempData, 'images', 'stale-cover.png'), 'STALE');
+    fs.writeFileSync(join(tempData, 'images', 'stale-cover.png'), pngBytes('STALE'));
     const senderColl = await mediaCollections.findOrCreateSeriesCollection({
       seriesId: s.id, seriesName: s.name,
     });
@@ -789,7 +981,7 @@ describe('sharing round-trip', () => {
     const mediaCollections = await import('../mediaCollections.js');
     const s = await series.createSeries({ name: 'Will Vanish' });
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'late-cover.png'), 'LATE');
+    fs.writeFileSync(join(tempData, 'images', 'late-cover.png'), pngBytes('LATE'));
     const collection = await mediaCollections.findOrCreateSeriesCollection({
       seriesId: s.id, seriesName: s.name,
     });
@@ -822,7 +1014,7 @@ describe('sharing round-trip', () => {
     const mediaCollections = await import('../mediaCollections.js');
     const u = await universeBuilder.createUniverse({ name: 'Post-Epoc' });
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'legacy.png'), 'PNG');
+    fs.writeFileSync(join(tempData, 'images', 'legacy.png'), pngBytes('PNG'));
 
     // Unlinked collection with the conventional name — exporter must NOT
     // adopt this for the universe.
@@ -846,7 +1038,7 @@ describe('sharing round-trip', () => {
     const { readCursor, hasBeenProcessed } = await import('./manifest.js');
     const u = await universeBuilder.createUniverse({ name: 'Slow Sync Universe' });
     const fs = await import('fs');
-    fs.writeFileSync(join(tempData, 'images', 'late.png'), 'LATEPNG');
+    fs.writeFileSync(join(tempData, 'images', 'late.png'), pngBytes('LATEPNG'));
 
     const collection = await mediaCollections.findOrCreateCollectionByName({
       name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
@@ -855,7 +1047,7 @@ describe('sharing round-trip', () => {
     await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late.png' });
 
     const exp = await exporter.exportUniverse(u.id, bucket.id);
-    const lateHash = sha256Hex('LATEPNG');
+    const lateHash = sha256Hex(pngBytes('LATEPNG'));
     fs.rmSync(join(tempBucket, 'assets', 'blobs', lateHash), { force: true });
     fs.rmSync(join(tempData, 'images', 'late.png'), { force: true });
     await mediaCollections.deleteCollection(collection.id);
@@ -873,7 +1065,7 @@ describe('sharing round-trip', () => {
     let cursor = await readCursor(bucket.id);
     expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
 
-    fs.writeFileSync(join(tempBucket, 'assets', 'blobs', lateHash), 'LATEPNG');
+    fs.writeFileSync(join(tempBucket, 'assets', 'blobs', lateHash), pngBytes('LATEPNG'));
     const retry = await importer.processBacklog(bucket.id);
     expect(retry.processed).toBe(1);
 
@@ -1474,7 +1666,7 @@ describe('sharing round-trip', () => {
     const mediaCollections = await import('../mediaCollections.js');
 
     // Two distinct filenames, identical bytes.
-    const sharedBytes = 'SHARED-PNG-PAYLOAD';
+    const sharedBytes = pngBytes('SHARED-PNG-PAYLOAD');
     fs.writeFileSync(join(tempData, 'images', 'alpha.png'), sharedBytes);
     fs.writeFileSync(join(tempData, 'images', 'beta.png'), sharedBytes);
     const hash = sha256Hex(sharedBytes);
@@ -1528,8 +1720,8 @@ describe('sharing round-trip', () => {
 
     expect(fs.existsSync(join(tempData, 'images', 'alpha.png'))).toBe(true);
     expect(fs.existsSync(join(tempData, 'images', 'beta.png'))).toBe(true);
-    expect(fs.readFileSync(join(tempData, 'images', 'alpha.png'), 'utf-8')).toBe(sharedBytes);
-    expect(fs.readFileSync(join(tempData, 'images', 'beta.png'), 'utf-8')).toBe(sharedBytes);
+    expect(fs.readFileSync(join(tempData, 'images', 'alpha.png'))).toEqual(sharedBytes);
+    expect(fs.readFileSync(join(tempData, 'images', 'beta.png'))).toEqual(sharedBytes);
   });
 
   it('importer rejects manifest asset refs whose hash is not a 64-char hex string (path-traversal guard)', async () => {
@@ -1625,7 +1817,7 @@ describe('sharing round-trip', () => {
     // Hand-craft a v1-style bucket: blob lives at assets/images/<filename>,
     // manifest's assetRefs has no `hash` field, schemaVersion: 1.
     fs.mkdirSync(join(tempBucket, 'assets', 'images'), { recursive: true });
-    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'legacy-v1.png'), 'V1BYTES');
+    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'legacy-v1.png'), pngBytes('V1BYTES'));
 
     const universeBuilder = await import('../universeBuilder.js');
     const u = await universeBuilder.createUniverse({ name: 'Legacy v1 Universe' });
@@ -1665,7 +1857,7 @@ describe('sharing round-trip', () => {
 
     // Asset blob made it to the local data dir via the legacy path.
     expect(fs.existsSync(join(tempData, 'images', 'legacy-v1.png'))).toBe(true);
-    expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'), 'utf-8')).toBe('V1BYTES');
+    expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'))).toEqual(pngBytes('V1BYTES'));
   });
 
   it('migrates legacy series canon arrays into the linked universe on import (pre-B.4 peer)', async () => {
@@ -2222,7 +2414,7 @@ describe('sharing round-trip', () => {
 
     // Stage a bucket asset so peer annotations have a corresponding key.
     mkdirSync(join(tempBucket, 'assets', 'images'), { recursive: true });
-    writeFileSync(join(tempBucket, 'assets', 'images', 'fakeasset.png'), 'PNGSTUB');
+    writeFileSync(join(tempBucket, 'assets', 'images', 'fakeasset.png'), pngBytes('PNGSTUB'));
 
     // Hand-write a peer's annotation record + manifest. Bypasses the exporter
     // (which would stamp the LOCAL instance id and short-circuit as
@@ -2288,7 +2480,7 @@ describe('sharing round-trip', () => {
 
   it('writes <bucket>/assets/blobs/.index.json mapping sourcePath:mtime:size → hash and invalidates on mtime change', async () => {
     const bucket = await buckets.createBucket({ name: 'CacheBucket', path: tempBucket, mode: 'auto-merge' });
-    const sourcePath = join(tempData, 'images', 'fakeasset.png'); // seeded as 'PNGSTUB' in beforeEach
+    const sourcePath = join(tempData, 'images', 'fakeasset.png'); // seeded as pngBytes('PNGSTUB') in beforeEach
 
     // Single-asset export — exportMedia falls through to copyAssetIfPresent (getJob is mocked → null).
     await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
@@ -2298,7 +2490,7 @@ describe('sharing round-trip', () => {
 
     const initialStat = statSync(sourcePath);
     const initialKey = `${sourcePath}:${initialStat.mtimeMs}:${initialStat.size}`;
-    const initialHash = sha256Hex('PNGSTUB');
+    const initialHash = sha256Hex(pngBytes('PNGSTUB'));
     const idx1 = JSON.parse(readFileSync(indexPath, 'utf-8'));
     expect(idx1[initialKey]).toBe(initialHash);
 
@@ -2321,21 +2513,21 @@ describe('sharing round-trip', () => {
     expect(idx2[touchedKey]).toBe(initialHash);
 
     // Mutating content invalidates and records a fresh hash.
-    writeFileSync(sourcePath, 'PNGSTUB-v2');
+    writeFileSync(sourcePath, pngBytes('PNGSTUB-v2'));
     await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
     const mutatedStat = statSync(sourcePath);
     const mutatedKey = `${sourcePath}:${mutatedStat.mtimeMs}:${mutatedStat.size}`;
     const idx3 = JSON.parse(readFileSync(indexPath, 'utf-8'));
-    expect(idx3[mutatedKey]).toBe(sha256Hex('PNGSTUB-v2'));
+    expect(idx3[mutatedKey]).toBe(sha256Hex(pngBytes('PNGSTUB-v2')));
     // Mutated bytes also land in the bucket under the new hash (content-addressed).
-    expect(existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNGSTUB-v2')))).toBe(true);
+    expect(existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex(pngBytes('PNGSTUB-v2'))))).toBe(true);
   });
 
   it('parallel exports against the same bucket merge cache entries instead of clobbering (exportByKind fanout)', async () => {
     const bucket = await buckets.createBucket({ name: 'MergeBucket', path: tempBucket, mode: 'auto-merge' });
     // Two distinct assets, both seeded with distinct bytes so they hash differently.
-    writeFileSync(join(tempData, 'images', 'parallelA.png'), 'PARALLEL_A');
-    writeFileSync(join(tempData, 'images', 'parallelB.png'), 'PARALLEL_B');
+    writeFileSync(join(tempData, 'images', 'parallelA.png'), pngBytes('PARALLEL_A'));
+    writeFileSync(join(tempData, 'images', 'parallelB.png'), pngBytes('PARALLEL_B'));
     // Two singleton media exports run in parallel — each loads its own cache view,
     // each saves with merge-on-save. Both new keys must survive in the persisted index.
     await Promise.all([
@@ -2348,8 +2540,8 @@ describe('sharing round-trip', () => {
     const statB = statSync(join(tempData, 'images', 'parallelB.png'));
     const keyA = `${join(tempData, 'images', 'parallelA.png')}:${statA.mtimeMs}:${statA.size}`;
     const keyB = `${join(tempData, 'images', 'parallelB.png')}:${statB.mtimeMs}:${statB.size}`;
-    expect(idx[keyA]).toBe(sha256Hex('PARALLEL_A'));
-    expect(idx[keyB]).toBe(sha256Hex('PARALLEL_B'));
+    expect(idx[keyA]).toBe(sha256Hex(pngBytes('PARALLEL_A')));
+    expect(idx[keyB]).toBe(sha256Hex(pngBytes('PARALLEL_B')));
   });
 
   it('retries a blob-index write after a transient failure instead of poisoning later exports', async () => {
@@ -2565,7 +2757,7 @@ describe('sharing round-trip', () => {
       const { hasBeenProcessed, readCursor } = await import('./manifest.js');
 
       const u = await universeBuilder.createUniverse({ name: 'Has A Collection Universe' });
-      fs.writeFileSync(join(tempData, 'images', 'late-universe-cover.png'), 'LATEUNI');
+      fs.writeFileSync(join(tempData, 'images', 'late-universe-cover.png'), pngBytes('LATEUNI'));
       const collection = await mediaCollections.findOrCreateCollectionByName({
         name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
       });

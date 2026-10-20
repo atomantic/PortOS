@@ -7,7 +7,7 @@ vi.mock('./apps.js', () => apps);
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
-const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn(), getTaskById: vi.fn() };
+const cosTaskStore = { getCosApprovalView: vi.fn(), approveTask: vi.fn(), getTaskById: vi.fn() };
 const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert: vi.fn() };
@@ -86,7 +86,7 @@ function resetEmpty() {
   brainStorage.getThreadById.mockResolvedValue(null);
   brainStorage.updateWith.mockResolvedValue(null);
   askConversations.listConversations.mockResolvedValue([]);
-  cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [] });
+  cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [] });
   cosAgentFeedback.getPendingAgentFeedback.mockResolvedValue({ agents: [], unavailable: [], count: 0 });
   cosAgentFeedback.submitAgentFeedback.mockResolvedValue({ success: true });
   messageDrafts.listDrafts.mockResolvedValue([]);
@@ -517,7 +517,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('surfaces drafts and CoS approvals from their producers', async () => {
-    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
     // The producer pushes a multi-status filter down to listDrafts, so the mock
     // honors it the way the real implementation does (drops the 'sent' draft).
     const allDrafts = [
@@ -964,7 +964,7 @@ describe('reviewQueue.buildQueue', () => {
 
   it('tags resolvable rows with an inline action verb, leaves no-clean-resolve sources without one', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
-    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }]);
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full' });
@@ -982,7 +982,7 @@ describe('reviewQueue.buildQueue', () => {
   it('attaches source-appropriate meta chips when the raw field is present', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', source: 'voice', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4, assistantTurnCount: 2 }]);
-    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }]);
     const queue = await buildQueue();
@@ -1004,7 +1004,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('drops an out-of-range cos priority rather than badge-ing it', async () => {
-    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'x', priority: 'URGENT', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'x', priority: 'URGENT', createdAt: '2026-06-03T09:00:00.000Z' }] });
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'cos').meta).toBeUndefined();
   });

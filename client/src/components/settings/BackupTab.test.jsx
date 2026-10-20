@@ -577,6 +577,16 @@ describe('BackupTab', () => {
       expect(screen.getByText('snap-2026-06-09')).toBeInTheDocument();
     });
 
+    it('labels an interrupted snapshot and keeps it deletable but not restorable', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-interrupted', failed: true, interrupted: true }]);
+      await renderTab();
+
+      expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+      expect(screen.queryByText('Backup failed — download only')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Restore DB/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Delete snapshot snap-interrupted/i })).toBeEnabled();
+    });
+
     it('disables delete for a snapshot still being written', async () => {
       getBackupSnapshots.mockResolvedValue([{ id: 'snap-incomplete', incomplete: true }]);
       await renderTab();

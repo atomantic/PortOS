@@ -81,7 +81,7 @@ import {
   PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
   buildImprovementDedupSets,
   queueDueInstallWideImprovementTasks,
-  generateManagedAppImprovementTaskForType,
+  prepareManagedAppImprovementTask,
   recordDeferredPerpetualDispatch,
   normalizeWorkItemRef,
   buildTargetWorkItemBlock,
@@ -123,12 +123,12 @@ const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
 
 it('declines an old app-scoped research request before generating a task', async () => {
-  const result = await generateManagedAppImprovementTaskForType(
+  const { task } = await prepareManagedAppImprovementTask(
     'model-comparison-refresh',
     { id: 'example-app', name: 'Example App', repoPath: '/tmp/example-app' },
     { config: {} }
   );
-  expect(result).toBeNull();
+  expect(task).toBeNull();
 });
 
 // The prompt pre-step layer moved to cosTaskPreStepBlocks.js, but these five
@@ -1751,9 +1751,8 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
 
     // prepareManagedAppImprovementTask computes the deferred-dispatch RECORD —
     // it never spends the budget itself. recordDeferredPerpetualDispatch is the
-    // one choke point that does, shared by the immediate-record wrapper
-    // (generateManagedAppImprovementTaskForType) and the deferred queue/
-    // on-demand/idle callers alike (#6871).
+    // one choke point that does, shared by the production queue, on-demand,
+    // and idle callers alike (#6871).
     const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
     expect(body, 'prepare must not charge the budget itself').not.toContain('recordPerpetualDispatch(');

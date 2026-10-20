@@ -277,8 +277,8 @@ export async function admitIdleReviewTask({
 
   // Deferred: the generator imports this owner, and ordinary capacity users
   // need neither the task store nor the prompt-generation dependency graph.
-  const { getCosTasks } = await import('./cosTaskStore.js');
-  if ((await getCosTasks()).autoApproved?.length) return;
+  const { getCosApprovalView } = await import('./cosTaskStore.js');
+  if ((await getCosApprovalView()).autoApprovedCount) return;
   const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
   const { task, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state, {
     ignoreTaskId,

@@ -195,7 +195,7 @@ export function HistoryPage() {
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                       <button
                         type="button"
-                        className="text-gray-400 hover:text-white shrink-0 focus:outline-hidden focus:ring-2 focus:ring-port-accent rounded"
+                        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 text-gray-400 hover:text-white shrink-0 focus:outline-hidden focus:ring-2 focus:ring-port-accent rounded"
                         onClick={(event) => {
                           event.stopPropagation();
                           toggleExpand(entry.id);

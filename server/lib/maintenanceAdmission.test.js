@@ -163,6 +163,30 @@ describe('durable graceful maintenance', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(before);
   });
 
+  it('serves status from one parse until the journal file changes', () => {
+    const { root } = gate();
+    let reads = 0;
+    const io = { ...fs, readFileSync: (...args) => { reads++; return fs.readFileSync(...args); } };
+    const admission = createMaintenanceAdmission(root, { io });
+    admission.admit('media', 'render-a');
+    const before = reads;
+    for (let i = 0; i < 5; i++) expect(admission.held()).toBe(false);
+    expect(reads - before).toBeLessThanOrEqual(1);
+    const settled = reads;
+    admission.status();
+    expect(reads).toBe(settled);
+
+    // A second process publishing (here: a second admission over the same root) is seen at once.
+    const other = createMaintenanceAdmission(root);
+    const hold = other.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    expect(admission.held()).toBe(true);
+    // Callers cannot corrupt the cached journal through the projection they receive.
+    admission.status().hold.reason = 'tampered';
+    expect(admission.status().hold.reason).toBe('Drain');
+    other.resume({ id: hold.id, revision: hold.revision });
+    expect(admission.held()).toBe(false);
+  });
+
   it('keeps journal write failure unavailable without claiming recovered completion', () => {
     const { root } = gate();
     let fail = false;

@@ -159,12 +159,12 @@ async function auditMergeGate(agentId, originalTask) {
 // still governed by success/skipMerge even for stand-down: the existing local
 // cleanup contract is independent of who opened the PR.
 const WORKTREE_DISPOSITIONS = Object.freeze({
-  'not-a-worktree': Object.freeze({ merge: false, preserveBranch: false }),
-  discard: Object.freeze({ merge: false, preserveBranch: false }),
-  'open-pr': Object.freeze({ merge: false, preserveBranch: false }),
-  'stand-down': Object.freeze({ preserveBranch: false }),
-  'stand-down-uncertain': Object.freeze({ preserveBranch: true }),
-  'stranded-pr-handoff': Object.freeze({ preserveBranch: true }),
+  'not-a-worktree': Object.freeze({ merge: false }),
+  discard: Object.freeze({ merge: false }),
+  'open-pr': Object.freeze({ merge: false }),
+  'stand-down': Object.freeze({}),
+  'stand-down-uncertain': Object.freeze({}),
+  'stranded-pr-handoff': Object.freeze({}),
   'merge-or-preserve': Object.freeze({}),
 });
 
@@ -185,7 +185,6 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
   return {
     disposition: name,
     merge: success && !skipMerge,
-    preserveBranch: !success,
     ...WORKTREE_DISPOSITIONS[name],
   };
 }
@@ -587,14 +586,11 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
     agentId, branchName: worktreeBranch, merge: shouldMerge
   });
 
+  // Cleanup retains branches without merge evidence, including failed runs and
+  // successful runs whose PR could not be confirmed. Their retry can resume
+  // from the preserved work through resolveResumeBranch below.
   const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, {
     merge: shouldMerge,
-    // A FAILED agent's branch is the only record of what it got done. Keep it when
-    // it holds commits so the task's retry can attach to it and resume rather than
-    // redo the work (see resolveResumeBranch below + removeWorktree's flag docs).
-    // Same reasoning for a SUCCESSFUL run whose PR we could not confirm: we chose
-    // not to push it, so the local branch is the only copy.
-    preserveBranchWithCommits: disposition.preserveBranch,
   }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
@@ -931,7 +927,7 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * spawn mode (#3368, #3373).
  *
  * A failed agent whose branch — or whole worktree — survived cleanup leaves real
- * work behind (see `preserveBranchWithCommits` above; a dirty tree aborts removal
+ * work behind (cleanup requires merge evidence; a dirty tree aborts removal
  * outright). Recording where it lives on the TASK is what makes its retry RESUME
  * rather than restart from scratch — the behavior the agent-d2ae0352 incident
  * exposed, where a run reaped 30s after its PR merged was re-dispatched to a fresh

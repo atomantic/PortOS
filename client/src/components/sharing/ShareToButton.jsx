@@ -182,7 +182,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
         disabled={nothingToShare}
         aria-expanded={open}
         aria-haspopup="true"
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'p-1.5' : ''}`}
+        className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors sm:min-h-0 sm:min-w-0 ${compact ? 'p-1.5' : ''}`}
         title={nothingToShare ? 'Nothing selected to share' : 'Share to a bucket'}
       >
         <Share2 size={12} />

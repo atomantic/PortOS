@@ -424,7 +424,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
 
     expect(git.push).not.toHaveBeenCalled();
     expect(git.createPR).not.toHaveBeenCalled();
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true, preserveBranchWithCommits: false });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true });
   });
 
   it('should use auto-merge path when prCreation is not provided (defaults to never)', async () => {
@@ -432,7 +432,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
 
     expect(git.push).not.toHaveBeenCalled();
     expect(git.createPR).not.toHaveBeenCalled();
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true, preserveBranchWithCommits: false });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true });
   });
 
   it('should skip PR flow when prCreation is always but success is false', async () => {
@@ -441,9 +441,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(git.push).not.toHaveBeenCalled();
     expect(git.createPR).not.toHaveBeenCalled();
     // Falls through to auto-merge path with merge: false (failure cleanup). A
-    // FAILED agent additionally asks removeWorktree to KEEP the branch when it
-    // holds commits, so the task's retry can resume from it (#3167).
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false, preserveBranchWithCommits: true });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
   });
 
   it('should use baseBranch as PR base (not devBranch, since worktrees are created from baseBranch)', async () => {
@@ -620,22 +618,18 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       const warnings = await cleanupAgentWorktree('agent-1', true, netOpts);
 
       expect(git.createPR).not.toHaveBeenCalled();
-      // …but standing down must NOT also throw the work away. `removeWorktree`
-      // deletes an unmerged branch outright on a `success` run, so without this
-      // a transient `gh pr list` failure takes the agent's only copy of the
-      // commits with it — we chose not to push, so the branch IS the copy.
       expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123',
-        expect.objectContaining({ preserveBranchWithCommits: true }));
+        { merge: true });
       expect(warnings.some(w => w.includes('Could not confirm a pull request'))).toBe(true);
     });
 
-    it('lets the branch be tidied up when the agent DID open its PR', async () => {
+    it('continues cleanup without warnings when the agent opened its PR', async () => {
       verifyPrClaimMock.mockResolvedValue({ ok: true, branch: 'cos/task-abc123' });
 
       const warnings = await cleanupAgentWorktree('agent-1', true, netOpts);
 
       expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123',
-        expect.objectContaining({ preserveBranchWithCommits: false }));
+        { merge: true });
       expect(warnings).toEqual([]);
     });
 
@@ -652,7 +646,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
 
       expect(git.createPR).not.toHaveBeenCalled();
       expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123',
-        expect.objectContaining({ preserveBranchWithCommits: true }));
+        { merge: true });
       expect(warnings.some(w => w.includes('Could not confirm a pull request'))).toBe(true);
     });
 
@@ -664,7 +658,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
 
       expect(git.createPR).not.toHaveBeenCalled();
       expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123',
-        expect.objectContaining({ preserveBranchWithCommits: true }));
+        { merge: true });
     });
 
     it('stands down when the branch holds no commits — there was nothing to open a PR for', async () => {
@@ -1285,7 +1279,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(getPullRequestStateMock).toHaveBeenCalledWith('42', expect.objectContaining({ cwd: '/mock/workspace' }));
     expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
     if (state === 'MERGED') {
-      expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'fork/contributor/main', { merge: false, preserveBranchWithCommits: false });
+      expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'fork/contributor/main', { merge: false });
     } else expect(removeWorktree).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
@@ -1297,7 +1291,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     await cleanupAgentWorktree('agent-1', true, { prCreation: 'never', skipMerge: true });
 
     expect(removeWorktree).toHaveBeenCalledWith(
-      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false, preserveBranchWithCommits: false }
+      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false }
     );
   });
 
@@ -1305,29 +1299,11 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     await cleanupAgentWorktree('agent-1', true, { prCreation: 'never', skipMerge: false });
 
     expect(removeWorktree).toHaveBeenCalledWith(
-      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true, preserveBranchWithCommits: false }
+      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true }
     );
   });
 
-  // --- branch preservation for resume (#3167) ---
 
-  it('asks removeWorktree to preserve a FAILED agent\'s branch so its retry can resume', async () => {
-    await cleanupAgentWorktree('agent-1', false);
-
-    expect(removeWorktree).toHaveBeenCalledWith(
-      'agent-1', '/mock/workspace', 'cos/task-abc123',
-      expect.objectContaining({ preserveBranchWithCommits: true })
-    );
-  });
-
-  it('does NOT preserve the branch on success — the merge/PR path owns cleanup', async () => {
-    await cleanupAgentWorktree('agent-1', true);
-
-    expect(removeWorktree).toHaveBeenCalledWith(
-      'agent-1', '/mock/workspace', 'cos/task-abc123',
-      expect.objectContaining({ preserveBranchWithCommits: false })
-    );
-  });
 });
 
 const DEAD_BRANCH = 'cos/task-1/agent-x';
@@ -2576,26 +2552,26 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
 // In particular, no branch identity is uncertainty even when ok is true.
 describe('resolveWorktreeDisposition', () => {
   it.each([
-    [true, 'always', null, {}, 'open-pr', false, false],
-    [false, 'always', null, {}, 'merge-or-preserve', false, true],
-    [true, 'never', null, {}, 'merge-or-preserve', true, false],
-    [false, 'never', null, {}, 'merge-or-preserve', false, true],
-    [true, 'if-missing', { category: 'pr-missing' }, {}, 'open-pr', false, false],
-    [true, 'if-missing', { ok: true, branch: 'example' }, {}, 'stand-down', true, false],
-    [true, 'if-missing', { ok: true, branch: 'example', branchProvenEmpty: true }, {}, 'stand-down', true, false],
-    [true, 'if-missing', { ok: true, branch: null }, {}, 'stand-down-uncertain', true, true],
-    [true, 'if-missing', { category: 'forge-unreachable' }, {}, 'stand-down-uncertain', true, true],
-    [true, 'if-missing', null, {}, 'stand-down-uncertain', true, true],
-    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, {}, 'stranded-pr-handoff', false, true],
-    [false, 'if-missing', { status: 'found' }, {}, 'merge-or-preserve', false, true],
-    [false, 'if-missing', { status: 'unavailable' }, {}, 'merge-or-preserve', false, true],
-    [false, 'if-missing', { status: 'none' }, {}, 'merge-or-preserve', false, true],
-    [true, 'always', null, { discardWorktree: true }, 'discard', false, false],
-    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, { discardWorktree: true }, 'discard', false, false],
-    [true, 'always', null, { isWorktree: false, discardWorktree: true }, 'not-a-worktree', false, false],
-    [true, 'never', null, { skipMerge: true }, 'merge-or-preserve', false, false],
-  ])('success=%s creation=%s verdict=%j overrides=%j → %s', (success, prCreation, prClaimVerdict, overrides, disposition, merge, preserveBranch) => {
+    [true, 'always', null, {}, 'open-pr', false],
+    [false, 'always', null, {}, 'merge-or-preserve', false],
+    [true, 'never', null, {}, 'merge-or-preserve', true],
+    [false, 'never', null, {}, 'merge-or-preserve', false],
+    [true, 'if-missing', { category: 'pr-missing' }, {}, 'open-pr', false],
+    [true, 'if-missing', { ok: true, branch: 'example' }, {}, 'stand-down', true],
+    [true, 'if-missing', { ok: true, branch: 'example', branchProvenEmpty: true }, {}, 'stand-down', true],
+    [true, 'if-missing', { ok: true, branch: null }, {}, 'stand-down-uncertain', true],
+    [true, 'if-missing', { category: 'forge-unreachable' }, {}, 'stand-down-uncertain', true],
+    [true, 'if-missing', null, {}, 'stand-down-uncertain', true],
+    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, {}, 'stranded-pr-handoff', false],
+    [false, 'if-missing', { status: 'found' }, {}, 'merge-or-preserve', false],
+    [false, 'if-missing', { status: 'unavailable' }, {}, 'merge-or-preserve', false],
+    [false, 'if-missing', { status: 'none' }, {}, 'merge-or-preserve', false],
+    [true, 'always', null, { discardWorktree: true }, 'discard', false],
+    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, { discardWorktree: true }, 'discard', false],
+    [true, 'always', null, { isWorktree: false, discardWorktree: true }, 'not-a-worktree', false],
+    [true, 'never', null, { skipMerge: true }, 'merge-or-preserve', false],
+  ])('success=%s creation=%s verdict=%j overrides=%j → %s', (success, prCreation, prClaimVerdict, overrides, disposition, merge) => {
     expect(resolveWorktreeDisposition({ success, prCreation, prClaimVerdict, ...overrides }))
-      .toEqual({ disposition, merge, preserveBranch });
+      .toEqual({ disposition, merge });
   });
 });

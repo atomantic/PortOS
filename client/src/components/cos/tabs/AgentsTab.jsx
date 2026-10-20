@@ -323,7 +323,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
             </h3>
             <button
               onClick={() => setConfirmingClear(true)}
-              className="flex items-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors sm:min-h-0 sm:min-w-0"
               aria-label="Clear all completed agents"
             >
               <Trash2 size={14} aria-hidden="true" />
