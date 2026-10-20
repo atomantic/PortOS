@@ -271,9 +271,10 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   persistTestDiagnostic(invocationPath, invocation);
   return new Promise((resolve) => {
     // npm is a launcher, not the entire test tree. Give this invocation its
-    // own POSIX group; Windows killProcessTree uses taskkill /T instead. The
-    // browser supervisor instead owns the inherited group, so its independent
-    // watchdog can retire npm even if this launcher's event loop is stopped.
+    // own POSIX group; Windows killProcessTree uses taskkill /T instead. A
+    // supervisor (the browser watchdog, or pregate's stage group) instead owns
+    // the inherited group, so it can retire npm and Vitest even after this
+    // launcher's event loop stopped or the launcher itself was killed.
     const processGroup = process.platform !== 'win32' && env.PORTOS_CI_TEST_SUPERVISED_GROUP !== '1';
     const childEnv = { ...env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
     // Only the workflow launcher owns durable attempts. Nested launcher
