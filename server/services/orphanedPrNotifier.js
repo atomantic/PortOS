@@ -26,23 +26,43 @@
 import { addNotification, exists as notificationExists, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+
+const queueHandback = createKeyCachedQueue();
+
+async function handBackBlockedRemediation(task) {
+  if (task.metadata.blockedCategory === 'pr-head-moved') return false;
+  return queueHandback(task.id, async () => {
+    const [{ getTaskById, updateTask }, { getAppById }, { handBackPrRemediation }] = await Promise.all([
+      import('./cos.js'), import('./apps.js'), import('./prRemediationFollowUp.js'),
+    ]);
+    // Re-read inside the queue: overlapping block events may hold older snapshots.
+    const current = await getTaskById(task.id);
+    if (current?.status !== 'blocked' || current.metadata?.prRemediationHandedBackAt
+      || current.metadata?.blockedCategory === 'pr-head-moved'
+      || TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(current.metadata?.blockedCategory)) return false;
+    const app = await getAppById(current.app || current.metadata?.app);
+    if (!app?.repoPath) return false;
+    if (!await handBackPrRemediation({ task: current, workspacePath: app.repoPath })) return false;
+    await updateTask(task.id, { metadata: { prRemediationHandedBackAt: new Date().toISOString() } }, 'internal');
+    return true;
+  });
+}
 
 /**
- * Raise a notification when a task that was going to merge a PR gets blocked.
+ * Preserve PR ownership when a merge or remediation follow-up gets blocked.
  *
  * Self-guarding: returns `false` without side effects unless the task is a
- * genuine block transition carrying a PR url. A notification-store failure
+ * genuine block transition carrying PR follow-up metadata. A notification-store failure
  * rejects rather than being swallowed here, so the caller decides — the
  * `tasks:changed` listener in cos.js logs it, because a throw from an event
  * listener has no request lifecycle to bubble to.
  *
  * @param {{ task?: object, previousStatus?: string }} change - a `tasks:changed` payload
- * @returns {Promise<boolean>} whether a notification was raised
+ * @returns {Promise<boolean>} whether a notification or hand-back was raised
  */
 export async function notifyIfPrLeftOrphaned({ task, previousStatus } = {}) {
   if (task?.status !== 'blocked' || previousStatus === 'blocked') return false;
-  const prUrl = task.metadata?.reviewLoopPRUrl;
-  if (!prUrl) return false;
   // A TIMED pause is not an orphaning: the cooldown sweeper flips the task back
   // to `pending` on its own, so the PR still has something coming for it. Staying
   // quiet matters twice over — the card would be wrong, and the one-per-PR guard
@@ -50,6 +70,9 @@ export async function notifyIfPrLeftOrphaned({ task, previousStatus } = {}) {
   // `worktree-busy` wait gives up after a bounded number of attempts and re-blocks
   // as `worktree-failed`, which is the block a human actually needs to see).
   if (TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory)) return false;
+  if (task.metadata?.prRemediationFollowUp) return handBackBlockedRemediation(task);
+  const prUrl = task.metadata?.reviewLoopPRUrl;
+  if (!prUrl) return false;
   // One notification per PR, not per block. Fixing the cause and re-running is
   // the intended recovery, and a re-run that blocks again would otherwise stack
   // another HIGH card for a PR the user is already looking at.

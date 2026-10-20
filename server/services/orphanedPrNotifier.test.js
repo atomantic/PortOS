@@ -16,6 +16,14 @@ vi.mock('./notifications.js', () => ({
 }));
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 
+vi.mock('./cos.js', () => ({ addTask: vi.fn(), getTaskById: vi.fn(), updateTask: vi.fn() }));
+vi.mock('./github.js', () => ({ execGh: vi.fn().mockResolvedValue('') }));
+vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: {} }) }));
+vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue({ repoPath: '/repos/example' }) }));
+
+import { getTaskById, updateTask } from './cos.js';
+import { execGh } from './github.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
 import { addNotification, exists } from './notifications.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
@@ -117,5 +125,54 @@ describe('notifyIfPrLeftOrphaned', () => {
   it('tolerates an empty payload', async () => {
     expect(await notifyIfPrLeftOrphaned()).toBe(false);
     expect(await notifyIfPrLeftOrphaned({})).toBe(false);
+  });
+});
+
+// Exercises the same entrypoint the tasks:changed listener invokes, through the
+// real hand-back service to the forge adapter.
+describe('blocked PR remediation hand-back', () => {
+  const remediation = (blockedCategory) => ({
+    id: 'sys-remediation-1', app: 'app-1', status: 'blocked',
+    metadata: {
+      prRemediationFollowUp: true, blockedCategory,
+      prRemediationNumber: 9, prRemediationRepoFullName: 'example-org/example-repo',
+      prRemediationUrl: PR_URL, prRemediationAuthorLogin: 'contributor',
+      prRemediationHeadSha: 'a'.repeat(40),
+    },
+  });
+
+  it.each(['worktree-failed', 'max-retries'])('hands back %s once across concurrent events and later re-blocks', async (category) => {
+    const task = remediation(category);
+    getTaskById.mockImplementation(async () => structuredClone(task));
+    updateTask.mockImplementation(async (_id, { metadata }) => {
+      Object.assign(task.metadata, metadata);
+      return structuredClone(task);
+    });
+    const change = { task: structuredClone(task), previousStatus: 'pending' };
+    expect(await Promise.all([notifyIfPrLeftOrphaned(change), notifyIfPrLeftOrphaned(change)])).toEqual([true, false]);
+    expect(execGh.mock.calls.map(([args]) => args.slice(0, 3))).toEqual([
+      ['pr', 'comment', PR_URL], ['pr', 'edit', PR_URL],
+    ]);
+    expect(execGh.mock.calls[0][0].at(-1)).toContain('remediation task is now blocked');
+    expect(execGh.mock.calls[0][0].at(-1)).not.toContain('it did not run');
+    expect(execGh.mock.calls[1][0]).toContain('contributor');
+    expect(task.metadata.prRemediationHandedBackAt).toEqual(expect.any(String));
+    expect(updateTask).toHaveBeenCalledWith(task.id, { metadata: { prRemediationHandedBackAt: expect.any(String) } }, 'internal');
+    expect(await notifyIfPrLeftOrphaned(change)).toBe(false);
+    expect(execGh).toHaveBeenCalledTimes(2);
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it.each(['worktree-busy', 'pr-head-moved'])('does not hand back a %s block', async (category) => {
+    expect(await notifyIfPrLeftOrphaned({ task: remediation(category), previousStatus: 'pending' })).toBe(false);
+    expect(execGh).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('does not hand back a task revived before its event was processed', async () => {
+    const task = remediation('max-retries');
+    getTaskById.mockResolvedValue({ ...task, status: 'pending' });
+    expect(await notifyIfPrLeftOrphaned({ task, previousStatus: 'in_progress' })).toBe(false);
+    expect(execGh).not.toHaveBeenCalled();
   });
 });
