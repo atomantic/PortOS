@@ -102,7 +102,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('reference-watch leaves tracker IDs and filing mechanics to the shared tracker block', () => {
     const current = DEFAULT_TASK_PROMPTS['reference-watch'];
 
-    expect(PROMPT_VERSIONS['reference-watch']).toBe(4);
+    expect(PROMPT_VERSIONS['reference-watch']).toBe(5);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('compare the upstream repository and commit SHA(s)');
     expect(current).toContain('The issue number or key is its');

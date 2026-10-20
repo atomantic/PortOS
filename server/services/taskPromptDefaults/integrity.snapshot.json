@@ -49,7 +49,7 @@
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
     "privacy": "71fd4422a7d1c67e405eb6cfb3acc426",
-    "reference-watch": "57221102b6245d40852ac258fbf9ebbf",
+    "reference-watch": "bc92833dd816f0f66759de8c0db1e758",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "reliability": "2a99be77b8f34653f4b926db0a773ea5",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
@@ -110,7 +110,7 @@
     "pr-reviewer": 5,
     "pr-watcher": 2,
     "privacy": 2,
-    "reference-watch": 4,
+    "reference-watch": 5,
     "refresh-local-llm-catalog": 4,
     "reliability": 1,
     "repo-sync": 1,
@@ -126,7 +126,7 @@
     "ux": 8,
     "workflow-recovery": 1
   },
-  "REFERENCE_WATCH_AUDITED_VERSION": 4,
+  "REFERENCE_WATCH_AUDITED_VERSION": 5,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "accessibility": [
       "ce7377d0ac57cbf0526074cfb95e3803",
@@ -449,7 +449,8 @@
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
       "722ca590fb4b6323c98850a176b9b309",
-      "e0e20754700fb08d5159b8437d9c260b"
+      "e0e20754700fb08d5159b8437d9c260b",
+      "57221102b6245d40852ac258fbf9ebbf"
     ],
     "refresh-local-llm-catalog": [
       "525bd0077672bf2f8beec9c0124740c8",
