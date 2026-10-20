@@ -739,7 +739,9 @@ async function main() {
     }
   }
 
-  if (owner.signal && !failure) {
+  // A signal after the last stage ran (e.g. during its group sweep) leaves the
+  // completed run's receipt; it is reported below and still ends the process.
+  if (owner.signal && !failure && results.some((stage) => stage.status === 'not-run')) {
     writeSync(2, `❌ Pregate incomplete: owner_pid=${process.pid} received_signal=${owner.signal} between stages.\n`);
     failure = `❌ Pregate incomplete: cancelled by ${owner.signal} before every stage ran.`;
     exitCode = 128 + constants.signals[owner.signal];
