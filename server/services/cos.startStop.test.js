@@ -165,7 +165,7 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
 
   it('arms journal recovery independently of agent slots and branch tasks, and enforces live autonomy on every timer', async () => {
     recoveryDrain.calls.length = 0;
-    persisted = { ...persisted, config: { ...persisted.config, maxConcurrentAgents: 0, domainAutonomy: { cos: 'execute' } } };
+    persisted = { ...persisted, paused: false, config: { ...persisted.config, maxConcurrentAgents: 0, domainAutonomy: { cos: 'execute' } } };
     const starting = start();
     await waitFor(() => typeof releaseRecovery === 'function');
     releaseRecovery(); await starting;

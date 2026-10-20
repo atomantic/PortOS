@@ -1232,7 +1232,9 @@ describe('automatic initialized retirement continuation', () => {
   it('skips completed historical journals beside a fresh foreign cut without starving its exact owner', async () => {
     for (let i = 0; i < 3; i++) {
       const retired = await fixture.service.retire(await reviewed());
-      expect(await fixture.service.restore({ appId: 'app', transactionId: retired.transactionId })).toMatchObject({ ok: true });
+      const target = { appId: 'app', transactionId: retired.transactionId };
+      const current = await fixture.service.status(target);
+      expect(await fixture.service.restore({ ...target, journalDigest: current.journalDigest })).toMatchObject({ ok: true });
     }
     fixture.failPart = 'administration';
     const pending = await fixture.service.retire(await reviewed());
@@ -1296,10 +1298,11 @@ describe('automatic initialized retirement continuation', () => {
   it('does not call a terminal receipt settled when its owner file disappeared but the cut still exists', async () => {
     await fixture.service.retire(await reviewed());
     expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted)).toMatchObject({ ok: true });
+    const input = await automaticInput();
     await mkdir(join(root, 'admission/cut'), { recursive: true, mode: 0o700 });
     const found = await fixture.service.discover();
-    expect(found.transactions[0].settled).toBe(false);
-    expect(await fixture.service.recoverAutomatically(await automaticInput(), permitted))
+    expect(found.transactions.find(row => row.transactionId === input.transactionId).settled).toBe(false);
+    expect(await fixture.service.recoverAutomatically(input, permitted))
       .toMatchObject({ ok: false, reason: 'retirement-reservation-owner-missing' });
     expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
   });
