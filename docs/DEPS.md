@@ -88,7 +88,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | **Autofixer deps** | | | | |
 | `express` | 1 | KEEP | `autofixer/ui.js` | Same framework and pin (`5.2.1`) as the server workspace, but a separate install prefix with its own lockfile — so it needs its own `overrides` block to inherit the server's express-tree pins |
 | **Browser workspace** | | | | |
-| _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus one in-repo import from `server/lib/`. No Dependabot entry, and its lockfile is gitignored |
+| _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus in-repo imports from `server/lib/` and `scripts/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
 ## Detailed Findings — Tier 2/3 Audits
 

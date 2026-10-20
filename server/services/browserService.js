@@ -107,14 +107,24 @@ export async function getHealthStatus({ strict = false } = {}) {
   const response = await fetchWithTimeout(healthUrl, {}, HEALTH_TIMEOUT_MS).catch(() => null);
 
   if (!response || !response.ok) {
+    // 503 while the supervisor is relaunching still carries the reason. The
+    // Browser page already renders `error` when Chrome is down.
+    const detail = response ? await readResponseJson(response) : null;
+    const relaunching = detail?.status === 'relaunching';
+    const lastError = typeof detail?.lastError === 'string' && detail.lastError ? detail.lastError : null;
     return {
       connected: false,
       processRunning: false,
-      cdpPort: config.cdpPort,
-      cdpHost: config.cdpHost,
+      cdpPort: detail?.cdpPort || config.cdpPort,
+      cdpHost: detail?.cdpHost || config.cdpHost,
       healthPort: config.healthPort,
-      cdpEndpoint: `ws://${config.cdpHost}:${config.cdpPort}`,
-      error: response ? `Health check returned ${response.status}` : 'Health check unreachable'
+      cdpEndpoint: detail?.cdpEndpoint || `ws://${config.cdpHost}:${config.cdpPort}`,
+      headless: detail?.headless ?? config.headless,
+      status: typeof detail?.status === 'string' ? detail.status : undefined,
+      ...(relaunching && Number.isInteger(detail.attempt) && detail.attempt > 0 ? { attempt: detail.attempt } : {}),
+      error: relaunching && lastError
+        ? lastError
+        : (response ? `Health check returned ${response.status}` : 'Health check unreachable')
     };
   }
 
