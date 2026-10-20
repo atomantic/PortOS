@@ -218,6 +218,7 @@ describe('TabPills — mobileCompact icon row', () => {
 
     const rightArrow = screen.getByRole('button', { name: 'Scroll tabs right' });
     expect(rightArrow).toHaveClass('min-w-[44px]', 'min-h-[44px]');
+    expect(rightArrow).not.toHaveClass('sm:hidden');
     await user.click(rightArrow);
     expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior });
 
@@ -271,6 +272,99 @@ describe('TabPills — mobileCompact icon row', () => {
     const select = screen.getByRole('combobox', { name: 'Universe sections' });
     expect(select).toHaveAttribute('aria-label', 'Universe sections');
     expect(select).not.toHaveAttribute('id');
+  });
+});
+
+// A labelled strip (no mobileCompact) overflows the same way the icon row does.
+// happy-dom is 0×0 and has no ResizeObserver, so the test states both.
+describe('TabPills — desktop overflow chevrons', () => {
+  function installResizeObserver() {
+    const resize = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb) { resize.push(cb); }
+      observe() {}
+      disconnect() {}
+    });
+    return resize;
+  }
+
+  function publishOverflow(strip, { scrollWidth, clientWidth }) {
+    Object.defineProperty(strip, 'scrollWidth', { configurable: true, value: scrollWidth });
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, value: clientWidth });
+  }
+
+  it.each(['underline', 'pills'])('shows a right chevron on an overflowing labelled %s strip and keeps the caller class on the bar', (variant) => {
+    const resize = installResizeObserver();
+    const { container } = render(
+      <TabPills variant={variant} className="mt-4 -mb-4" tabs={sampleTabs} activeTab="cast" onChange={() => {}} />
+    );
+    const strip = container.querySelector('[role="tablist"]');
+    publishOverflow(strip, { scrollWidth: 800, clientWidth: 300 });
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
+    act(() => { for (const cb of resize) cb(); });
+
+    const rightArrow = screen.getByRole('button', { name: 'Scroll tabs right' });
+    expect(rightArrow).toHaveClass('min-w-[44px]', 'min-h-[44px]');
+    expect(rightArrow).not.toHaveClass('sm:hidden');
+    expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).toBeNull();
+    expect(within(screen.getByRole('tab', { name: /Cast/ })).getByText('Cast')).not.toHaveClass('max-sm:sr-only');
+
+    const bar = strip.parentElement;
+    expect(bar).toHaveClass('mt-4', '-mb-4', 'min-w-0');
+    expect(strip).toHaveClass('min-w-0', 'flex-1');
+    expect(strip).not.toHaveClass('mt-4');
+    if (variant === 'underline') expect(bar).toHaveClass('border-b', 'border-port-border');
+    else expect(strip).toHaveClass('bg-port-card');
+    vi.unstubAllGlobals();
+  });
+
+  it('shows no chevrons when the labelled strip fits', () => {
+    const resize = installResizeObserver();
+    const { container } = render(
+      <TabPills tabs={sampleTabs} activeTab="cast" onChange={() => {}} />
+    );
+    publishOverflow(container.querySelector('[role="tablist"]'), { scrollWidth: 300, clientWidth: 300 });
+    act(() => { for (const cb of resize) cb(); });
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('scrolls a labelled strip from the chevrons', async () => {
+    const resize = installResizeObserver();
+    const user = userEvent.setup();
+    const { container } = render(
+      <TabPills tabs={sampleTabs} activeTab="cast" onChange={() => {}} />
+    );
+    const strip = container.querySelector('[role="tablist"]');
+    publishOverflow(strip, { scrollWidth: 800, clientWidth: 300 });
+    const scrollBy = vi.spyOn(strip, 'scrollBy').mockImplementation(() => {});
+    act(() => { for (const cb of resize) cb(); });
+
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
+    expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior: 'smooth' });
+
+    strip.scrollLeft = 200;
+    fireEvent.scroll(strip);
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs left' }));
+    expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior: 'smooth' });
+    vi.unstubAllGlobals();
+  });
+
+  it('does not measure or chevron a filter chip row that overflows', () => {
+    const resize = installResizeObserver();
+    const { container } = render(
+      <TabPills variant="filter" className="mt-2 max-w-full" tabs={sampleTabs} activeTab="cast" onChange={() => {}} ariaLabel="Filter by kind" />
+    );
+    const group = screen.getByRole('group', { name: 'Filter by kind' });
+    expect(group).toBe(container.firstElementChild);
+    expect(group).toHaveClass('mt-2', 'max-w-full');
+    publishOverflow(group, { scrollWidth: 800, clientWidth: 300 });
+    act(() => { for (const cb of resize) cb(); });
+    expect(resize).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
+    expect(within(group).getAllByRole('button')).toHaveLength(3);
+    vi.unstubAllGlobals();
   });
 });
 

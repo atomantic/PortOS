@@ -10,7 +10,10 @@
 // `mobileCompact` is the phone treatment for a bar with more tabs than fit at
 // 375px. It collapses to an ICON-ONLY row below `sm` — same buttons, same
 // tablist, labels kept for screen readers — with chevrons at whichever edge is
-// still scrollable. That is a deliberate product preference over a `<select>`
+// still scrollable. The same chevrons show on a labelled underline or pills
+// strip at every width: padding usually clips that row after a whole word, so
+// the cut is not a cue that more tabs exist (#12593). `filter` chip rows are
+// left alone. That is a deliberate product preference over a `<select>`
 // (#7283 swapped to one and it reads as a form control, not navigation): icons
 // keep every destination one tap away and keep the bar looking like a nav.
 // A tab list where any tab has no icon has nothing to render in that row and
@@ -46,10 +49,9 @@ const SIZE = {
   md: { text: 'text-sm', icon: 16, padding: 'px-3 sm:px-4 py-3', gap: 'gap-2' },
 };
 
-// Chevrons are the only overflow cue an icon row gets — with labels gone there
-// is no half-clipped word hinting that the strip continues. They sit in flow
-// beside the strip rather than over it, so they never cover a destination.
-const ARROW_CLASS = 'sm:hidden shrink-0 flex min-w-[44px] min-h-[44px] items-center justify-center self-stretch px-1 text-gray-400 hover:text-white';
+// In flow beside the strip, never over a tab. 44px is the phone touch target,
+// and the buttons stay visible at every breakpoint.
+const ARROW_CLASS = 'shrink-0 flex min-w-[44px] min-h-[44px] items-center justify-center self-stretch px-1 text-gray-400 hover:text-white';
 
 export default function TabPills({
   tabs,
@@ -88,6 +90,9 @@ export default function TabPills({
   // whole bar rather than rendering a gap the user can't aim at.
   const iconRow = mobileCompact && visibleTabs.every((t) => t.icon);
   const selectFallback = mobileCompact && !iconRow;
+  // Filter chip rows are not a scroll strip. Every other bar, including the
+  // compact icon row of any variant, gets the overflow measure and chevrons.
+  const scrollCue = iconRow || variant !== 'filter';
 
   // Reveal only inside the horizontal tab strip. scrollIntoView also scrolls
   // ancestors, pulling a mobile page away from its task form/content.
@@ -122,15 +127,15 @@ export default function TabPills({
     syncPosition();
   }, [syncPosition]);
 
-  useEffect(() => { if (iconRow) measure(); }, [iconRow, measure, visibleTabs.length]);
+  useEffect(() => { if (scrollCue) measure(); }, [scrollCue, measure, visibleTabs.length]);
 
   useEffect(() => {
     const strip = stripRef.current;
-    if (!iconRow || !strip || typeof ResizeObserver === 'undefined') return undefined;
+    if (!scrollCue || !strip || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver(measure);
     observer.observe(strip);
     return () => observer.disconnect();
-  }, [iconRow, measure]);
+  }, [scrollCue, measure]);
 
   const scrollStrip = (direction) => {
     const strip = stripRef.current;
@@ -196,12 +201,13 @@ export default function TabPills({
     </div>
   ) : null;
 
-  // One strip, wrapped in an arrow row only when compact — an extra flex
-  // wrapper on every bar would break the callers that size this thing. The
-  // wrapper IS the bar when it exists, so the caller's `className` and the
-  // underline move onto it; the strip keeps only what makes it the scroller.
-  const withArrows = (strip) => (iconRow ? (
-    <div className={`flex min-w-0 items-stretch ${variant === 'underline' ? 'border-b border-port-border' : ''} ${className}`}>
+  // The wrapper IS the bar. Callers size it (`mt-4 -mb-4`, `w-full min-w-0
+  // shrink-0`, `pb-px`), so those classes and the underline live here; the
+  // strip keeps only what makes it the scroller. A select fallback hides this
+  // whole bar below `sm` — hiding only the strip would leave an empty flex row
+  // beside the select.
+  const withArrows = (strip) => (scrollCue ? (
+    <div className={`${selectFallback ? 'hidden sm:flex' : 'flex'} min-w-0 items-stretch ${variant === 'underline' ? 'border-b border-port-border' : ''} ${className}`}>
       {canScrollLeft && (
         <button type="button" onClick={() => scrollStrip(-1)} aria-label="Scroll tabs left" className={ARROW_CLASS}>
           <ChevronLeft size={18} />
@@ -224,8 +230,8 @@ export default function TabPills({
         {withArrows(
           <div
             ref={stripRef}
-            onScroll={iconRow ? syncPosition : undefined}
-            className={`${selectFallback ? 'hidden sm:flex' : 'flex'} ${iconRow ? 'min-w-0 flex-1' : `shrink-0 ${className}`} items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto scrollbar-hide touch-pan-x`}
+            onScroll={scrollCue ? syncPosition : undefined}
+            className={`${selectFallback && !scrollCue ? 'hidden sm:flex' : 'flex'} ${scrollCue ? 'min-w-0 flex-1' : `shrink-0 ${className}`} items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto scrollbar-hide touch-pan-x`}
             role={isFilter ? 'group' : 'tablist'}
             aria-label={ariaLabel}
           >
@@ -280,8 +286,8 @@ export default function TabPills({
       {withArrows(
         <div
           ref={stripRef}
-          onScroll={iconRow ? syncPosition : undefined}
-          className={`${selectFallback ? 'hidden sm:flex' : 'flex'} ${iconRow ? 'min-w-0 flex-1' : `shrink-0 border-b border-port-border ${className}`} ${stretch ? 'items-stretch bg-port-bg/40' : 'gap-1'} overflow-x-auto scrollbar-hide touch-pan-x`}
+          onScroll={scrollCue ? syncPosition : undefined}
+          className={`flex min-w-0 flex-1 ${stretch ? 'items-stretch bg-port-bg/40' : 'gap-1'} overflow-x-auto scrollbar-hide touch-pan-x`}
           role="tablist"
           aria-label={ariaLabel}
         >
