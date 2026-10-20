@@ -39,7 +39,7 @@ import { detectConflicts } from './taskConflict.js';
 import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
-import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
+import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
 import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
@@ -239,10 +239,9 @@ async function prepareRequestedWorktree({
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
-    existingBranch: existingBranch || undefined,
-    // Only consulted when `existingBranch` names a FORK PR's head, which has no
-    // `origin/<branch>` to attach to (#6064). Null for every other task, which
-    // is the behavior that predates it.
+    existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
+    ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
+    // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,

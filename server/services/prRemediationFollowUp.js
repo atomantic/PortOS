@@ -42,8 +42,8 @@
 
 import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
-import { buildCiMergeGateSteps } from './promptSections/reviewLifecycle.js';
-import { normalizeForkHead } from '../lib/forkHead.js';
+import { buildCiMergeGateSteps, buildForkBranchInstructions } from './promptSections/reviewLifecycle.js';
+import { normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { PR_WRITE_ACCESS } from '../lib/prHandbackPolicy.js';
 
@@ -51,13 +51,13 @@ import { PR_WRITE_ACCESS } from '../lib/prHandbackPolicy.js';
  * The remediation procedure. `reason` names why the PR did not land, so the
  * agent starts from the right end of the problem instead of re-deriving it.
  */
-function renderContext({ repoFullName, number, url, headRefName, authorLogin, reason, writeAccess }) {
+function renderContext({ repoFullName, number, url, headRefName, authorLogin, reason, writeAccess, forkHead }) {
   // Both halves stay conditional: a same-repo head has no contributor who "left
   // the branch writable", and saying otherwise puts a false claim about a real
   // person into an operator-facing instruction.
   const accessNote = writeAccess === PR_WRITE_ACCESS.OWN_REPO
     ? `The head branch \`${headRefName}\` lives in ${repoFullName} itself, so it is yours to push to and \`git push\` goes to origin.`
-    : `@${authorLogin} left the head branch writable by maintainers ("Allow edits by maintainers"), and \`${headRefName}\` lives in their FORK. Your worktree's branch already tracks that fork, so a plain \`git push\` goes there — never re-point it at origin, and never open a second PR.`;
+    : `@${authorLogin} left the head branch writable by maintainers ("Allow edits by maintainers"), and \`${headRefName}\` lives in their FORK. Your worktree's branch already tracks that fork, so use the explicit fork push command below — never re-point it at origin, and never open a second PR.`;
   // The shared gate owns everything from "wait for CI" through "confirm MERGED",
   // including clearing conflicts, so step 3 stays scoped to the review itself.
   const { lines: mergeGate } = buildCiMergeGateSteps(4, {
@@ -76,9 +76,10 @@ function renderContext({ repoFullName, number, url, headRefName, authorLogin, re
     '## Procedure',
     '',
     `1. Read the review PortOS already posted: \`gh pr view ${number} --repo ${repoFullName} --comments\` and \`gh api repos/${repoFullName}/pulls/${number}/comments\`. Every finding is in scope: fix blocking findings, non-blocking findings, and nits alike, then resolve every review thread from that review after its feedback is addressed.`,
-    `2. You are ALREADY in an isolated worktree with \`${headRefName}\` checked out — PortOS attached it for you. Do not check the PR out again, do not create another worktree, and do not switch branches. ${accessNote}`,
+    `2. You are ALREADY in an isolated worktree with \`${forkLocalBranch(headRefName, forkHead)}\` checked out — PortOS attached it for you. Do not check the PR out again, do not create another worktree, and do not switch branches. ${accessNote}`,
+    buildForkBranchInstructions(headRefName, forkHead),
     '3. Fix everything the review asked for, including non-blocking findings and nits. Do not bundle refactors, unrelated cleanups, or your own review opinions onto a contributor\'s branch.',
-    `4. Run the repo's own tests for the code you touched and confirm they pass, then commit with a message that says what you fixed and that it answers the review, and push to the PR's own branch (\`git push\` — its upstream is already the right remote). Never force-push over the contributor's commits unless a rebase you performed requires it, and never open a new PR.`,
+    `4. Run the repo's own tests for the code you touched and confirm they pass, then commit with a message that says what you fixed and that it answers the review, and push to the PR's own branch (use the explicit fork push command above for a fork, otherwise \`git push\`). Never force-push over the contributor's commits unless a rebase you performed requires it, and never open a new PR.`,
     ...mergeGate,
     '',
     '## Stop instead of merging if',
@@ -150,6 +151,7 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
       number,
       url: pullRequest.url || `https://github.com/${repoFullName}/pull/${number}`,
       headRefName,
+      forkHead: pullRequest.forkHead,
       authorLogin,
       reason: reason || 'the review did not clear it for an automatic merge',
       writeAccess,

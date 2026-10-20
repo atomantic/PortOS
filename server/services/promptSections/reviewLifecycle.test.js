@@ -200,3 +200,11 @@ describe('public review CLI procedure sanitization', () => {
     expect(body).toContain('Reviewer unavailable');
   });
 });
+
+it.each([{}, { verbose: true }, { reviewLoopMergeOnly: true }])('keeps fork push destinations explicit for review and merge variants %j', options => {
+  const section = buildReviewLoopFollowUpSection({ ...metadata, ...options, reviewLoopPRBranch: 'main',
+    forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } }, options);
+  expect(section).toContain('local branch `fork/contributor/main`');
+  expect(section).toContain('git push fork-contributor HEAD:refs/heads/main');
+  expect(section).toContain('never push it to origin or delete the contributor');
+});
