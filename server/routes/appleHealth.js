@@ -20,7 +20,6 @@ import {
   getLatestMetricValues
 } from '../services/appleHealthQuery.js';
 
-
 const isZip = (file) =>
   file.mimetype === 'application/zip' ||
   file.mimetype === 'application/x-zip-compressed' ||

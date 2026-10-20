@@ -64,6 +64,14 @@ describe('chatgptZipImport service', () => {
     expect(await readdir(assetDir)).toEqual([]);
   });
 
+  it('bounds aggregate asset expansion and removes every partial file', async () => {
+    const zipPath = await writeZip([['file-first.dat', PNG], ['file-second.dat', PNG]]);
+    const assetDir = join(TMP, 'assets');
+    await expect(extractChatgptZip(zipPath, { assetDir, maxAssetBytes: PNG.length + 1 }))
+      .rejects.toMatchObject({ status: 413 });
+    expect(await readdir(assetDir)).toEqual([]);
+  });
+
   describe('sniffExtension', () => {
     it('detects png/jpeg/wav/pdf from magic bytes', () => {
       expect(sniffExtension(PNG)).toBe('.png');
