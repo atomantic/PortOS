@@ -352,6 +352,23 @@ describe('syncOrchestrator', () => {
       expect(result.memory.memorySeq).toBe('0');
     });
 
+    it('advances on the numeric memory cursor older peers send', async () => {
+      let memoryPages = 0;
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/memory/sync')) {
+          memoryPages += 1;
+          return { ok: true, json: async () => ({ memories: [{ id: `m${memoryPages}` }], maxSequence: memoryPages * 100, hasMore: memoryPages < 2 }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+      applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
+
+      const result = await syncWithPeer(mockPeer);
+
+      expect(applyMemoryChanges).toHaveBeenCalledTimes(2);
+      expect(result.memory.memorySeq).toBe('200');
+    });
+
     it('handles pagination loop with hasMore=true', async () => {
       // First brain batch: hasMore=true
       mockFetch

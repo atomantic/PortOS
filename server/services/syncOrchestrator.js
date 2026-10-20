@@ -332,13 +332,14 @@ async function syncMemoryFromPeer(peer, cursor) {
 
     const result = await memorySync.applyRemoteChanges(data.memories, data.schemaVersion ?? 0);
     totalApplied += result.inserted + result.updated;
-    // Same non-advancing-cursor guard as the brain drain above.
-    if (typeof data.maxSequence !== 'string' || !/^\d+$/.test(data.maxSequence)
-      || safeBigInt(data.maxSequence) <= safeBigInt(memorySeq)) {
+    // Same non-advancing-cursor guard as the brain drain above. Peers older
+    // than v1.26.0 send the cursor as a number; newer ones send a string.
+    const next = Number.isSafeInteger(data.maxSequence) && data.maxSequence >= 0 ? String(data.maxSequence) : data.maxSequence;
+    if (typeof next !== 'string' || !/^\d+$/.test(next) || safeBigInt(next) <= safeBigInt(memorySeq)) {
       console.warn(`⚠️ Memory sync from ${peer.name}: cursor did not advance past ${memorySeq} — stopping this pull`);
       break;
     }
-    memorySeq = data.maxSequence;
+    memorySeq = next;
     hasMore = data.hasMore === true;
   }
 
