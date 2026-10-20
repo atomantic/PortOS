@@ -54,7 +54,9 @@ const callHost = vi.hoisted(() => ({ socket: null }));
 vi.mock('../services/voice/callSession.js', () => ({
   attachHost: (socket) => { callHost.socket = socket; return { ok: true, state: {} }; },
   getCallHost: () => callHost.socket, isCallActive: () => true,
-  getCallState: () => ({}), getCallContext: () => null,
+  // Call-host frames are dropped unless the session is already in a turn.
+  // These cases exercise tool authority on that path, not the idle gate.
+  getCallState: () => ({ state: 'listening', active: true }), getCallContext: () => null,
   peekCallOpeningLine: () => null, clearCallOpeningLine: vi.fn(),
   detachHost: vi.fn(), endCall: vi.fn(), markListening: vi.fn(), markSpeaking: vi.fn(),
   noteCallerSpeech: vi.fn(), recordTurn: vi.fn(), setCallStateListener: vi.fn(),
