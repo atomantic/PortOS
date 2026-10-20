@@ -4579,14 +4579,17 @@ describe('peerSync', () => {
         //   must not ride the federation layer at all (ADR
         //   2026-08-08-privacy-records-machine-local), and a peer has no use for a
         //   record of a button someone pressed on another install.
+        // - cosTaskArchive is the completed-task history moved out of TASKS.md /
+        //   COS-TASKS.md: prompt bodies and run notes for ONE machine. Peers merge only
+        //   the tasks their own files hold, never this table.
         // This guard pins that decision: federating any of them later is a conscious
         // act — wire the kind AND update this assertion + the ADR together.
-        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'tribeIdentity', 'universeRun', 'humanActivityEvent', 'userActionEvent'];
+        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'tribeIdentity', 'universeRun', 'humanActivityEvent', 'userActionEvent', 'cosTaskArchive'];
         for (const kind of localOnlyKinds) {
           expect(PEER_SUBSCRIBABLE_KINDS).not.toContain(kind);
           expect(RECORD_KIND_SCHEMA_CATEGORIES[kind]).toBeUndefined();
         }
-        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'tribeIdentities', 'universeRuns', 'humanActivityEvents', 'userActionEvents'];
+        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'tribeIdentities', 'universeRuns', 'humanActivityEvents', 'userActionEvents', 'cosTaskArchive'];
         for (const category of localOnlyCategories) {
           expect(PORTOS_SCHEMA_VERSIONS[category]).toBeUndefined();
           expect(NON_RECORD_SCHEMA_CATEGORIES.has(category)).toBe(false);

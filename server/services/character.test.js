@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const store = vi.hoisted(() => ({
   value: null, birthDate: null, readable: true, beforeWrite: null,
   jira: { instances: {}, projects: [], tickets: [], beforeTickets: null },
-  tasks: { user: { tasks: [] }, cos: { tasks: [] }, before: null },
+  tasks: { user: { tasks: [] }, cos: { tasks: [] }, before: null, archived: [] },
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -55,6 +55,9 @@ vi.mock('./cosTaskStore.js', () => ({
     await store.tasks.before?.();
     return { user: store.tasks.user, cos: store.tasks.cos };
   },
+}));
+vi.mock('./cosTaskArchive.js', () => ({
+  listArchivedSummaries: async () => store.tasks.archived,
 }));
 vi.mock('./characterSkills.js', () => ({
   getCharacterSkills: vi.fn(async () => FAKE_SKILLS),
@@ -570,7 +573,7 @@ describe('Character mutation queue (#9817)', () => {
     store.birthDate = null;
     store.beforeWrite = null;
     store.jira = { instances: {}, projects: [], tickets: [], beforeTickets: null };
-    store.tasks = { user: { tasks: [] }, cos: { tasks: [] }, before: null };
+    store.tasks = { user: { tasks: [] }, cos: { tasks: [] }, before: null, archived: [] };
   });
 
   afterEach(() => { store.beforeWrite = null; });
@@ -710,6 +713,23 @@ describe('Character mutation queue (#9817)', () => {
       expect(result.totalXP).toBe(25);
       expect(store.value.syncedTaskIds.sort()).toEqual(['t1', 't2']);
       expect(store.value.xp).toBe(125);
+    });
+
+    it('syncTaskXP also grants XP for completed tasks that have already left the task files', async () => {
+      store.tasks.user = { tasks: [{ id: 't1', status: 'completed', title: 'In the file window' }] };
+      store.tasks.archived = [
+        { source: 'user', id: 't0', description: 'Archived before any sync' },
+        { source: 'internal', id: 't1', description: 'Same id as a file task' },
+      ];
+      store.value.syncedTaskIds = ['t0'];
+      const result = await characterService.syncTaskXP();
+
+      // t0 was already synced; t1 appears in both places but is granted once.
+      expect(result.taskCount).toBe(1);
+      expect(store.value.syncedTaskIds.sort()).toEqual(['t0', 't1']);
+      store.tasks.archived = [{ source: 'user', id: 't9', description: 'Archived and unsynced' }];
+      expect((await characterService.syncTaskXP()).taskCount).toBe(1);
+      expect(store.value.syncedTaskIds).toContain('t9');
     });
 
     it('syncJiraXP does not double-grant a ticket synced during discovery, and keeps a racing edit', async () => {

@@ -39,6 +39,7 @@ import { hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
+import { archiveTasks, countArchivedTasks, deleteArchivedTask, getArchivedIds, getArchivedTask, listArchivedTasks } from './cosTaskArchive.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
@@ -341,11 +342,18 @@ function sourceShape(type, filePath, tasks, { exists = true } = {}) {
 async function readQueueView(selected) {
   const read = async (type) => {
     const filePath = await resolveSourceFile(type);
-    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: 0 };
+    const archivedCount = await countArchivedTasks(type);
+    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: archivedCount };
     const snapshot = await readTaskSnapshot(filePath);
     const { open, completed } = snapshotPartitions(snapshot);
     const refs = selected === undefined ? open : snapshot.tasks.filter((task) => !isCompleted(task) || task.id === selected);
-    return { ...sourceShape(type, filePath, structuredClone(refs)), completedCount: completed.length };
+    const tasks = structuredClone(refs);
+    // A selected historical task that has aged out of the file lives in the archive.
+    if (selected !== undefined && !refs.some((task) => task.id === selected)) {
+      const archived = await getArchivedTask(selected, type);
+      if (archived) tasks.push(archived.task);
+    }
+    return { ...sourceShape(type, filePath, tasks), completedCount: completed.length + archivedCount };
   };
   const [user, cos] = await Promise.all([read('user'), read('internal')]);
   return { user, cos };
@@ -355,36 +363,61 @@ async function readQueueView(selected) {
 async function readBareView() {
   const read = async (type) => {
     const filePath = await resolveSourceFile(type);
-    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: 0, completedNextCursor: null };
-    const { open, completed } = snapshotPartitions(await readTaskSnapshot(filePath));
-    const firstPage = completed.slice(0, COMPLETED_FIRST_PAGE);
-    const shape = sourceShape(type, filePath, structuredClone([...open, ...firstPage]));
+    const { open, completed } = filePath ? snapshotPartitions(await readTaskSnapshot(filePath)) : { open: [], completed: [] };
+    const page = await pageCompleted(type, completed, { limit: COMPLETED_FIRST_PAGE });
+    const shape = sourceShape(type, filePath, [...structuredClone(open), ...page.items], { exists: Boolean(filePath) });
     // Completed rows leave `grouped`; only the page inside `tasks` carries them.
-    return { ...shape, grouped: { ...shape.grouped, completed: [] }, completedCount: completed.length,
-      completedNextCursor: completed.length > COMPLETED_FIRST_PAGE ? firstPage[firstPage.length - 1].id : null };
+    return { ...shape, grouped: { ...shape.grouped, completed: [] }, completedCount: page.total, completedNextCursor: page.nextCursor };
   };
   const [user, cos] = await Promise.all([read('user'), read('internal')]);
   return { user, cos };
+}
+
+/**
+ * One page of completed history from ONE source, newest id first, merged from
+ * the file's recent window and the archive. A task caught between archive and
+ * file removal exists in both; the file copy wins. `completedRefs` are snapshot
+ * references (newest first); only the returned page is cloned.
+ */
+async function pageCompleted(type, completedRefs, { cursor = null, limit }) {
+  const fileRemaining = cursor ? completedRefs.filter((task) => task.id < cursor) : completedRefs;
+  const filePage = fileRemaining.slice(0, limit + 1);
+  const fileIds = new Set(filePage.map((task) => task.id));
+  const archivedPage = (await listArchivedTasks(type, { before: cursor, limit: limit + 1 })).filter((task) => !fileIds.has(task.id));
+  const merged = [...filePage, ...archivedPage].sort(byIdDesc).slice(0, limit + 1);
+  const items = merged.slice(0, limit);
+  const total = completedRefs.length + await countArchivedTasks(type);
+  return {
+    items: items.map((task) => (fileIds.has(task.id) ? structuredClone(task) : task)),
+    total,
+    nextCursor: merged.length > limit ? items[limit - 1].id : null,
+  };
 }
 
 /** One page of completed history from ONE source, newest id first. */
 async function readCompletedView({ source, cursor, limit }) {
   const type = source === 'internal' ? 'internal' : 'user';
   const filePath = await resolveSourceFile(type);
-  if (!filePath) return { items: [], total: 0, nextCursor: null };
-  const { completed } = snapshotPartitions(await readTaskSnapshot(filePath));
-  const remaining = cursor ? completed.filter((task) => task.id < cursor) : completed;
-  return { items: structuredClone(remaining.slice(0, limit)), total: completed.length,
-    nextCursor: remaining.length > limit ? remaining[limit - 1].id : null };
+  const completed = filePath ? snapshotPartitions(await readTaskSnapshot(filePath)).completed : [];
+  return pageCompleted(type, completed, { cursor, limit });
 }
 
-/** Legacy limit/offset window: the slice and scalar metadata only. */
+/**
+ * Legacy limit/offset window over each queue's tasks: the file's tasks in file
+ * order, then the archived completed tasks newest id first. The slice and scalar
+ * metadata only.
+ */
 async function readWindowView({ offset, limit }) {
   const read = async (type) => {
     const filePath = await resolveSourceFile(type);
-    if (!filePath) return { meta: { file: filePath, exists: false, type }, tasks: [], total: 0 };
-    const snapshot = await readTaskSnapshot(filePath);
-    return { meta: { file: filePath, exists: true, type }, tasks: structuredClone(snapshot.tasks.slice(offset, offset + limit)), total: snapshot.tasks.length };
+    const fileTasks = filePath ? (await readTaskSnapshot(filePath)).tasks : [];
+    const fileSlice = structuredClone(fileTasks.slice(offset, offset + limit));
+    const archivedWanted = limit - fileSlice.length;
+    const archived = archivedWanted > 0
+      ? await listArchivedTasks(type, { offset: Math.max(0, offset - fileTasks.length), limit: archivedWanted })
+      : [];
+    const total = fileTasks.length + await countArchivedTasks(type);
+    return { meta: { file: filePath, exists: Boolean(filePath), type }, tasks: [...fileSlice, ...archived], total };
   };
   const [user, cos] = await Promise.all([read('user'), read('internal')]);
   return {
@@ -493,7 +526,9 @@ export async function findTaskWithSource(taskId) {
   const cosTask = await findTaskInFile(join(ROOT_DIR, config.cosTasksFile), taskId);
   if (cosTask) return { task: cosTask, source: 'internal' };
 
-  return null;
+  // Completed history older than the file window lives in the archive.
+  const archived = await getArchivedTask(taskId);
+  return archived ? { task: archived.task, source: archived.source } : null;
 }
 
 // Legacy shape: the source overwrites the record's `taskType`. Callers that
@@ -810,7 +845,19 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
 
   let tasks = await readTaskFile(filePath);
 
-  const taskIndex = tasks.findIndex(t => t.id === taskId);
+  let taskIndex = tasks.findIndex(t => t.id === taskId);
+  // A history item the archive sweep moved out of the file can still be edited or
+  // reopened: pull it back, apply the update, and drop the archive row only once
+  // the file write lands. An early return below leaves the archive untouched.
+  let restoredFromArchive = false;
+  if (taskIndex === -1) {
+    const archived = await getArchivedTask(taskId, taskType);
+    if (archived) {
+      tasks.push(archived.task);
+      taskIndex = tasks.length - 1;
+      restoredFromArchive = true;
+    }
+  }
   if (taskIndex === -1) {
     console.log(`⚠️ updateTask: task ${taskId} not found in ${filePath} (taskType=${taskType}, parsed ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
     return { error: 'Task not found' };
@@ -946,6 +993,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   const includeApprovalFlags = taskType === 'internal';
   const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
   await writeTaskFile(filePath, markdown);
+  if (restoredFromArchive) await deleteArchivedTask(taskId, taskType);
 
   // `transition.action` distinguishes the two flips that must WAKE the scheduler
   // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
@@ -1035,7 +1083,15 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
       ? await readTaskFile(filePath)
       : [];
 
-    const merged = mergeTaskLists(localTasks, remoteTasks, { now });
+    // A peer's file still holds completed tasks this machine has archived; merging
+    // them back would resurrect history the sweep already moved out of the file.
+    const remoteCompletedIds = remoteTasks.filter((task) => task?.status === 'completed').map((task) => task.id);
+    const archivedIds = await getArchivedIds(taskType, remoteCompletedIds);
+    const incoming = archivedIds.size === 0
+      ? remoteTasks
+      : remoteTasks.filter((task) => !(task?.status === 'completed' && archivedIds.has(task.id)));
+
+    const merged = mergeTaskLists(localTasks, incoming, { now });
 
     const includeApprovalFlags = taskType === 'internal';
     const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
@@ -1085,23 +1141,22 @@ export async function deleteTask(taskId, taskType = 'user') {
     ? join(ROOT_DIR, state.config.userTasksFile)
     : join(ROOT_DIR, state.config.cosTasksFile);
 
-  if (!existsSync(filePath)) {
-    return { error: 'Task file not found' };
+  let deletedFromFile = false;
+  if (existsSync(filePath)) {
+    const tasks = await readTaskFile(filePath);
+    if (tasks.some(t => t.id === taskId)) {
+      const includeApprovalFlags = taskType === 'internal';
+      await writeTaskFile(filePath, generateTasksMarkdown(tasks.filter(t => t.id !== taskId), includeApprovalFlags));
+      deletedFromFile = true;
+    }
   }
 
-  let tasks = await readTaskFile(filePath);
-
-  const taskToDelete = tasks.find(t => t.id === taskId);
-  if (!taskToDelete) {
-    return { error: 'Task not found' };
+  // The archive copy goes too: during the sweep's archive-then-rewrite window a
+  // task lives in both stores, and a file-only delete would leave it in history.
+  const deletedFromArchive = await deleteArchivedTask(taskId, taskType);
+  if (!deletedFromFile && !deletedFromArchive) {
+    return { error: existsSync(filePath) ? 'Task not found' : 'Task file not found' };
   }
-
-  tasks = tasks.filter(t => t.id !== taskId);
-
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeTaskFile(filePath, markdown);
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
   return { success: true, taskId };
@@ -1307,6 +1362,66 @@ export async function sweepResolvedFailureTasks({
     console.log(`🧹 Reaped ${reaped} resolved failure task(s): ${staleBlocks} stale block(s), ${investigations} investigation(s)`);
   }
   return { reaped, staleBlocks, investigations };
+}
+
+// ── Completed-task archive ──────────────────────────────────────────────────
+//
+// TASKS.md / COS-TASKS.md grew to tens of MB because every finished task keeps
+// its full prompt, and every full-queue read clones all of it. Completed tasks
+// past the recent window move to `cos_task_archive`; the files keep the open
+// queue plus that window, which is what dedup, retry bookkeeping and the PR
+// reviewer-failure lookup actually consult.
+const ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+const ARCHIVE_KEEP_NEWEST = 100;
+// Bounds how long one sweep holds the state lock; a first run over a large
+// backlog drains across several ticks.
+const ARCHIVE_SWEEP_LIMIT = 300;
+
+// Undated tasks sort as oldest: they predate the stamps current writers add.
+const completionStamp = (task) => {
+  const stamp = Date.parse(task.metadata?.completedAt || task.metadata?.updatedAt || '');
+  return Number.isFinite(stamp) ? stamp : 0;
+};
+
+/** Completed tasks old enough, and beyond the newest few, to leave the file. Oldest first. */
+function selectArchivable(tasks, { now, afterMs, keepNewest, limit }) {
+  const completed = tasks.filter(isCompleted).sort((a, b) => completionStamp(b) - completionStamp(a) || byIdDesc(a, b));
+  return completed
+    .slice(keepNewest)
+    .filter((task) => completionStamp(task) <= now - afterMs)
+    .reverse()
+    .slice(0, limit);
+}
+
+/**
+ * Move aged completed tasks out of the task files into the archive. The archive
+ * write lands first and is idempotent, so a crash before the file rewrite leaves
+ * a harmless duplicate that the next sweep removes. Runs under the same lock as
+ * every task write.
+ */
+export async function archiveCompletedTasks({
+  now = Date.now(),
+  afterMs = ARCHIVE_AFTER_MS,
+  keepNewest = ARCHIVE_KEEP_NEWEST,
+  limit = ARCHIVE_SWEEP_LIMIT,
+} = {}) {
+  let archived = 0;
+  for (const type of ['user', 'internal']) {
+    archived += await withStateLock(async () => {
+      const filePath = await resolveSourceFile(type);
+      if (!filePath) return 0;
+      const snapshot = await readTaskSnapshot(filePath);
+      const selected = selectArchivable(snapshot.tasks, { now, afterMs, keepNewest, limit });
+      if (selected.length === 0) return 0;
+      await archiveTasks(type, structuredClone(selected));
+      const leaving = new Set(selected.map((task) => task.id));
+      await writeTaskFile(filePath, generateTasksMarkdown(snapshot.tasks.filter((task) => !leaving.has(task.id)), type === 'internal'));
+      cosEvents.emit('tasks:changed', { type, action: 'archived' });
+      return selected.length;
+    });
+  }
+  if (archived > 0) console.log(`🗄️ Archived ${archived} completed task(s) out of the task files`);
+  return { archived };
 }
 
 /**

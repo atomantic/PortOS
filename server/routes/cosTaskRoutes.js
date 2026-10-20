@@ -170,7 +170,9 @@ const router = Router();
 // With no params it returns a bounded `{ user, cos }` projection: all non-completed
 // tasks plus grouped/derived lists, and only the first page of completed history
 // (+ `completedCount`/`completedNextCursor`; page on with `view=completed`).
-// `view=full` returns the raw unbounded store. When a client passes
+// `view=full` returns everything the task files hold (open queue + the recent completed
+// window); older completed tasks live in the archive and page through `view=completed`.
+// When a client passes
 // `limit`/`offset`, each source is reduced to a *genuinely bounded* shape: the
 // windowed `tasks` slice plus scalar metadata only. The full-set derived
 // collections (`grouped`, `autoApproved`, `awaitingApproval`) are dropped from

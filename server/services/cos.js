@@ -93,7 +93,7 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks, archiveCompletedTasks } from './cosTaskStore.js';
 export { getPendingTaskIds } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instanceIdentity.js';
@@ -480,8 +480,13 @@ async function bootDaemon(state) {
       if (swept.reaped > 0) {
         emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
       }
+      // Completed tasks past the recent window leave the task files for the
+      // archive table; the files stay small enough for every poller to read.
+      await archiveCompletedTasks().catch((err) => {
+        console.warn(`⚠️ archiveCompletedTasks failed: ${err?.message || err}`);
+      });
     },
-    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper + completed-task archive' }
   });
 
   // Performance summary (10 min)
