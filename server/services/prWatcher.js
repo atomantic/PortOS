@@ -53,6 +53,14 @@ const PR_LIST_LIMIT = 200;
 // stays the sole owner of the budget and of every entry after the cap.
 export const PENDING_MERGE_SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 export const MAX_PENDING_MERGE_TICKS = 12;
+// Withheld-assessment causes that repeat identically until the head or the
+// untrusted-content configuration changes. Transport and readiness failures
+// are deliberately absent: they heal without either changing.
+const STABLE_ASSESSMENT_CAUSES = new Set([
+  'untrusted-content-model-required', 'untrusted-content-context-too-small', 'untrusted-content-too-large',
+  'untrusted-content-policy-invalid', 'untrusted-content-endpoint-blocked', 'untrusted-content-blocked',
+  'security-model-withheld', 'security-model-uncertain', 'security-model-assessment-required',
+]);
 export const HANDOFF_FOLLOW_UP_INTERVAL_MS = 60 * 1000;
 export const HANDOFF_FOLLOW_UP_FAST_POLLS = 5;
 export const HANDOFF_FOLLOW_UP_BACKOFF_MS = 2 * 60 * 1000;
@@ -63,6 +71,9 @@ const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 // rather than a per-app map: simultaneous writes for different app ids would
 // otherwise still load stale whole-file snapshots and clobber one another.
 let pendingMergeWriteTail = Promise.resolve();
+// Bumped when an untrusted-content policy save clears holds. A sweep that
+// already read its entries must not write a hold back over that save.
+let assessmentHoldGeneration = 0;
 const pendingMergeSweeps = new Map();
 const pendingMergeResweeps = new Map();
 // appId -> { receipts: Map<receiptId, deadlineMs>, polls, timer }
@@ -278,6 +289,25 @@ async function mutatePendingMergePrs(appId, mutate) {
     const next = mutate(readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean));
     return updateApp(appId, { pendingMergePrs: next });
   });
+}
+
+// A policy save re-arms withheld merges even when the saved JSON is unchanged:
+// the usual fix is a provider default model, which is not part of the policy
+// document. Only an attention string that names the withheld code is cleared.
+export async function clearPendingMergeAssessmentHolds() {
+  assessmentHoldGeneration += 1;
+  const apps = await getActiveApps().catch(() => []);
+  for (const app of apps) {
+    if (!readPendingMergePrs(app).some((entry) => entry?.assessmentWithheld)) continue;
+    await mutatePendingMergePrs(app.id, (current) => current.map((entry) => {
+      const held = entry?.assessmentWithheld;
+      if (!held) return entry;
+      const { assessmentWithheld: _held, attention, ...rest } = entry;
+      const heldCode = typeof held.code === 'string' ? held.code : '';
+      if (typeof attention === 'string' && heldCode && attention.includes(heldCode)) return rest;
+      return attention === undefined ? rest : { ...rest, attention };
+    }));
+  }
 }
 
 /**
@@ -518,10 +548,12 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
   const outcomes = new Map();
+  const withheldGenerations = new Map();
   const result = { ok: true, checked: 0, merged: 0, escalated: 0, invalidated: 0, timedOut: 0, errors: 0 };
 
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
+    withheldGenerations.set(key, assessmentHoldGeneration);
     if (Date.now() < (entry.cleanup?.retryAt || 0)) {
       outcomes.set(key, entry);
       continue;
@@ -634,7 +666,22 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
     }
 
     let withheldReason = null;
-    if (isPendingMergeReady(prView)) {
+    // The last assessment withheld for this exact head and configuration. While
+    // neither has changed a retry cannot succeed, so skip the classifier run and
+    // the repository's merge-admission lease; the entry stays in attention.
+    let assessmentWithheld = null;
+    const ready = isPendingMergeReady(prView);
+    if (ready && entry.assessmentWithheld) {
+      const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+      const policy = await getContributionAssessmentFingerprint().catch(() => null);
+      const held = entry.assessmentWithheld;
+      if (policy && held.policy === policy
+        && String(prView.headRefOid || '').toLowerCase() === held.headSha) {
+        assessmentWithheld = held;
+        withheldReason = held.reason;
+      }
+    }
+    if (ready && !assessmentWithheld) {
       const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
       const admitted = await withPendingMergeAdmission(origin, async () => {
         const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
@@ -653,8 +700,25 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
           readIssue: async (number) => safeJSONParse(await execGh([
             'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
           ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
-        }).catch(() => ({ ok: false }));
-        withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
+        }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
+        if (!assessment.ok) {
+          const code = assessment.code || 'security-action-assessment-unavailable';
+          const detail = assessment.cause ? `${code}: ${assessment.cause}` : code;
+          // `message` is server-authored. A thrown error's message is not: it can
+          // echo the contribution, so the catch above records only the code.
+          const message = typeof assessment.message === 'string'
+            ? assessment.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 240)
+            : '';
+          withheldReason = message ? `${detail} — ${message}` : detail;
+          // Evidence, mutable-state, transport and provider-readiness failures
+          // can clear on a retry of the same head; only a stable outcome of this
+          // head under this configuration is cached.
+          if (assessment.code === 'security-action-assessment-withheld' && STABLE_ASSESSMENT_CAUSES.has(assessment.cause)) {
+            const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+            const policy = await getContributionAssessmentFingerprint().catch(() => null);
+            if (policy) assessmentWithheld = { headSha: String(expectedHeadSha).toLowerCase(), code: detail, policy, reason: withheldReason };
+          }
+        } else withheldReason = null;
         // Re-read the durable owner's policy inside admission, after remote
         // assessment and immediately before merge. Waiting CI is not authority
         // to ignore a later manual hold or a changed review requirement.
@@ -674,7 +738,8 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
       }
       const merge = admitted.result;
       if (merge.ownerDeferred || merge.ownerBlocked) {
-        outcomes.set(key, merge.ownerBlocked ? { ...entry, recoveryBlocked: merge.ownerBlocked } : entry);
+        const retained = assessmentWithheld ? { ...entry, assessmentWithheld } : entry;
+        outcomes.set(key, merge.ownerBlocked ? { ...retained, recoveryBlocked: merge.ownerBlocked } : retained);
         result.waiting = (result.waiting || 0) + 1;
         if (merge.ownerBlocked) await notifyPendingMergeTimeout(app, entry, null,
           `PR #${entry.prNumber} remains owned by task ${binding.taskId}: ${merge.ownerBlocked}.`);
@@ -695,7 +760,8 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
       console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
     }
 
-    const next = { ...entry, ticks: entry.ticks + charge };
+    const { assessmentWithheld: _previous, ...settled } = entry;
+    const next = { ...settled, ticks: entry.ticks + charge, ...(assessmentWithheld ? { assessmentWithheld } : {}) };
     if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
       const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
         ? `it is ${String(prView.state).toLowerCase()} rather than open`
@@ -713,7 +779,12 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
     // A new receipt can arrive while a sweep waits on GitHub or recovery. It
     // owns its new head; an old sweep must not delete or overwrite that work.
     if (!observed || JSON.stringify(observed) !== JSON.stringify(entry)) return [entry];
-    const outcome = outcomes.get(pendingMergeKey(entry));
+    const outcomeKey = pendingMergeKey(entry);
+    let outcome = outcomes.get(outcomeKey);
+    if (outcome?.assessmentWithheld && withheldGenerations.get(outcomeKey) !== assessmentHoldGeneration) {
+      const { assessmentWithheld: _stale, ...withoutHold } = outcome;
+      outcome = withoutHold;
+    }
     return outcome === undefined ? [entry] : outcome ? [outcome] : [];
   }));
   return result;

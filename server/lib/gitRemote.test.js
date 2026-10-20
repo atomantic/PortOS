@@ -17,8 +17,21 @@ import {
   redactRemoteUrlCredentials,
   UPSTREAM_OWNER,
   UPSTREAM_REPO,
-  UPSTREAM_FULL_NAME
+  UPSTREAM_FULL_NAME,
+  isUpstreamOwner,
+  isUpstreamFullName
 } from './gitRemote.js';
+
+describe('upstream identity helpers', () => {
+  it('matches upstream owners and full names case-insensitively', () => {
+    expect(isUpstreamOwner('Atomantic/PortOS')).toBe(true);
+    expect(isUpstreamOwner('ATOMANTIC')).toBe(true);
+    expect(isUpstreamOwner('other/PortOS')).toBe(false);
+    expect(isUpstreamFullName('Atomantic/PortOS')).toBe(true);
+    expect(isUpstreamFullName('  ATOMANTIC/PORTOS  ')).toBe(true);
+    expect(isUpstreamFullName('atomantic/other')).toBe(false);
+  });
+});
 
 describe('parseGitRemoteUrl', () => {
   it('parses SCP-style SSH URLs', () => {

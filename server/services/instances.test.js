@@ -916,8 +916,13 @@ describe('instances.js', () => {
       });
       const order = [];
       let resolveFirst;
+      let firstReachedFetch;
+      const firstFetchStarted = new Promise(r => { firstReachedFetch = r; });
       const fetchMock = vi.fn()
-        .mockImplementationOnce(() => new Promise(r => { resolveFirst = () => { order.push('first'); r({ ok: true, status: 200 }); }; }))
+        .mockImplementationOnce(() => new Promise(r => {
+          resolveFirst = () => { order.push('first'); r({ ok: true, status: 200 }); };
+          firstReachedFetch();
+        }))
         .mockImplementationOnce(async () => { order.push('second'); return { ok: true, status: 200 }; });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -925,11 +930,10 @@ describe('instances.js', () => {
       const p2 = enqueueReciprocalSync('p-serial');
       // The second send resolves immediately; the first blocks until we release
       // it. If the two ran concurrently (unserialized), 'second' would land
-      // first. Flush microtasks until the first send reaches its (blocked)
-      // fetch, then release it — the recorded order proves serialization.
-      // (beforeEach installs fake timers, so we flush the microtask queue
-      // directly rather than waiting on a real-time setTimeout.)
-      for (let i = 0; i < 20 && !resolveFirst; i++) await Promise.resolve();
+      // first. Wait for the first send to signal it reached its (blocked) fetch —
+      // a deterministic signal, independent of how many awaits precede fetch —
+      // then release it; the recorded order proves serialization.
+      await firstFetchStarted;
       resolveFirst();
       await Promise.all([p1, p2]);
       expect(order).toEqual(['first', 'second']);

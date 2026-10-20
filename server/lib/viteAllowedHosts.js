@@ -42,8 +42,11 @@ function stripComments(source) {
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
+// The array alternative must skip over quoted strings: an entry like `'[::1]'`
+// contains a `]` that a naive `[^\]]*` would treat as the array's close, leaving
+// the rewrite to splice `true` into the middle of the list and corrupt the file.
 const ALLOWED_HOSTS_VALUE_RE =
-  /allowedHosts\s*:\s*(true|false|'all'|"all"|`all`|\[[^\]]*\])/;
+  /allowedHosts\s*:\s*(true|false|'all'|"all"|`all`|\[(?:[^\]'"`]|'[^']*'|"[^"]*"|`[^`]*`)*\])/;
 
 /**
  * Parse the current `server.allowedHosts` value out of a vite config source.
