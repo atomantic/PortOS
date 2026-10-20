@@ -235,7 +235,7 @@ def checked_config(admin):
                 fail('unknown-git-extension')
 
 
-def check_admin(admin, module=False):
+def check_admin(admin, module=False, common=False):
     if any((admin / name).exists() for name in OPERATIONS):
         fail('active-or-partial-git-state')
     for name in ('objects/info/alternates', 'objects/info/http-alternates', 'info/grafts'):
@@ -243,10 +243,18 @@ def check_admin(admin, module=False):
             fail('external-object-dependency')
     if module and any((admin / name).exists() for name in ('commondir', 'worktrees', 'modules')):
         fail('shared-or-nested-module')
-    # Only walk the current private administration; the common worktrees/ tree
-    # belongs to other live agents and is deliberately outside this capture.
+    # Shared capture includes only COMMON_PARTS. Primary-checkout modules and
+    # runtime sockets remain live outside it; private module administration is
+    # captured in full and must still reject every special file. Root locks and
+    # operation/config/object dependencies remain guards even outside the copy.
     for current, dirs, files in os.walk(admin, followlinks=False):
-        if Path(current) == admin and not module:
+        if Path(current) == admin and common:
+            if any(name.endswith(('.lock', '.promisor')) or name.startswith('sharedindex.')
+                   for name in [*dirs, *files]):
+                fail('active-or-dependent-git-state')
+            dirs[:] = [name for name in dirs if name in COMMON_PARTS]
+            files = [name for name in files if name in COMMON_PARTS]
+        elif Path(current) == admin and not module:
             dirs[:] = [d for d in dirs if d not in ('worktrees', 'portos-checkout-admission')]
         for name in [*dirs, *files]:
             path = Path(current) / name
@@ -376,7 +384,7 @@ def inspect(request, full=False):
     work, admin, common = scan(request)
     release = request['release']
     check_admin(admin)
-    check_admin(common)
+    check_admin(common, common=True)
     parent = git_facts(admin, work)
     branch = git(admin, work, 'symbolic-ref', '--short', 'HEAD')
     if parent['head'] != release['head'] or branch != release['branch']:
@@ -634,7 +642,7 @@ def verify(request):
         if manifest(path) != facts['sources'][label]:
             fail('source-content-or-identity-changed:' + label)
     common = safe_path(facts['commonGitDir'])
-    check_admin(common)
+    check_admin(common, common=True)
     if identity(common) != facts['identity']['common']:
         fail('common-store-incarnation-changed')
     restoring = request.get('mode') == 'restore'
