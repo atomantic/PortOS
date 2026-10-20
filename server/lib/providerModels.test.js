@@ -42,6 +42,7 @@ import {
   CODEX_UPDATE_CHECK_KEY,
   PORTOS_CLI_CONFIG_KEYS,
   CODEX_AGENT_THREADS_KEY,
+  CODEX_WORKSPACE_NETWORK_KEY,
   isPortosSuppliedConfigKey,
   hasCodexUpdateCheckConfig,
   buildCodexStartupArgs,
@@ -748,6 +749,7 @@ describe('providerModels', () => {
         CODEX_AGENT_THREADS_KEY,
         CODEX_EFFORT_KEY,
         CODEX_UPDATE_CHECK_KEY,
+        CODEX_WORKSPACE_NETWORK_KEY,
       ].sort());
       // Guard against a third emitter appearing without a row: both builders
       // that produce `-c` are asserted to use a listed key.

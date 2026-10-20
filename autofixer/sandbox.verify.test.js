@@ -1,0 +1,69 @@
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { probeVerifyContainment, runVerifyCommand } from './sandbox.js';
+
+// The real OS boundary an agent-written test file or npm lifecycle script meets.
+const mechanism = await probeVerifyContainment();
+
+describe.skipIf(!mechanism.supported)(`runVerifyCommand under ${mechanism.id || 'no containment'}`, () => {
+  let root;
+  let worktree;
+  let dataDir;
+  let outside;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'autofix-verify-real-'));
+    dataDir = join(root, 'data');
+    worktree = join(dataDir, 'autofixer', 'worktrees', 'example');
+    outside = join(root, 'outside');
+    await mkdir(worktree, { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(dataDir, 'providers.json'), '{"apiKey":"example-provider-key"}');
+    server = createServer((socket) => socket.end('reached'));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    vi.unstubAllEnvs();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const verify = (command) => runVerifyCommand(command, worktree, { dataDir, timeoutMs: 30000 });
+
+  it('runs a forking test command that writes inside the worktree', async () => {
+    const result = await verify('echo built > out.txt && (cat out.txt) && sh -c "exit 0"');
+    expect(result).toMatchObject({ ok: true, contained: true, mechanism: mechanism.id });
+    expect(await readFile(join(worktree, 'out.txt'), 'utf8')).toBe('built\n');
+  });
+
+  it('carries no provider key or PortOS token and a private HOME', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-example-verify-secret');
+    vi.stubEnv('PORTOS_API_TOKEN', 'example-portos-token');
+    const result = await verify('env');
+    expect(result.ok).toBe(true);
+    expect(result.output).not.toContain('sk-ant-example-verify-secret');
+    expect(result.output).not.toContain('PORTOS_API_TOKEN');
+    expect(result.output).not.toMatch(new RegExp(`^HOME=${process.env.HOME}$`, 'm'));
+  });
+
+  it('cannot write outside the worktree, read the PortOS data directory, or reach loopback', async () => {
+    const write = await verify(`echo x > ${JSON.stringify(join(outside, 'escaped'))}`);
+    expect(write.ok).toBe(false);
+    await expect(access(join(outside, 'escaped'))).rejects.toThrow();
+
+    const read = await verify(`cat ${JSON.stringify(join(dataDir, 'providers.json'))}`);
+    expect(read.ok).toBe(false);
+    expect(read.output).not.toContain('example-provider-key');
+
+    const net = await verify(`${JSON.stringify(process.execPath)} -e "require('net').connect(${port}, '127.0.0.1').on('data', (d) => { console.log(String(d)); process.exit(0); }).on('error', () => process.exit(3))"`);
+    expect(net.ok).toBe(false);
+    expect(net.output).not.toContain('reached');
+  });
+});

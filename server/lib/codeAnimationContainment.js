@@ -62,8 +62,8 @@ export function codeAnimationContainmentMechanism(platform, seatbeltAvailable, b
   };
 }
 
-// SBPL string literals: refuse anything that could close the literal or the form.
-const sbplPath = (path) => {
+/** SBPL string literal for a path; refuses anything that could close the literal or the form. */
+export const seatbeltPathLiteral = (path) => {
   if (typeof path !== 'string' || !isAbsolute(path) || normalize(path) !== path || /["\\()\0\r\n]/.test(path)) {
     throw new Error('Containment paths must be normalized absolute paths without quote, backslash or parenthesis characters');
   }
@@ -120,12 +120,12 @@ export function codeAnimationSeatbeltProfile({ executable, toolRoots, workspace 
   const metadata = [...new Set([...readRoots, executable].flatMap(ancestors))];
   return `(version 1)
 (deny default)
-(allow process-exec (literal ${sbplPath(executable)}))
+(allow process-exec (literal ${seatbeltPathLiteral(executable)}))
 (allow sysctl-read)
-(allow file-read-metadata (literal "/") ${metadata.map((path) => `(literal ${sbplPath(path)})`).join(' ')})
+(allow file-read-metadata (literal "/") ${metadata.map((path) => `(literal ${seatbeltPathLiteral(path)})`).join(' ')})
 (allow file-read* (literal "/") (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
-  ${readRoots.map((path) => `(subpath ${sbplPath(path)})`).join(' ')})
-(allow file-write* (literal "/dev/null") ${writable.map((path) => `(subpath ${sbplPath(path)})`).join(' ')})`;
+  ${readRoots.map((path) => `(subpath ${seatbeltPathLiteral(path)})`).join(' ')})
+(allow file-write* (literal "/dev/null") ${writable.map((path) => `(subpath ${seatbeltPathLiteral(path)})`).join(' ')})`;
 }
 
 /**

@@ -15,13 +15,12 @@ vi.mock('fs/promises', () => ({
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
 vi.mock('../server/lib/cliProviderRun.js', () => ({
-  pickCliProvider: () => ({ provider: { id: 'example-cli' } }),
   runCliProviderPrompt: harness.provider,
 }));
 vi.mock('./sandbox.js', () => ({
   sanitizeChildEnv: () => ({}), collectSecretEnvValues: () => [],
   buildFixPrompt: ({ errorLogs, outputLogs }) => JSON.stringify({ errorLogs, outputLogs }),
-  restrictedToolArgs: () => [], isGitRepo: async () => true,
+  pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: async () => true,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
   collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
   sweepStaleWorktrees: harness.sweep,

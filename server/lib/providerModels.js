@@ -727,6 +727,9 @@ export function buildEffortArgs(effort, provider, existingArgs = [], model = nul
 // edit rather than a four-builder grep.
 export const CODEX_UPDATE_CHECK_KEY = 'check_for_update_on_startup';
 export const CODEX_AGENT_THREADS_KEY = 'agents.max_concurrent_threads_per_session';
+// Forced off for autofixer repairs (#12487) so a user config cannot open the
+// workspace-write sandbox to the network.
+export const CODEX_WORKSPACE_NETWORK_KEY = 'sandbox_workspace_write.network_access';
 
 /**
  * Give a Codex swarm enough session threads for its root orchestrator plus
@@ -806,6 +809,7 @@ export const PORTOS_CLI_CONFIG_KEYS = Object.freeze([
   CODEX_AGENT_THREADS_KEY,
   CODEX_EFFORT_KEY,
   CODEX_UPDATE_CHECK_KEY,
+  CODEX_WORKSPACE_NETWORK_KEY,
 ]);
 
 /**

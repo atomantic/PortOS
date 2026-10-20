@@ -79,6 +79,7 @@ import {
   OPENCODE_PUBLIC_REVIEW_AGENT,
   OPENCODE_BUILD_AGENT,
   applyLeanClaudeArgs,
+  CODEX_WORKSPACE_NETWORK_KEY,
 } from './providerModels.js';
 import {
   isCodexCommand,
@@ -1140,6 +1141,49 @@ export function toolFreeOneShotArgs(provider, args = []) {
   if (spec?.toolFreeArgs) return { args: spec.toolFreeArgs(stripped), toolFree: true };
   if (spec?.sandboxArgs) return { args: spec.sandboxArgs(stripped), toolFree: false, readOnlySandbox: true };
   return { args: removed && spec?.afterStrip ? spec.afterStrip(stripped) : stripped, toolFree: false };
+}
+
+// Autofixer repair posture (#12487). Claude keeps file Read/Edit/Write only:
+// acceptEdits auto-approves edits inside the working directory and nothing
+// else, and neither project MCP servers nor project settings (hooks) load.
+const CLAUDE_REPAIR_ARGS = [
+  '--permission-mode', 'acceptEdits',
+  '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+  '--setting-sources', 'user',
+  '--disallowedTools', 'Bash', 'WebFetch', 'WebSearch',
+];
+// Codex's OS sandbox: writes confined to the working directory, network off
+// even when the user's config.toml enables it for workspace-write.
+const CODEX_REPAIR_ARGS = ['--sandbox', 'workspace-write', '-c', `${CODEX_WORKSPACE_NETWORK_KEY}=false`];
+
+/**
+ * Saved provider argv for a file-editing repair driven by untrusted input
+ * (autofixer crash logs), or null when the vendor has no enforced restricted
+ * mode. Every approval bypass is removed and the vendor's own posture options
+ * are replaced, so a saved bypass or wider grant cannot override the recipe.
+ * The result replaces `provider.args`; the vendor builder adds `-p -` / `-`.
+ *
+ * @param {object} provider - provider record (command, args)
+ * @returns {{ mode: 'claude-disallowed-tools'|'codex-workspace-write', args: string[] } | null}
+ */
+export function restrictedRepairArgs(provider) {
+  const command = provider?.command;
+  if (!command) return null;
+  const saved = stripApprovalBypassArgs(Array.isArray(provider.args) ? provider.args : []).args;
+  if (isClaudeCommand(command)) {
+    const cleared = dropOptions(
+      dropOptions(saved, ['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--mcp-config'], { variadic: true }),
+      ['--permission-mode', '--setting-sources'],
+    ).filter((arg) => arg !== '--strict-mcp-config');
+    return { mode: 'claude-disallowed-tools', args: [...cleared, ...CLAUDE_REPAIR_ARGS] };
+  }
+  if (isCodexCommand(command)) {
+    const cleared = dropOptions(saved, ['--sandbox', '-s']);
+    // Options must follow the subcommand; the builder appends `exec` only when absent.
+    const withExec = cleared.includes('exec') ? cleared : ['exec', ...cleared];
+    return { mode: 'codex-workspace-write', args: [...withExec, ...CODEX_REPAIR_ARGS] };
+  }
+  return null;
 }
 
 /**
