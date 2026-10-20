@@ -1,4 +1,4 @@
-import { beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
+import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { mkdir, writeFile, symlink, link as hardLinkFile, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -66,6 +66,15 @@ function members(zip) {
 beforeEach(() => { records.clear(); jobs.clear(); records.set('mv-example', fixture()); });
 
 describe('local making-of compilation', () => {
+  // A fresh Windows runner spends ~4s on the first SVG <text> render while
+  // fontconfig builds its font cache (rect-only SVGs take ~6ms; measured on
+  // windows-latest, #11345). That one-time native cost is paid here, under its own
+  // hook deadline, so the export contracts below keep measuring export work.
+  beforeAll(async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"><text x="8" y="15" font-size="12">S</text></svg>';
+    await sharp(Buffer.from(svg)).png().toBuffer();
+  });
+
   it('keeps multiline entity-encoded image captions inert in exported Markdown', async () => {
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#227766' } }).png().toBuffer();
     const sheet = artifact('caption-example');
