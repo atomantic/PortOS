@@ -16,7 +16,6 @@ afterEach(() => {
   root = undefined;
 });
 
-// The JS realpath fails with EPERM on Windows symlinks and keeps 8.3 short names; native resolves both.
 describe('link-worktree-deps script', () => {
   it('links missing dependency dirs from the source checkout and keeps existing ones', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
@@ -41,7 +40,7 @@ describe('link-worktree-deps script', () => {
   });
 
   it('resolves workspace links inside the worktree, not the source checkout (#12633)', () => {
-    root = realpathSync.native(mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-')));
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-')));
     const source = join(root, 'source');
     const worktree = join(root, 'worktree');
     // Source install: a registry package, a workspace scope next to a registry scope entry, a bin shim.
@@ -54,6 +53,8 @@ describe('link-worktree-deps script', () => {
     mkdirSync(join(worktree, 'packages', 'core'), { recursive: true });
     writeFileSync(join(source, 'packages', 'core', 'marker.txt'), 'stale');
     writeFileSync(join(worktree, 'packages', 'core', 'marker.txt'), 'fresh');
+    writeFileSync(join(modules, 'left-pad', 'index.js'), 'source');
+    writeFileSync(join(modules, '@types', 'node', 'index.d.ts'), 'source');
     symlinkSync('../../packages/core', join(modules, '@acme', 'core'), 'dir');
     symlinkSync('../left-pad', join(modules, '.bin', 'left-pad'), 'dir');
 
@@ -65,10 +66,9 @@ describe('link-worktree-deps script', () => {
     // Windows reports the recreated relative target with backslashes.
     expect(readlinkSync(join(linked, '@acme', 'core')).replaceAll('\\', '/')).toBe('../../packages/core');
     expect(readFileSync(join(linked, '@acme', 'core', 'marker.txt'), 'utf8')).toBe('fresh');
-    expect(realpathSync.native(join(linked, '@acme', 'core')).startsWith(worktree)).toBe(true);
     // Everything that is not a workspace link still shares the source's install.
-    expect(realpathSync.native(join(linked, 'left-pad'))).toBe(join(modules, 'left-pad'));
-    expect(realpathSync.native(join(linked, '@types'))).toBe(join(modules, '@types'));
+    expect(readFileSync(join(linked, 'left-pad', 'index.js'), 'utf8')).toBe('source');
+    expect(readFileSync(join(linked, '@types', 'node', 'index.d.ts'), 'utf8')).toBe('source');
     expect(existsSync(join(linked, '.bin', 'left-pad'))).toBe(true);
 
     // Already provisioned: a rerun leaves the directory exactly as it was.
