@@ -103,6 +103,7 @@ export default function ModelAbuseGuardPanel() {
   });
   const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
   const overallReady = guardStatus?.ready === true;
+  const contributionBlocked = guardStatus?.contributionAssessment?.ready === false;
   const incomplete = guardStatus?.setupState === 'incomplete' || (!overallReady && (guardStatus?.modelCached || guardStatus?.venvReady));
 
   return (
@@ -121,7 +122,9 @@ export default function ModelAbuseGuardPanel() {
             <p className="text-xs text-port-accent mt-0.5">Required by default · local classifier</p>
           </div>
         </div>
-        {overallReady ? (
+        {contributionBlocked && overallReady ? (
+          <span className="text-xs px-2 py-1 rounded border border-port-warning/40 text-port-warning">Not ready</span>
+        ) : overallReady ? (
           <span className="text-xs px-2 py-1 rounded border border-port-success/40 text-port-success">Ready</span>
         ) : guardStatus ? (
           <span className="text-xs px-2 py-1 rounded border border-port-warning/40 text-port-warning">{incomplete ? 'Setup incomplete' : 'Not installed'}</span>

@@ -781,6 +781,11 @@ const saveSettingsPatch = async (body, slicePatch) => {
   // already emitted it — so an added/removed/edited schedule takes effect
   // immediately without a restart, and this route stays decoupled from the
   // autopilot pipeline graph.
+  if (settingsPatch.untrustedContent !== undefined) {
+    const { clearPendingMergeAssessmentHolds } = await import('../services/prWatcher.js');
+    await clearPendingMergeAssessmentHolds()
+      .catch((err) => console.error(`❌ Could not re-arm pending-merge assessments after a policy save: ${err.message}`));
+  }
   return sanitizeSettingsForResponse(merged);
 };
 

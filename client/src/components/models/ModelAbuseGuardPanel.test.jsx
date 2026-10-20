@@ -64,6 +64,7 @@ describe('ModelAbuseGuardPanel', () => {
       contributionAssessment: { ready: false, code: 'untrusted-content-model-required' } });
     await renderPanel();
     expect(await screen.findByText(/assessment is not ready \(untrusted-content-model-required\)/)).toBeInTheDocument();
+    expect(screen.getByText('Not ready').className).toContain('text-port-warning');
   });
 
   it('offers repair for partial setup and disables installation without Python', async () => {

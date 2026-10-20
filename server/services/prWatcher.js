@@ -288,6 +288,24 @@ async function mutatePendingMergePrs(appId, mutate) {
   });
 }
 
+// A policy save re-arms withheld merges even when the saved JSON is unchanged:
+// the usual fix is a provider default model, which is not part of the policy
+// document. Only an attention string that names the withheld code is cleared.
+export async function clearPendingMergeAssessmentHolds() {
+  const apps = await getActiveApps().catch(() => []);
+  for (const app of apps) {
+    if (!readPendingMergePrs(app).some((entry) => entry?.assessmentWithheld)) continue;
+    await mutatePendingMergePrs(app.id, (current) => current.map((entry) => {
+      const held = entry?.assessmentWithheld;
+      if (!held) return entry;
+      const { assessmentWithheld: _held, attention, ...rest } = entry;
+      const heldCode = typeof held.code === 'string' ? held.code : '';
+      if (typeof attention === 'string' && heldCode && attention.includes(heldCode)) return rest;
+      return attention === undefined ? rest : { ...rest, attention };
+    }));
+  }
+}
+
 /**
  * Persist a merge-only PR for the next existing pr-watcher tick. The source
  * task carries only the fields the escalation path needs to recreate today's
@@ -676,14 +694,16 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
           readIssue: async (number) => safeJSONParse(await execGh([
             'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
           ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
-        }).catch((err) => {
-          console.warn(`⚠️ Contribution assessment for PR #${entry.prNumber} threw: ${err.message}`);
-          return { ok: false, code: 'security-action-assessment-error' };
-        });
+        }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
         if (!assessment.ok) {
           const code = assessment.code || 'security-action-assessment-unavailable';
           const detail = assessment.cause ? `${code}: ${assessment.cause}` : code;
-          withheldReason = `the complete current contribution assessment was unavailable or withheld (${detail})`;
+          // `message` is server-authored. A thrown error's message is not: it can
+          // echo the contribution, so the catch above records only the code.
+          const message = typeof assessment.message === 'string'
+            ? assessment.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 240)
+            : '';
+          withheldReason = message ? `${detail} — ${message}` : detail;
           // Evidence, mutable-state, transport and provider-readiness failures
           // can clear on a retry of the same head; only a stable outcome of this
           // head under this configuration is cached.
@@ -712,7 +732,8 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
       }
       const merge = admitted.result;
       if (merge.ownerDeferred || merge.ownerBlocked) {
-        outcomes.set(key, merge.ownerBlocked ? { ...entry, recoveryBlocked: merge.ownerBlocked } : entry);
+        const retained = assessmentWithheld ? { ...entry, assessmentWithheld } : entry;
+        outcomes.set(key, merge.ownerBlocked ? { ...retained, recoveryBlocked: merge.ownerBlocked } : retained);
         result.waiting = (result.waiting || 0) + 1;
         if (merge.ownerBlocked) await notifyPendingMergeTimeout(app, entry, null,
           `PR #${entry.prNumber} remains owned by task ${binding.taskId}: ${merge.ownerBlocked}.`);
