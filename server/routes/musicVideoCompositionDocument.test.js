@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -18,16 +19,27 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/m
 
 const ROOT = () => lazyTempDataRoot('mv-composition-document-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
-vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+vi.mock('../services/settings.js', () => ({ settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})) }));
+const auth = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../services/auth.js', async (original) => ({
+  ...await original(), isAuthEnabled: vi.fn(async () => auth.enabled),
+}));
+const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
+const { createSession } = await import('../services/auth.js');
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
 
-const app = express();
-app.use(express.json());
-app.use('/api/music-video', musicVideoRoutes);
-app.use(errorMiddleware);
+const appFor = (address = '127.0.0.1') => {
+  const app = express();
+  app.use((req, _res, next) => { Object.defineProperty(req.socket, 'remoteAddress', { value: address }); next(); });
+  app.use(authGate, hostControlRouteGate, express.json());
+  app.use('/api/music-video', musicVideoRoutes);
+  app.use(errorMiddleware);
+  return app;
+};
+const app = appFor();
 
 const PAGE = '<!doctype html><html><head><link rel="stylesheet" href="style.css"></head><body><script src="portos-mv.js"></script><script src="app.js"></script></body></html>';
 const FILES = { 'index.html': PAGE, 'app.js': 'globalThis.portosComposition = { durationSec: 1, fps: 12, width: 1280, height: 720, seek() {} };', 'style.css': 'body { background: url(bg.png); }', 'bg.png': Buffer.from([137, 80, 78, 71]) };
@@ -45,11 +57,11 @@ function withSymlinkMember(zip, name) {
   return buf;
 }
 
-async function uploadZip(projectId, zip, name = 'doc.zip') {
+async function uploadZip(projectId, zip, name = 'doc.zip', target = app) {
   const form = new FormData();
   form.append('file', new Blob([zip], { type: 'application/zip' }), name);
   const encoded = new Request('http://localhost/', { method: 'POST', body: form });
-  return request(app).post(`/api/music-video/${projectId}/composition/document/zip`)
+  return request(target).post(`/api/music-video/${projectId}/composition/document/zip`)
     .set('content-type', encoded.headers.get('content-type'))
     .send(Buffer.from(await encoded.arrayBuffer()));
 }
@@ -69,6 +81,7 @@ const versionsOf = (projectId) => {
 
 let project;
 beforeEach(async () => {
+  auth.enabled = false;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'music-video'), { recursive: true, force: true });
   rmSync(join(ROOT(), 'compositions'), { recursive: true, force: true });
@@ -77,6 +90,39 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('music-video composition documents', () => {
+  it('requires host authority before copying a caller-named folder and preserves authorized imports', async () => {
+    const source = join(ROOT(), 'compositions', 'example-source');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, 'index.html'), PAGE);
+    const path = `/api/music-video/${project.id}/composition/document/directory`;
+    const body = { directory: 'compositions/example-source' };
+    const before = versionsOf(project.id);
+    const denied = await request(appFor('192.0.2.10')).post(path).send(body);
+    expect([denied.status, denied.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(versionsOf(project.id)).toEqual(before);
+    const operator = await createSession();
+    const agent = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
+      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      const pending = request(appFor(address)).post(path);
+      for (const [key, value] of Object.entries(headers)) pending.set(key, value);
+      const imported = await pending.send(body);
+      expect(imported.status, JSON.stringify(imported.body)).toBe(201);
+      expect(await readFile(join(ROOT(), imported.body.document.directory, 'index.html'), 'utf8')).toBe(PAGE);
+    }
+  });
+
+  it('keeps uploaded archives and shipped templates reachable for remote callers', async () => {
+    const remote = appFor('192.0.2.10');
+    const uploaded = await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))), 'doc.zip', remote);
+    expect(uploaded.status).toBe(201);
+    expect((await request(remote).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
+  });
+
   it('upgrades a recognized legacy engine without rewriting authored files or validating an old review', async () => {
     // Historical shipped bytes pin recognition independently of today's engine.
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
