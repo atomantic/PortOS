@@ -52,7 +52,8 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'initialized-recovery-'));
   const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
   const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
-  fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null };
+  fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null,
+    metadataToken: 'f'.repeat(64) };
   const admission = {
     withCheckoutPublication: async (_repo, work) => { if (fixture.cut) throw new Error('checkout-retirement-reserved'); return work(); },
     reserveCheckoutRetirement: vi.fn(async (_repo, id) => {
@@ -75,13 +76,21 @@ beforeEach(async () => {
       if (fixture.failProofJournal) fixture.failNextJournal = true;
       return { ok: true, manifestSha256: 'e'.repeat(64), restoreProof: { verified: true } };
     }
+    if (input.command === 'review-metadata-recovery') return {
+      metadataRecovery: { version: 1, digest: fixture.metadataToken, evidenceFile: 'private-proof.json', evidenceSha256: fixture.metadataToken },
+      initialPlacements: { ...fixture.placement }, changeCounts: { residualCompressionRemoved: 3, rootProvenanceAdded: 1 }, changedPaths: 4,
+    };
     if (['verify', 'move', 'status'].includes(input.command) && input.manifestSha256 !== 'e'.repeat(64)) throw new Error('archive-manifest-proof-changed');
+    if (fixture.metadataDrift && ['verify', 'move'].includes(input.command) && input.mode !== 'standalone'
+      && input.metadataRecovery?.digest !== fixture.metadataToken) throw new Error('source-content-or-identity-changed:working');
     if (input.command === 'move') {
       if (fixture.failPart === input.part && input.direction === 'quarantine') throw new Error('move-refused');
+      if (fixture.failRestorePart === input.part && input.direction === 'restore') throw new Error('restore-interrupted');
       fixture.placement[input.part] = input.direction === 'quarantine' ? 'quarantined' : 'original';
     }
     if (fixture.failArchive && input.command === 'verify') throw new Error('archive-changed');
     return { ok: true, placement: fixture.placement, fingerprint: fixture.snapshot.fingerprint,
+      ...(input.metadataRecovery ? { postMoveObservation: { file: 'post-move.json', sha256: fixture.metadataToken } } : {}),
       placements: Object.fromEntries(Object.entries(fixture.placement).map(([part, state]) => [part, { state: state === 'quarantined' ? 'quarantine' : state }])) };
   });
   const deps = { root: () => root, fenced: work => work(), admission, native,
@@ -164,6 +173,93 @@ describe('initialized checkout transaction', () => {
     expect(status.placement).toEqual({ preserved: false });
     expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
+  });
+  const interruptedMetadata = async () => {
+    fixture.failPart = 'administration';
+    const retired = await fixture.service.retire(await reviewed());
+    fixture.metadataDrift = true;
+    const status = await fixture.service.status({ appId: 'app', transactionId: retired.transactionId });
+    return { appId: 'app', transactionId: retired.transactionId, journalDigest: status.journalDigest };
+  };
+  it('restores originals only through a separately approved metadata proof and preserves the immutable baseline', async () => {
+    const input = await interruptedMetadata();
+    expect(await fixture.service.restore(input)).toMatchObject({ ok: false, reason: 'source-content-or-identity-changed:working' });
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    expect(prepared).toMatchObject({ ok: true, review: { mode: 'restore-metadata-only', changeCounts: { residualCompressionRemoved: 3 } } });
+    const restored = await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } });
+    expect(restored).toMatchObject({ ok: true, restored: true, phase: 'restored-with-metadata-transitions', archivesRetained: true });
+    expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
+    expect(fixture.cut).toBeNull();
+    expect(fixture.headExists).toBe(true);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    const dir = join(root, input.transactionId);
+    expect(await readFile(join(dir, 'manifest.json'), 'utf8')).toBe('{}');
+    const journals = (await readdir(dir)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const last = JSON.parse(await readFile(join(dir, journals.at(-1)), 'utf8'));
+    expect(last.metadataRestoreReview.metadataRecovery.digest).toBe(fixture.metadataToken);
+    expect(last.metadataRestoreObservations).toHaveLength(2);
+  });
+  it('refuses changed metadata approval or a missing existing reservation before restoring', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.metadataToken = '9'.repeat(64);
+    const before = fixture.deps.native.mock.calls.filter(([v]) => v.command === 'move').length;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'metadata-recovery-review-changed' });
+    expect(fixture.deps.native.mock.calls.filter(([v]) => v.command === 'move')).toHaveLength(before);
+    fixture.cut = null;
+    expect(await fixture.service.reviewMetadataRestore(input)).toMatchObject({ ok: false, recoveryRequired: true });
+    expect(fixture.deps.admission.reserveCheckoutRetirement).toHaveBeenCalledTimes(1);
+  });
+  it('requires a new journal-bound review after a metadata restore interruption', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.failRestorePart = 'working';
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'restore-interrupted' });
+    expect(fixture.cut).not.toBeNull();
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    expect(await restarted.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    const status = await restarted.status(input);
+    const fresh = { ...input, journalDigest: status.journalDigest };
+    const second = await restarted.reviewMetadataRestore(fresh);
+    fixture.failRestorePart = null;
+    expect(await restarted.restoreMetadata({ ...fresh, review: { digest: second.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+    expect(fixture.cut).toBeNull();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+  });
+  it('rechecks current ownership before each metadata restoration move', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.deps.ownership.mockResolvedValueOnce({ ok: true, policy: null })
+      .mockResolvedValue({ ok: false, reason: 'active-owner' });
+    const before = fixture.deps.native.mock.calls.filter(([v]) => v.command === 'move').length;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'active-owner' });
+    expect(fixture.deps.native.mock.calls.filter(([v]) => v.command === 'move')).toHaveLength(before);
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('retains the reservation when allowed policy changes during final restoration verification', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.deps.ownership.mockResolvedValueOnce({ ok: true, policy: null })
+      .mockResolvedValueOnce({ ok: true, policy: null })
+      .mockResolvedValueOnce({ ok: true, policy: null })
+      .mockResolvedValue({ ok: true, policy: { reason: null, policies: [] } });
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-evidence-changed' });
+    expect(fixture.placement).toEqual({ working: 'original', administration: 'original' });
+    expect(fixture.cut).not.toBeNull();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    const status = await fixture.service.status(input);
+    expect(status.phase).toBe('metadata-restored-working');
+    const fresh = { ...input, journalDigest: status.journalDigest };
+    const second = await fixture.service.reviewMetadataRestore(fresh);
+    expect(await fixture.service.restoreMetadata({ ...fresh, review: { digest: second.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+    expect(fixture.cut).toBeNull();
   });
   it('exposes only source-verified cancellation after durable preservation loses its proof journal', async () => {
     fixture.failProofJournal = true;

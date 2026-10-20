@@ -354,6 +354,9 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       ...(unboundPreservation ? { recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' } : {}),
       ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
       ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
+      ...(state.metadataRestoreReview ? { metadataRecovery: state.metadataRestoreReview.metadataRecovery,
+        metadataChangeCounts: state.metadataRestoreReview.changeCounts,
+        metadataRestored: state.phase === 'restored-with-metadata-transitions' } : {}),
       ...(['branch-retired', 'retired'].includes(state.phase) ? { recoveryAction: 'retire-branch' } : {}) };
   };
 
@@ -419,7 +422,81 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       });
     } finally { await executor.release(); }
   }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
-  return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch };
+
+  const metadataRestoreSafety = async ({ ctx, state }) => {
+    const policy = await ensureOwner(ctx, state.release, false);
+    const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+    if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch
+      && tree.path !== state.release.path)) fail('branch-has-new-holder');
+    const head = await (deps.execGit || execGit)(['rev-parse', '--verify', `refs/heads/${state.release.branch}`],
+      ctx.repoPath, { ignoreExitCode: true });
+    if (head.exitCode !== 0 || head.stdout.trim() !== state.release.head) fail('branch-ref-changed');
+    return policy;
+  };
+  const metadataReview = async bound => {
+    const { directory, state, ctx } = bound;
+    const allowed = ['quarantine-working-intent', 'quarantined-working', 'quarantine-administration-intent',
+      'quarantined-administration', 'quarantined', 'restore-administration-intent', 'restored-administration',
+      'restore-working-intent', 'restored-working', 'metadata-restore-approved', 'metadata-restore-administration-intent',
+      'metadata-restored-administration', 'metadata-restore-working-intent', 'metadata-restored-working',
+      'restored-with-metadata-transitions'];
+    if (!allowed.includes(state.phase) || state.branchDeleted || !state.proof?.manifestSha256) fail('metadata-recovery-phase-not-ready');
+    const policy = await metadataRestoreSafety(bound);
+    const proof = await native({ command: 'review-metadata-recovery', transactionDir: directory,
+      manifestSha256: state.proof.manifestSha256 });
+    const evidence = { version: 1, mode: 'restore-metadata-only', transactionId: state.id,
+      repoPath: ctx.repoPath, release: state.release, journalDigest: hash(state), phase: state.phase, policy,
+      metadataRecovery: proof.metadataRecovery, initialPlacements: proof.initialPlacements,
+      changeCounts: proof.changeCounts, changedPaths: proof.changedPaths };
+    return { digest: hash(evidence), ...evidence };
+  };
+  // The CLI uses this same path before an update can be deployed. Its local
+  // ownership tail is not a cross-process lock: native execution.lock and the
+  // exact existing publication cut must both remain held for the entire action.
+  const withMetadataRestore = (input, work) => fenced(async () => {
+    const directory = location(input.transactionId);
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      const bound = await loadBoundTransaction(input);
+      const gate = await admission();
+      const reservation = await gate.readCheckoutReservation(bound.ctx.repoPath, bound.state.id);
+      return await gate.withCheckoutReservation(reservation, async () => {
+        executor.assertHeld();
+        if (hash(await readJournal(directory)) !== hash(bound.state)) fail('retirement-journal-changed');
+        return work(bound, { executor, gate, reservation });
+      });
+    } finally { await executor.release(); }
+  }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
+  const reviewMetadataRestore = input => withMetadataRestore(input,
+    async bound => ({ ok: true, review: await metadataReview(bound) }));
+  const restoreMetadata = input => withMetadataRestore(input, async (bound, { executor, gate, reservation }) => {
+    const current = await metadataReview(bound);
+    if (current.digest !== input.review?.digest) fail('metadata-recovery-review-changed');
+    const { directory } = bound;
+    let state = await appendStep(directory, bound.state, 'metadata-restore-approved',
+      { metadataRestoreReview: current, reservation });
+    const proof = { transactionDir: directory, manifestSha256: state.proof.manifestSha256,
+      metadataRecovery: current.metadataRecovery };
+    for (const part of ['administration', 'working']) {
+      executor.assertHeld();
+      const policy = await metadataRestoreSafety({ ...bound, state });
+      if (JSON.stringify(policy) !== JSON.stringify(current.policy)) fail('retirement-evidence-changed');
+      state = await appendStep(directory, state, `metadata-restore-${part}-intent`);
+      const moved = await native({ command: 'move', ...proof, part, direction: 'restore' });
+      state = await appendStep(directory, state, `metadata-restored-${part}`, {
+        metadataRestoreObservations: [...(state.metadataRestoreObservations || []), { part, proof: moved.postMoveObservation }],
+      });
+    }
+    await native({ command: 'verify', ...proof, mode: 'restore' });
+    const finalPolicy = await metadataRestoreSafety({ ...bound, state });
+    if (JSON.stringify(finalPolicy) !== JSON.stringify(current.policy)) fail('retirement-evidence-changed');
+    executor.assertHeld();
+    state = await appendStep(directory, state, 'restored-with-metadata-transitions');
+    await gate.releaseCheckoutReservation(reservation);
+    return { ok: true, transactionId: state.id, phase: state.phase, restored: true, archivesRetained: true,
+      metadataTransitionsPreserved: true, metadataRecovery: current.metadataRecovery, archiveDir: directory };
+  });
+  return { review, retire, status, restore, verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata };
 }
 
 const recovery = _createInitializedCheckoutRecovery();
@@ -432,3 +509,5 @@ export const verifyInitializedCheckoutArchive = recovery.verifyArchive;
 
 export const reviewInitializedCheckoutBranch = recovery.reviewBranch;
 export const retireInitializedCheckoutBranch = recovery.retireBranch;
+export const reviewInitializedCheckoutMetadataRestore = recovery.reviewMetadataRestore;
+export const restoreInitializedCheckoutMetadata = recovery.restoreMetadata;

@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import uuid
 
 MAX_FILES = 200000
 MAX_BYTES = 20 * 1024 ** 3
@@ -762,26 +763,195 @@ def verify_saved_archive(root, saved):
     return proof_repositories(root, facts)
 
 
-def verify(request):
-    root, saved = load_transaction(request)
-    facts = saved['facts']
-    if request.get('mode') == 'standalone':
-        proof = verify_saved_archive(root, saved)
-        return {'verified': True, 'standalone': True, 'fingerprint': facts['fingerprint'],
-                'restorePath': str(root / 'restore/working'), 'restoreProof': proof}
+def original_sources(root, facts):
     located = placements(root, facts)
+    sources = {}
     for label in ('working', 'administration'):
         state = located[label]['state']
         if state == 'ambiguous':
             fail('ambiguous-source-placement:' + label)
-        path = Path(facts['release']['path'] if label == 'working' else facts['privateGitDir']) if state == 'original' else root / 'quarantine' / label
-        if manifest(path) != facts['sources'][label]:
-            fail('source-content-or-identity-changed:' + label)
+        original = facts['release']['path'] if label == 'working' else facts['privateGitDir']
+        path = Path(original) if state == 'original' else root / 'quarantine' / label
+        sources[label] = manifest(path)
+    return located, sources
+
+
+def metadata_recovery_changes(root, saved, located, sources):
+    """Prove only the observed, reversible-rename metadata differences.
+
+    Removed residual compression bytes remain in the verified archive. No
+    attribute is installed on an original, and all non-attribute fields,
+    including filesystem identity and UF_COMPRESSED, remain exact.
+    """
+    changes, total = [], 0
+    for label in ('working', 'administration'):
+        expected, actual = saved['facts']['sources'][label], sources[label]
+        if len(expected) != len(actual):
+            fail('metadata-recovery-source-layout-changed:' + label)
+        original = saved['facts']['release']['path'] if label == 'working' else saved['facts']['privateGitDir']
+        current = Path(original) if located[label]['state'] == 'original' else root / 'quarantine' / label
+        for before, after in zip(expected, actual):
+            if {k: v for k, v in before.items() if k != 'xattrs'} != {
+                    k: v for k, v in after.items() if k != 'xattrs'}:
+                fail('metadata-recovery-source-content-or-identity-changed:' + label)
+            old, new = before['xattrs'], after['xattrs']
+            for name in sorted(set(old) | set(new)):
+                if old.get(name) == new.get(name):
+                    continue
+                change = {'part': label, 'path': before['path'], 'attribute': name,
+                          'beforeSha256': old.get(name), 'afterSha256': new.get(name)}
+                if (name == 'com.apple.decmpfs' and name in old and name not in new
+                        and before['kind'] == 'file' and not before['flags'] & 0x20):
+                    raw = raw_xattrs(root / 'archive' / label / before['path']).get(name)
+                    if raw is None or hashlib.sha256(raw).hexdigest() != old[name]:
+                        fail('metadata-recovery-preimage-missing-or-changed')
+                    change['beforeBase64'] = base64.b64encode(raw).decode('ascii')
+                elif (name == 'com.apple.provenance' and name not in old and name in new
+                      and before['path'] == '' and before['kind'] == 'directory'):
+                    raw = raw_xattrs(current).get(name)
+                    if raw is None or hashlib.sha256(raw).hexdigest() != new[name]:
+                        fail('metadata-recovery-observation-changed')
+                    change['afterBase64'] = base64.b64encode(raw).decode('ascii')
+                else:
+                    fail('metadata-recovery-unsupported-attribute-change:' + label + ':' + name)
+                total += len(raw)
+                if total > 16 * 1024 ** 2:
+                    fail('metadata-recovery-evidence-budget-exceeded')
+                changes.append(change)
+    return changes
+
+
+def immutable_recovery_evidence(root, prefix, evidence):
+    value = digest(evidence)
+    name = prefix + value + '.json'
+    path = root / name
+    encoded = (json.dumps(evidence, sort_keys=True) + '\n').encode('utf-8')
+    if len(encoded) > 256 * 1024 ** 2:
+        fail('metadata-recovery-evidence-budget-exceeded')
+    def existing_matches():
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()
+                    or info.st_size != len(encoded) or source.read(len(encoded) + 1) != encoded):
+                fail('metadata-recovery-evidence-changed')
+    if os.path.lexists(path):
+        existing_matches()
+    else:
+        # A stopped write must not occupy the deterministic proof name. Keep
+        # abandoned staging files as evidence; only a fully fsynced record may
+        # become canonical, with no replacement of an existing destination.
+        staged = root / ('.' + name + '.' + uuid.uuid4().hex + '.staging')
+        private_json(staged, evidence)
+        try:
+            exclusive_rename(staged, path)
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+            existing_matches()
+        fsync_dir(root)
+    return {'file': name, 'sha256': hashlib.sha256(encoded).hexdigest(), 'digest': value}
+
+
+def load_metadata_recovery(root, saved, request):
+    accepted = request['metadataRecovery']
+    if (not isinstance(accepted, dict)
+            or set(accepted) != {'version', 'evidenceFile', 'evidenceSha256', 'digest'}
+            or accepted['version'] != 1
+            or not isinstance(accepted['digest'], str)
+            or not re.fullmatch(r'[0-9a-f]{64}', accepted['digest'])
+            or accepted['evidenceFile'] != 'metadata-recovery-' + accepted['digest'] + '.json'):
+        fail('metadata-recovery-proof-invalid')
+    path = root / accepted['evidenceFile']
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()
+                or info.st_size > 256 * 1024 ** 2):
+            fail('metadata-recovery-evidence-unsafe')
+        encoded = source.read(256 * 1024 ** 2 + 1)
+    if hashlib.sha256(encoded).hexdigest() != accepted['evidenceSha256']:
+        fail('metadata-recovery-evidence-changed')
+    evidence = json.loads(encoded)
+    if (digest(evidence) != accepted['digest']
+            or set(evidence) != {'version', 'manifestSha256', 'transactionIdentity',
+                                 'originalFingerprint', 'initialPlacements', 'sources', 'changes'}
+            or evidence['version'] != 1
+            or evidence['manifestSha256'] != request.get('manifestSha256')
+            or evidence['transactionIdentity'] != saved['transactionIdentity']
+            or evidence['originalFingerprint'] != saved['facts']['fingerprint']
+            or set(evidence['initialPlacements']) != {'working', 'administration'}
+            or any(value not in ('original', 'quarantine') for value in evidence['initialPlacements'].values())):
+        fail('metadata-recovery-proof-invalid')
+    return evidence
+
+
+def verify_metadata_recovery(root, saved, request, located, sources):
+    evidence = load_metadata_recovery(root, saved, request)
+    if sources != evidence['sources']:
+        fail('metadata-recovery-review-changed')
+    for label in ('working', 'administration'):
+        # A restoration can only advance toward original placement. The outer
+        # service additionally binds the initial placement to its journal step.
+        if located[label]['state'] not in (evidence['initialPlacements'][label], 'original'):
+            fail('metadata-recovery-placement-regressed')
+    if metadata_recovery_changes(root, saved, located, sources) != evidence['changes']:
+        fail('metadata-recovery-review-changed')
+
+
+def review_metadata_recovery(request):
+    if not re.fullmatch(r'[0-9a-f]{64}', request.get('manifestSha256', '')):
+        fail('metadata-recovery-manifest-proof-required')
+    root, saved = load_transaction(request)
+    verify_saved_archive(root, saved)
+    located, sources = original_sources(root, saved['facts'])
+    changes = metadata_recovery_changes(root, saved, located, sources)
+    verify_live_common(root, saved, restoring=True)
+    if original_sources(root, saved['facts']) != (located, sources):
+        fail('metadata-recovery-observation-changed')
+    evidence = {'version': 1, 'manifestSha256': request['manifestSha256'],
+                'transactionIdentity': saved['transactionIdentity'],
+                'originalFingerprint': saved['facts']['fingerprint'],
+                'initialPlacements': {label: row['state'] for label, row in located.items()},
+                'sources': sources, 'changes': changes}
+    stored = immutable_recovery_evidence(root, 'metadata-recovery-', evidence)
+    return {'metadataRecovery': {'version': 1, 'evidenceFile': stored['file'],
+                                'evidenceSha256': stored['sha256'], 'digest': stored['digest']},
+            'initialPlacements': evidence['initialPlacements'],
+            'changeCounts': {'residualCompressionRemoved': sum(row['attribute'] == 'com.apple.decmpfs' for row in changes),
+                             'rootProvenanceAdded': sum(row['attribute'] == 'com.apple.provenance' for row in changes)},
+            'changedPaths': len({(row['part'], row['path']) for row in changes})}
+
+
+def verify(request):
+    root, saved = load_transaction(request)
+    facts = saved['facts']
+    recovering = 'metadataRecovery' in request
+    if recovering and request.get('mode') != 'restore':
+        fail('metadata-recovery-restore-only')
+    if request.get('mode') == 'standalone':
+        proof = verify_saved_archive(root, saved)
+        return {'verified': True, 'standalone': True, 'fingerprint': facts['fingerprint'],
+                'restorePath': str(root / 'restore/working'), 'restoreProof': proof}
+    located, sources = original_sources(root, facts)
+    if recovering:
+        verify_metadata_recovery(root, saved, request, located, sources)
+    else:
+        for label in ('working', 'administration'):
+            if sources[label] != facts['sources'][label]:
+                fail('source-content-or-identity-changed:' + label)
+    verify_saved_archive(root, saved)
+    verify_live_common(root, saved, restoring=request.get('mode') == 'restore')
+    return {'verified': True, 'placements': located, 'fingerprint': facts['fingerprint'],
+            **({'metadataRecoveryAccepted': True} if recovering else {})}
+
+
+def verify_live_common(root, saved, restoring):
+    facts = saved['facts']
     common = safe_path(facts['commonGitDir'])
     check_admin(common, common=True)
     if identity(common) != facts['identity']['common']:
         fail('common-store-incarnation-changed')
-    restoring = request.get('mode') == 'restore'
     mutable_shared = {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set()
     for name, expected in facts['sources']['common'].items():
         if name not in mutable_shared and manifest(common / name, True) != expected:
@@ -789,7 +959,6 @@ def verify(request):
     if sorted(p.name for p in common.iterdir() if p.name in COMMON_PARTS and p.name not in mutable_shared) != sorted(
             name for name in facts['sources']['common'] if name not in mutable_shared):
         fail('common-store-layout-changed')
-    verify_saved_archive(root, saved)
     if restoring:
         # Other branches may legitimately advance after quarantine. Rollback
         # never rewrites shared refs or objects: prove the original private index
@@ -802,13 +971,23 @@ def verify(request):
             'fsck', '--full', '--strict', objects=common / 'objects')
         prove_index_blobs(root / 'restore/administration', root / 'restore/working',
                           objects=common / 'objects')
-    return {'verified': True, 'placements': located, 'fingerprint': facts['fingerprint']}
+
+
+def exclusive_rename(source, destination):
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    libc.renamex_np.restype = ctypes.c_int
+    # RENAME_EXCL = 0x00000004, sys/stdio.h; never replace any occupied path.
+    if libc.renamex_np(os.fsencode(source), os.fsencode(destination), 0x00000004):
+        raise OSError(ctypes.get_errno(), 'exclusive-rename-failed')
 
 
 def move(request):
     part, direction = request['part'], request['direction']
     if part not in ('working', 'administration') or direction not in ('quarantine', 'restore'):
         fail('invalid-move')
+    if 'metadataRecovery' in request and direction != 'restore':
+        fail('metadata-recovery-restore-only')
     verified = verify({**request, 'mode': 'restore' if direction == 'restore' else 'fresh'})
     root, saved = load_transaction(request)
     facts = saved['facts']
@@ -825,17 +1004,24 @@ def move(request):
     safe_path(str(destination.parent))
     if identity(source) != facts['identity'][part] or os.path.lexists(destination):
         fail('move-lease-or-destination-changed')
-    libc = ctypes.CDLL(None, use_errno=True)
-    libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-    libc.renamex_np.restype = ctypes.c_int
-    # RENAME_EXCL = 0x00000004, sys/stdio.h; never replace any occupied path.
-    if libc.renamex_np(os.fsencode(source), os.fsencode(destination), 0x00000004):
-        raise OSError(ctypes.get_errno(), 'exclusive-rename-failed')
+    exclusive_rename(source, destination)
     fsync_dir(source.parent)
     fsync_dir(destination.parent)
     if identity(destination) != facts['identity'][part]:
         fail('post-move-identity-uncertain')
-    return {'moved': True, 'part': part, 'direction': direction, 'placements': placements(root, facts)}
+    result = {'moved': True, 'part': part, 'direction': direction, 'placements': placements(root, facts)}
+    if 'metadataRecovery' in request:
+        located, sources = original_sources(root, facts)
+        observation = immutable_recovery_evidence(root, 'metadata-recovery-postmove-', {
+            'version': 1, 'manifestSha256': request['manifestSha256'],
+            'acceptedMetadataRecovery': request['metadataRecovery'],
+            'part': part, 'placements': located, 'sources': sources})
+        try:
+            verify({**request, 'mode': 'restore'})
+        except Exception as error:
+            fail('metadata-recovery-postmove-changed:' + observation['file'] + ':' + str(error))
+        result['postMoveObservation'] = observation
+    return result
 
 
 def main():
@@ -858,10 +1044,11 @@ def main():
     elif action == 'status':
         root, saved = load_transaction(request)
         result = {'placements': placements(root, saved['facts']), 'fingerprint': saved['facts']['fingerprint']}
-    elif action in ('preserve', 'verify', 'move'):
+    elif action in ('preserve', 'verify', 'move', 'review-metadata-recovery'):
         fd = lock_file(transaction(request['transactionDir']), 'backend.lock')
         try:
-            result = {'preserve': preserve, 'verify': verify, 'move': move}[action](request)
+            result = {'preserve': preserve, 'verify': verify, 'move': move,
+                      'review-metadata-recovery': review_metadata_recovery}[action](request)
         finally:
             os.close(fd)
     else:

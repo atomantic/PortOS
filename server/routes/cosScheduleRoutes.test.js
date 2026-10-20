@@ -10,7 +10,7 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
-const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn() }));
+const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn() }));
 vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
 
 vi.mock('../services/taskSchedule.js', () => ({
@@ -92,6 +92,21 @@ describe('CoS Schedule Routes', () => {
     const branchInput = { ...restore, review };
     expect((await request(app).post(`${base}/retire-branch`).send(branchInput)).status).toBe(200);
     expect(initialized.retireInitializedCheckoutBranch).toHaveBeenCalledWith(branchInput);
+  });
+
+  it('separately requires a fresh digest for metadata restoration and rejects caller-supplied allowances', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const input = { appId: 'app', transactionId: '2f800be9-6824-4726-813d-8d9ea0b2c1dc', journalDigest: 'a'.repeat(64) };
+    initialized.reviewInitializedCheckoutMetadataRestore.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-metadata-restore`).send(input)).status).toBe(200);
+    expect(initialized.reviewInitializedCheckoutMetadataRestore).toHaveBeenCalledWith(input);
+    expect((await request(app).post(`${base}/restore-metadata`).send(input)).status).toBe(400);
+    const approved = { ...input, review: { digest: 'b'.repeat(64) } };
+    expect((await request(app).post(`${base}/restore-metadata`).send({ ...approved, ignoreXattrs: true })).status).toBe(400);
+    expect(initialized.restoreInitializedCheckoutMetadata).not.toHaveBeenCalled();
+    initialized.restoreInitializedCheckoutMetadata.mockResolvedValue({ ok: false, reason: 'metadata-recovery-review-changed' });
+    expect((await request(app).post(`${base}/restore-metadata`).send(approved)).status).toBe(409);
+    expect(initialized.restoreInitializedCheckoutMetadata).toHaveBeenCalledWith(approved);
   });
 
   describe('GET /api/cos/schedule', () => {

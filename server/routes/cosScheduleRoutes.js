@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -339,6 +339,20 @@ router.post('/schedule/branch-reconcile/initialized-checkouts/restore', asyncHan
   const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
   const { restoreInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
   const result = await restoreInitializedCheckout(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutMetadataRestore } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutMetadataRestore(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/restore-metadata', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutMetadataRestoreSchema, req.body);
+  const { restoreInitializedCheckoutMetadata } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await restoreInitializedCheckoutMetadata(input);
   res.status(result.ok ? 200 : 409).json(result);
 }));
 
