@@ -412,6 +412,28 @@ describe('pregate hidden-content invocation', () => {
     }
   });
 
+  // run-ci-tests.js leaves npm and Vitest in pregate's stage group, so pregate
+  // owns them on every exit path, not only on cancellation.
+  it.skipIf(process.platform === 'win32')('kills a descendant still running in the stage group after the stage exits', () => {
+    const marker = join(scratch, 'straggler-pid');
+    write('scripts/scan-diff-hidden-content.js', `
+      import { spawn } from 'child_process';
+      import { writeFileSync } from 'fs';
+      const straggler = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], { stdio: 'ignore' });
+      writeFileSync(${JSON.stringify(marker)}, String(straggler.pid));
+      setTimeout(() => process.exit(0), 200);
+    `);
+    const result = run('--skip-lint');
+    const pid = Number(readFileSync(marker, 'utf8'));
+    let alive = true;
+    try { process.kill(pid, 0); } catch (error) { alive = error.code !== 'ESRCH'; }
+    if (alive) process.kill(pid, 'SIGKILL');
+    expect(alive).toBe(false);
+    // Later stages are not fixtures here; only the scan stage's outcome matters.
+    expect(result.stdout).toContain('hidden-content scan passed');
+    expect(result.stderr).toContain('Stage "hidden-content scan" exited with processes still running in its group; killed them.');
+  });
+
   it.skipIf(process.platform === 'win32')('reports a stage child signal as incomplete rather than an ordinary assertion failure', () => {
     write('scripts/scan-diff-hidden-content.js', "process.kill(process.pid, 'SIGTERM');\n");
     const result = run('--skip-lint');

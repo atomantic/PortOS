@@ -124,7 +124,9 @@ Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest processes,
 which share that stage's process group — gets the signal and a 5-second grace,
 then the group is killed until no member remains. Only then does pregate write
-an incomplete receipt (`passed: false`) and exit by the same signal.
+an incomplete receipt (`passed: false`) and exit by the same signal. After every stage, on
+POSIX, pregate also kills anything still left in that stage's group, with a
+warning, so no stage's processes run into the next one or past pregate.
 
 After the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a

@@ -51,6 +51,7 @@
 import { spawn, spawnSync } from 'child_process';
 import { writeSync } from 'fs';
 import { constants } from 'os';
+import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -466,18 +467,28 @@ async function cancelStage(stage, child, closed, signal) {
     signalStage(child, 'SIGKILL');
     if (!await within(closed, STAGE_SETTLE_MS)) return { settled: false, reason: 'stage process did not exit after SIGKILL' };
   }
-  if (IS_WIN32) return { settled: true };
-  // The leader is reaped, but a descendant that ignored the signal keeps the
-  // group (and its open log descriptors) alive. ESRCH is the proof of empty.
+  return IS_WIN32 ? { settled: true } : sweepStageGroup(child.pid);
+}
+
+/**
+ * Kill whatever is still in a stage's process group once its leader exited:
+ * a descendant that ignored a signal or outlived its launcher keeps running
+ * (and writing to inherited descriptors) into the next stage or past pregate.
+ * ESRCH is the proof the group is empty. POSIX only. Resolves
+ * `{ settled, lingered?, reason? }`.
+ */
+async function sweepStageGroup(pgid) {
   const deadline = Date.now() + STAGE_SETTLE_MS;
-  for (;;) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      process.kill(-child.pid, 'SIGKILL');
+      process.kill(-pgid, 'SIGKILL');
     } catch (error) {
-      return error.code === 'ESRCH' ? { settled: true } : { settled: false, reason: `group kill failed (${error.code ?? 'unknown'})` };
+      return error.code === 'ESRCH'
+        ? { settled: true, lingered: attempt > 0 }
+        : { settled: false, reason: `group kill failed (${error.code ?? 'unknown'})` };
     }
     if (Date.now() >= deadline) return { settled: false, reason: 'group members remained after SIGKILL' };
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await delay(25);
   }
 }
 
@@ -504,8 +515,11 @@ async function runStage(stage, owner) {
   };
   const outcome = await closed;
   owner.onSignal = null;
-  if (!cancellation) return { ...outcome, pid: child.pid };
-  return { ...outcome, pid: child.pid, interrupted, ...await cancellation };
+  if (cancellation) return { ...outcome, pid: child.pid, interrupted, ...await cancellation };
+  if (IS_WIN32 || !child.pid) return { ...outcome, pid: child.pid };
+  const sweep = await sweepStageGroup(child.pid);
+  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited with processes still running in its group; killed them.\n`);
+  return { ...outcome, pid: child.pid, ...(sweep.settled ? {} : { unsettled: sweep.reason }) };
 }
 
 const formatDuration = (ms) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(1)}s`);
@@ -700,6 +714,10 @@ async function main() {
         ? `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; its process group has exited.`
         : `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; owned process group settlement unverified (${outcome.reason}).`;
       exitCode = 128 + constants.signals[outcome.interrupted];
+    } else if (outcome.unsettled) {
+      result.status = 'failed';
+      failure = `❌ ${result.name} left processes in its group that could not be stopped (${outcome.unsettled}).`;
+      exitCode = 1;
     } else if (outcome.error) {
       result.status = 'failed';
       failure = `❌ ${result.name} could not start: ${outcome.error.message}`;
