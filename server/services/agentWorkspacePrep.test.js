@@ -67,6 +67,9 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
+const handBackPrRemediationMock = vi.fn().mockResolvedValue(true);
+vi.mock('./prRemediationFollowUp.js', () => ({ handBackPrRemediation: (...args) => handBackPrRemediationMock(...args) }));
+
 vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
@@ -76,7 +79,7 @@ import { ensureLatest, isRepo, fetchOrigin } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -746,26 +749,50 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  // A PR-remediation follow-up is the same shape one step further out (its
-  // commits land on the contributor's own branch) and hits the identical #6243
-  // bug when that branch is checked out in a claim tree, so it carries the same
-  // carve-out via the shared isNonCommittingCoordinatorTask predicate.
-  it('opts into adopting a live /claim worktree for a PR-remediation follow-up', async () => {
-    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-99', agentId: 'claim-issue-99' });
-    adoptWorktree.mockResolvedValue({
-      worktreePath: '/mock/worktrees/agent-new', branchName: 'contributor/fix-thing',
-      baseBranch: null, existingBranch: true, adopted: true
-    });
-    const task = {
+  // A PR-remediation agent runs the PR's own tests, so it attaches only at the
+  // head PortOS reviewed (#12486). Adopting a surviving tree would hand it a
+  // checkout nothing proved is that commit, so it always attaches fresh, pinned.
+  describe('a PR-remediation follow-up pinned to the reviewed head', () => {
+    const REVIEWED = 'a'.repeat(40);
+    const remediationTask = (extra = {}) => ({
       id: 't-remediation', taskType: 'internal',
-      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing' }
-    };
+      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing', prRemediationHeadSha: REVIEWED, ...extra },
+    });
 
-    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    it('never adopts a holder and attaches fresh at the reviewed commit', async () => {
+      findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-99', agentId: 'claim-issue-99' });
+      createWorktree.mockResolvedValueOnce({ worktreePath: '/mock/worktrees/agent-new', branchName: 'contributor/fix-thing', baseBranch: null, existingBranch: true });
 
-    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
-    expect(opts.allowLiveClaim).toBe(true);
-    expect(r.outcome).toBe('ready');
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask() });
+
+      expect(adoptWorktree).not.toHaveBeenCalled();
+      expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 't-remediation',
+        expect.objectContaining({ existingBranch: 'contributor/fix-thing', expectedHeadSha: REVIEWED }));
+      expect(r.outcome).toBe('ready');
+      expect(handBackPrRemediationMock).not.toHaveBeenCalled();
+    });
+
+    it('blocks the task for good and hands the PR back when the head moved', async () => {
+      createWorktree.mockRejectedValueOnce(Object.assign(new Error('origin/contributor/fix-thing is at bbbb'), { code: PINNED_HEAD_MOVED }));
+      const task = remediationTask();
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+      expect(r.outcome).toBe('blocked');
+      // Not `worktree-busy`: a timed pause would retry the same moved head.
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'pr-head-moved' }),
+      }), expect.anything());
+      expect(handBackPrRemediationMock).toHaveBeenCalledWith(expect.objectContaining({ task }));
+    });
+
+    it('refuses a remediation task that records no reviewed head without touching git', async () => {
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask({ prRemediationHeadSha: null }) });
+
+      expect(r.outcome).toBe('blocked');
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(handBackPrRemediationMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   // A `/do:next` run keeps its tree in a sibling directory outside the managed
