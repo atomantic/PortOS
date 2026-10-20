@@ -1,9 +1,11 @@
 /**
  * Receiver-side authorization for peer PULL requests (#3659, #5663).
  *
- * Covers BOTH pull transports: the per-record `/api/peer-sync/*` routes
+ * Covers both pull transports, the per-record `/api/peer-sync/*` routes
  * (`server/routes/peerSync.js`) and the older snapshot transport
- * `/api/sync/:category/*` (`server/routes/dataSync.js`).
+ * `/api/sync/:category/*` (`server/routes/dataSync.js`), plus the brain,
+ * memory and catalog delta pulls (`routes/brainSync.js`, `memory.js`,
+ * `catalog.js`), which gate on their sync category.
  *
  * The push direction has always been gated on the user's per-peer sharing
  * config (`peerAllowsOutbound` + `peerHasCategory`, see peerSyncPush.js). The
@@ -87,7 +89,8 @@ export function readCallerInstanceId(req) {
  * Scope, at most one of:
  *  - `recordKind` — a per-record `/api/peer-sync/*` read. Gated on
  *    `peerAllowsOutbound` + `peerHasCategory`, the predicates the push path uses.
- *  - `syncCategory` — a whole-category `/api/sync/*` snapshot read. Gated on
+ *  - `syncCategory` — a whole-category read: an `/api/sync/*` snapshot or a
+ *    brain/memory/catalog delta pull, with its checksum and manifest. Gated on
  *    `peerAllowsCategoryPull`, which folds the master switch into the resolved
  *    category map instead of checking it separately, so a default-ON category
  *    still flows for a peer whose other sync the user turned off.

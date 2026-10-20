@@ -29,6 +29,7 @@ import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';
 import { getProviderById } from './providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
 
 const SETTINGS_FILE = join(PATHS.brain, 'activity-digest-settings.json');
 
@@ -254,12 +255,21 @@ async function buildNameMap(events) {
   return map;
 }
 
-// Generate the LLM narrative from the bullet template. Returns null on any
-// failure (caller falls back to the non-LLM bullets). Never throws — runs on
+// Generate the LLM narrative from the bullet template. Returns `{ text: null }`
+// on any failure (caller falls back to the non-LLM bullets), plus `skipped`
+// when the configured provider is refused outright. Never throws — runs on
 // the scheduler path too.
 async function generateNarrative(template, date, settings) {
   const provider = await getProviderById(settings.provider).catch(() => null);
-  if (!provider || !provider.enabled) return null;
+  if (!provider || !provider.enabled) return { text: null };
+  // The template quotes other people's text (calendar invite titles, message
+  // participant names, media titles) and runs unattended on the scheduler, so
+  // it never reaches host tools: only a provider that can run it tool-free
+  // drafts the narrative, pinned so no fallback swaps in an agent harness.
+  if (!isToolFreeOneShotProvider(provider)) {
+    console.warn(`⚠️ Activity digest ${date}: provider ${provider.id} cannot run tool-free — keeping the bullet digest`);
+    return { text: null, skipped: 'provider-not-tool-free' };
+  }
   const model = settings.model || provider.defaultModel;
   // Headless classification-style run — append headlessArgs so a CLI provider
   // doesn't persist a session transcript for the draft.
@@ -271,12 +281,14 @@ async function generateNarrative(template, date, settings) {
     prompt: buildNarrativePrompt(template, date),
     source: 'activity-digest',
     model,
+    toolFree: true,
+    allowFallback: false,
   }).catch((err) => {
     console.error(`🗓️  Activity digest LLM narrative failed for ${date}: ${err.message}`);
     return null;
   });
   const text = (result?.text || '').trim();
-  return text || null;
+  return { text: text || null };
 }
 
 /**
@@ -288,7 +300,9 @@ async function generateNarrative(template, date, settings) {
  * @param {object} [opts]
  * @param {boolean} [opts.recordRun=false] — stamp settings.lastRun* on success
  *   (the scheduler sets this; manual drafts don't move the scheduler cursor).
- * @returns {Promise<{ date, drafted: boolean, usedLlm: boolean, reason?: string }>}
+ * @returns {Promise<{ date, drafted: boolean, usedLlm: boolean, reason?: string, narrativeSkipped?: string }>}
+ *   `narrativeSkipped: 'provider-not-tool-free'` names why a configured
+ *   provider drafted no narrative, so the UI can say so.
  */
 export async function runDigestForDate(date, { recordRun = false } = {}) {
   if (!journal.isIsoDate(date)) throw new Error(`invalid date: ${date}`);
@@ -311,8 +325,10 @@ export async function runDigestForDate(date, { recordRun = false } = {}) {
 
   let sectionBody = template;
   let usedLlm = false;
+  let narrativeSkipped = null;
   if (settings.provider) {
-    const narrative = await generateNarrative(template, date, settings);
+    const { text: narrative, skipped } = await generateNarrative(template, date, settings);
+    narrativeSkipped = skipped || null;
     if (narrative) {
       // Prose narrative on top; keep the structured bullets beneath it for
       // provenance / at-a-glance scanning.
@@ -324,7 +340,7 @@ export async function runDigestForDate(date, { recordRun = false } = {}) {
   await journal.upsertAutoSection(date, buildSectionBody(date, sectionBody, { usedLlm }), DIGEST_MARKERS);
   if (recordRun) await stampRun(date);
   console.log(`🗓️  Activity digest drafted ${date} (${events.length} event(s), ${usedLlm ? 'LLM' : 'non-LLM'}) in ${Date.now() - started}ms`);
-  return { date, drafted: true, usedLlm };
+  return { date, drafted: true, usedLlm, ...(narrativeSkipped ? { narrativeSkipped } : {}) };
 }
 
 // Advance the scheduler cursor to the drafted day.

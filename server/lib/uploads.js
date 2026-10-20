@@ -1,13 +1,52 @@
 /** Upload staging, validation, persistence, and local-file serving helpers. */
-import { readFile, stat, unlink } from 'fs/promises';
+import { open, readFile, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';
 import { MIRRORED_MIME_TYPES } from './beeperAttachmentPaths.js';
 import { ServerError } from './errorHandler.js';
 import { copyFileGuarded, ensureDir, pathExists, renameGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
-import { detectImageFormat, getFileExtension, getMimeType, RISKY_MIME_TYPES, sanitizeFilename } from './mimeTypes.js';
+import {
+  detectImageFormat, detectMediaManifest, getFileExtension, getMimeType, id3v2TagLength,
+  MEDIA_MANIFEST_PROBE_BYTES, RISKY_MIME_TYPES, sanitizeFilename,
+} from './mimeTypes.js';
 import { PATHS } from './paths.js';
 import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
+
+// Uploads under these types may later be probed, thumbnailed or rendered by ffmpeg.
+const isFfmpegInputExtension = (ext) => /^(audio|video|image)\//.test(getMimeType(ext));
+
+/**
+ * Refuse bytes ffmpeg would open as a playlist or manifest naming other files
+ * (see `detectMediaManifest`). Apply before persisting any upload a probe,
+ * thumbnail or render may later read.
+ */
+function assertNotMediaManifest(buffer) {
+  const format = detectMediaManifest(buffer);
+  if (format) {
+    throw new ServerError(`File content is a ${format} playlist or manifest that references other files; upload the media itself`, { status: 400, code: 'INVALID_FILE_TYPE' });
+  }
+}
+
+/**
+ * `assertNotMediaManifest` over a file on disk: its leading window, plus a
+ * full window after an ID3v2 tag. A tag ending inside a full leading window
+ * leaves only a fragment of the following manifest in it, so the post-tag
+ * window is read whenever the leading read filled its buffer.
+ */
+export async function assertFileNotMediaManifest(path) {
+  const handle = await open(path, 'r');
+  const readWindow = async (position) => {
+    const window = Buffer.alloc(MEDIA_MANIFEST_PROBE_BYTES);
+    const { bytesRead } = await handle.read(window, 0, window.length, position);
+    return window.subarray(0, bytesRead);
+  };
+  const windows = await (async () => {
+    const head = await readWindow(0);
+    const tagLength = id3v2TagLength(head);
+    return tagLength > 0 && head.length === MEDIA_MANIFEST_PROBE_BYTES ? [head, await readWindow(tagLength)] : [head];
+  })().finally(() => handle.close());
+  for (const window of windows) assertNotMediaManifest(window);
+}
 
 /**
  * Move a temp file into `destDir` and return the persisted filename, using the
@@ -27,6 +66,7 @@ export async function importFileToDir(tempPath, originalName, destDir, { extensi
   if (extensions && !extensions.map((item) => item.toLowerCase()).includes(extension)) {
     throw new ServerError('Invalid file type', { status: 400, code: 'INVALID_FILE_TYPE' });
   }
+  if (extension && isFfmpegInputExtension(extension)) await assertFileNotMediaManifest(tempPath);
   await ensureDir(destDir);
   const id = randomUUID();
   const filename = `${id.slice(0, 8)}-${sanitizeFilename(originalName)}`;
@@ -168,6 +208,7 @@ export async function saveBase64Upload(dir, { filename, data }, { allowedExtensi
   if (buffer.length > maxBytes) {
     throw new ServerError(`File exceeds maximum size of ${maxBytes / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
   }
+  if (isFfmpegInputExtension(ext)) assertNotMediaManifest(buffer);
 
   await ensureDir(dir);
 

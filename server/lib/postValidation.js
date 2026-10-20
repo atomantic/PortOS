@@ -6,6 +6,12 @@ import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { RHETORIC_DRILL_TYPES, RHETORIC_MODE_IDS, rhetoricEvaluationSchema } from './postRhetoric.js';
+import { POLLUTING_KEYS } from './objects.js';
+
+// Chunk ids and element names index the plain-object mastery maps in
+// meatspacePostMemory.js; `__proto__` would resolve to Object.prototype and
+// the mastery update would write onto every object in the process.
+const masteryKeySchema = z.string().refine((key) => !POLLUTING_KEYS.has(key), 'reserved mastery key');
 
 // =============================================================================
 // POST (Power On Self Test) VALIDATION SCHEMAS
@@ -44,7 +50,8 @@ const fillBlankAnswerSchema = z.object({
   value: z.string().nullable(),
   expected: z.string().optional(),
   correct: z.boolean().optional(),
-  element: z.string().nullable().optional(),
+  // Copied onto the question's element by expandMemoryQuestionResults.
+  element: masteryKeySchema.nullable().optional(),
 });
 
 const questionResultSchema = z.object({
@@ -76,8 +83,8 @@ const questionResultSchema = z.object({
   // merge per-chunk/per-element mastery (mergeMasteryFromSession in
   // meatspacePostMemory.js) the same way MemoryBuilder's submitPractice does.
   // Absent for math/LLM/cognitive drills.
-  chunkId: z.string().nullable().optional(),
-  element: z.string().nullable().optional()
+  chunkId: masteryKeySchema.nullable().optional(),
+  element: masteryKeySchema.nullable().optional()
 });
 
 // LLM drill response (text-based)
@@ -501,7 +508,8 @@ const memoryLineSchema = z.object({
 });
 
 const memoryChunkSchema = z.object({
-  id: z.string(),
+  // Practice submits this id as a mastery key, so it takes the same check.
+  id: masteryKeySchema,
   lineRange: z.array(z.number().int().min(0)).length(2),
   label: z.string(),
 });
@@ -561,10 +569,10 @@ export const memoryItemUpdateSchema = z.object({
 const practiceResultSchema = z.object({
   correct: z.boolean(),
   word: z.string().optional(),
-  element: z.string().nullable().optional(),
+  element: masteryKeySchema.nullable().optional(),
   expected: z.string().optional(),
   answered: z.string().optional(),
-  chunkId: z.string().optional(),
+  chunkId: masteryKeySchema.optional(),
 });
 
 export const memoryPracticeSchema = z.object({
@@ -572,7 +580,7 @@ export const memoryPracticeSchema = z.object({
   // logged like `learn` and intentionally does not advance mastery. It is NOT a
   // POST-session drill type (no server generator, see generateMemoryDrill).
   mode: z.enum(['fill-blank', 'sequence', 'element-flash', 'element-study', 'learn', 'speed-run']),
-  chunkId: z.string().nullable().optional(),
+  chunkId: masteryKeySchema.nullable().optional(),
   // Learn mode is an exposure event and legitimately has no scored results.
   // Every retrieval mode still needs at least one result.
   results: z.array(practiceResultSchema),

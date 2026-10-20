@@ -3,6 +3,7 @@
  * Sync, pregate, push and CI run outside the lease; it spans only the final
  * verify-and-merge, so holds take seconds (#10803).
  */
+import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
 import { randomUUID } from 'node:crypto';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -22,6 +23,8 @@ export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
 // deadline may still land, with the same exposure as two CLEAN merges.
 export const AGENT_LEASE_MAX_HOLD_MS = 5 * 60 * 1000;
 export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
+const MERGE_ADMISSION_HISTORY_LIMIT = 25;
+const MERGE_HANDOFF_RECEIPT_LIMIT = 25;
 const serverOwner = randomUUID();
 const sweepTokens = new Set();
 const refuse = (reason) => ({ admitted: false, reason, retryAfterMs });
@@ -194,19 +197,20 @@ async function verifiedReviewCoordinator(agent, repository) {
     || !isTruthyMeta(meta?.reviewLoopFollowUp) || isTruthyMeta(meta?.reviewLoopLeaveOpen)
     || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
     || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
-    || agent.metadata?.worktreeBranch !== target.branch || !agent.metadata?.workspacePath) return false;
+    || resolveTaskRemoteBranch(meta) !== target.branch
+    || agent.metadata?.worktreeBranch !== resolveTaskTargetBranch(meta) || !agent.metadata?.workspacePath) return false;
   const pr = parsePullRequestUrl(target.url);
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository
     || String(meta.reviewLoopPRNumber) !== String(pr.number)
     || meta.reviewLoopPRHost !== pr.host || meta.reviewLoopPROwner !== pr.owner || meta.reviewLoopPRRepo !== pr.repo) return false;
-  if (!await checkoutOnBranch(agent.metadata.workspacePath, target.branch, repository)) return false;
+  if (!await checkoutOnBranch(agent.metadata.workspacePath, resolveTaskTargetBranch(meta), repository)) return false;
   if (!meta.forkHead && !meta.reviewLoopForkTarget && !target.fork && !target.workspacePath) return true;
   if (target.workspacePath !== agent.metadata.workspacePath || !agent.metadata.sourceWorkspace
     || agent.metadata.sourceWorkspace === target.workspacePath || target.fork?.url !== target.url) return false;
   const { verifyForkReviewMergeTarget } = await import('./forkReviewMergeTarget.js');
   const headSha = await verifyForkReviewMergeTarget({ target: target.fork, taskTarget: meta.reviewLoopForkTarget,
     forkHead: meta.forkHead, sourceWorkspace: agent.metadata.sourceWorkspace,
-    workspacePath: target.workspacePath, branch: target.branch });
+    workspacePath: target.workspacePath, branch: target.branch, localBranch: agent.metadata.worktreeBranch });
   return headSha ? { headSha } : false;
 }
 
@@ -310,6 +314,48 @@ export async function resolveMergeHandoffOwner(agentId) {
   return { refused: 'handoff-owner-unverified' };
 }
 
+/**
+ * Record that the pending-merge coordinator was handed exactly this PR head, on
+ * the run that handed it off. The post-merge gate audit (#12549) reads it to
+ * tell the coordinator's merge from an agent merging around admission.
+ *
+ * @returns {Promise<{ recorded: true }|{ recorded?: false, reason: string }>}
+ */
+export async function recordMergeHandoffReceipt({ agentId, receipt }) {
+  return transaction(async (state, save) => {
+    const agent = state.agents[agentId];
+    if (!agent || agent.id !== agentId) return { recorded: false, reason: 'handoff-owner-unverified' };
+    const prior = Array.isArray(agent.metadata?.mergeHandoffReceipts) ? agent.metadata.mergeHandoffReceipts : [];
+    state.agents[agentId] = { ...agent, metadata: { ...agent.metadata,
+      mergeHandoffReceipts: [...prior, receipt].slice(-MERGE_HANDOFF_RECEIPT_LIMIT) } };
+    await save(state);
+    return { recorded: true };
+  }, 'handoff-receipt');
+}
+
+/**
+ * Record that the pending-merge coordinator itself merged the head a receipt
+ * names. Only the coordinator's own merge call writes this; a PR that merely
+ * turns up MERGED (the run merged it around the queue) leaves the receipt
+ * unmarked, so the post-merge gate audit still sees that merge.
+ *
+ * @returns {Promise<{ marked: true }|{ marked?: false, reason: string }>}
+ */
+export async function markMergeHandoffMerged({ agentId, receiptId, headSha }) {
+  return transaction(async (state, save) => {
+    const agent = state.agents[agentId];
+    const receipts = Array.isArray(agent?.metadata?.mergeHandoffReceipts) ? agent.metadata.mergeHandoffReceipts : [];
+    if (!receipts.some((receipt) => receipt?.receiptId === receiptId && receipt.headSha === headSha)) {
+      return { marked: false, reason: 'receipt-unknown' };
+    }
+    const coordinatorMergedAt = new Date().toISOString();
+    state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, mergeHandoffReceipts: receipts.map((receipt) =>
+      (receipt?.receiptId === receiptId ? { ...receipt, coordinatorMergedAt } : receipt)) } };
+    await save(state);
+    return { marked: true };
+  }, 'handoff-merged');
+}
+
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
 export async function claimMergeAdmission({ agentId, action, token, outcome }) {
   return transaction(async (state, save, measure) => {
@@ -356,8 +402,14 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (action === 'check') return expired(lease) ? refuse('lease-expired') : { admitted: true, token, repository };
     if (action !== 'release' || !MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
     delete state.mergeAdmissions[repository];
+    // The post-merge gate audit (#12549) asks whether a lease was held at the
+    // instant a PR merged, so the interval outlives the lease. Bounded: a swarm
+    // parent cycles one lease per child PR.
+    const released = { repository, outcome, acquiredAt: lease.acquiredAt, releasedAt: new Date().toISOString() };
+    const history = Array.isArray(agent.metadata?.mergeAdmissionHistory) ? agent.metadata.mergeAdmissionHistory : [];
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata,
-      lastMergeAdmission: { repository, outcome, releasedAt: new Date().toISOString() },
+      lastMergeAdmission: released,
+      mergeAdmissionHistory: [...history, released].slice(-MERGE_ADMISSION_HISTORY_LIMIT),
     } };
     await save(state);
     return { admitted: false, released: true, outcome };

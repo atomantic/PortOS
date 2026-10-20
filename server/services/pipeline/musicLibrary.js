@@ -26,6 +26,7 @@ import {
   listDirectoryByExtension,
   copyFileGuarded,
   unlinkGuarded,
+  assertFileNotMediaManifest,
 } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
@@ -135,9 +136,15 @@ export async function listMusicLibrary() {
 /**
  * Move an uploaded temp file into the library and return the persisted
  * filename. Caller (the route) reads `req.file.path` from the multipart
- * helper. Returns `{ filename, sizeBytes }`.
+ * helper. Returns `{ filename, sizeBytes }`. The upload filter checks only the
+ * name and declared type, so the bytes are checked here before ffmpeg can
+ * probe or render the stored file; a refused temp file is removed.
  */
 export async function importUploadedTrack(tempPath, originalName) {
+  await assertFileNotMediaManifest(tempPath).catch(async (err) => {
+    await unlinkGuarded(tempPath).catch(() => {});
+    throw err;
+  });
   const filename = buildStoredFilename(originalName);
   const dest = join(PATHS.music, filename);
   // The copy is the whole publication: a snapshot copying the library while it

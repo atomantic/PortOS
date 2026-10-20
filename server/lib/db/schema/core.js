@@ -89,6 +89,52 @@ BEGIN
 END$$`,
 ];
 
+// Existing installs already have the trigger; replacing its function at boot
+// upgrades the memory clock without rebuilding tables or rewriting records.
+// Keep this body identical to the fresh-install definition in init-db.sql.
+export const memoryTimestampDdl = [
+    `CREATE OR REPLACE FUNCTION update_memory_timestamp()
+RETURNS TRIGGER AS $$
+DECLARE
+  content_changed BOOLEAN;
+BEGIN
+  content_changed := (
+    NEW.type IS DISTINCT FROM OLD.type OR
+    NEW.content IS DISTINCT FROM OLD.content OR
+    NEW.summary IS DISTINCT FROM OLD.summary OR
+    NEW.category IS DISTINCT FROM OLD.category OR
+    NEW.tags IS DISTINCT FROM OLD.tags OR
+    NEW.embedding IS DISTINCT FROM OLD.embedding OR
+    NEW.embedding_model IS DISTINCT FROM OLD.embedding_model OR
+    NEW.confidence IS DISTINCT FROM OLD.confidence OR
+    NEW.importance IS DISTINCT FROM OLD.importance OR
+    NEW.status IS DISTINCT FROM OLD.status OR
+    NEW.expires_at IS DISTINCT FROM OLD.expires_at OR
+    NEW.source_task_id IS DISTINCT FROM OLD.source_task_id OR
+    NEW.source_agent_id IS DISTINCT FROM OLD.source_agent_id OR
+    NEW.source_app_id IS DISTINCT FROM OLD.source_app_id OR
+    NEW.updated_at IS DISTINCT FROM OLD.updated_at
+  );
+
+  -- Access-stat-only update: skip sync_sequence and updated_at bump
+  IF NOT content_changed THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+    -- Wire clocks are milliseconds; advance even within one transaction or
+    -- after a future peer clock. NOW() would reuse transaction-start time.
+    NEW.updated_at := GREATEST(
+      date_trunc('milliseconds', clock_timestamp()),
+      date_trunc('milliseconds', OLD.updated_at) + INTERVAL '1 millisecond'
+    );
+  END IF;
+  NEW.sync_sequence := nextval(pg_get_serial_sequence('memories', 'sync_sequence'));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+];
+
 export const coreDdl = [
     ...memorySearchDdl,
     // Deliberately no FK: the bridge repairs a purged target on its next sync.
@@ -121,6 +167,7 @@ export const coreDdl = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence)`,
+    ...memoryTimestampDdl,
     // Versioned DB-migration tracker (#1029). Records which ordered migration
     // files in server/scripts/db-migrations/ have been applied on THIS install.
     // It's part of the base schema (created here AND in init-db.sql, parity-

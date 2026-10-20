@@ -7,6 +7,7 @@ import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.j
 import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, isProviderReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
+import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/forkHead.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
@@ -750,6 +751,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
+  const forkNote = buildForkBranchInstructions(prBranch, metadata.forkHead);
   const prNumber = metadata.reviewLoopPRNumber ?? '';
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
@@ -775,7 +777,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // the whole job is CI-gate → fix → merge. Branch before any reviewer defaulting
   // below, which would otherwise resolve the empty list back to `[copilot]`.
   if (isMergeOnlyFollowUp(metadata)) {
-    return buildMergeFollowUpSection({
+    return forkNote + buildMergeFollowUpSection({
       prUrl, prBranch, prNumber, prOwner, prRepo, sourceTaskId, verbose, inlineExitStep,
       mergeGateForge: forge.mergeGateForge, inlineWorkflowStep, localReviewers: localPhaseReviewerList, localReviewRequired: localPhaseReviewRequired,
       selfReview: isSelfReviewFollowUp(metadata),
@@ -940,7 +942,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const opening = phase.opening(phaseCtx);
 
   if (verbose && phase.supportsVerbose) {
-    return `
+    return forkNote + `
 ${heading}
 ${opening}
 
@@ -976,7 +978,7 @@ ${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do
   const hardStopNote = optionalConfiguredReviewers.length
     ? `**Hard stop:** if a required reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}. An optional reviewer may end with an inconclusive result without blocking, but an unresolved accepted finding or rejection, failed build/test, or push failure still blocks.`
     : `**Hard stop:** if a reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}.`;
-  return [
+  return [forkNote,
     heading,
     phase.compactOpening(phaseCtx),
     `**Reviewers (in order)**: ${reviewerLabel}${equiv}.`,
@@ -1272,4 +1274,11 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     '**Hard stop:** if CI is still red after 5 fix rounds, or a conflict needs a product decision you can\'t make, post a PR comment summarising exactly what is blocking the merge and exit with the PR left open. Do not force a merge over red CI.',
     ...prDetails,
   ].join('\n');
+}
+
+/** Explicit pushes preserve fork destinations without changing repository-wide Git defaults. */
+export function buildForkBranchInstructions(branch, forkHead) {
+  const fork = normalizeForkHead(forkHead);
+  if (!fork || !branch) return '';
+  return `Fork checkout: local branch \`${forkLocalBranch(branch, fork)}\` tracks the contributor's \`${branch}\`. For every push use \`git push ${shellQuote(forkRemoteName(fork.ownerLogin))} ${shellQuote(`HEAD:refs/heads/${branch}`)}\` (add --force-with-lease only when the workflow authorizes a rebase). This destination applies to all push steps below. Keep this local branch checked out; never push it to origin or delete the contributor's remote branch.\n\n`;
 }

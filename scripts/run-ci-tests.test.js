@@ -552,6 +552,47 @@ describe('native crash diagnostics before retry/cancellation (#8152)', () => {
 
 
 describe('structured failure diagnostics', () => {
+  // This uniquely pins shutdown after the ordinary reporter snapshot through
+  // real Vitest assertions, npm, and the launcher's durable collection boundary.
+  it('retains passing assertions and late process exit provenance without changing status (#12536)', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-final-exit-'));
+    try {
+      writeFileSync(join(fixture, 'fixture.test.js'), "test('passing control', () => expect(true).toBe(true));");
+      const lateReporter = join(fixture, 'late-reporter.mjs');
+      writeFileSync(lateReporter, `export default function () { return {
+        onInit(vitest) { vitest.onClose(() => { process.once('beforeExit', () => { process.exitCode = Number(process.env.FIXTURE_FINAL_CODE); }); }); }
+      }; }`);
+      writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
+      for (const code of [17, 0]) {
+        const durable = join(fixture, 'durable-' + code);
+        const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js', '--reporter=default', '--reporter=' + lateReporter];
+        const env = { ...process.env, NODE_ENV: 'test', NODE_DISABLE_COMPILE_CACHE: '1',
+          PORTOS_CI_DIAGNOSTICS_DIR: durable, FIXTURE_FINAL_CODE: String(code) };
+        delete env.PORTOS_TEST_TEMP_ROOT;
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+          import { runNpm } from ${JSON.stringify(new URL('./run-ci-tests.js', import.meta.url).href)};
+          process.exitCode = (await runNpm('server', 'test:ci', ${JSON.stringify(args)})).status;
+        `], { encoding: 'utf8', timeout: 30_000, env });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(code);
+        expect(stripVTControlCharacters(result.stdout)).toMatch(/Test Files\s+1 passed/);
+        const attempt = join(durable, readdirSync(durable)[0]);
+        const run = JSON.parse(readFileSync(join(attempt, 'run.json'), 'utf8'));
+        expect(run).toMatchObject({ reason: 'passed', errorCount: 0,
+          processExit: { eventCode: code, exitCode: code } });
+        // The diagnostic reporter's close callback ran before the late callback.
+        expect(run.exitCode ?? 0).toBe(0);
+        const invocation = JSON.parse(readFileSync(join(attempt, 'invocation.json'), 'utf8'));
+        expect(invocation).toMatchObject({ completed: true, status: code,
+          childExit: { code, signal: null }, childClose: { code, signal: null } });
+        expect(['direct npm process', 'cmd.exe -> npm.cmd']).toContain(invocation.commandBoundary);
+        const { collectTestDiagnostics } = await import('./ci-test-diagnostics.js');
+        const lines = await collectTestDiagnostics(durable, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
+        expect(lines.join('\n')).toContain(`Vitest process exit event: code=${code}; exitCode=${code}.`);
+      }
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  }, 65_000);
+
   it('reports a run-level rejection and worker cause when every test passed (#11244)', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
     try {
@@ -680,7 +721,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       expect(result.error.message).toContain('cleanup unverified');
       expect(result.diagnosticsPath).toBe(join(host, readdirSync(host)[0]));
       expect(JSON.parse(readFileSync(join(result.diagnosticsPath, 'invocation.json'), 'utf8')))
-        .toMatchObject({ completed: false, status: 143, signal: 'SIGTERM' });
+        .toMatchObject({ completed: false, status: 143, signal: 'SIGTERM', childExit: null, childClose: null });
       expect(errors).toHaveBeenCalledWith(expect.stringContaining(result.diagnosticsPath));
     } finally {
       vi.useRealTimers();

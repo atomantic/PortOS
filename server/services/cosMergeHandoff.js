@@ -150,6 +150,12 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
     queuedAt: new Date().toISOString(),
   };
+  // The post-merge gate audit (#12549) must not flag the coordinator's own merge
+  // of this head, and the queue entry is gone once it merges. Record the receipt
+  // on the run first: a stale receipt for a head never queued is harmless.
+  const { recordMergeHandoffReceipt } = await import('./cosMergeAdmission.js');
+  const recorded = await recordMergeHandoffReceipt({ agentId, receipt: { receiptId: receipt.id, prUrl, headSha: head, acceptedAt: receipt.queuedAt } });
+  if (!recorded.recorded) return refuse('queue-write-failed');
   const { queuePendingMerge, followUpHandoffReceipt } = await import('./prWatcher.js');
   const queued = await queuePendingMerge(app.id, {
     prUrl, prNumber: pr.number, prBranch: view.headRefName, sourceAgentId: agentId,

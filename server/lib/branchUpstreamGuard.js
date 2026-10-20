@@ -20,8 +20,9 @@
  *
  * The invariant this module enforces: an agent branch's upstream is either
  * ABSENT or names its OWN ref (`refs/heads/<branch>` — what `git push -u origin
- * <branch>` records once the branch is published). Anything else is a
- * mis-aimed push waiting to happen.
+ * <branch>` records once the branch is published). A caller with verified fork
+ * coordinates can supply the original remote branch for a namespaced checkout.
+ * Anything else is a mis-aimed push waiting to happen.
  *
  * Enforcement is REPAIR-then-verify, not refuse: the fix is to drop the bogus
  * upstream, and an untracked branch is exactly what makes `/do:pr`'s
@@ -115,12 +116,13 @@ export function isSafeBranchUpstream(branchName, merge) {
  *
  * @param {string} repo - repository path whose config holds the branch
  * @param {string} branchName
+ * @param {{remoteBranch?: string}} options - explicit PR head when the local name is namespaced
  * @returns {Promise<{safe: boolean, repaired: boolean, upstream: string}>}
  */
-export async function enforceSafeBranchUpstream(repo, branchName) {
+export async function enforceSafeBranchUpstream(repo, branchName, { remoteBranch = branchName } = {}) {
   if (!repo || !branchName) return { safe: true, repaired: false, upstream: '' };
   const { merge } = await readBranchUpstream(repo, branchName);
-  if (isSafeBranchUpstream(branchName, merge)) return { safe: true, repaired: false, upstream: merge };
+  if (isSafeBranchUpstream(remoteBranch, merge)) return { safe: true, repaired: false, upstream: merge };
   // Unreadable config is not a clean bill of health — the branch may well track
   // the default branch, and nothing here verified otherwise.
   if (merge === null) {
@@ -134,7 +136,7 @@ export async function enforceSafeBranchUpstream(repo, branchName) {
   }).catch(() => {});
 
   const after = await readBranchUpstream(repo, branchName);
-  if (!isSafeBranchUpstream(branchName, after.merge)) {
+  if (!isSafeBranchUpstream(remoteBranch, after.merge)) {
     const stillAt = after.merge === null ? 'an unreadable value' : after.merge;
     throw new Error(`Refusing to hand off branch ${branchName}: its upstream still resolves to ${stillAt} — a config-derived push (git push <remote> HEAD:<merge>) would land there instead of opening a PR`);
   }

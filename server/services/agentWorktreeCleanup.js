@@ -24,7 +24,7 @@ import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
-import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
+import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
@@ -102,8 +102,12 @@ export async function cleanupAgentWorktree(agentId, success, options = {}) {
   // output buffer for the duration of the probes.
   const originalTask = options?.originalTask || null;
   run.then(
-    (warnings) => auditRepoState(agentId, success, originalTask, warnings)
-      .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
+    (warnings) => Promise.all([
+      auditRepoState(agentId, success, originalTask, warnings)
+        .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
+      auditMergeGate(agentId, originalTask)
+        .catch(err => emitLog('warn', `🚦 Merge-gate audit failed for ${agentId}: ${err.message}`, { agentId })),
+    ]),
     // A cleanup that threw has no end state to audit; `settled` still rejects.
     () => {}
   // Nothing awaits this chain, so a throw from the reporting itself would surface
@@ -136,6 +140,19 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
+}
+
+/**
+ * Post-merge gate audit (#12549): did a claim run's merged PR hold the merge
+ * admission lease and land on green checks? Detection only; it flags and files
+ * one default-branch recovery task. Lazily imported like the repo-state audit.
+ */
+async function auditMergeGate(agentId, originalTask) {
+  const { auditClaimMergeGate } = await import('./mergeGateAudit.js');
+  const { getAgentRecord } = await import('./cos.js');
+  const agentState = await getAgentRecord(agentId).catch(() => null);
+  if (!agentState) return;
+  await auditClaimMergeGate({ agentId, task: originalTask, agentState });
 }
 
 // A disposition is selected once, after forge evidence is available. Merge is
@@ -546,15 +563,19 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
 const preservedPrState = (pr) => (pr?.mergeHandoffQueued === true ? 'pending-merge handoff'
   : pr?.autoMergeEnabled === true ? 'pending GitHub auto-merge' : 'unconfirmed PR recovery');
 
-async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings, skipMerge }, disposition) {
+async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranch, warnings, skipMerge, originalTask }, disposition) {
   // Default: auto-merge on success, just cleanup on failure.
   // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
   // handled the merge upstream — re-merging the worktree branch into the local
   // source workspace would duplicate the squashed commits.
   const shouldMerge = disposition.merge;
   if (skipMerge) {
-    const pr = await import('./prProbe.js').then(({ probePrForBranch }) =>
-      probePrForBranch(sourceWorkspace, worktreeBranch)).catch(() => null);
+    const meta = originalTask?.metadata;
+    const forkPrNumber = meta?.forkHead && (meta.reviewLoopPRNumber || meta.prRemediationNumber);
+    const pr = await import('./prProbe.js').then(({ probePrForBranch, probeChangeRequestState }) =>
+      meta?.forkHead
+        ? probeChangeRequestState(sourceWorkspace, { number: forkPrNumber, branch: resolveTaskRemoteBranch(meta) })
+        : probePrForBranch(sourceWorkspace, worktreeBranch)).catch(() => null);
     if (!pr?.readable || (pr.prState && pr.prState !== 'MERGED')) {
       // Failed/unreadable CI or unpublished commits need recovery, which needs this
       // branch. Only a healthy handoff suppresses the post-cleanup audit.

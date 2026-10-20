@@ -101,11 +101,15 @@ export function buildSmokeEnv({ root, parentEnv = process.env }) {
     TMP: tmp,
     TEMP: tmp,
     PGDATABASE: SMOKE_DATABASE,
-    // Loopback only, on dedicated ports so a running PortOS instance doesn't
-    // collide and nothing on the network can reach the throwaway server.
+    // Loopback only, so nothing on the network can reach the throwaway server.
+    // Port 0 lets the kernel pick a free port per child, so concurrent smokes
+    // (parallel worktree pregates, #12543) and a running install never share a
+    // listener; readiness arrives over this child's IPC, never a port probe.
+    // An explicit SMOKE_PORT / SMOKE_HTTP_PORT still pins one, and an empty
+    // value counts as unset rather than falling through to the production port.
     HOST: '127.0.0.1',
-    PORT: parentEnv.SMOKE_PORT ?? '55559',
-    PORTOS_HTTP_PORT: parentEnv.SMOKE_HTTP_PORT ?? '55557',
+    PORT: parentEnv.SMOKE_PORT || '0',
+    PORTOS_HTTP_PORT: parentEnv.SMOKE_HTTP_PORT || '0',
     NODE_OPTIONS: `${existingNodeOpts}--unhandled-rejections=strict`
   };
 }
@@ -150,7 +154,8 @@ export function monitorSmokeChild(child, {
       if (phase !== 'startup' || message?.type !== 'portos:smoke-ready') return;
       clearTimeout(timer);
       phase = 'survival';
-      console.log('🚀 Smoke child is ready; starting survival window.');
+      const where = Number.isInteger(message.port) ? ` on 127.0.0.1:${message.port}` : '';
+      console.log(`🚀 Smoke child is ready${where}; starting survival window.`);
       timer = setTimeout(shutdown, windowMs);
     };
     const onExit = (code, signal) => {

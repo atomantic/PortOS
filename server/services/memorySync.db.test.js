@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 let dbReady = false;
@@ -104,6 +104,65 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
   afterAll(async () => {
     await query(`DELETE FROM memories`).catch(() => {});
     await close();
+  });
+
+  // Replay two successive exported states into the same row to exercise the
+  // real receiver's strict clock comparison, including JavaScript wire precision.
+  const expectPeerAccepts = async (first, second) => {
+    await query('DELETE FROM memories WHERE id = $1', [ID_A]);
+    await memorySync.applyRemoteChanges([first]);
+    expect(await memorySync.applyRemoteChanges([second])).toEqual({ inserted: 0, updated: 1, skipped: 0 });
+    expect(await contentOf(ID_A)).toBe(second.content);
+    expect((await memorySync.getChangesSince()).memories[0].updatedAt).toBe(second.updatedAt);
+  };
+
+  it('exports overlapping transaction edits with clocks peers accept in commit order', async () => {
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-01T00:00:00.000Z')]);
+    let first;
+    await withTransaction(async client => {
+      // Pin the older transaction clock before a separate connection commits.
+      const { rows } = await client.query('SELECT NOW() AS started');
+      await query(`UPDATE memories SET content = 'first commit', updated_at = $2::timestamptz + INTERVAL '1 millisecond' WHERE id = $1`, [ID_A, rows[0].started]);
+      first = (await memorySync.getChangesSince()).memories[0];
+      await client.query(`UPDATE memories SET content = 'late commit' WHERE id = $1`, [ID_A]);
+    });
+    const page = await memorySync.getChangesSince(first.syncSequence);
+    expect(page.memories).toHaveLength(1);
+    await expectPeerAccepts(first, page.memories[0]);
+  });
+
+  it('advances successive edits in one transaction at millisecond wire precision', async () => {
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-01T00:00:00.000Z')]);
+    let first;
+    await withTransaction(async client => {
+      const { rows } = await client.query(`UPDATE memories SET content = 'first edit' WHERE id = $1 RETURNING updated_at`, [ID_A]);
+      first = remoteMemory(ID_A, rows[0].updated_at.toISOString(), { content: 'first edit' });
+      await client.query(`UPDATE memories SET content = 'second edit' WHERE id = $1`, [ID_A]);
+    });
+    await expectPeerAccepts(first, (await memorySync.getChangesSince()).memories[0]);
+  });
+
+  it('advances past a future peer clock while keeping access statistics out of the feed', async () => {
+    const future = '2099-01-01T00:00:00.123Z';
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, future)]);
+    const first = (await memorySync.getChangesSince()).memories[0];
+    expect(first.updatedAt).toBe(future);
+    await query('UPDATE memories SET access_count = access_count + 1, last_accessed = NOW() WHERE id = $1', [ID_A]);
+    expect((await memorySync.getChangesSince(first.syncSequence)).memories).toEqual([]);
+    expect((await memorySync.getChangesSince()).memories[0].updatedAt).toBe(future);
+    await query(`UPDATE memories SET content = 'local edit after future peer', updated_at = NULL WHERE id = $1`, [ID_A]);
+    const second = (await memorySync.getChangesSince(first.syncSequence)).memories[0];
+    expect(second.updatedAt).toBe('2099-01-01T00:00:00.124Z');
+    await expectPeerAccepts(first, second);
+  });
+
+  it('keeps local relation edits monotonic and returns their persisted clock', async () => {
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2099-01-01T00:00:00.000Z')]);
+    const { updateMemory } = await import('./memoryDB.js');
+    const updated = await updateMemory(ID_A, { content: 'edited with relations', relatedMemories: [] });
+    const exported = (await memorySync.getChangesSince()).memories[0];
+    expect(Date.parse(exported.updatedAt)).toBeGreaterThan(Date.parse('2099-01-01T00:00:00.000Z'));
+    expect(updated.updatedAt).toBe(exported.updatedAt);
   });
 
   it('keeps chosen identity local through outbound and incoming federation, including id collisions', async () => {
