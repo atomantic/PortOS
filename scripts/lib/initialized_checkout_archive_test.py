@@ -1166,7 +1166,7 @@ class NativeArchive(unittest.TestCase):
                              'only in index')
             self.assertNotEqual(self.git(tree, 'rev-parse', recovery_ref), self.git(tree, 'rev-parse', 'HEAD'))
 
-    def test_quarantine_recovery_allows_absent_unrelated_tracking_cleanup_without_rewriting_config(self):
+    def test_quarantine_recovery_preserves_unrelated_tracking_creation_and_cleanup(self):
         self.git(self.repo, 'branch', 'other/finished')
         self.git(self.repo, 'config', 'branch.other/finished.remote', 'origin')
         self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/finished')
@@ -1175,6 +1175,11 @@ class NativeArchive(unittest.TestCase):
         archived = self.txn / 'archive/common/config'
         archived_bytes = archived.read_bytes()
         self.git(self.repo, 'branch', '-D', 'other/finished')
+        active_head = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD',
+                               '-m', 'new unrelated work')
+        self.git(self.repo, 'update-ref', 'refs/heads/other/active', active_head)
+        self.git(self.repo, 'config', 'branch.other/active.remote', 'origin')
+        self.git(self.repo, 'config', 'branch.other/active.merge', 'refs/heads/other/active')
         current = archive.manifest(self.repo / '.git/config', True)
         # This is a real atomic Git config rewrite, not a mocked metadata delta.
         self.assertNotEqual(archived_bytes, (self.repo / '.git/config').read_bytes())
@@ -1185,6 +1190,7 @@ class NativeArchive(unittest.TestCase):
         self.assertTrue(archive.resume_quarantine(request)['moved'])
         self.assertTrue(archive.verify_completed_quarantine(request)['verified'])
         self.assertEqual(archive.manifest(self.repo / '.git/config', True), current)
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'refs/heads/other/active'), active_head)
         self.assertEqual(archived.read_bytes(), archived_bytes)
         self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
         _, saved = archive.load_transaction(request)
@@ -1205,7 +1211,7 @@ class NativeArchive(unittest.TestCase):
         valid = (common / 'config').read_bytes()
         mode = (common / 'config').stat().st_mode & 0o777
         def check():
-            return archive.unrelated_tracking_removal(
+            return archive.unrelated_tracking_changes(
                 self.txn, saved, common, expected, archive.manifest(common / 'config', True))
         self.assertTrue(check())
         for label, arguments in (
@@ -1219,6 +1225,17 @@ class NativeArchive(unittest.TestCase):
                 (common / 'config').write_bytes(valid)
                 self.git(self.repo, 'config', *arguments)
                 self.assertFalse(check())
+        (common / 'config').write_bytes(valid)
+        self.git(self.repo, 'config', 'branch.new-work.remote', 'origin')
+        self.git(self.repo, 'config', 'branch.new-work.merge', 'refs/heads/new-work')
+        self.assertFalse(check())  # A complete stanza without its branch is held.
+        added_ref = common / 'refs/heads/new-work'
+        for contents in ('not-an-object\n', 'ref: refs/heads/missing-target\n',
+                         'ref: refs/heads/feature/fixture\n'):
+            with self.subTest(unknownAddedRef=contents):
+                added_ref.write_text(contents)
+                self.assertFalse(check())
+                added_ref.unlink()
         (common / 'config').write_bytes(valid)
         loose = common / 'refs/heads/other/finished'
         loose.parent.mkdir(parents=True, exist_ok=True)

@@ -1209,12 +1209,13 @@ def verify(request):
             **({'metadataRecoveryAccepted': True} if recovering else {})}
 
 
-def unrelated_tracking_removal(root, saved, common, expected, observed):
-    """A concurrent branch deletion may rewrite config; never rewrite it back.
+def unrelated_tracking_changes(root, saved, common, expected, observed):
+    """Concurrent branch creation/deletion may rewrite config; never undo it.
 
-    Only whole tracking-only stanzas for absent, unrelated local branches may
-    disappear. Target/global settings, added entries, security metadata and
-    archive bytes remain strict. Capture and ordinary moves never use this.
+    Only whole tracking-only stanzas for unrelated local branches may appear
+    or disappear, with present/absent refs proven respectively. Existing values,
+    target/global settings, security metadata and archive bytes remain strict.
+    Capture and ordinary moves never use this.
     """
     if root is None or len(expected) != 1 or len(observed) != 1:
         return False
@@ -1241,16 +1242,16 @@ def unrelated_tracking_removal(root, saved, common, expected, observed):
         return records
     before, after = entries(archived), entries(common / 'config')
     old_keys, new_keys = {r[0] for r in before}, {r[0] for r in after}
-    removed = old_keys - new_keys
-    branches = set()
-    for key in removed:
+    removed, added = old_keys - new_keys, new_keys - old_keys
+    removed_branches, added_branches = set(), set()
+    for key in removed | added:
         match = re.fullmatch(r'branch\.(.+)\.(remote|merge)', key)
         if not match or match[1] == saved['facts']['release']['branch']:
             return False
-        branches.add(match[1])
-    if not branches:
+        (removed_branches if key in removed else added_branches).add(match[1])
+    if not removed_branches and not added_branches:
         return False
-    for branch in branches:
+    for branch in removed_branches:
         prefix = 'branch.' + branch + '.'
         # Removing only part of a stanza, or non-tracking attributes, is not
         # the narrowly understood unrelated-branch cleanup operation.
@@ -1263,7 +1264,29 @@ def unrelated_tracking_removal(root, saved, common, expected, observed):
             require_absent_local_ref(saved['facts'], ref)
         except RuntimeError:
             return False
-    if [r for r in before if r[0] not in removed] != after:
+    for branch in added_branches:
+        prefix = 'branch.' + branch + '.'
+        if any(key.startswith(prefix) for key in old_keys) or {
+                key for key in new_keys if key.startswith(prefix)} != {
+                    prefix + 'remote', prefix + 'merge'}:
+            return False
+        ref = 'refs/heads/' + branch
+        try:
+            git(common, Path(saved['facts']['repoPath']), 'check-ref-format', ref)
+            git(common, Path(saved['facts']['repoPath']),
+                'symbolic-ref', '--quiet', ref, expected_returncode=1)
+            head = git(common, Path(saved['facts']['repoPath']),
+                       'rev-parse', '--verify', ref + '^{commit}')
+            if git(common, Path(saved['facts']['repoPath']),
+                   'show-ref', '--verify', ref) != head + ' ' + ref:
+                return False
+            git(common, Path(saved['facts']['repoPath']),
+                'symbolic-ref', '--quiet', ref, expected_returncode=1)
+        except RuntimeError:
+            return False
+        if not re.fullmatch(r'[a-f0-9]{' + str(len(saved['facts']['parent']['head'])) + '}', head):
+            return False
+    if [r for r in before if r[0] not in removed] != [r for r in after if r[0] not in added]:
         return False
     # The parser and ref observations must describe the same file incarnation.
     if manifest(common / 'config', True) != observed or sha(archived) != old['sha256']:
@@ -1282,7 +1305,7 @@ def verify_common_metadata(saved, mutable_shared, root=None):
             observed = manifest(common / name, True)
             if observed != expected and not (
                     name == 'config' and mutable_shared
-                    and unrelated_tracking_removal(root, saved, common, expected, observed)):
+                    and unrelated_tracking_changes(root, saved, common, expected, observed)):
                 fail('common-store-changed:' + name)
     if sorted(p.name for p in common.iterdir() if p.name in COMMON_PARTS and p.name not in mutable_shared) != sorted(
             name for name in facts['sources']['common'] if name not in mutable_shared):
