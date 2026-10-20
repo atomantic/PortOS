@@ -375,7 +375,12 @@ BEGIN
   END IF;
 
   IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-    NEW.updated_at := NOW();
+    -- Wire clocks are milliseconds; advance even within one transaction or
+    -- after a future peer clock. NOW() would reuse transaction-start time.
+    NEW.updated_at := GREATEST(
+      date_trunc('milliseconds', clock_timestamp()),
+      date_trunc('milliseconds', OLD.updated_at) + INTERVAL '1 millisecond'
+    );
   END IF;
   NEW.sync_sequence := nextval(pg_get_serial_sequence('memories', 'sync_sequence'));
   RETURN NEW;

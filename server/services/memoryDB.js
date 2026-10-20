@@ -401,7 +401,7 @@ async function updateMemoryWithClient(client, id, updates) {
     .map(([key, column]) => { params.push(values[key]); return `${column} = $${params.length}`; });
   // The row trigger saves OLD and increments version in this same transaction,
   // including writes from sync. Operational-only writes do not create history.
-  const updated = fields.length ? (await client.query(
+  let updated = fields.length ? (await client.query(
     `UPDATE memories SET ${fields.join(', ')} WHERE id = $${params.length + 1} RETURNING *`,
     [...params, id]
   )).rows[0] : row;
@@ -413,7 +413,8 @@ async function updateMemoryWithClient(client, id, updates) {
       await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
         [id, ...updates.relatedMemories]);
     }
-    await client.query('UPDATE memories SET updated_at = NOW() WHERE id = $1', [id]);
+    // Ask the trigger for a local clock; explicit clocks belong to peer replay.
+    updated = (await client.query('UPDATE memories SET updated_at = NULL WHERE id = $1 RETURNING *', [id])).rows[0];
   }
   const links = await client.query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
   return { ...rowToMemory(updated), relatedMemories: links.rows.map(link => link.target_id) };

@@ -26,7 +26,7 @@
 import { describe, it, expect } from 'vitest';
 import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
 import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './db/schema/syncFeed.js';
-import { memorySearchDdl } from './db/schema/core.js';
+import { memorySearchDdl, memoryTimestampDdl } from './db/schema/core.js';
 import { catalogIdentityDdl } from './db/schema/catalogIdentity.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -369,6 +369,13 @@ describe('DDL parity (init-db.sql ↔ db/schema ensureSchema)', () => {
     expect(sqlAuditTables.size, 'no _audit triggers found in init-db.sql — DDL broke').toBeGreaterThan(8);
     expect([...sqlAuditTables].sort()).toEqual([...jsAuditTables].sort());
     for (const table of jsAuditTables) expect(shared, `audited table ${table} is not declared in both sources`).toContain(table);
+  });
+
+  it('memory clock upgrade matches the fresh-install trigger body', () => {
+    const flat = s => s.replace(/--[^\n]*(?:\n|$)/g, ' ').replace(/\s+/g, ' ').trim();
+    for (const statement of memoryTimestampDdl) {
+      expect(flat(INIT_SQL)).toContain(flat(statement));
+    }
   });
 
   // Commit-ordered sync feed (#8315). The constraint triggers carry
