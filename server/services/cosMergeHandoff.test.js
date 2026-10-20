@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // Agent → server pending-merge handoff (#12247), end to end through the real
 // admission service and the real pr-watcher coordinator over synthetic stores.
 const f = vi.hoisted(() => ({
-  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), optionalReviewers: [], queueWriteFailure: false,
+  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), reviewers: [], optionalReviewers: [], queueWriteFailure: false,
 }));
 vi.mock('./cosState.js', async () => {
   const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
@@ -45,7 +45,7 @@ vi.mock('./apps.js', () => ({
 }));
 vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: async () => ({ ok: true, screening: { safe: true } }) }));
 vi.mock('./codeReview.js', () => ({
-  resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
+  resolveReviewLoopOptions: async () => ({ reviewers: f.reviewers, usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
@@ -99,6 +99,7 @@ beforeEach(async () => {
   f.apps = new Map([['app1', { id: 'app1', repoPath: '/repos/source', forgeAccount: null, mergeHandoffMinQueuedRuns: 3 }]]);
   f.checkouts = { [workspace]: { branch: 'claim/issue-1', head: HEAD } };
   f.foreign = new Set();
+  f.reviewers = ['codex'];
   f.optionalReviewers = [];
   f.queueWriteFailure = false;
   f.pr = {
@@ -331,6 +332,47 @@ describe('pending-merge handoff', () => {
     f.optionalReviewers = [];
     await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
     expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+  });
+
+  it('queues current-head optional quota/no-verdict evidence without inventing a clean verdict', async () => {
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`);
+    expect(await handedOff()).toMatchObject({ queued: true });
+    expect(pending()[0].handoff).toMatchObject({ reviewStatus: 'optional-inconclusive', headSha: HEAD });
+    greenChecks();
+    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
+  });
+
+  it.each([[[]], [['codex', 'claude']]])('refuses optional inconclusive evidence without an all-optional nonempty roster: %j', async (reviewers) => {
+    f.reviewers = reviewers;
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`);
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+    expect(pending()).toEqual([]);
+  });
+
+  it.each([
+    ['a required reviewer', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`, false],
+    ['an earlier attempted head', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${'f'.repeat(40)}\n`],
+    ['no attempted head', 'REVIEW_STATUS=optional-inconclusive\n'],
+    ['a malformed head', 'REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=invalid\n'],
+    ['an empty duplicate status', `REVIEW_STATUS=optional-inconclusive\nREVIEW_STATUS=\nREVIEW_HEAD=${HEAD}\n`],
+    ['duplicate heads', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\nREVIEW_HEAD=${HEAD}\n`],
+    ['duplicate statuses', `REVIEW_STATUS=optional-inconclusive\nREVIEW_STATUS=clean\nREVIEW_HEAD=${HEAD}\n`],
+    ['pending review', `REVIEW_STATUS=pending\nREVIEW_HEAD=${HEAD}\n`],
+    ['unresolved findings', `REVIEW_STATUS=findings\nREVIEW_HEAD=${HEAD}\n`],
+    ['a required availability block', `REVIEW_STATUS=review-blocked\nREVIEW_HEAD=${HEAD}\n`],
+    ['an unspecified inconclusive result', `REVIEW_STATUS=inconclusive\nREVIEW_HEAD=${HEAD}\n`],
+    ['empty evidence', ''],
+    ['missing evidence', null],
+  ])('refuses optional handoff with %s', async (_name, evidence, optional = true) => {
+    f.optionalReviewers = optional ? ['codex'] : [];
+    if (evidence === null) await rm(join(workspace, 'portos-review-status'));
+    else await writeFile(join(workspace, 'portos-review-status'), evidence);
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+    expect(pending()).toEqual([]);
+    expect(mergePrMock).not.toHaveBeenCalled();
   });
 
   it('keeps an already-green PR with its original owner for immediate merge', async () => {

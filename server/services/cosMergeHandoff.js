@@ -63,11 +63,11 @@ async function readReviewEvidence(workspace) {
   if (!relative) return { status: 'unreadable', head: null };
   const content = await readFile(resolve(workspace, relative), 'utf-8').catch((err) => (err.code === 'ENOENT' ? null : undefined));
   if (content === null) return { status: null, head: null };
-  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1]);
-  const statuses = values(/^REVIEW_STATUS=(\S+)\s*$/gm);
-  const heads = values(/^REVIEW_HEAD=(\S+)\s*$/gm);
+  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1].trim());
+  const statuses = values(/^REVIEW_STATUS=([^\r\n]*)$/gm);
+  const heads = values(/^REVIEW_HEAD=([^\r\n]*)$/gm);
   return {
-    status: statuses.length === 0 ? 'unreadable' : statuses.find((status) => status !== 'clean') ?? 'clean',
+    status: statuses.length === 1 ? statuses[0] : 'unreadable',
     head: heads.length === 1 ? heads[0].toLowerCase() : null,
   };
 }
@@ -76,12 +76,13 @@ async function readReviewEvidence(workspace) {
 // reviewers, so there only a recorded block or unreadable status refuses. When
 // every local reviewer is optional the in-session merge treats them as
 // non-blocking, so a clean status needs no head: capped rounds that all returned
-// (fixed) findings never record one.
+// (fixed) findings never record one. Explicit optional-inconclusive evidence
+// instead names the attempted head; it never represents a clean reviewer verdict.
 function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy, { reviewers = [], optionalReviewers = [] } = {}) {
   if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return status === null || status === 'clean';
-  if (status !== 'clean') return false;
   const allOptional = reviewers.length > 0 && reviewers.every((reviewer) => optionalReviewers.includes(reviewer));
-  return allOptional || reviewedHead === head;
+  if (status === 'optional-inconclusive') return allOptional && reviewedHead === head;
+  return status === 'clean' && (allOptional || reviewedHead === head);
 }
 
 async function followUpRoster(task, policy) {
