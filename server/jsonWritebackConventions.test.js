@@ -80,6 +80,37 @@ describe('syntax scanner regression contracts', () => {
     expect(strict).toEqual(['B', 'C', 'E', 'I', 'K']);
   });
 
+  it('treats a raw read whose bytes reach safeJSONParse as a non-strict read (#12440)', () => {
+    const source = `
+      import { tryReadFile as slurp, atomicWrite } from './fileUtils.js';
+      async function loadA() { const raw = await tryReadFile(A); return safeJSONParse(raw ?? '{}', {}); }
+      async function loadB() { return safeJSONParse(await readFile(B, 'utf-8'), {}); }
+      async function loadC() { const raw = await slurp(C).catch(() => null); return safeJSONParse(raw, null); }
+      async function loadD() { const { ok, value } = await tryReadFileStrict(D); return ok ? safeJSONParse(value, null) : null; }
+      async function loadE() { const text = await readFile(E, 'utf-8'); return text.split('\\n'); }
+      async function loadF() { const raw = await tryReadFile(F); return helper(() => safeJSONParse(raw, null)); }
+      function unrelated() { const raw = 1; return safeJSONParse(raw, null); }
+      async function loadG() { const raw = await tryReadFile(G); return raw; }
+      async function loadH() { const raw = await tryReadFile(H); return [raw].map(function (raw) { return safeJSONParse(raw, null); }); }
+      async function loadJ() { const raw = await tryReadFile(J); { const raw = ''; } return safeJSONParse(raw, null); }
+      function parseK() { return safeJSONParse(raw, null); }
+      const raw = await tryReadFile(K);
+      async function loadL() { const raw = await tryReadFile(L); return safeJSONParse(other.raw, null); }
+      async function loadI() { const raw = await tryReadFile(I); return [1].map((raw) => safeJSONParse(raw, null)); }
+      await atomicWrite(A, 1); await atomicWrite(B, 1); await atomicWrite(C, 1); await atomicWrite(D, 1);
+      await atomicWrite(E, 1); await atomicWrite(F, 1); await atomicWrite(G, 1);
+      await atomicWrite(H, 1); await atomicWrite(I, 1); await atomicWrite(J, 1);
+      await atomicWrite(K, 1); await atomicWrite(L, 1);
+    `;
+    // A: variable, B: inline, C: aliased import, F: closure, J: an inner block's
+    // `raw` ends with the block, K: a closure declared before the binding it captures. D is a strict read,
+    // E, G and L (a `.raw` property) never reach a parse, and neither unrelated()'s `raw`
+    // nor a shadowing parameter (H, I) borrows the outer binding.
+    expect(scanJsonWriteback(source)).toEqual({ candidates: ['A', 'B', 'C', 'F', 'J', 'K'], strict: [] });
+    expect(mayReadJsonFile('tryReadFile(P); safeJSONParse(raw, {});')).toBe(true);
+    expect(scanJsonWriteback("const raw = await tryReadFile(P); safeJSONParse(raw, {}); atomicWrite(P, {});").candidates).toEqual(['P']);
+  });
+
   it('keeps literal contents and dynamic template expressions distinct and fails on invalid syntax', () => {
     expect(scanJsonWriteback('readJSONFile("a b", {}); atomicWrite("ab", {});').candidates).toEqual([]);
     expect(scanJsonWriteback('readJSONFile(`row-${id}`, {}); atomicWrite(`row-${other}`, {});').candidates).toEqual([]);

@@ -1,7 +1,13 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'catalog-ideas-scenes-concepts.md': ['243074821ebc58eec63e26d284101b29'],
+  'catalog-ideas-scenes-concepts.md': [
+    '243074821ebc58eec63e26d284101b29',
+    // Shipped v2.13–v2.69 and upgraded by migration 394, which runs after this
+    // one: without it every upgrade from those releases was reported as
+    // customized here first.
+    '98aa063cec8ad5c0e017dbc7bc949054',
+  ],
   'fableloom-branch-node.md': [
     'e5005826c4577623ba362a0292741c7c',
     'ff5d40b3090c775fc9c1f48c2ea96bbd',

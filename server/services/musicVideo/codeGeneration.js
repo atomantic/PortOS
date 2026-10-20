@@ -17,6 +17,7 @@ import { buildMusicVideoCodePrompt, extractCodeSections } from '../codeAnimation
 import { normalizeComposition } from './composition.js';
 import { approvedCastAndSetsDirection } from './castAndSets.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { musicVideoLlmRouteLabel } from '../../lib/musicVideoAutomation.js';
 import { effortArg, resolveMusicVideoLlm } from './llmRoute.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
@@ -128,8 +129,7 @@ async function writeComposition(projectId, run, sections, timelineIds, authoring
  * model returned; a section it omitted keeps its previous function.
  */
 export async function generateMusicVideoCode(projectId, { providerId, model, effort } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   assertProductionApproval(project, 'storyboard');
   const timeline = buildCodeTimeline(project);
   if (!timeline.sections.length) {
@@ -161,8 +161,7 @@ export async function generateMusicVideoCode(projectId, { providerId, model, eff
 
 /** Replace one section function. Every other stored function stays. */
 export async function regenerateMusicVideoCodeSection(projectId, sectionId, { providerId, model, effort } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   assertProductionApproval(project, 'storyboard');
   const timeline = buildCodeTimeline(project);
   if (!timeline.sections.some((section) => section.id === sectionId)) {

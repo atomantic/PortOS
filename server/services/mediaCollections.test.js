@@ -39,6 +39,7 @@ vi.mock('crypto', async () => {
 
 const svc = await import('./mediaCollections.js');
 const cj = await import('../lib/conflictJournal.js');
+const { sanitizeRecordForWire } = await import('../lib/syncWire.js');
 
 // Wipe + recreate the collections dir before every test so each starts clean.
 // The empty dir means collectionStore's readdir is the source of truth and its
@@ -1075,7 +1076,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(all[0].items[0].ref).toBe('peer.png');
   });
 
-  it('unions items by kind:ref so neither side ever loses a render', async () => {
+  it('unions concurrently added items by kind:ref so neither side loses one', async () => {
     await seedState({
       collections: [{
         id: 'c1',
@@ -1541,7 +1542,7 @@ describe('mergeMediaCollectionsFromSync — conflict journal', () => {
     expect(await journalEntries()).toHaveLength(0);
   });
 
-  it('item-only divergence does NOT journal (items union-merged, never lost)', async () => {
+  it('item-only divergence does NOT journal (concurrent adds union-merge, never lost)', async () => {
     // Establish a shared base, then both sides add different items only.
     await svc.mergeMediaCollectionsFromSync([baseColl()]);
     // Local adds an item directly on disk; remote arrives with a different item.
@@ -1587,6 +1588,89 @@ describe('mergeMediaCollectionsFromSync — conflict journal', () => {
     expect(await journalEntries()).toHaveLength(0);
     const [merged] = await svc.listCollections();
     expect(merged.name).toBe('LOCAL rename');
+  });
+});
+
+describe('item removal records (#12433)', () => {
+  const T0 = '2026-05-01T00:00:00.000Z';
+  const coll = (over = {}) => ({
+    id: 'c1', name: 'Bucket', description: '', coverKey: null, universeId: null, seriesId: null,
+    items: [
+      { kind: 'image', ref: 'keep.png', addedAt: T0 },
+      { kind: 'image', ref: 'gone.png', addedAt: T0 },
+    ],
+    createdAt: T0, updatedAt: T0, ...over,
+  });
+  const refs = async () => (await svc.getCollection('c1')).items.map((i) => i.ref).sort();
+
+  it('a removal sticks when merging with a peer that still holds the item', async () => {
+    await seedState({ collections: [coll()] });
+    await svc.removeItem('c1', 'image:gone.png');
+    // The peer never saw the removal (or is a v1 peer that strips removal
+    // records): it still lists the item at its original addedAt.
+    await svc.mergeMediaCollectionsFromSync([coll({ updatedAt: '2026-05-02T00:00:00.000Z' })]);
+    expect(await refs()).toEqual(['keep.png']);
+    // The record crosses the wire, so the other side drops its copy in turn.
+    const wire = sanitizeRecordForWire('mediaCollection', await svc.getCollection('c1'));
+    expect(Object.keys(wire.removedItems)).toEqual(['image:gone.png']);
+    await svc.deleteCollection('c1');
+    await svc.mergeMediaCollectionsFromSync([coll({ id: 'c2' })]);
+    await svc.mergeMediaCollectionsFromSync([{ ...wire, id: 'c2' }]);
+    expect((await svc.getCollection('c2')).items.map((i) => i.ref)).toEqual(['keep.png']);
+  });
+
+  it('a gallery delete sticks in every collection that held the item', async () => {
+    await seedState({ collections: [coll(), coll({ id: 'c2' })] });
+    expect(await svc.removeItemFromAllCollections('image', 'gone.png')).toBe(2);
+    await svc.mergeMediaCollectionsFromSync([coll(), coll({ id: 'c2' })]);
+    for (const c of await svc.listCollections()) expect(c.items.map((i) => i.ref)).toEqual(['keep.png']);
+  });
+
+  it('a re-add after the removal wins, and a stale copy cannot drag it back under the removal', async () => {
+    await seedState({ collections: [coll()] });
+    await svc.removeItem('c1', 'image:gone.png');
+    const { removedItems } = await svc.getCollection('c1');
+    await svc.addItem('c1', { kind: 'image', ref: 'gone.png' });
+    // Stale peer copy at the original addedAt, then a peer that only knows the removal.
+    await svc.mergeMediaCollectionsFromSync([coll()]);
+    await svc.mergeMediaCollectionsFromSync([coll({ items: [coll().items[0]], removedItems })]);
+    const merged = await svc.getCollection('c1');
+    expect(merged.items.map((i) => i.ref).sort()).toEqual(['gone.png', 'keep.png']);
+    const readded = merged.items.find((i) => i.ref === 'gone.png');
+    expect(Date.parse(readded.addedAt)).toBeGreaterThan(Date.parse(removedItems['image:gone.png']));
+  });
+
+  it('a removal wins only over copies that predate it — a newer remote add survives', async () => {
+    await seedState({ collections: [coll({ removedItems: { 'image:gone.png': '2026-05-02T00:00:00.000Z' } })] });
+    expect(await refs()).toEqual(['keep.png']);
+    await svc.mergeMediaCollectionsFromSync([coll({
+      items: [{ kind: 'image', ref: 'gone.png', addedAt: '2026-05-03T00:00:00.000Z' }],
+    })]);
+    expect(await refs()).toEqual(['gone.png', 'keep.png']);
+  });
+
+  it('drops malformed peer-supplied removal records instead of persisting them', async () => {
+    await svc.mergeMediaCollectionsFromSync([coll({
+      removedItems: {
+        'image:../../etc/passwd': '2026-05-02T00:00:00.000Z',
+        'audio:x.mp3': '2026-05-02T00:00:00.000Z',
+        'image:bad-date.png': 'not a date',
+        'image:gone.png': '2026-05-02T00:00:00.000Z',
+      },
+    })]);
+    expect((await svc.getCollection('c1')).removedItems).toEqual({ 'image:gone.png': '2026-05-02T00:00:00.000Z' });
+    expect(await refs()).toEqual(['keep.png']);
+  });
+
+  it('pruneCollectionItemRemovals drops only records older than the cutoff, without bumping updatedAt', async () => {
+    await seedState({ collections: [coll({
+      items: [],
+      removedItems: { 'image:old.png': '2026-05-01T00:00:00.000Z', 'image:new.png': '2026-05-09T00:00:00.000Z' },
+    })] });
+    expect(await svc.pruneCollectionItemRemovals(Date.parse('2026-05-05T00:00:00.000Z'))).toEqual({ pruned: 1 });
+    const pruned = await svc.getCollection('c1');
+    expect(pruned.removedItems).toEqual({ 'image:new.png': '2026-05-09T00:00:00.000Z' });
+    expect(pruned.updatedAt).toBe(T0);
   });
 });
 

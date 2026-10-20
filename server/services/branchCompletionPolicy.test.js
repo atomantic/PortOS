@@ -9,6 +9,8 @@ const runtime = vi.hoisted(() => ({ dir: null, agents: {}, trusted: true, tip: '
 const repoPath = '/synthetic/repository';
 const branch = 'feature/handoff';
 const prUrl = 'https://github.com/example/repository/pull/42';
+// Synthetic Git contracts do not create a filesystem repository.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 vi.mock('../lib/fileUtils.js', async () => ({
   ...await vi.importActual('../lib/fileUtils.js'),
   PATHS: { root: '/synthetic/repository', data: '/synthetic/data', worktrees: '/synthetic/worktrees', get cos() { return runtime.dir; } },
@@ -243,5 +245,74 @@ describe('scoped legacy retirement policy', () => {
     expect(reviewedRetirementPolicy({ repoPath, branch, agents })).toMatchObject({ reason: null, policies: [{ id: 'agent-legacy' }] });
     expect(removeDanglingAgentIndexEntries).not.toHaveBeenCalled();
     expect(await snapshotHold(agents)).toBe('pr-completion-review-required');
+  });
+});
+
+describe('reviewed reused-branch checkout incarnation', () => {
+  const checkoutPath = join(tmpdir(), 'synthetic-current-checkout');
+  const input = () => ({ repoPath, branch, checkoutPath, prUrl, tip: runtime.tip, verifiedPrHead: runtime.tip,
+    checkoutIdentities: { [repoPath]: 'primary-filesystem-identity', [checkoutPath]: 'current-filesystem-identity',
+      [join(tmpdir(), 'synthetic-prior-checkout')]: 'prior-missing-path-identity' } });
+  function owners() {
+    register('current', 'review-then-merge', '2026-03-01T00:00:00Z');
+    const current = runtime.agents.current;
+    current.completedAt = '2026-03-01T01:00:00Z';
+    current.metadata.workspacePath = checkoutPath;
+    current.metadata.reviewLoopMergeTarget = { branch, url: prUrl };
+    const prior = { ...structuredClone(current), id: 'prior', startedAt: '2026-02-01T00:00:00Z',
+      completedAt: '2026-02-01T01:00:00Z', result: { success: false } };
+    prior.metadata.workspacePath = join(tmpdir(), 'synthetic-prior-checkout');
+    prior.metadata.prCompletionPolicy = null;
+    prior.metadata.reviewLoopMergeTarget = null;
+    return [current, prior];
+  }
+
+  it('separates explicit prior checkout history only under fresh current PR/head proof', () => {
+    const agents = owners();
+    const result = reviewedRetirementPolicy({ ...input(), agents });
+    expect(result).toMatchObject({ reason: null, policies: [{ id: 'current', prUrl }],
+      priorCheckouts: [{ id: 'prior', success: false }], reviewedPr: { prUrl, checkoutPath, tip: runtime.tip } });
+    expect(reviewedRetirementPolicy({ ...input(), verifiedPrHead: 'b'.repeat(40), agents }).reason).toBeTruthy();
+    expect(reviewedRetirementPolicy({ ...input(), agents: [agents[0]], verifiedPrHead: null }).reason).toBeTruthy();
+    agents[0].metadata.branchCompletionPolicy = { branch, prUrl, tip: runtime.tip, completion: 'review-then-merge' };
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeNull();
+    agents[0].metadata.branchCompletionPolicy.tip = 'b'.repeat(40);
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
+  });
+
+  it.each(['same-checkout', 'missing-checkout', 'primary-checkout', 'relative-checkout', 'unknown-completion-time',
+    'overlapping-time', 'running', 'paused', 'same-pr', 'current-failed', 'current-unknown', 'manual-handoff', 'historical-manual',
+    'contradictory-pr', 'unreadable-identity', 'same-filesystem-identity'])(
+    'retains current or ambiguous policy history: %s', change => {
+      const agents = owners();
+      const [current, prior] = agents;
+      if (change === 'same-checkout') prior.metadata.workspacePath = checkoutPath;
+      if (change === 'missing-checkout') delete prior.metadata.workspacePath;
+      if (change === 'primary-checkout') prior.metadata.workspacePath = repoPath;
+      if (change === 'relative-checkout') prior.metadata.workspacePath = 'prior';
+      if (change === 'unknown-completion-time') delete prior.completedAt;
+      if (change === 'overlapping-time') prior.completedAt = current.startedAt;
+      if (['running', 'paused'].includes(change)) prior.status = change;
+      if (change === 'same-pr') prior.metadata.reviewLoopMergeTarget = { branch, url: prUrl };
+      if (change === 'current-failed') current.result.success = false;
+      if (change === 'current-unknown') current.metadata.prCompletionPolicy = null;
+      if (change === 'manual-handoff') current.metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'historical-manual') prior.metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'contradictory-pr') {
+        prior.metadata.branchCompletionPolicy = { branch, completion: 'review-then-merge', prUrl: 'https://github.com/example/repository/pull/41' };
+        prior.metadata.reviewLoopMergeTarget = { branch, url: prUrl };
+      }
+      const scope = input();
+      if (change === 'unreadable-identity') delete scope.checkoutIdentities[prior.metadata.workspacePath];
+      if (change === 'same-filesystem-identity') scope.checkoutIdentities[prior.metadata.workspacePath] = scope.checkoutIdentities[checkoutPath];
+      expect(reviewedRetirementPolicy({ ...scope, agents }).reason).toBeTruthy();
+    });
+
+  it('uses the first current incarnation owner, not a later successful recovery, as the overlap cutoff', () => {
+    const agents = owners();
+    agents[1].completedAt = '2026-03-01T00:30:00Z';
+    const recovery = { ...structuredClone(agents[0]), id: 'recovery',
+      startedAt: '2026-03-01T02:00:00Z', completedAt: '2026-03-01T03:00:00Z' };
+    expect(reviewedRetirementPolicy({ ...input(), agents: [...agents, recovery] }).reason).toBeTruthy();
   });
 });

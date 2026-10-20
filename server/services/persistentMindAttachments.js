@@ -29,11 +29,15 @@ import {
 import { backupSnapshotCutPending, withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
+import {
+  MIND_ATTACHMENT_FILENAME_PREFIX,
+  PENDING_ATTACHMENT_MARKER_PREFIX,
+  PENDING_ATTACHMENT_MARKER_PATTERN,
+} from '../lib/persistentMindAttachmentOwnership.js';
+
+export { PENDING_ATTACHMENT_MARKER_PREFIX, PENDING_ATTACHMENT_MARKER_PATTERN } from '../lib/persistentMindAttachmentOwnership.js';
 
 const nowIso = () => new Date().toISOString();
-
-export const PENDING_ATTACHMENT_MARKER_PREFIX = '.mind-pending-';
-export const PENDING_ATTACHMENT_MARKER_PATTERN = /^\.mind-pending-([A-Za-z0-9_-]{1,128})$/;
 
 export const attachmentFailure = (error, { code = 'INVALID_ATTACHMENT', status = 400 } = {}) => ({
   success: false,
@@ -79,7 +83,7 @@ export const screenshotEntries = async () => readdir(PATHS.screenshots).then(
 );
 
 export const removePendingAttachmentFiles = async (attachmentId, entries) => {
-  const prefix = `mind-${attachmentId}-`;
+  const prefix = `${MIND_ATTACHMENT_FILENAME_PREFIX}${attachmentId}-`;
   const candidates = entries.filter((entry) => (
     entry.startsWith(prefix)
     && PERSISTENT_MIND_IMAGE_EXTENSIONS.some((extension) => entry.toLowerCase().endsWith(extension))
@@ -292,9 +296,9 @@ export async function createPersistentMindAttachment({ filename, data } = {}) {
   await mkdir(PATHS.screenshots, { recursive: true });
   await writeFileGuarded(pendingAttachmentMarkerPath(attachmentId), '', { flag: 'wx' });
   const saved = await saveImageUpload(PATHS.screenshots, {
-    filename: `mind-${attachmentId}-${originalName}`,
+    filename: `${MIND_ATTACHMENT_FILENAME_PREFIX}${attachmentId}-${originalName}`,
     data,
-  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES, stagePrefix: `mind-${attachmentId}-` }).then(
+  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES, stagePrefix: `${MIND_ATTACHMENT_FILENAME_PREFIX}${attachmentId}-` }).then(
     (value) => value,
     async (error) => {
       await removeRejectedUpload(attachmentId);

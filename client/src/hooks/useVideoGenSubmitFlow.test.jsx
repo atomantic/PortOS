@@ -9,7 +9,7 @@ const submissionState = (prompt) => ({
   disableAudio: false,
   icModeActive: false,
   icReferenceImageFiles: [],
-  isGrok: false,
+  hostedLane: null,
   keyframes: [],
   keyframesActive: false,
   mode: 'text',
@@ -60,7 +60,7 @@ it('submits batch size and seed zero only to a capable, unchained local runtime'
   const state = { ...submissionState('Example shot'), currentModel: { supportsWarmBatch: true }, batchSize: 3, seed: 0 };
   const { result, rerender } = renderHook(({ value }) => useVideoGenSubmitFlow(value), { initialProps: { value: state } });
   expect(result.current.buildGeneratePayload()).toMatchObject({ batchSize: 3, seed: 0 });
-  for (const overrides of [{ currentModel: {} }, { chainingActive: true, chunks: 2 }, { isGrok: true }, { remoteSubmissionFields: { mediaProviderPeerId: 'peer' } }]) {
+  for (const overrides of [{ currentModel: {} }, { chainingActive: true, chunks: 2 }, { hostedLane: 'grok' }, { remoteSubmissionFields: { mediaProviderPeerId: 'peer' } }]) {
     rerender({ value: { ...state, ...overrides } });
     expect(result.current.buildGeneratePayload()).not.toHaveProperty('batchSize');
   }

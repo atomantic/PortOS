@@ -26,7 +26,7 @@ import {
   requireToolkit,
 } from '../lib/aiToolkitState.js';
 
-// Re-exported so `server/lib/promptRunner.js` can import via the runner
+// Re-exported so `server/services/promptRunner.js` can import via the runner
 // (its existing dependency boundary). The canonical home is now
 // `server/lib/providerModels.js` — that's where `server/lib/tuiHandshake.js`
 // imports from directly (lib→lib, no service layer violation).
@@ -77,7 +77,7 @@ export async function createRun(options) {
 
 /**
  * Returns the configured runs directory. Other execution paths
- * (`server/lib/tuiPromptRunner.js`) need this to write output + metadata
+ * (`server/services/tuiPromptRunner.js`) need this to write output + metadata
  * under the same tree as `createRun` — without it, runs configured with a
  * non-default `dataDir` end up split across two trees and `/runs` replay
  * breaks.

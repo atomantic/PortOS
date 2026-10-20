@@ -9,6 +9,8 @@
  */
 
 import net from 'net';
+import dns from 'dns/promises';
+import { isBlockedIngestHost } from '../lib/catalogValidation.js';
 import crypto from 'crypto';
 import { loadData, withData, UNKNOWN_INSTANCE_ID, getInstanceId, getSelf } from './instanceIdentity.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -244,6 +246,24 @@ function validHost(str) {
 }
 
 export { validHost };
+
+// An announce is unauthenticated, so unlike an operator-entered host it must not
+// name this machine or a link-local/metadata service (probePeer would GET it).
+function announcedHost(str) {
+  const host = validHost(str);
+  return host && !isBlockedIngestHost(host) ? host : undefined;
+}
+
+// A DNS host that answers loopback/link-local would turn the fixed-path probe
+// and relay into an SSRF read. LAN and tailnet answers stay allowed; a lookup
+// failure is left to the fetch itself to report as unreachable.
+async function assertPeerHostNotLocal(peer) {
+  if (peer.transport === 'tailcat' || !peer.host || net.isIP(peer.host)) return;
+  const answers = await dns.lookup(peer.host, { all: true }).catch(() => []);
+  if (answers.some(({ address }) => isBlockedIngestHost(address))) {
+    throw new Error(`peer host ${peer.host} resolves to a loopback or link-local address`);
+  }
+}
 
 // Default sync categories. Everything that replicates the user's own CONTENT is
 // off until explicitly enabled per-peer; the exception is `usage`, which is
@@ -911,6 +931,7 @@ export async function probePeer(peer) {
   // fetches, AND their body reads, so a single PROBE_TIMEOUT_MS bounds the whole
   // probe (the instanceId read is inside the budget, as it was before).
   await withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
+    await assertPeerHostNotLocal(peer);
     // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
     // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
     // an unresolved/unknown id just omits the param and we get the inbound-only
@@ -1148,7 +1169,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       matchedByAddress = true;
     }
 
-    const normalizedHost = validHost(host);
+    const normalizedHost = announcedHost(host);
 
     if (existing?.syncSecret) return { created: false, peer: existing };
 

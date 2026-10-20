@@ -16,6 +16,18 @@ const mocks = vi.hoisted(() => ({
   preparePerformanceShot: vi.fn(async () => null),
   assertRevisionOpen: vi.fn(async () => {}),
   assertProductionSubmission: vi.fn(async () => {}),
+  resolveVideoModelSelection: vi.fn(),
+  prepareSourceAudioWindow: vi.fn(),
+  discardSourceAudioWindow: vi.fn(async () => ({ ok: true })),
+  unlink: vi.fn(async () => {}),
+}));
+
+vi.mock('fs/promises', async (load) => ({ ...await load(), unlink: mocks.unlink }));
+vi.mock('./modelSelection.js', () => ({ resolveVideoModelSelection: mocks.resolveVideoModelSelection }));
+vi.mock('../federatedMedia/sourceAudio.js', async (load) => ({
+  ...await load(),
+  prepareSourceAudioWindow: mocks.prepareSourceAudioWindow,
+  discardSourceAudioWindow: mocks.discardSourceAudioWindow,
 }));
 
 vi.mock('../../lib/federatedMediaRequest.js', () => ({
@@ -163,6 +175,14 @@ describe('submitVideoGenJob', () => {
     }
   });
 
+  it('persists prepared chunk beats byte-for-byte into queued params', async () => {
+    const chunkPrompts = [' \topening beat\n ', null, 'closing beat  '];
+    mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveChunkPrompts: chunkPrompts }));
+
+    await submitVideoGenJob({ prompt: 'Example shot', width: 1280, height: 720 }, {});
+    expect(mocks.enqueueJob.mock.calls[0][0].params.chunkPrompts).toEqual(chunkPrompts);
+  });
+
   it('cleans multipart uploads exactly once when submission fails', async () => {
     const failure = new Error('staging failed');
     const uploads = { sourceImage: { path: '/tmp/example-upload' } };
@@ -181,6 +201,61 @@ describe('submitVideoGenJob', () => {
 
     await expect(submitVideoGenJob({ prompt: 'Example shot' }, {})).rejects.toBe(failure);
     expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+  });
+
+  // Uniquely catches a dependency read rejecting after durable inputs exist but
+  // before any queue job could own them (#12394).
+  describe('releases every owned input when a project read rejects before enqueue (#12394)', () => {
+    const ltx = { id: 'ltx25-example', name: 'LTX-2.5 Example', runtime: 'ltx25', frameStride: 8, maxNumFrames: 1017, supportedModes: ['image', 'a2v'] };
+    const project = { id: 'mv-1', videoSettings: { generationMode: 'suppliedAudio' }, scenes: [{ sceneId: 'mvs-1', startSec: 2, endSec: 3, shotMode: 'cutaway' }] };
+
+    it('a local supplied-audio clip releases its staged frame', async () => {
+      const failure = new Error('project store unavailable');
+      const uploads = { sourceImage: { path: '/example/tmp/upload' } };
+      const prepared = localPrepared({ effectiveModel: ltx, mode: 'image', sourceImagePath: '/example/uploads/frame.png' });
+      mocks.resolveVideoModelSelection.mockResolvedValue({ model: ltx, modelId: ltx.id });
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      // The render-pool and model reads succeed; the read after staging rejects.
+      mocks.getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockRejectedValueOnce(failure);
+
+      await expect(submitVideoGenJob({ prompt: 'skyline', backend: 'local', modelId: ltx.id, mode: 'a2v', fps: 24,
+        _suppliedAudio: true, musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } }, uploads)).rejects.toBe(failure);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.cleanupMultipartTemp).toHaveBeenCalledWith(uploads);
+      expect(mocks.prepareSourceAudioWindow).not.toHaveBeenCalled();
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('a hosted performance shot releases its staged frame and sliced song excerpt', async () => {
+      const failure = new Error('project store unavailable');
+      const slice = '/example/uploads/mv-performance-1.wav';
+      const prepared = { backend: 'fal', cleanupStaged: vi.fn(async () => {}), sourceImagePath: '/example/images/frame.png', uploadedTempPath: null };
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: slice, modelId: 'fal-lipsync-example', resolution: '1080P',
+        enableTranscription: true, shotInstruction: { version: 1, shotMode: 'performance', edit: { inSec: 0 } } });
+      // The render-pool read succeeds; the project-aspect read rejects.
+      mocks.getMusicVideoProject.mockResolvedValueOnce(null).mockRejectedValueOnce(failure);
+
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', mode: 'image',
+        musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } }, {})).rejects.toBe(failure);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.unlink).toHaveBeenCalledWith(slice);
+      expect(mocks.unlink).not.toHaveBeenCalledWith('/example/images/frame.png');
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('keeps owned inputs for the worker once the job is queued', async () => {
+      const slice = '/example/uploads/mv-performance-1.wav';
+      const prepared = { backend: 'fal', cleanupStaged: vi.fn(async () => {}), sourceImagePath: '/example/images/frame.png', uploadedTempPath: null };
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: slice, modelId: 'fal-lipsync-example', resolution: '1080P',
+        enableTranscription: true, shotInstruction: { version: 1, shotMode: 'performance', edit: { inSec: 0 } } });
+
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', mode: 'image', musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } }, {});
+      expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
+      expect(prepared.cleanupStaged).not.toHaveBeenCalled();
+      expect(mocks.unlink).not.toHaveBeenCalled();
+    });
   });
 
   it('rolls staged assets back when FableLoom compilation rejects', async () => {

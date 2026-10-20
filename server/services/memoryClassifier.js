@@ -5,11 +5,10 @@
  * Falls back to pattern-based extraction if LLM is unavailable.
  */
 
-import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
-import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFileStrict, unreadableStoreError, PATHS } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
@@ -40,20 +39,21 @@ let configCache = null;
 async function loadConfig() {
   if (configCache) return configCache;
 
-  if (existsSync(MEMORY_CONFIG_FILE)) {
-    const content = await readFile(MEMORY_CONFIG_FILE, 'utf-8');
-    // Handle empty or malformed config file
-    if (content && content.trim() && content.trim().startsWith('{') && content.trim().endsWith('}')) {
-      configCache = { ...DEFAULT_CONFIG, ...safeJSONParse(content, {}) };
-    } else {
-      console.log('⚠️ Memory classifier config file empty/malformed, using defaults');
-      configCache = DEFAULT_CONFIG;
-    }
-  } else {
-    configCache = DEFAULT_CONFIG;
+  const { ok, value } = await readJSONFileStrict(MEMORY_CONFIG_FILE, null, { allowArray: false });
+  if (!ok) {
+    // Serve defaults to readers without caching, so a repaired file is picked up.
+    console.warn('⚠️ Memory classifier config unreadable, using defaults');
+    return DEFAULT_CONFIG;
   }
-
+  configCache = value ? { ...DEFAULT_CONFIG, ...value } : DEFAULT_CONFIG;
   return configCache;
+}
+
+// updateConfig refuses while the stored bytes are unreadable, so defaults
+// served to readers are never persisted over the user's config.
+async function assertConfigWritable() {
+  const { ok } = await readJSONFileStrict(MEMORY_CONFIG_FILE, null, { allowArray: false, logError: false });
+  if (!ok) throw unreadableStoreError(MEMORY_CONFIG_FILE);
 }
 
 /**
@@ -67,6 +67,7 @@ export async function getConfig() {
  * Update configuration
  */
 export async function updateConfig(updates) {
+  await assertConfigWritable();
   const config = await loadConfig();
   const newConfig = { ...config, ...updates };
 

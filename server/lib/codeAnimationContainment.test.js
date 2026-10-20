@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { codeAnimationBubblewrapArgs, codeAnimationSeccompFilter } from './codeAnimationContainment.js';
+import { autofixVerifySeccompFilter } from './autofixVerifyContainment.js';
 
 // Interpret the small classic-BPF instruction set this security filter uses.
 // This catches ABI bypasses and jump/offset mistakes even on non-Linux hosts.
-const verdict = (filter, { arch, nr, flags = 0 }) => {
-  const data = new Map([[0, nr], [4, arch], [16, flags]]);
+const verdict = (filter, { arch, nr, flags = 0, type = 0 }) => {
+  const data = new Map([[0, nr], [4, arch], [16, flags], [24, type]]);
   let accumulator = 0;
   for (let pc = 0; pc < filter.length / 8; pc += 1) {
     const offset = pc * 8;
     const code = filter.readUInt16LE(offset);
     const value = filter.readUInt32LE(offset + 4);
     if (code === 0x20) accumulator = data.get(value) ?? 0;
+    else if (code === 0x54) accumulator &= value;
     else if (code === 0x06) return value;
     else {
       const match = code === 0x15 ? accumulator === value
@@ -23,6 +25,22 @@ const verdict = (filter, { arch, nr, flags = 0 }) => {
 };
 
 describe('Linux worker containment policy', () => {
+  it.each([
+    ['x64', 0xc000003e, 41, 53],
+    ['arm64', 0xc00000b7, 198, 199],
+  ])('blocks direct and io_uring Unix sockets in autofix verification on %s', (name, arch, socket, socketpair) => {
+    const filter = autofixVerifySeccompFilter(name);
+    const run = (nr, flags = 0, type = 0) => verdict(filter, { arch, nr, flags, type });
+    expect(run(socket, 1)).toBe(0x00050001);
+    for (const nr of [425, 426, 427]) expect(run(nr)).toBe(0x00050001);
+    expect(run(socketpair, 1, 1)).toBe(0x7fff0000);
+    expect(run(socketpair, 1, 1 | 0x80000 | 0x800)).toBe(0x7fff0000);
+    for (const type of [2, 5, 2 | 0x80000]) expect(run(socketpair, 1, type)).toBe(0x00050001);
+    expect(run(1)).toBe(0x7fff0000);
+    expect(run(0x40000000)).toBe(0x80000000);
+    expect(verdict(filter, { arch: 0x40000003, nr: 102 })).toBe(0x80000000);
+  });
+
   it.each([
     ['x64', 0xc000003e, 56, [57, 58, 41, 272, 308]],
     ['arm64', 0xc00000b7, 220, [198, 97, 268]],

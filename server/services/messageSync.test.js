@@ -8,8 +8,17 @@ vi.mock('fs/promises', () => ({
   unlink: vi.fn()
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn(),
+vi.mock('../lib/fileUtils.js', () => {
+  const tryReadFile = vi.fn();
+  return {
+  tryReadFile,
+  // Strict JSON reads (selectors) are driven from the same bytes mock.
+  readJSONFileStrict: async (path, fallback) => {
+    const raw = await tryReadFile(path);
+    if (raw == null) return { ok: true, value: fallback };
+    try { return { ok: true, value: JSON.parse(raw) }; } catch { return { ok: false, value: fallback }; }
+  },
+  unreadableStoreError: (path) => new Error(`Unreadable JSON file: ${path}`),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
   ensureDir: vi.fn(),
   PATHS: { messages: '/mock/data/messages' },
@@ -30,7 +39,8 @@ vi.mock('../lib/fileUtils.js', () => ({
       })
     );
   }
-}));
+  };
+});
 
 vi.mock('./messageAccounts.js', () => ({
   getAccount: vi.fn(),

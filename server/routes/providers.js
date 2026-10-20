@@ -88,6 +88,7 @@ import {
   PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
+import { isMaskedEnvVar } from '../lib/credentialEnvVars.js';
 import { presetDerivable, presetKind } from '../lib/providerPresets.js';
 import { isDerivedPreset } from '../lib/providerGraphRecords.js';
 import {
@@ -135,12 +136,10 @@ const sanitizeProvider = (provider) => {
     envVars: envVars ? { ...envVars } : {},
     secretEnvVars: secretEnvVars || []
   };
-  // Redact values of secret env vars
-  if (Array.isArray(secretEnvVars)) {
-    for (const key of secretEnvVars) {
-      if (key in sanitized.envVars) {
-        sanitized.envVars[key] = sanitized.envVars[key] === '' ? '' : '***';
-      }
+  // Redact secret-listed AND credential-named env vars (Secret box may be off)
+  for (const key of Object.keys(sanitized.envVars)) {
+    if (isMaskedEnvVar(key, secretEnvVars)) {
+      sanitized.envVars[key] = sanitized.envVars[key] === '' ? '' : '***';
     }
   }
   return sanitized;
@@ -1179,10 +1178,10 @@ export function createPortOSProviderRoutes(aiToolkit) {
       updates.apiKey = existing.apiKey;
     }
 
-    // Preserve existing secret env var values when client sends redacted '***' placeholders
-    if (updates.envVars && Array.isArray(existing.secretEnvVars)) {
-      for (const key of existing.secretEnvVars) {
-        if (updates.envVars[key] === '***' && existing.envVars?.[key]) {
+    // Preserve existing secret/credential-named env var values when client sends redacted '***' placeholders
+    if (updates.envVars) {
+      for (const [key, value] of Object.entries(updates.envVars)) {
+        if (value === '***' && existing.envVars?.[key] && isMaskedEnvVar(key, existing.secretEnvVars)) {
           updates.envVars[key] = existing.envVars[key];
         }
       }

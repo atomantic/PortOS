@@ -5,7 +5,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 
 const root = () => lazyTempDataRoot('mv-render-cleanup-');
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: root }));
-const state = { project: null, others: [], collections: [], timelines: [], director: [], active: false, failHistory: false, kitActive: false, jobs: [] };
+const state = { project: null, others: [], collections: [], timelines: [], director: [], boards: [], active: false, failHistory: false, kitActive: false, jobs: [] };
 vi.mock('../../lib/fileUtils.js', async load => {
   const actual = await load();
   return { ...actual, atomicWrite: async (path, data) => {
@@ -22,6 +22,10 @@ vi.mock('./projects.js', () => ({
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.collections }));
 vi.mock('../videoTimeline/local.js', () => ({ listProjects: async () => state.timelines }));
 vi.mock('../creativeDirector/local.js', () => ({ listProjects: async () => state.director }));
+vi.mock('../moodBoard/db.js', () => {
+  const listBoards = vi.fn(async () => state.boards);
+  return { listBoards, withBoardMediaReferences: async work => work(await listBoards()) };
+});
 vi.mock('../mediaAssetIndex/index.js', () => ({ unindexVideo: vi.fn(async () => {}) }));
 vi.mock('./render.js', () => ({ isProjectRenderActive: () => state.active }));
 vi.mock('./shotSegments.js', () => ({
@@ -34,6 +38,7 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { saveHistory, loadHistory } = await import('../videoGen/history.js');
 const { unindexVideo } = await import('../mediaAssetIndex/index.js');
 const { assertSegmentCleanupIdle } = await import('./shotSegments.js');
+const { listBoards } = await import('../moodBoard/db.js');
 afterAll(cleanupTempDataRoots);
 beforeEach(async () => {
   rmSync(root(), { recursive: true, force: true });
@@ -41,6 +46,7 @@ beforeEach(async () => {
   mkdirSync(PATHS.videoThumbnails, { recursive: true });
   state.project = { id: 'example-project', renderHistoryId: 'current' };
   state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false; state.failHistory = false; state.kitActive = false; state.jobs = [];
+  state.boards = [];
   vi.clearAllMocks();
   assertSegmentCleanupIdle.mockReset();
   await saveHistory([]);
@@ -101,6 +107,51 @@ describe('derived render retention', () => {
     expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
     state.jobs = [];
     expect(await cleanupSupersededFinals('example-project')).toBe(1);
+  });
+
+  it('preserves mood-board video keys and poster URLs through automatic and manual cleanup', async () => {
+    await seed([entry('current'), entry('pinned', { filename: 'pinned final.mp4' }), entry('poster'), entry('unused')]);
+    state.boards = [{ id: 'example-board', items: [
+      { type: 'video', mediaKey: 'video:pinned final.mp4' },
+      { type: 'image', imageUrl: 'https://example.test/data/video-thumbnails/poster.jpg?preview=1' },
+    ] }];
+    const reason = 'Referenced by saved media or production records';
+    expect((await getRenderCleanup('example-project')).finals.map(item => [item.id, item.reason]))
+      .toEqual([['pinned', reason], ['poster', reason], ['unused', null]]);
+    expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
+    expect((await cleanupRenders('example-project')).finals.map(item => item.id)).toEqual(['pinned', 'poster']);
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current', 'pinned', 'poster']);
+    expect(existsSync(join(PATHS.videos, 'pinned final.mp4'))).toBe(true);
+    expect(existsSync(join(PATHS.videoThumbnails, 'poster.jpg'))).toBe(true);
+    expect(unindexVideo.mock.calls.map(([id]) => id)).toEqual(['unused']);
+  });
+
+  it('retires nothing when mood-board ownership cannot be read, then rechecks on retry', async () => {
+    await seed([entry('current'), entry('old')]);
+    listBoards.mockRejectedValueOnce(new Error('Mood board store unavailable'));
+    await expect(cleanupSupersededFinals('example-project')).rejects.toThrow('Mood board store unavailable');
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current', 'old']);
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+    expect(unindexVideo).not.toHaveBeenCalled();
+    state.boards = [{ items: [{ type: 'video', mediaKey: 'video:old.mp4' }] }];
+    expect(await cleanupSupersededFinals('example-project')).toBe(0);
+    state.boards = [];
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+  });
+
+  it('keeps a pending retirement when a mood-board pin arrives before its retry', async () => {
+    await seed([entry('current'), entry('old')]);
+    state.failHistory = true;
+    await expect(cleanupSupersededFinals('example-project')).rejects.toThrow('History write failed');
+    state.failHistory = false;
+    state.boards = [{ items: [{ type: 'video', mediaKey: 'video:old.mp4' }] }];
+    expect(await cleanupSupersededFinals('example-project')).toBe(0);
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current', 'old']);
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+    expect((await getRenderCleanup('example-project')).finals[0]).toMatchObject({ id: 'old', pending: true, reason: 'Referenced by saved media or production records' });
+    state.boards = [];
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+    expect(existsSync(join(PATHS.videos, '.music-video-render-cleanup.json'))).toBe(false);
   });
 
   it('keeps history and bytes retryable when index removal fails, then settles them on retry', async () => {

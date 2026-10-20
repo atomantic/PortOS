@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
+import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
@@ -340,6 +341,7 @@ export const appSchema = z.object({
   // task when it diverges. See lib/repoStateExpectations.js. Unset = ON: an install
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
+  mergeHandoffMinQueuedRuns: z.number().int().min(1).max(10000).nullable().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
@@ -2302,6 +2304,13 @@ export const settingsSlicePartialSchemas = Object.freeze({
   seriesAutopilot: seriesAutopilotSettingsSchema.partial(),
   pipelineEditorialChecks: pipelineEditorialChecksSettingsSchema.partial(),
   autoUpdate: autoUpdateSettingsSchema,
+  // The Chiptune panel and the Music Designer each own one sub-slice, so a save
+  // from either cannot drop the other's prefs or a template saved elsewhere.
+  'music.chiptune': musicSettingsSchema.shape.chiptune.unwrap().strict(),
+  'music.designer': musicSettingsSchema.shape.designer.unwrap().strict(),
+  // The caption-model picker owns only these two keys; the rest of the slice
+  // (training defaults, segmentation, watchdog, display sleep) is hand-set.
+  loraTraining: loraTrainingConfigSchema.pick({ captionProviderId: true, captionModel: true }).strict(),
 });
 
 // Check raw JSON before Zod can strip a dangerous key. Arrays can contain
@@ -2862,6 +2871,21 @@ export const heldCheckoutRetireBodySchema = z.object({
   }).optional(),
 });
 export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url() });
+export const initializedCheckoutRetireBodySchema = heldCheckoutRetireBodySchema.extend({
+  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
+}).strict();
+export const initializedCheckoutTransactionSchema = z.object({ appId: nonEmptyString, transactionId: z.string().uuid() }).strict();
+export const initializedCheckoutRestoreSchema = initializedCheckoutTransactionSchema.extend({
+  journalDigest: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+export const initializedCheckoutBranchRetireSchema = initializedCheckoutRestoreSchema.extend({
+  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
+}).strict();
+export const initializedCheckoutMetadataRestoreSchema = initializedCheckoutRestoreSchema.extend({
+  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+}).strict();
+export const initializedCheckoutFinalizationSchema = initializedCheckoutMetadataRestoreSchema;
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

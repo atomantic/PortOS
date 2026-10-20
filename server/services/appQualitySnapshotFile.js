@@ -421,7 +421,7 @@ async function landExistingBranchPr(app, git, defaultBranch, deps) {
 
 async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, message, removeLegacy = false, remoteSha }) {
   const makeTemp = deps.mkdtemp || mkdtemp;
-  const worktreePath = await makeTemp(join(tmpdir(), 'portos-quality-'));
+  let worktreePath;
   const addWorktree = deps.addWorktree || (async (args, repo) => {
     const { addWorktreeWithRetry } = await import('./worktreeManager.js');
     return addWorktreeWithRetry(args, repo);
@@ -475,7 +475,11 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     };
   };
 
-  return run().finally(() => cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(app.repoPath, async () => {
+    worktreePath = await makeTemp(join(tmpdir(), 'portos-quality-'));
+    return run().finally(() => cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
+  });
 }
 
 const removeWorktreeRegistration = (git, repoPath, worktreePath) => git

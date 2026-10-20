@@ -201,7 +201,7 @@ function trySelfSigned() {
 
 // Implicit fallback gate. Decides what to do (and what to tell the user) when
 // the Tailscale provisioning path didn't run / failed. Three cases — picked by
-// what's actually on disk, because `server/lib/tailscale-https.js` boots HTTPS
+// what's actually on disk, because `lib/tailscale-https.js` boots HTTPS
 // purely on cert+key file presence (not on meta.mode):
 //   1. Self-signed cert on disk → renewal path (regenerate on IP changes).
 //   2. Tailscale (or unknown-mode) cert on disk → keep the existing cert in

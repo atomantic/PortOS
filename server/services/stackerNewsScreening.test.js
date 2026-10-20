@@ -61,6 +61,26 @@ beforeEach(() => {
   };
 });
 
+describe('Stacker News analysis endpoint', () => {
+  it.each([
+    [{ OLLAMA_HOST: '127.0.0.1:11500' }, 'http://127.0.0.1:11500/api/chat'],
+    [{}, 'http://localhost:11434/api/chat'],
+  ])('posts to the configured Ollama daemon %j', async (env, url) => {
+    const saved = { OLLAMA_URL: process.env.OLLAMA_URL, OLLAMA_HOST: process.env.OLLAMA_HOST };
+    delete process.env.OLLAMA_URL; delete process.env.OLLAMA_HOST;
+    Object.assign(process.env, env);
+    try {
+      screenUntrustedContent.mockResolvedValue({ ok: true, safe: true });
+      item.image_urls = [];
+      fetchWithTimeout.mockResolvedValue(ollamaResponse(allowed));
+      await analyzeItem('item');
+      expect(fetchWithTimeout.mock.calls[0][0]).toBe(url);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+});
+
 describe('Stacker News phase-1 screening', () => {
   it('reaches no model — text or vision — when screening blocks the item', async () => {
     screenUntrustedContent.mockResolvedValue({ ok: false, safe: false, code: 'untrusted-content-blocked', message: 'flagged' });

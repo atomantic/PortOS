@@ -1,6 +1,7 @@
 /**
  * Curated Runway VIDEO model catalog — what PortOS knows about each model it
- * offers through Runway's developer API (`POST /v1/image_to_video`): the
+ * offers through Runway's developer API (`POST /v1/image_to_video`, and
+ * `POST /v1/text_to_video` for a row with a `textToVideo` rule): the
  * request fields each model takes (the body is one shape per `model`), its
  * duration and output-size rules, whether it ends on a last frame, and its
  * published price.
@@ -15,8 +16,11 @@
  * Runway serves it; the native `negativePrompt` row field stays for a model
  * that takes one.
  *
- * Image-to-video only: every row animates a start frame, and the rows marked
- * `endImage` also end on a last frame. Provider audio is always requested off
+ * Every row animates a start frame, and the rows marked `endImage` also end on
+ * a last frame. Only Gen-4.5 also renders from text alone; its `textToVideo`
+ * rule lists the ratios `/v1/text_to_video` takes (the duration, prompt cap,
+ * seed and price are the row's own). The other curated rows stay image-only
+ * until a text-to-video need for them is checked against the API reference. Provider audio is always requested off
  * (`audio: false`) where a model has the field, since a PortOS clip is silent
  * unless the caller asks (a Music Video's master song is its only soundtrack),
  * and the silent rate is what is priced.
@@ -45,6 +49,8 @@ export const RUNWAY_VIDEO_MODELS = Object.freeze([
     // `ratio` is required and names the output canvas.
     size: { param: 'ratio', required: true, byResolution: { '720p': GEN4_RATIOS }, default: '720p' },
     audio: false, seed: true, negativePrompt: false,
+    // `ratio` is required on /v1/text_to_video and offers only these two.
+    textToVideo: { ratios: Object.freeze(['1280:720', '720:1280']) },
     pricing: { perSecond: 0.12 },
   },
   {
@@ -113,6 +119,9 @@ const BY_ID = new Map(RUNWAY_VIDEO_MODELS.map((m) => [m.id, m]));
 
 /** The catalog row for `modelId`, or null for a model PortOS has not curated. */
 export const getRunwayVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
+
+/** True when `model` renders from a prompt alone (`/v1/text_to_video`). */
+export const runwayModelTakesText = (model) => !!model?.textToVideo;
 
 /** Output sizes a model offers (empty when it has no size parameter). */
 export const runwayVideoResolutions = (model) => (model?.size ? Object.keys(model.size.byResolution) : []);
@@ -215,8 +224,10 @@ export function describeRunwayVideoRate(modelId, resolution) {
 }
 
 /**
- * Build the `/v1/image_to_video` body for a curated model. Returns `{ body,
- * model, seconds, resolution, estimatedCostUsd }`. A missing required input, an
+ * Build the Runway request for a curated model: `/v1/image_to_video` with a
+ * start frame, `/v1/text_to_video` without one (a model with a `textToVideo`
+ * rule). Returns `{ endpoint, body, model, seconds, resolution,
+ * estimatedCostUsd }`. A missing required input, an
  * input the model cannot take, an uncurated model, or an over-cap prompt throws
  * an Error with `code = 'RUNWAY_MODEL_INPUT'` so the caller refuses before
  * anything is paid for. A prompt is never shortened (AGENTS.md, #11317).
@@ -240,19 +251,27 @@ export function buildRunwayVideoRequest({
   if (model.negativePrompt && avoid.length > model.negativePromptMaxChars) {
     throw refuse(`The negative prompt is ${avoid.length.toLocaleString('en-US')} characters; ${model.label} takes ${model.negativePromptMaxChars.toLocaleString('en-US')}. Shorten it to render.`);
   }
-  if (!imageUri) throw refuse(`${model.label} renders from a start frame. Supply a source image.`);
+  const textOnly = !imageUri;
+  if (textOnly && !runwayModelTakesText(model)) throw refuse(`${model.label} renders from a start frame. Supply a source image.`);
+  if (textOnly && endImageUri) throw refuse('An end frame needs a start frame. Supply a source image.');
   if (endImageUri && !model.endImage) throw refuse(`${model.label} takes no end frame; choose a model that does`);
 
   const body = { model: model.id };
-  body.promptImage = endImageUri
-    ? [{ uri: imageUri, position: 'first' }, { uri: endImageUri, position: 'last' }]
-    : imageUri;
+  if (!textOnly) {
+    body.promptImage = endImageUri
+      ? [{ uri: imageUri, position: 'first' }, { uri: endImageUri, position: 'last' }]
+      : imageUri;
+  }
   if (sent) body.promptText = sent;
   if (model.negativePrompt && avoid) body.negativePrompt = avoid;
   const coercedSec = coerceRunwayVideoSeconds(model, seconds);
   body.duration = coercedSec;
   const res = resolveRunwayVideoResolution(model, resolution);
-  if (model.size) {
+  if (textOnly) {
+    // No frame to follow, so the canvas is always named: the offered ratio closest to the target.
+    const want = aspectOf({ aspectRatio, width, height }) ?? 16 / 9;
+    body.ratio = model.textToVideo.ratios.reduce((best, r) => (Math.abs(ratioOf(r) - want) < Math.abs(ratioOf(best) - want) ? r : best));
+  } else if (model.size) {
     const target = aspectOf({ aspectRatio, width, height });
     // An optional ratio is sent only when there is a target to match and no
     // last frame (a keyframe render's canvas follows its first frame);
@@ -266,6 +285,7 @@ export function buildRunwayVideoRequest({
   if (model.seed && Number.isInteger(seed) && seed >= 0 && seed <= 4294967295) body.seed = seed;
 
   return {
+    endpoint: textOnly ? 'text_to_video' : 'image_to_video',
     body,
     model,
     seconds: coercedSec,

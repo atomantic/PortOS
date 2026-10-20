@@ -4,7 +4,8 @@
  * A cloud lane like `videoGen/fal.js`: the same job-map/SSE contract, so
  * `mediaJobQueue` dispatches to it on `params.mode === 'runway'`. Flow: POST
  * the start frame (and an optional last frame) as data URIs to
- * `/v1/image_to_video`, poll the task until it SUCCEEDS, download `output[0]`
+ * `/v1/image_to_video` — or just the prompt to `/v1/text_to_video` when no frame
+ * is given and the model renders from text — poll the task until it SUCCEEDS, download `output[0]`
  * and hand it to the shared `finalizeGeneratedVideo` helper.
  *
  * The request body is built per model from the curated catalog
@@ -177,7 +178,7 @@ async function generateVideoPrepared({
     ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),
-    mode: 'image',
+    mode: sourceImagePath ? 'image' : 'text',
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
@@ -245,18 +246,18 @@ async function runRunwayVideo(job, jobId, {
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + RUNWAY_RENDER_TIMEOUT_MS;
   try {
-    const frame = await runwayFrameDataUri(sourceImagePath, frameAspect);
+    const frame = sourceImagePath ? await runwayFrameDataUri(sourceImagePath, frameAspect) : null;
     const endFrame = lastImagePath ? await runwayFrameDataUri(lastImagePath, frameAspect) : null;
     for (const [label, fit] of [['start', frame], ['end', endFrame]]) {
       if (fit?.conformed) console.log(`✂️ Cropped Runway ${label} frame [${jobId.slice(0, 8)}] ${fit.conformed.from} → ${fit.conformed.to} for ${frameAspect}`);
       if (fit?.reencoded) console.log(`🗜️ Re-encoded Runway ${label} frame [${jobId.slice(0, 8)}] as JPEG to fit the 5 MB inline limit`);
     }
-    if (frame.conformed || endFrame?.conformed) {
-      meta.frameConformed = { aspect: frameAspect, ...(frame.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
+    if (frame?.conformed || endFrame?.conformed) {
+      meta.frameConformed = { aspect: frameAspect, ...(frame?.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
     }
-    const { body } = buildRunwayVideoRequest({ ...requestSpec, imageUri: frame.dataUri, endImageUri: endFrame?.dataUri ?? null });
+    const { body, endpoint } = buildRunwayVideoRequest({ ...requestSpec, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null });
     if (entry.aborted) return finishFailure('Canceled');
-    entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'image_to_video', body });
+    entry.taskId = await submitRunwayTask({ apiKey, endpoint, body });
 
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_RENDER_TIMEOUT_MS,

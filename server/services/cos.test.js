@@ -2423,10 +2423,13 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
   it("the agent:completed listener invokes the perpetual refill path", () => {
     const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
     expect(onIdx, 'agent:completed listener must exist').toBeGreaterThan(-1);
+    const recoveryIdx = COS_SRC.indexOf('await settleRetirementReviewRun(agent)', onIdx);
+    expect(recoveryIdx).toBeGreaterThan(onIdx);
+    expect(recoveryIdx).toBeLessThan(COS_SRC.indexOf('refillPerpetualForCompletedAgent(agent)', onIdx));
     const completionIdx = COS_SRC.indexOf('await settleBranchReconcileRun(agent)', onIdx);
     expect(completionIdx).toBeGreaterThan(onIdx);
     expect(completionIdx).toBeLessThan(COS_SRC.indexOf('refillPerpetualForCompletedAgent(agent)', onIdx));
-    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1200);
+    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1600);
     expect(
       handlerSlice.includes('refillPerpetualForCompletedAgent'),
       'agent:completed handler must call refillPerpetualForCompletedAgent'

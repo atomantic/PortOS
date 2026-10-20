@@ -7,11 +7,14 @@ import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
   federatedMediaInboxBusy, imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy,
 } from './dataManagerBusy.js';
+import { getEidoversePaths } from './eidoverse.js';
+import { getAllApps } from './apps.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -180,13 +183,13 @@ export const CATEGORIES = {
   // A pasted or URL-fetched book is the user's only copy — the shelf is not a
   // cache of anything re-fetchable, so it is neither archivable nor deletable.
   'rapid-reader-library': { label: 'Rapid Reader Shelf', description: 'Saved books for Rapid Reader — pasted and URL-imported prose kept on this machine, not regenerable', archivable: false, deletable: false },
-  'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents', archivable: false, deletable: true, purgeScope: 'category' },
+  'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents. Managed app checkouts (Eidoverse Worlds and its video repo) are kept on purge',archivable: false, deletable: true, purgeScope: 'category' },
   // Not deletable: user todos, pending CoS action requests and private security
   // assessment reports live here and have no other copy.
   'review': { label: 'Review', description: 'Review Hub todos, action requests and assessment reports', archivable: true, deletable: false },
   'rigging': { label: 'Rigging Clip Library', description: 'User-dropped animation-bearing GLB source files for retargeting — the only copy of assets you supplied', archivable: false, deletable: false },
   'runs': { label: 'AI Runs', description: 'Agent run logs and outputs', archivable: true, deletable: true, purgeScope: 'category' },
-  'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them', archivable: true, deletable: true, purgeScope: 'category' },
+  'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them; Persistent Mind attachments are retained by Mind', archivable: true, deletable: true, purgeScope: 'category', purgeFilter: name => !isPersistentMindScreenshotEntry(name) },
   'settings': { label: 'Settings', description: 'Per-feature settings files', archivable: true, deletable: false },
   'sharing': { label: 'Peer Sync State', description: 'Peer-sync bookkeeping — purging forces a full resync and can resurrect deleted records', archivable: true, deletable: false },
   'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false },
@@ -252,6 +255,53 @@ export async function resolveCategoryBusy(categoryKey) {
   }
   if (!result.busy) return { busy: false, busyReason: null };
   return { busy: true, busyReason: result.reason || `Something is using data/${categoryKey} right now — purge once it finishes.` };
+}
+
+// Managed app checkouts (Eidoverse worlds, its video companion, any registered
+// app repo) live under data/repos but hold installed code, .env.portos and local
+// commits, so a "Cloned Repos" purge must keep them. Fails closed: if the app
+// registry cannot be read, the purge is refused rather than run unprotected.
+async function protectedRepoPaths() {
+  const reposDir = resolve(PATHS.repos);
+  const eidoverse = getEidoversePaths();
+  const candidates = [eidoverse.worlds, eidoverse.video];
+  for (const app of await getAllApps()) {
+    if (typeof app.repoPath === 'string') candidates.push(app.repoPath);
+    for (const companion of app.companionRepoPaths || []) {
+      if (typeof companion === 'string') candidates.push(companion);
+    }
+  }
+  return candidates.map(p => resolve(p)).filter(p => isInsideDir(reposDir, p));
+}
+
+function isInsideDir(parent, child) {
+  const rel = relative(parent, child);
+  return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+// Removes every entry under `dir` that is not protected. An ancestor of a
+// protected checkout (e.g. the owner directory holding it) is descended into,
+// never removed whole.
+async function purgeUnprotectedEntries(dir, protectedPaths) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  let kept = 0;
+  for (const entry of entries) {
+    const full = resolve(join(dir, entry.name));
+    if (protectedPaths.includes(full)) {
+      kept++;
+      continue;
+    }
+    if (protectedPaths.some(p => isInsideDir(full, p))) {
+      const nested = await purgeUnprotectedEntries(full, protectedPaths);
+      removed += nested.removed;
+      kept += nested.kept;
+      continue;
+    }
+    await rmGuarded(full, { recursive: true, force: true });
+    removed++;
+  }
+  return { removed, kept };
 }
 
 // Validate category key contains only safe characters
@@ -548,8 +598,14 @@ export async function purgeCategory(categoryKey, options = {}) {
     // the same fail-closed busy probe to both deletion scopes.
     const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
     if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
+    const protectedPaths = categoryKey === 'repos' ? await protectedRepoPaths() : [];
 
     if (wantsItem) {
+      if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
+        throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
+          status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+        });
+      }
       const resolvedRoot = resolve(dirPath);
       const resolvedTarget = resolve(join(dirPath, options.subPath));
       // Boundary-aware containment check: use path.relative so a prefix like
@@ -557,6 +613,10 @@ export async function purgeCategory(categoryKey, options = {}) {
       const rel = relative(resolvedRoot, resolvedTarget);
       if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
         throw new ServerError('Invalid subPath', { status: 400, code: 'VALIDATION_ERROR' });
+      }
+      // Ancestor (holds a checkout) or descendant (lies inside one) — both would destroy it.
+      if (protectedPaths.some(p => p === resolvedTarget || isInsideDir(resolvedTarget, p) || isInsideDir(p, resolvedTarget))) {
+        throw new ServerError(`"${options.subPath}" is a managed app checkout and is kept`, { status: 409, code: 'PROTECTED_CHECKOUT' });
       }
       // Item-scoped categories are flat directories of assets; their only
       // subdirectories are working state for other features (`data/videos/.detached`
@@ -579,6 +639,9 @@ export async function purgeCategory(categoryKey, options = {}) {
       }
       await rmGuarded(resolvedTarget, { recursive: !itemScoped, force: true });
       console.log(`🗑️ Purged item from data/${categoryKey}`);
+    } else if (categoryKey === 'repos') {
+      const { removed, kept } = await purgeUnprotectedEntries(dirPath, protectedPaths);
+      console.log(`🗑️ Purged ${removed} entries from data/repos, kept ${kept} managed app checkout(s)`);
     } else {
       const allEntries = await readdir(dirPath).catch(() => []);
       const entries = meta.purgeFilter ? allEntries.filter(meta.purgeFilter) : allEntries;

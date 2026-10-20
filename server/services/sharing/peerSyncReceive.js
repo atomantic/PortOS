@@ -40,6 +40,7 @@ import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
   findPeerById,
+  loadOrNotFound,
   peerSyncEvents,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -48,6 +49,11 @@ import {
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
+
+async function isPostgresBackend() {
+  const { getBackendName } = await import('../memoryBackend.js');
+  return getBackendName() === 'postgres';
+}
 
 /**
  * Apply a received catalog bundle on the receiver. Reuses
@@ -59,14 +65,110 @@ import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
  * the backend here so a stray call on a non-Postgres install is a clean no-op.
  */
 async function applyCatalogBundle(catalogBundle, portosMeta) {
-  const { getBackendName } = await import('../memoryBackend.js');
-  if (getBackendName() !== 'postgres') return;
+  if (!(await isPostgresBackend())) return;
   const { applyRemoteChanges } = await import('../catalogSync.js');
   await applyRemoteChanges({
     ingredients: Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [],
     refs: Array.isArray(catalogBundle.refs) ? catalogBundle.refs : [],
     portosMeta,
   });
+}
+
+/**
+ * Bundled companion records (`linkedCollection`, `catalogBundle`,
+ * `linkedTrack`) ride a push admitted for ONE record's category. Without a
+ * binding to that record, a peer admitted for `universe` could overwrite
+ * media collections, catalog rows or tracks outside the categories the user
+ * enabled for it (#12427). Each bundle is kept only when it provably belongs
+ * to `record`; an unbound bundle is skipped with one warning and never fails
+ * the push (the bundle contract is non-fatal, so older peers that send
+ * well-formed bundles are unaffected).
+ */
+const COLLECTION_PARENT_FIELD = { universe: 'universeId', series: 'seriesId' };
+
+async function bindLinkedCollection({ kind, record, linkedCollection, sourceInstanceId }) {
+  if (!isPlainObject(linkedCollection)) return null;
+  const parentField = COLLECTION_PARENT_FIELD[kind];
+  if (!parentField || linkedCollection[parentField] !== record.id) {
+    console.warn(`⚠️ peerSync: skipped unbound linkedCollection from ${sourceInstanceId} — not linked to ${kind} ${record.id}`);
+    return null;
+  }
+  // The merge overwrites the collection's own parent link by id, so a peer that
+  // names another collection's id while claiming this record as parent would
+  // re-parent it. Refuse when the local collection is linked elsewhere.
+  // A failed lookup is not "no local collection": skip the bundle (the snapshot
+  // sync reconciles collections) rather than merge past an unverified owner.
+  let local;
+  try {
+    local = await loadOrNotFound(() => RECORD_KINDS.mediaCollection.load(linkedCollection.id));
+  } catch (err) {
+    console.warn(`⚠️ peerSync: skipped linkedCollection from ${sourceInstanceId} — local collection lookup failed: ${err.message}`);
+    return null;
+  }
+  // Parent field and id must both match: a local collection parented by a
+  // series that shares this universe's id is still another category's record.
+  const linkedElsewhere = local && (local.universeId || local.seriesId) && local[parentField] !== record.id;
+  if (linkedElsewhere) {
+    console.warn(`⚠️ peerSync: skipped linkedCollection from ${sourceInstanceId} — local collection belongs to another parent`);
+    return null;
+  }
+  return linkedCollection;
+}
+
+async function bindCatalogBundle({ kind, record, catalogBundle, sourceInstanceId }) {
+  if (!isPlainObject(catalogBundle)) return null;
+  const rawRefs = Array.isArray(catalogBundle.refs) ? catalogBundle.refs : [];
+  const rawIngredients = Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [];
+  let refs = rawRefs.filter((ref) => isPlainObject(ref) && ref.refKind === kind && ref.refId === record.id);
+  let ingredients = rawIngredients.filter((ing) => isPlainObject(ing) && refs.some((ref) => ref.ingredientId === ing.id));
+  const dropped = (rawRefs.length - refs.length) + (rawIngredients.length - ingredients.length);
+  if (dropped > 0) {
+    console.warn(`⚠️ peerSync: dropped ${dropped} catalog bundle rows from ${sourceInstanceId} not bound to ${kind} ${record.id}`);
+  }
+  // A ref naming the pushed record proves nothing about an ingredient another
+  // record already owns: the sender writes both. Only an ingredient with no
+  // local row, or one this record already refs locally, may merge (#12466).
+  // The ref is dropped with it, or the forged link would authorize the
+  // overwrite on the next push. Postgres-only, like the apply itself.
+  const named = [...new Set(refs.map((ref) => ref.ingredientId))];
+  if (named.length > 0 && (await isPostgresBackend())) {
+    let ownership;
+    try {
+      const { getLocalIngredientRefOwnership } = await import('../catalogDB.js');
+      ownership = await getLocalIngredientRefOwnership(named, kind, record.id);
+    } catch (err) {
+      console.warn(`⚠️ peerSync: skipped catalog bundle from ${sourceInstanceId} — local ingredient lookup failed: ${err.message}`);
+      return null;
+    }
+    const foreign = new Set(named.filter((id) => ownership.existing.has(id) && !ownership.linked.has(id)));
+    if (foreign.size > 0) {
+      console.warn(`⚠️ peerSync: skipped ${foreign.size} catalog ingredients from ${sourceInstanceId} owned by another record`);
+      refs = refs.filter((ref) => !foreign.has(ref.ingredientId));
+      ingredients = ingredients.filter((ing) => !foreign.has(ing.id));
+    }
+  }
+  return refs.length === 0 && ingredients.length === 0 ? null : { ingredients, refs };
+}
+
+// A project bundles only the track it links, and only when no local track has
+// that id. Track records carry no sender provenance, so a track that already
+// exists locally is never overwritten here — not even one the local project
+// links, since a prior push can set that link (#12466). Later edits arrive
+// through the Tracks category.
+async function bindLinkedTrack({ record, linkedTrack, sourceInstanceId, onLookupError }) {
+  if (!isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return null;
+  let localTrack;
+  try {
+    localTrack = await loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id));
+  } catch (err) {
+    onLookupError(err);
+    return null;
+  }
+  if (localTrack) {
+    console.warn(`⚠️ peerSync: skipped linkedTrack from ${sourceInstanceId} — a local track with that id already exists`);
+    return null;
+  }
+  return linkedTrack;
 }
 
 /**
@@ -193,7 +295,7 @@ export async function applyIncomingPush(payload, authorization) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection: pushedCollection, linkedTrack: pushedTrack, catalogBundle: pushedCatalog, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -212,8 +314,10 @@ export async function applyIncomingPush(payload, authorization) {
 
   await authorizeIncomingPush(payload, authorization);
 
+  // The gate sees the bundles as pushed: a schema-ahead sender is rejected even
+  // when its bundle is later found unbound and skipped.
   const { senderSchemaVersions } = await assertSchemaVersionGate({
-    kind, record, issues, linkedCollection, catalogBundle, linkedTrack, portosMeta, sourceInstanceId,
+    kind, record, issues, linkedCollection: pushedCollection, catalogBundle: pushedCatalog, linkedTrack: pushedTrack, portosMeta, sourceInstanceId,
   });
 
   // Look up the LOCAL record state BEFORE merging so we can detect the
@@ -247,6 +351,20 @@ export async function applyIncomingPush(payload, authorization) {
     console.log(`⚠️ peerSync: ${key} merge failed: ${err.message}`);
     pending.add(ENVELOPE_PENDING_KEYS[key]);
   };
+  // Bundles that are not bound to `record` are dropped here (#12427), so every
+  // later use (merge, asset diff, host-mode ownership) sees only bound ones.
+  // Tombstone and local-ephemeral pushes merge no bundles, so they bind none.
+  const bundlesMergeable = !localEphemeral && record.deleted !== true;
+  const linkedCollection = bundlesMergeable
+    ? await bindLinkedCollection({ kind, record, linkedCollection: pushedCollection, sourceInstanceId })
+    : null;
+  const catalogBundle = bundlesMergeable
+    ? await bindCatalogBundle({ kind, record, catalogBundle: pushedCatalog, sourceInstanceId })
+    : null;
+  // Only a music-video push has a linked track to bundle.
+  const linkedTrack = bundlesMergeable && kind === 'musicVideoProject'
+    ? await bindLinkedTrack({ record, linkedTrack: pushedTrack, sourceInstanceId, onLookupError: markPending('linkedTrack') })
+    : null;
   // #1922: true only once the bundled linkedTrack merge actually RAN and
   // succeeded — gates whether `linkedTrack` may contribute to
   // `ackedDeletesUpTo` below. Stays false on every skip path (mismatched id,

@@ -22,6 +22,7 @@
 import { musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { cancelExcerptRender, startExcerptRender } from './excerptRender.js';
 import {
   assertRevisionOpenForGeneration,
@@ -171,14 +172,12 @@ async function dependencyImpactFor(project) {
 }
 
 export async function getDependencyImpact(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   return dependencyImpactFor(project);
 }
 
 export async function startDependencyRepair(projectId, input) {
-  const before = await getProject(projectId);
-  if (!before) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const before = await requireProject(projectId);
   const impact = await dependencyImpactFor(before);
   const structuralBasis = musicVideoDependencyImpact(before).basis;
   return mutateProjectRecord(projectId, (current) => {

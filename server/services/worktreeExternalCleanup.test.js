@@ -1,4 +1,6 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
+// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
@@ -11,10 +13,17 @@ import { cleanupOrphanedWorktrees } from './worktreeManager.js';
 
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, realpathSync: path => fault.pathAlias && (path === fault.aliasTarget || path === fault.pathAlias) ? path : actual.realpathSync(path) };
+  return { ...actual, realpathSync: Object.assign(
+    path => fault.pathAlias && (path === fault.aliasTarget || path === fault.pathAlias) ? path : actual.realpathSync(path),
+    { native: actual.realpathSync.native },
+  ) };
 });
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
+}));
+// Shared branch reflog archives import the leaf paths module directly.
+vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
 }));
 const fault = vi.hoisted(() => ({ command: null, subcommand: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, onGit: null, calls: [] }));
@@ -98,6 +107,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     await resetGitWorktreeSandbox(external, initialHead);
     await rm(PATHS.worktrees, { recursive: true, force: true });
     await mkdir(PATHS.worktrees, { recursive: true });
+    // Retirement reads durable completion policy independently of the supplied
+    // owner snapshot. Missing state is unknown, not a known-empty registry.
+    await writeFile(join(PATHS.cos, 'state.json'), JSON.stringify({ agents: {} }));
     fault.calls = [];
   });
   afterAll(cleanupTempDataRoots);
@@ -213,5 +225,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const path = await addTree('agent-unknown-liveness');
     expect(await cleanupOrphanedWorktrees(primary, null, NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
+  });
+
+  it('retains merged work when durable completion policy is unreadable despite an empty owner snapshot', async () => {
+    const path = await addTree('agent-policy-unreadable');
+    await writeFile(join(PATHS.cos, 'state.json'), '{');
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
+    expect(existsSync(path)).toBe(true);
+    expect(await branchExists('agent-policy-unreadable')).toBe(true);
   });
 });

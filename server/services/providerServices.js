@@ -12,6 +12,7 @@ import {
   takenServiceSlugs,
   toServiceDto,
 } from '../lib/providerServiceInstances.js';
+import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
@@ -51,6 +52,12 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // "Import scoping").
 const loadInstallEnvFile = async () => (await import('./credentialInventory.js')).loadInstallEnvFile();
 
+const hostOf = (url) => { try { return new URL(url).host; } catch { return null; } };
+const isShippedDefaultHost = (definition, url) => {
+  const host = hostOf(url);
+  return host !== null && Object.values(definition.transports || {}).some((transport) => hostOf(transport.defaultBaseUrl) === host);
+};
+
 /**
  * GET `/models` on the instance's own endpoint with its own key.
  *
@@ -68,6 +75,18 @@ async function listByProbe(connection, definition, { env, probe }) {
   const openai = connection.transports?.openai?.baseUrl;
   const anthropic = connection.transports?.anthropic?.baseUrl;
   if (!openai && !anthropic) return { refreshed: false, error: 'This service declares no endpoint to list models from' };
+
+  // Same guard the runner and toolkit catalog apply: never attach a key to a host
+  // it would refuse. A connection carries no custom-endpoint opt-in, but a host the
+  // definition itself ships as its default (opencode.ai, api.moonshot.ai) is vetted.
+  if (apiKey) {
+    const target = openai || anthropic;
+    const guard = evaluateSecretEndpoint(target, { allowCustomEndpoint: isShippedDefaultHost(definition, target) });
+    if (!guard.allowed) {
+      console.warn(`⛔ Catalog refresh for ${connection.slug ?? connection.id} skipped: ${guard.reason}`);
+      return { refreshed: false, error: `Endpoint blocked: ${guard.reason}` };
+    }
+  }
 
   const result = openai
     ? await probe(openai, { apiKey, timeoutMs: CATALOG_PROBE_TIMEOUT_MS })

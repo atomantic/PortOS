@@ -21,7 +21,7 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
 });
 
 import { execGit } from '../lib/execGit.js';
-import { forceRemoveWorktreeDir } from './worktreeManager.js';
+import { forceRemoveWorktreeDir, WORKTREE_ADD_TIMEOUT_MS } from './worktreeManager.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
   let repo;
@@ -59,6 +59,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     const path = await addWorktree();
     const outcome = await forceRemoveWorktreeDir(repo, path, { verifyRemoval: async () => null });
     expect(outcome).toMatchObject({ removed: true, directory: 'absent', registration: 'absent', warning: null });
+    expect(execGit).toHaveBeenCalledWith(
+      ['worktree', 'remove', path, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }
+    );
     expect(existsSync(path)).toBe(false);
     expect(await registered(path)).toBe(false);
   });

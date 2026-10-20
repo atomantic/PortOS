@@ -3,6 +3,7 @@ import { join } from 'path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { commandExists } from '../lib/commandExists.js';
 
 const mock = vi.hoisted(() => ({
   existing: new Set(),
@@ -125,7 +126,17 @@ describe('Eidoverse managed-app installer', () => {
   });
 
   it('clones separate licensed repos, installs Bun dependencies, and registers Worlds', async () => {
+    vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
+    vi.stubEnv('PGPASSWORD', 'db');
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
+    const installEnv = mock.spawn.mock.calls.find(([, args]) => args[0] === 'install')[2].env;
+    expect(installEnv).not.toHaveProperty('PRIVACY_VAULT_KEY');
+    expect(installEnv).not.toHaveProperty('PGPASSWORD');
+    for (const [, , options] of vi.mocked(commandExists).mock.calls) {
+      expect(options.env).not.toHaveProperty('PRIVACY_VAULT_KEY');
+      expect(options.env).not.toHaveProperty('PGPASSWORD');
+    }
+    vi.unstubAllEnvs();
 
     expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: '' });
     expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);

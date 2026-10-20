@@ -42,8 +42,8 @@ export function AutofixerTab() {
           When a monitored process crashes, the Autofixer runs this AI provider to read the logs,
           propose a fix in an isolated checkout. Fixes are staged for review by default; apply or discard
           them in the Autofixer History tab. Automatic application and restart require the toggle below.
-          Only agentic CLI providers are listed —
-          the fixer needs file-edit and shell access, which API chat providers can't do.
+          Repairs run only on a Claude Code or Codex CLI provider. Claude uses file-editing tools;
+          Codex runs commands in a sandbox with network access disabled. Other CLI providers are skipped.
         </p>
         <FeatureProviderPicker
           featureKey="autofixer"
@@ -62,7 +62,7 @@ export function AutofixerTab() {
               value={verifyCommand} maxLength={500} disabled={!loaded || saving}
               onChange={event => setVerifyCommand(event.target.value)} placeholder="npm test" />
           </label>
-          <p className="text-xs text-gray-400">Optional command run in the isolated checkout before staging or automatic application.</p>
+          <p className="text-xs text-gray-400">Optional command run in the isolated checkout before staging or automatic application. Verification requires Linux bubblewrap to contain files, network access, and child processes. On macOS and other unsupported systems, a configured check is refused and the fix is not applied.</p>
           <button className="px-3 py-2 bg-port-accent rounded text-white" disabled={!loaded || saving} onClick={save}>
             {saving ? 'Saving…' : 'Save promotion settings'}
           </button>

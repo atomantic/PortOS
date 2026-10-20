@@ -11,9 +11,15 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+const publication = vi.hoisted(() => ({ active: false, refuse: false }));
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
+  if (publication.refuse) throw new Error('checkout-retirement-reserved');
+  publication.active = true;
+  try { return await work(); } finally { publication.active = false; }
+}) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({
-  execGit: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }),
+  execGit: vi.fn().mockImplementation(async args => ({ stdout: args.includes('--is-inside-work-tree') ? 'true' : '', stderr: '', exitCode: 0 })),
 }));
 vi.mock('./cos.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
@@ -67,6 +73,9 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
+const handBackPrRemediationMock = vi.fn().mockResolvedValue(true);
+vi.mock('./prRemediationFollowUp.js', () => ({ handBackPrRemediation: (...args) => handBackPrRemediationMock(...args) }));
+
 vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
@@ -76,11 +85,11 @@ import { ensureLatest, isRepo, fetchOrigin } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); listWorktrees.mockResolvedValue([]); });
+beforeEach(() => { vi.clearAllMocks(); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -444,6 +453,18 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     findAdoptableWorktreeForBranch.mockResolvedValue(null);
   });
 
+  it('recovers the namespaced fork holder without adopting the base repository main checkout', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: 'fork/contributor/main', adopted: true });
+    const task = resumeTask({ existingBranch: 'fork/contributor/main',
+      forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(result.outcome).toBe('ready');
+    expect(findAdoptableWorktreeForBranch).toHaveBeenCalledWith(expect.any(String), 'fork/contributor/main', expect.any(Object));
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'fork/contributor/main');
+    expect(createWorktree).not.toHaveBeenCalled();
+  });
+
   it('adopts the interrupted run’s worktree instead of creating a new one', async () => {
     findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
     adoptWorktree.mockResolvedValue({
@@ -746,26 +767,61 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  // A PR-remediation follow-up is the same shape one step further out (its
-  // commits land on the contributor's own branch) and hits the identical #6243
-  // bug when that branch is checked out in a claim tree, so it carries the same
-  // carve-out via the shared isNonCommittingCoordinatorTask predicate.
-  it('opts into adopting a live /claim worktree for a PR-remediation follow-up', async () => {
-    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-99', agentId: 'claim-issue-99' });
-    adoptWorktree.mockResolvedValue({
-      worktreePath: '/mock/worktrees/agent-new', branchName: 'contributor/fix-thing',
-      baseBranch: null, existingBranch: true, adopted: true
-    });
-    const task = {
+  // A PR-remediation agent runs the PR's own tests, so it attaches only at the
+  // head PortOS reviewed (#12486). Adopting a surviving tree would hand it a
+  // checkout nothing proved is that commit, so it always attaches fresh, pinned.
+  describe('a PR-remediation follow-up pinned to the reviewed head', () => {
+    const REVIEWED = 'a'.repeat(40);
+    const remediationTask = (extra = {}) => ({
       id: 't-remediation', taskType: 'internal',
-      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing' }
-    };
+      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing', prRemediationHeadSha: REVIEWED, ...extra },
+    });
 
-    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    it('never adopts a holder and attaches fresh at the reviewed commit', async () => {
+      findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-99', agentId: 'claim-issue-99' });
+      createWorktree.mockResolvedValueOnce({ worktreePath: '/mock/worktrees/agent-new', branchName: 'contributor/fix-thing', baseBranch: null, existingBranch: true });
 
-    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
-    expect(opts.allowLiveClaim).toBe(true);
-    expect(r.outcome).toBe('ready');
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask() });
+
+      expect(adoptWorktree).not.toHaveBeenCalled();
+      expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 't-remediation',
+        expect.objectContaining({ existingBranch: 'contributor/fix-thing', expectedHeadSha: REVIEWED }));
+      expect(r.outcome).toBe('ready');
+      expect(handBackPrRemediationMock).not.toHaveBeenCalled();
+    });
+
+    it('never falls back to the shared checkout when persisted isolation flags are missing', async () => {
+      createWorktree.mockRejectedValueOnce(new Error('transport unavailable'));
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask({ useWorktree: false }) });
+      expect(r.outcome).toBe('blocked');
+      expect(ensureLatest).not.toHaveBeenCalled();
+    });
+
+    it('blocks the task for good and hands the PR back when the head moved', async () => {
+      createWorktree.mockRejectedValueOnce(Object.assign(new Error('origin/contributor/fix-thing is at bbbb'), { code: PINNED_HEAD_MOVED }));
+      const task = remediationTask();
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+      expect(r.outcome).toBe('blocked');
+      // Not `worktree-busy`: a timed pause would retry the same moved head.
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'pr-head-moved' }),
+      }), expect.anything());
+      expect(handBackPrRemediationMock).toHaveBeenCalledWith(expect.objectContaining({ task }));
+    });
+
+    it.each([
+      { prRemediationHeadSha: null },
+      { prRemediationHeadSha: 'not-a-commit' },
+      { existingBranch: null },
+    ])('refuses incomplete remediation coordinates without touching git (%j)', async (missing) => {
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask(missing) });
+
+      expect(r.outcome).toBe('blocked');
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(handBackPrRemediationMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   // A `/do:next` run keeps its tree in a sibling directory outside the managed
@@ -984,5 +1040,65 @@ describe('resolveTaskExistingBranch', () => {
 
     expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 'sys-rl-1',
       expect.objectContaining({ existingBranch: 'cos/task-x/agent-y' }));
+  });
+});
+
+
+describe('durable workspace preparation and registration lifetime', () => {
+  it('retains admission after ordinary creation until its registration continuation settles', async () => {
+    let finish;
+    const registration = new Promise(resolve => { finish = resolve; });
+    createWorktree.mockImplementationOnce(async () => {
+      expect(publication.active).toBe(true);
+      return { worktreePath: '/mock/worktrees/new', branchName: 'cos/new' };
+    });
+    const onPrepared = vi.fn(async result => {
+      expect(result.outcome).toBe('ready');
+      expect(publication.active).toBe(true);
+      await registration;
+      expect(publication.active).toBe(true);
+      return 'registered-and-spawned';
+    });
+    const result = prepareAgentWorkspace({ agentId: 'new', task: {
+      id: 'new', metadata: { useWorktree: true },
+    }, onPrepared });
+    await vi.waitFor(() => expect(onPrepared).toHaveBeenCalledOnce());
+    expect(publication.active).toBe(true);
+    finish();
+    expect(await result).toBe('registered-and-spawned');
+    expect(publication.active).toBe(false);
+  });
+
+  it('refuses before ordinary preparation can mutate or call registration', async () => {
+    publication.refuse = true;
+    const onPrepared = vi.fn();
+    await expect(prepareAgentWorkspace({ agentId: 'new', task: {
+      id: 'new', metadata: { useWorktree: true },
+    }, onPrepared })).rejects.toThrow('checkout-retirement-reserved');
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(ensureLatest).not.toHaveBeenCalled();
+    expect(onPrepared).not.toHaveBeenCalled();
+  });
+
+  it('continues non-Git read-only tasks without a repository permit', async () => {
+    execGit.mockResolvedValueOnce({ stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git', exitCode: 128 });
+    const onPrepared = vi.fn(async result => {
+      expect(publication.active).toBe(false);
+      return result;
+    });
+    const result = await prepareAgentWorkspace({ agentId: 'docs', task: {
+      id: 'docs', metadata: { readOnly: true },
+    }, onPrepared });
+    expect(result.outcome).toBe('ready');
+    expect(onPrepared).toHaveBeenCalledOnce();
+  });
+
+  it.each(['fatal: permission denied', 'fatal: not a git repository: /broken/gitdir'])('does not treat an unreadable repository as non-Git: %s', async stderr => {
+    execGit.mockResolvedValueOnce({ stdout: '', stderr, exitCode: 128 });
+    const onPrepared = vi.fn();
+    await expect(prepareAgentWorkspace({ agentId: 'new', task: { id: 'new', metadata: {} }, onPrepared }))
+      .rejects.toThrow('Cannot establish workspace repository identity');
+    expect(ensureLatest).not.toHaveBeenCalled();
+    expect(onPrepared).not.toHaveBeenCalled();
   });
 });

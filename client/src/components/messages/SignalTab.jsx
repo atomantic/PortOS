@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SettingsLoadError from '../ui/SettingsLoadError';
 import { Save, Loader2, Lock, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -16,7 +17,7 @@ import {
 // Highest-fragility source: everything degrades gracefully to an actionable error.
 export function SignalTab() {
   const {
-    loading, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving,
+    loading, loadError, retry, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving,
     status, setStatus, dirty, save,
   } = useSyncSourceSettings({ domain: 'signal', defaultInterval: 60, getStatus: getSignalStatus });
   const [setup, setSetup] = useState(null);
@@ -56,6 +57,7 @@ export function SignalTab() {
 
   return (
     <div className="space-y-6">
+      {loadError && <SettingsLoadError onRetry={retry} />}
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <Lock size={16} className="text-port-accent" />
@@ -103,7 +105,7 @@ export function SignalTab() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || loadError}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}

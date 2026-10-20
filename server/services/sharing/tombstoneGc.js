@@ -47,7 +47,9 @@ import {
   listIds as listSeriesIds,
 } from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
-import { pruneTombstonedCollections, listCollections, listCollectionIds } from '../mediaCollections.js';
+import {
+  pruneTombstonedCollections, pruneCollectionItemRemovals, listCollections, listCollectionIds,
+} from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
@@ -395,6 +397,15 @@ async function loadState() {
 // cutoff never refuses on snapshot-coverage grounds — but the per-record
 // confirmed-push clamp can still hold it, and it's surfaced here for symmetry
 // with every other kind.
+// Item removal records (#12433) live inside LIVE collections, which reach peers
+// through their own subscription, the snapshot category, AND as the bundled
+// `linkedCollection` on a universe/series push. Hold their cutoff to the
+// strictest of those cohorts; any refusal refuses the prune.
+function collectionItemRemovalCutoff({ mediaCollectionCutoff, universeCutoff, seriesCutoff }) {
+  const cutoffs = [mediaCollectionCutoff, universeCutoff, seriesCutoff];
+  return cutoffs.includes(null) ? null : Math.min(...cutoffs);
+}
+
 function refusedFromCutoffs(cutoffs) {
   const refused = [];
   for (const kind of PEER_SUBSCRIBABLE_KINDS) {
@@ -406,10 +417,10 @@ function refusedFromCutoffs(cutoffs) {
 }
 
 /**
- * One sweep cycle. Returns `{ universes, series, issues, collections,
- * orphanBaseHashes, orphanSubscriptions, refused }` — the four per-kind
- * tombstone-prune counts, the two post-prune orphan-sweep counts, and the
- * list of kinds whose cutoff was refused.
+ * One sweep cycle. Returns the per-kind tombstone-prune counts (`universes`,
+ * `series`, `issues`, `collections`, …), `collectionItemRemovals` (pruned
+ * per-item removal records), the two post-prune orphan-sweep counts, and
+ * `refused` — the kinds whose cutoff was refused.
  *
  * `graceMs` defaults to 24h so the orchestrator path is unchanged; the
  * manual-trigger UI / CLI passes 0 to skip the post-delete buffer. The
@@ -456,11 +467,13 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     cutoffForKind('deck', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
-  const [u, s, i, c, a, ar, al, t, cd, mv, mb, fl, wr, wrf, wre, cfb, cc, dk] = await Promise.all([
+  const itemRemovalCutoff = collectionItemRemovalCutoff({ mediaCollectionCutoff, universeCutoff, seriesCutoff });
+  const [u, s, i, c, cir, a, ar, al, t, cd, mv, mb, fl, wr, wrf, wre, cfb, cc, dk] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
     mediaCollectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(mediaCollectionCutoff),
+    itemRemovalCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneCollectionItemRemovals(itemRemovalCutoff),
     authorCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAuthors(authorCutoff),
     artistCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedArtists(artistCutoff),
     albumCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAlbums(albumCutoff),
@@ -495,6 +508,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     series: s.pruned,
     issues: i.pruned,
     collections: c.pruned,
+    collectionItemRemovals: cir.pruned,
     authors: a.pruned,
     artists: ar.pruned,
     albums: al.pruned,

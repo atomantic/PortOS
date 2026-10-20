@@ -4,13 +4,20 @@
  * mutation, and an ownership change or archive failure leaves the checkout,
  * its lock and its branch as found.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { PATHS } from '../lib/paths.js';
+
+// Local branch deletion archives the common reflog using PATHS.cos, independently
+// of the checkout archive's explicit cosDir option.
+vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
+afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [] }));
@@ -40,7 +47,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
@@ -94,6 +101,143 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
 
+  it('preserves ignored evidence before unattended cleanup and refuses later byte or head changes', async () => {
+    const path = join(external, 'merged');
+    await execGit(['worktree', 'add', '-b', 'feature/done', path, 'main'], repo);
+    await writeFile(join(path, 'ignored.txt'), 'recovery evidence');
+    await writeFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
+    expect((await execGit(['status', '--porcelain'], path)).stdout.trim()).toBe('');
+    const tree = { path, branch: 'refs/heads/feature/done', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await readFile(join(saved.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('recovery evidence');
+    await execGit(['bundle', 'verify', join(saved.archiveDir, 'commits.bundle')], repo);
+    expect(await saved.verify(tree)).toBe(null);
+    expect(await saved.verify({ ...tree, head: 'f'.repeat(40) })).toBe('worktree-holder-changed');
+    await writeFile(join(path, 'ignored.txt'), 'new evidence');
+    expect(await saved.verify(tree)).toBe('checkout-content-changed');
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it('bundles reflog-only commits into a standalone recovery repository', async () => {
+    const path = join(external, 'reflog');
+    await execGit(['worktree', 'add', '-b', 'feature/reflog', path, 'main'], repo);
+    await writeFile(join(path, 'lost.txt'), 'recover this private commit');
+    await execGit(['add', 'lost.txt'], path);
+    await execGit(['commit', '-m', 'private recovery commit'], path);
+    const lost = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    await execGit(['reset', '--hard', 'main'], path);
+    const tree = { path, branch: 'refs/heads/feature/reflog', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toContain(lost);
+    const restored = join(scratch, 'restored');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['show', `${lost}:lost.txt`], restored)).stdout).toBe('recover this private commit');
+    expect(await saved.verify(tree)).toBe(null);
+  });
+
+  it('recovers AUTO_MERGE trees and private blob/tag roots without the original object store', async () => {
+    const path = join(external, 'private-objects');
+    await execGit(['worktree', 'add', '-b', 'feature/private-objects', path, 'main'], repo);
+    await writeFile(join(path, 'conflict.txt'), '<<<<<<< ours\nprivate conflict bytes\n=======\nother side\n>>>>>>> theirs\n');
+    await execGit(['add', 'conflict.txt'], path);
+    const autoMerge = (await execGit(['write-tree'], path)).stdout.trim();
+    const conflictBlob = (await execGit(['rev-parse', ':conflict.txt'], path)).stdout.trim();
+    await execGit(['tag', '-a', 'temporary-tree-tag', autoMerge, '-m', 'private tree evidence'], path);
+    const tag = (await execGit(['rev-parse', 'refs/tags/temporary-tree-tag'], path)).stdout.trim();
+    await execGit(['tag', '-d', 'temporary-tree-tag'], path);
+    await execGit(['reset', '--hard', 'main'], path);
+    await writeFile(join(path, 'blob-source'), 'private root blob bytes');
+    const blob = (await execGit(['hash-object', '-w', 'blob-source'], path)).stdout.trim();
+    await rm(join(path, 'blob-source'));
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(admin, 'AUTO_MERGE'), `${autoMerge}\n`);
+    await execGit(['update-ref', 'refs/worktree/private-blob', blob], path);
+    await execGit(['update-ref', 'refs/worktree/private-tag', tag], path);
+    const tree = { path, branch: 'refs/heads/feature/private-objects', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag]));
+    expect(await readFile(join(saved.archiveDir, 'administration', 'gitdir', 'AUTO_MERGE'), 'utf8')).toBe(`${autoMerge}\n`);
+    expect(await saved.verify(tree)).toBe(null);
+    // The archive must supply the conflict tree's children, not just list roots
+    // whose missing bytes happen to be available from the original repository.
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'restored-private-objects');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['show', `${autoMerge}:conflict.txt`], restored)).stdout).toContain('private conflict bytes');
+    expect((await execGit(['cat-file', 'blob', conflictBlob], restored)).stdout).toContain('>>>>>>> theirs');
+    expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private root blob bytes');
+    expect((await execGit(['rev-parse', `${tag}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
+
+  it('retains the checkout when an AUTO_MERGE recovery tree is missing', async () => {
+    const path = join(external, 'missing-auto-merge');
+    await execGit(['worktree', 'add', '-b', 'feature/missing-auto-merge', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const missing = 'f'.repeat(40);
+    await writeFile(join(admin, 'AUTO_MERGE'), `${missing}\n`);
+    const tree = { path, branch: 'refs/heads/feature/missing-auto-merge', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
+    expect(existsSync(path)).toBe(true);
+    expect(await readFile(join(admin, 'AUTO_MERGE'), 'utf8')).toBe(`${missing}\n`);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive'], repo)).stdout).toBe('');
+  });
+
+  it.each([false, true])('archives a missing checkout private index and staged contents before pruning, parentAlias=%s', async parentAlias => {
+    const path = join(external, 'missing');
+    await execGit(['worktree', 'add', '-b', 'feature/missing', path, 'main'], repo);
+    await writeFile(join(path, 'staged.txt'), 'only in the private index');
+    await execGit(['add', 'staged.txt'], path);
+    const tree = { path, branch: 'refs/heads/feature/missing', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    if (parentAlias) {
+      const alias = join(scratch, 'external-alias');
+      // Directory junctions need no Windows symlink privilege. This reproduces
+      // two filesystem spellings of the existing parent of a missing checkout.
+      await symlink(external, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+      await writeFile(join(admin, 'gitdir'), `${join(alias, 'missing', '.git')}\n`);
+      await execGit(['worktree', 'add', '--detach', join(external, 'unrelated'), 'main'], repo);
+    }
+    await rm(path, { recursive: true, force: true });
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await readFile(join(saved.archiveDir, 'index.diff'), 'utf8')).toContain('only in the private index');
+    expect(existsSync(join(saved.archiveDir, 'administration', 'gitdir', 'index'))).toBe(true);
+    expect(JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8')).captured.missingCheckout).toBe(true);
+    expect(await saved.verify(tree)).toBe(null);
+    const restored = join(scratch, 'restored-missing');
+    await mkdir(restored);
+    await materializeGitRepo(restored);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/recovered'], restored);
+    await execGit(['checkout', 'recovered'], restored);
+    await execGit(['apply', '--index', join(saved.archiveDir, 'index.diff')], restored);
+    expect(await readFile(join(restored, 'staged.txt'), 'utf8')).toBe('only in the private index');
+    expect((await execGit(['show', ':staged.txt'], restored)).stdout).toBe('only in the private index');
+    await mkdir(path);
+    await expect(saved.verify(tree)).rejects.toThrow('missing-checkout-reappeared');
+  });
+
+  it.each(['different-tail', 'different-parent', 'tail-case'])('refuses a missing checkout whose private registration points elsewhere: %s', async mismatch => {
+    const path = join(external, 'missing-mismatched');
+    await execGit(['worktree', 'add', '-b', 'feature/mismatched', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const tree = { path, branch: 'refs/heads/feature/mismatched', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await rm(path, { recursive: true, force: true });
+    const otherParent = join(scratch, 'other-parent');
+    await mkdir(otherParent);
+    const pointer = mismatch === 'different-parent' ? join(otherParent, 'missing-mismatched', '.git')
+      : join(external, mismatch === 'tail-case' ? 'MISSING-MISMATCHED' : 'another-checkout', '.git');
+    await writeFile(join(admin, 'gitdir'), `${pointer}\n`);
+    await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir }))
+      .rejects.toThrow('missing-checkout-administration-unverified');
+    expect(await archives()).toEqual([]);
+    expect(existsSync(join(admin, 'index'))).toBe(true);
+  });
+
   it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
     await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
     // No newline: Windows core.autocrlf must not make this stat-only fixture
@@ -146,9 +290,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       remaining: [{ ...release, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
     });
 
+    const branchArchiveRoot = join(PATHS.cos, 'branch-retirement-archives');
+    const priorArchives = new Set(await readdir(branchArchiveRoot).catch(() => []));
+    const originalReflog = await readFile(join(repo, '.git', 'logs', 'refs', 'heads', 'feature', 'held'));
     const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners });
 
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
+    const newArchives = (await readdir(branchArchiveRoot)).filter(name => !priorArchives.has(name));
+    expect(newArchives).toHaveLength(1);
+    const branchArchive = join(branchArchiveRoot, newArchives[0]);
+    expect(await readFile(join(branchArchive, 'reflog'))).toEqual(originalReflog);
+    const branchManifest = JSON.parse(await readFile(join(branchArchive, 'manifest.json'), 'utf8'));
+    expect(branchManifest).toMatchObject({ branch: release.branch, expectedHead: release.head });
+    await execGit(['bundle', 'verify', join(branchArchive, 'commits.bundle')], repo);
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
     // The original commit stays recoverable after its branch is gone.
@@ -322,6 +476,33 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', 'receipt-restored'], repo)).stdout.trim()).toBe(c.release.head);
   });
 
+  it('refreshes missing operator-review proof objects after remote main moves without accepting the old digest or advancing refs', async () => {
+    const c = await reviewedCheckout('advanced-default');
+    const before = await c.prepare();
+    expect(before.ok).toBe(true);
+    const oldMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    const remote = join(scratch, 'remote-proof');
+    await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+    await execGit(['config', 'user.email', 'test@example.com'], remote);
+    await execGit(['config', 'user.name', 'Test'], remote);
+    await execGit(['commit', '--allow-empty', '-m', 'unrelated remote main advance'], remote);
+    c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    injected.fetchRemote = remote;
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect(prepared.review.digest).not.toBe(before.review.digest);
+    expect(injected.fetches).toHaveLength(1);
+    expect(injected.fetches[0].args).toEqual(expect.arrayContaining(['--no-write-fetch-head', '--no-recurse-submodules', '--refmap=', c.forge.defaultHead]));
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(oldMain);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    expect(await c.confirm(before.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+    expect(await archives()).toEqual([]);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
+
   it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
     const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
     const c = await heldCheckout('remote-merge', { branch: 'feature/remote-merge', beforeLock: async tree => {
@@ -457,6 +638,117 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', 'restored-legacy'], repo)).stdout.trim()).toBe(c.release.head);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
+
+  function reusedBranchOwners(c) {
+    const current = { id: 'current-review-owner', status: 'completed', result: { success: true },
+      startedAt: '2026-03-01T00:00:00Z', completedAt: '2026-03-01T01:00:00Z',
+      metadata: { sourceWorkspace: repo, workspacePath: c.release.path, worktreeBranch: c.release.branch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl } } };
+    // Reused quality branches retain older records with no explicit policy,
+    // including unsuccessful launches. Distinct completed checkout incarnations
+    // are history; neither their age nor a success summary grants permission.
+    const prior = Array.from({ length: 33 }, (_, index) => ({
+      id: `prior-owner-${index}`, status: 'completed', result: { success: index !== 0 },
+      startedAt: '2026-02-01T00:00:00Z', completedAt: '2026-02-01T01:00:00Z',
+      metadata: { sourceWorkspace: repo, workspacePath: join(external, `prior-${index}`), worktreeBranch: c.release.branch },
+    }));
+    injected.policies = [current, ...prior, {
+      id: 'unscoped-successful-recovery', status: 'completed', result: { success: true },
+      metadata: { workspacePath: repo, recoveryOrigin: { subsystem: 'repository-cleanup', parentAgentId: current.id } },
+    }];
+    return current;
+  }
+
+  it('retires a freshly reviewed reused-branch incarnation with a standalone archive and exact receipt', async () => {
+    const c = await reviewedCheckout('quality-reused', { gitlink: true });
+    reusedBranchOwners(c);
+    const shared = join(scratch, 'shared-dependencies');
+    await mkdir(shared);
+    await writeFile(join(shared, 'untouched'), 'shared installation\n');
+    if (SYMLINKS) {
+      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nnode_modules\n');
+      for (const relative of ['node_modules', 'server/node_modules', 'client/node_modules', 'autofixer/node_modules']) {
+        await mkdir(dirname(join(c.path, relative)), { recursive: true });
+        await symlink(shared, join(c.path, relative), 'dir');
+      }
+    }
+    await writeFile(join(c.path, 'staged.txt'), 'unique staged content\n');
+    await execGit(['add', 'staged.txt'], c.path);
+    const index = await readFile(join(c.admin, 'index'));
+    const reflog = await readFile(join(c.admin, 'logs/HEAD'));
+    const policiesBefore = structuredClone(injected.policies);
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { policy: {
+      policies: [{ id: 'current-review-owner' }], reviewedPr: { tip: c.release.head, prUrl: c.forge.prUrl },
+    } } });
+    expect(prepared.review.policy.priorCheckouts).toHaveLength(33);
+    expect(prepared.review.comparison.localPatch).toContain('original feature');
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.release.path)).toBe(false);
+    expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: c.release.path, branch: c.release.branch, head: c.release.head,
+        archiveDir: result.archiveDir, branchDeleted: true }),
+    ]));
+    expect(injected.policies).toEqual(policiesBefore);
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
+    if (SYMLINKS) {
+      expect(manifest.captured.symlinks.filter(link => link.path.endsWith('node_modules'))).toHaveLength(4);
+      expect(manifest.captured.files.some(file => file.path.includes('node_modules/'))).toBe(false);
+    }
+    expect(await readFile(join(shared, 'untouched'), 'utf8')).toBe('shared installation\n');
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/index'))).toEqual(index);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/logs/HEAD'))).toEqual(reflog);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(result.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'standalone');
+    await execGit(['init', restored], scratch);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    await execGit(['checkout', '--detach', c.release.head], restored);
+    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
+    await execGit(['apply', join(result.archiveDir, 'worktree.diff')], restored);
+    await cp(join(result.archiveDir, 'files'), restored, { recursive: true });
+    for (const link of manifest.captured.symlinks) {
+      await mkdir(dirname(join(restored, link.path)), { recursive: true });
+      await symlink(link.target, join(restored, link.path));
+    }
+    expect((await execGit(['rev-parse', 'HEAD'], restored)).stdout.trim()).toBe(c.release.head);
+    expect(await readdir(join(restored, 'vendor'))).toEqual([]);
+    expect((await execGit(['show', ':staged.txt'], restored)).stdout).toBe('unique staged content\n');
+    expect(await readFile(join(restored, 'initial.txt'), 'utf8')).toBe('tracked edit\n');
+    expect(await readFile(join(restored, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await readFile(join(restored, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    if (SYMLINKS) expect(await readFile(join(restored, 'server/node_modules/untouched'), 'utf8')).toBe('shared installation\n');
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
+
+  it.each(['head-mismatch', 'same-checkout-failed', 'ambiguous-history', 'current-manual', 'current-active', 'checkout-alias', 'primary-alias'])(
+    'keeps the full original checkout when reused-branch proof changes: %s', async change => {
+      const c = await reviewedCheckout('quality-held');
+      const current = reusedBranchOwners(c);
+      const prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+      if (change === 'head-mismatch') c.forge.prHead = c.forge.changeBase;
+      if (change === 'same-checkout-failed') injected.policies[1].metadata.workspacePath = c.release.path;
+      if (change === 'ambiguous-history') delete injected.policies[1].metadata.workspacePath;
+      if (change === 'current-manual') current.metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'current-active') current.status = 'running';
+      if (change === 'checkout-alias' || change === 'primary-alias') {
+        const alias = join(external, 'historical-alias');
+        await symlink(change === 'checkout-alias' ? c.path : repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        injected.policies[1].metadata.workspacePath = alias;
+      }
+      expect(await c.confirm(prepared.review)).toMatchObject({ ok: false });
+      expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+      expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+      expect(await archives()).toEqual([]);
+    });
 
   it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
     const c = await reviewedCheckout('changed-review', { gitlink: true });

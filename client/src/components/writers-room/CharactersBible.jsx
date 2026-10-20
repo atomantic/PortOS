@@ -149,7 +149,7 @@ const CHARACTER_CONFIG = {
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
 export default function CharactersBible({
-  workId, characters, onCharactersChange, readingTheme = 'dark', hotRefId = null, segments = null,
+  workId, characters, onCharactersChange, readingTheme = 'dark', hotRefId = null, segments = null, loadStatus, onRetry,
 }) {
   return (
     <BibleSection
@@ -158,6 +158,8 @@ export default function CharactersBible({
       onItemsChange={onCharactersChange}
       readingTheme={readingTheme}
       hotRefId={hotRefId}
+      loadStatus={loadStatus}
+      onRetry={onRetry}
       config={CHARACTER_CONFIG}
       // The active draft's segment index, so the evolution lens can anchor a
       // stage to a real chapter/scene instead of asking for a raw `seg-NNN`.

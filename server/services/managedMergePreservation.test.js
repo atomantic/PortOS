@@ -29,11 +29,12 @@ it('pins every managed GitHub merge attempt and defers removal until preservatio
       expect(command).not.toContain('--delete-branch');
       expect(command).toContain('--match-head-commit');
     }
-    const proofOrder = ['remote state is exactly MERGED', 'require released:true', 'Recheck live claim/worktree ownership', 'Inventory and preserve ALL', 'Verify the archive manifest', 'exact-ref compare-and-delete', 'git branch -d'];
+    const proofOrder = ['remote state is exactly MERGED', 'require released:true', 'Recheck live claim/worktree ownership', 'checkouts/review', 'Read the full returned comparison', 'checkouts/retire', 'matching persisted retirement receipt'];
     const positions = proofOrder.map(marker => text.indexOf(marker, text.indexOf('**Managed-worktree')));
     expect(positions.every(at => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
-    expect(text).toContain('Archive failure or an ownership/ref/inventory change keeps the checkout and branch intact');
+    expect(text).toContain('A refusal keeps an unresolved retirement obligation, never a shell fallback');
+    expect(text).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)/);
   }
 });
 
@@ -109,32 +110,20 @@ describe.skipIf(process.platform === 'win32')('managed merge shell preservation 
 });
 
 
-it('the rendered remote compare-and-delete refuses a newly advanced branch', async () => {
-  sandbox = await makeGitSandbox({ origin: true });
-  const { repo, origin } = sandbox;
-  const branch = 'claim/issue-42';
-  await execGit(['checkout', '-b', branch], repo);
-  const verifiedHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-  await execGit(['push', 'origin', branch], repo);
-  await writeFile(join(repo, 'late.txt'), 'another writer advanced the ref');
-  await execGit(['add', 'late.txt'], repo);
-  await execGit(['commit', '-m', 'late remote work'], repo);
-  const advancedHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-  await execGit(['push', 'origin', branch], repo);
-  const command = MANAGED_WORKTREE_CLEANUP_CONTRACT.match(/`(git push[^`]+)`/)[1]
-    .replaceAll('<branch>', branch).replaceAll('<verified-head>', verifiedHead).replaceAll('<verified-remote>', 'origin');
-  const result = await execGit(command.split(' ').slice(1), repo, { ignoreExitCode: true });
-  expect(result.exitCode).not.toBe(0);
-  expect((await execGit(['--git-dir', origin, 'rev-parse', `refs/heads/${branch}`], repo)).stdout.trim()).toBe(advancedHead);
+it('the shared cleanup contract requires API review and receipts rather than an executable deletion recipe', () => {
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('review:{prUrl,digest:<fresh review.digest>,acceptSuperseded:<reviewed boolean>}');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('private Git state, refs, reflogs and recoverable objects');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('an uncertain response needs receipt/inventory readback before retry');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('including a branch-only remnant');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toMatch(/`git |git worktree remove|git branch -[dD]/);
 });
-
 
 it('completion merges preserve the checkout for the PortOS cleanup owner', () => {
   const text = buildCiMergeGateSteps(1, { prRef: '42' }).lines.join('\n');
   expect(text).not.toContain('--delete-branch');
   expect(text).toContain('--match-head-commit <verified-head>');
-  expect(text).toContain('Leave local teardown to PortOS');
-  expect(text).toContain('Archive failure or changed ownership/refs preserves the checkout and branch');
-  expect(text).toContain('unique tracked, untracked and ignored bytes');
-  expect(text).toContain('compare-and-delete only the exact ref at the CI-verified head');
+  expect(text).toContain('Local teardown is API-only');
+  expect(text).toContain('A refusal keeps an unresolved retirement obligation');
+  expect(text).toContain('tracked, untracked and ignored bytes, private Git state, refs, reflogs');
+  expect(text).toContain("service's exact-head lease");
 });

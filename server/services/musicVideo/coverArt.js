@@ -32,6 +32,7 @@ import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
 import { buildCoverDesignPrompt, parseCoverDesign } from './coverArtDesign.js';
 import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
 
 const MAX_GENERATED = 12;
@@ -77,12 +78,6 @@ export const projectCoverArt = (project) => {
   const art = projectPublishKit(project).coverArt;
   return art && typeof art === 'object' ? art : {};
 };
-
-async function requireProject(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw coverError(404, 'NOT_FOUND', 'Project not found');
-  return project;
-}
 
 function publish(projectId, project) {
   musicVideoEvents.emit('cover-art', { projectId, project });

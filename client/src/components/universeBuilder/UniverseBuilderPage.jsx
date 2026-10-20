@@ -141,6 +141,9 @@ export default function UniverseBuilder() {
     handleCreateNamed,
     handleDelete,
     handleSave,
+    draftReady,
+    draftReadError,
+    retryDraft,
     imageCfg,
     imageModels,
     loading,
@@ -157,6 +160,8 @@ export default function UniverseBuilder() {
     removeCategory,
     removeStyleReference,
     runs,
+    runsStatus,
+    retryRuns,
     saving,
     setRenderPin,
     setCanonDirty,
@@ -451,6 +456,22 @@ export default function UniverseBuilder() {
     if (status === 'failed') toast.error('Render failed');
   }, []);
 
+  // A URL change revokes the outgoing draft before the selection effect runs.
+  // Keep all editing/render actions unavailable until this record has loaded.
+  if (!draftReady) {
+    return (
+      <section className="p-4 space-y-3">
+        <Link to="/universes" className="text-port-accent">All Universes</Link>
+        {draftReadError ? (
+          <div role="alert">
+            <p>{draftReadError}</p>
+            <button onClick={retryDraft} className="text-port-accent">Retry loading universe</button>
+          </div>
+        ) : <p role="status">Loading universe…</p>}
+      </section>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full">
       <section className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
@@ -699,6 +720,8 @@ export default function UniverseBuilder() {
             handleRender={handleRender}
             rendering={rendering}
             runs={runs}
+            runsStatus={runsStatus}
+            onRetryRuns={retryRuns}
           />
         )}
 

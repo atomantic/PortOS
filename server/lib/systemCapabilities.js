@@ -60,6 +60,7 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
   'gemma4-31b': Object.freeze({ minMemoryGb: 64 }),
   'nemotron-3-nano-30b-a3b': Object.freeze({ minMemoryGb: 32 }),
   'nemotron-3.5-lightning': Object.freeze({ minMemoryGb: 32 }),
+  'nemotron-3.5-bolt': Object.freeze({ minMemoryGb: 32 }),
   'qwen3.6-27b': Object.freeze({ minMemoryGb: 32 }),
   'qwen3.5-122b-a10b': Object.freeze({ minMemoryGb: 96 }),
   'qwen3-coder-30b': Object.freeze({ minMemoryGb: 32 }),

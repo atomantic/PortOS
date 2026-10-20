@@ -32,15 +32,18 @@ export const COMMISSION_RENDER_BACKEND_AUTO = RENDER_TARGET_BACKEND_AUTO;
 
 // Image backends a commission may pin: the queueable image modes (local /
 // codex / grok / agy — `external` never queues) plus the auto sentinel.
-// Derived from QUEUEABLE_IMAGE_MODES so a new backend needs no edit here.
+// Derived from QUEUEABLE_IMAGE_MODES so a new backend needs no edit here, but it
+// still needs a wire-version bump in every sync category that stores it
+// (creativeCommissions, fableLoom) — see schemaVersions.test.js.
 export const CREATIVE_COMMISSION_IMAGE_MODES = Object.freeze([
   COMMISSION_RENDER_BACKEND_AUTO, ...QUEUEABLE_IMAGE_MODES,
 ]);
 
 // Video backends a commission may pin: local (MLX runtimes), grok, fal, or
 // reactor, plus auto. Derived from VIDEO_GEN_MODES so a new backend needs no
-// edit here — this enum is exactly what drifted client-side when fal (#6213)
-// and reactor (#6214) shipped with no matching form edit.
+// enum edit here (it does need a sync wire-version bump, see above) — this
+// enum is exactly what drifted client-side when fal (#6213) and reactor (#6214)
+// shipped with no matching form edit.
 export const CREATIVE_COMMISSION_VIDEO_MODES = Object.freeze([
   COMMISSION_RENDER_BACKEND_AUTO, ...VIDEO_GEN_MODES,
 ]);

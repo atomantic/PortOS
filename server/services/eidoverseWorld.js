@@ -2067,8 +2067,9 @@ function normalizeAugmentOperation(operation) {
       const id = validEntityId(args.id);
       const normalized = { id };
       if (args.role !== undefined) {
-        if (!['owner', 'builder', 'visitor'].includes(args.role)) {
-          throw new ServerError('grant.role must be owner, builder, or visitor.', { status: 400, code: 'EIDOVERSE_ARGUMENT_INVALID' });
+        // null clears the role: the world has no revoke verb (guest revocation).
+        if (args.role !== null && !['owner', 'builder', 'visitor'].includes(args.role)) {
+          throw new ServerError('grant.role must be owner, builder, visitor, or null.', { status: 400, code: 'EIDOVERSE_ARGUMENT_INVALID' });
         }
         normalized.role = args.role;
       }
@@ -2286,8 +2287,43 @@ export async function closeEidoverseWorldConnections() {
   return worldLock(() => closeCosPresenceInternal());
 }
 
-export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
+export const __resetEidoverseWorldForTests = async () => {
+  pendingGuestRevokes.clear();
+  return closeEidoverseWorldConnections();
+};
 
+
+// Guest grants whose revoke failed; retried once on the next world-lock acquisition.
+const pendingGuestRevokes = new Map();
+
+/** Strip a guest's role. Caller holds worldLock. A failure is logged and queued for one retry. */
+async function revokeGuestGrant(presence, { world, name }, { verbIntervalMs, retry = false } = {}) {
+  const key = `${world}\0${name}`;
+  if (presence.connection.world !== world) {
+    pendingGuestRevokes.delete(key);
+    return;
+  }
+  await sendPacedVerb(presence.connection, 'grant', { id: name, role: null }, { pacing: presence.pacing, verbIntervalMs }).then(
+    () => pendingGuestRevokes.delete(key),
+    (error) => {
+      console.error(`❌ Eidoverse guest revoke failed${retry ? ' on retry' : ''}: ${error.message}`);
+      if (retry) pendingGuestRevokes.delete(key);
+      else pendingGuestRevokes.set(key, { world, name });
+    },
+  );
+}
+
+/** Remove a departed guest's visitor role so repeated visits cannot accumulate grants. */
+export async function revokeEidoverseGuest(identity) {
+  if (!identity?.name || !identity.world) return;
+  return worldLock(async () => {
+    const presence = await ensureCosPresenceInternal();
+    await revokeGuestGrant(presence, identity);
+  }).catch((error) => {
+    pendingGuestRevokes.set(`${identity.world}\0${identity.name}`, { world: identity.world, name: identity.name });
+    console.error(`❌ Eidoverse guest revoke failed: ${error.message}`);
+  });
+}
 
 /** Guest admission happens through the owner before any guest joins. */
 export async function admitEidoverseGuest({ agent = false, name, verbIntervalMs } = {}) {
@@ -2300,6 +2336,7 @@ export async function admitEidoverseGuest({ agent = false, name, verbIntervalMs 
     const desiredName = validIdentity(name, '');
     const usableName = desiredName && scrubSecretTokens(desiredName) === desiredName
       && presence.snapshot?.state?.roles;
+    for (const pending of [...pendingGuestRevokes.values()]) await revokeGuestGrant(presence, pending, { verbIntervalMs, retry: true });
     const baseName = usableName ? desiredName : `guest-${randomUUID()}`;
     let id = baseName;
     for (let suffix = 2; presence.connection.hasIdentity(id); suffix += 1) {
@@ -2315,11 +2352,14 @@ export async function admitEidoverseGuest({ agent = false, name, verbIntervalMs 
     const connection = createWorldConnection({ world: identity.world, id, avatar: identity.avatar, agent: true, guest: true });
     return connection.waitForSnapshot().then(async (snapshot) => {
       if (snapshot.yourRights?.role !== 'visitor' || snapshot.yourRights?.gen || snapshot.yourRights?.open) {
-        await connection.close();
         throw new ServerError('The world did not confirm visitor access.', { status: 409, code: 'EIDOVERSE_GUEST_ROLE_INVALID' });
       }
       return { identity, connection };
-    }).catch((error) => connection.close().then(() => { throw error; }));
+    }).catch(async (error) => {
+      await connection.close();
+      await revokeGuestGrant(presence, identity, { verbIntervalMs });
+      throw error;
+    });
   });
 }
 

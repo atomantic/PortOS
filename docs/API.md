@@ -42,10 +42,13 @@ Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
 `localLlm.mtplx`, `localLlm.slotstream`, `imageGen`, `imageGen.external`,
 `imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
 `imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
-`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, and `autoUpdate`.
-The Media settings drawer saves only the fields the user changed through these,
-one slice per request, so a value a sibling panel patched after the drawer
-opened is never overwritten by a stale snapshot. A `renderDefaults` target sent
+`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
+`music.chiptune`, `music.designer`, and `loraTraining` (its caption-model keys
+only). The Media settings drawer saves only the fields the user changed through
+these, one slice per request, so a value a sibling panel patched after the drawer
+opened is never overwritten by a stale snapshot. The Chiptune panel, the Music
+Designer and the LoRA caption-model picker save the same way, so none of them can
+drop another's prefs or the hand-set LoRA training knobs. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
@@ -603,6 +606,12 @@ leaves finished ones alone. Agents outside PortOS call these with `node scripts/
 | GET | `/music-video/:id/publish/promotion-plan` | A music video's open promotion steps |
 | POST | `/music-video/:id/publish/promotion-plan` | Plan its promotion with one provider call `{ goal?, audience?, days?, providerId?, model? }` and schedule the steps |
 | POST | `/music-video/:id/publish/:target/preview` | What Fill draft would post for one platform (same body as prepare) → `{ ready, parts }` or `{ ready: false, problem }` |
+| POST | `/music-video/:id/render` | Start the final render (ffmpeg on the host). Host-control gated: a remote password-free caller, a peer credential or Basic is refused; local connections, operator sessions and `PORTOS_API_TOKEN` agents are allowed. Status, SSE events and cancel stay open |
+| POST | `/music-video/:id/shots/:sceneId/render` | Render one shot segment (ffmpeg). Host-control gated as the final render |
+| POST | `/music-video/:id/shot-renders/preview` | Concat the rendered shots with the song into a preview (ffmpeg). Host-control gated as the final render |
+| POST | `/music-video/:id/excerpt` | Start an excerpt encode (ffmpeg). Host-control gated as the final render |
+| POST | `/music-video/:id/publish-kit/build` | Build platform encodes and thumbnails (ffmpeg). Host-control gated as the final render |
+| POST | `/music-video/publish/cover-fonts` | Upload a cover lettering font. Host-control gated: the file is installed into a host-wide font folder (macOS `Library/Fonts/PortOS`), so a remote caller on a password-free install is refused; local connections, operator sessions and `PORTOS_API_TOKEN` agents are allowed. Listing and serving (`GET`) and delete stay open |
 
 ### Notifications
 
@@ -652,16 +661,16 @@ return an `{ items, total }` envelope.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/browser` | Get browser status |
+| GET | `/browser` | Get browser status. Callers without host control get `contentRedacted: true` with empty `pages` and download `files` (host control also gates `/browser/downloads` and `/browser/downloads/:name`) |
 | GET | `/browser/config` | Get browser configuration |
 | PUT | `/browser/config` | Update browser configuration |
 | POST | `/browser/launch` | Launch browser instance |
 | POST | `/browser/stop` | Stop browser instance |
 | POST | `/browser/restart` | Restart browser instance |
-| POST | `/browser/navigate` | Navigate browser to URL |
+| POST | `/browser/navigate` | Navigate browser to URL (host control: the profile carries the operator's signed-in sessions) |
 | GET | `/browser/health` | Get browser health status |
 | GET | `/browser/process` | Get browser process info |
-| GET | `/browser/pages` | Get open browser pages |
+| GET | `/browser/pages` | Get open browser pages (host control) |
 | GET | `/browser/version` | Get browser version info |
 | GET | `/browser/logs` | Get browser logs |
 

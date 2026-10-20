@@ -4,6 +4,11 @@
  */
 
 import { spawn } from './childProcess.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const mutationLifetime = new AsyncLocalStorage();
+/** Admission owners retain their durable permit when Git/helper exit is uncertain. */
+export const withGitMutationLifetime = (work, onUncertain) => mutationLifetime.run(onUncertain, work);
 
 /**
  * Execute a git command safely using spawn (prevents shell injection).
@@ -38,15 +43,31 @@ export function execGit(args, cwd, options = {}) {
       ...(options.env ? { env: options.env } : {})
     });
 
+    const onUncertain = mutationLifetime.getStore();
     let stdout = '';
     let stderr = '';
     let killed = false;
+    let failure = null;
+    let escalation = null;
+    const markUncertain = () => {
+      try { onUncertain?.(); }
+      catch (error) { failure ||= error; }
+    };
+    const terminate = error => {
+      if (killed) return;
+      killed = true;
+      failure = error;
+      // A direct-child close cannot prove detached hooks/helpers settled.
+      markUncertain();
+      try { child.kill(); } catch (killError) { failure ||= killError; }
+      escalation = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch (killError) { failure ||= killError; }
+      }, 5000);
+    };
 
     const timer = setTimeout(() => {
       if (!killed) {
-        killed = true;
-        child.kill();
-        reject(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
+        terminate(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
       }
     }, timeout);
 
@@ -54,27 +75,29 @@ export function execGit(args, cwd, options = {}) {
     // a runaway command can't blow past maxBuffer on either channel.
     const guardOverflow = () => {
       if (stdout.length + stderr.length > maxBuffer && !killed) {
-        killed = true;
         clearTimeout(timer);
-        child.kill();
-        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
+        terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
       }
     };
 
     child.stdout.on('data', (data) => {
+      if (killed) return;
       stdout += data.toString();
       guardOverflow();
     });
 
     child.stderr.on('data', (data) => {
+      if (killed) return;
       stderr += data.toString();
       guardOverflow();
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (killed) return;
+      clearTimeout(escalation);
+      if (failure) { reject(failure); return; }
       if (code === null && signal) {
+        markUncertain();
         if (options.ignoreExitCode) {
           resolve({ stdout, stderr, exitCode: null, signal, terminated: true });
         } else {
@@ -91,6 +114,7 @@ export function execGit(args, cwd, options = {}) {
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      if (child.pid) markUncertain();
       reject(err);
     });
   });

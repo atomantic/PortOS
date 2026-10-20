@@ -217,6 +217,7 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'qwen3.6-27b')?.id).toBe('qwen3.6:27b');
       expect(ollama.find((m) => m.key === 'magistral-small-24b')?.id).toBe('magistral:24b');
       expect(ollama.find((m) => m.key === 'nemotron-3.5-lightning')?.id).toBe('nemotron-3.5-lightning:30b');
+      expect(ollama.find((m) => m.key === 'nemotron-3.5-bolt')?.id).toBe('nemotron-3.5-bolt');
     });
   });
 
@@ -249,6 +250,8 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/Magistral-Small-2509-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'nemotron-3.5-lightning:30b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'nemotron-3.5-bolt', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {

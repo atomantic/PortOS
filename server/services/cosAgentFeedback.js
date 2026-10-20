@@ -21,6 +21,7 @@ import {
   recordArchivedCompletions,
 } from './cosAgentCompletionIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { bucketFor } from '../lib/objects.js';
 import { recordUserAction } from './userActions.js';
 import {
   FEEDBACK_RATINGS,
@@ -393,11 +394,10 @@ export async function getFeedbackStats() {
       metadata: a.metadata,
       taskType: a.metadata?.taskType,
     });
-    if (!byTaskType[taskType]) {
-      byTaskType[taskType] = { positive: 0, negative: 0, neutral: 0, total: 0 };
-    }
-    byTaskType[taskType][a.feedback.rating]++;
-    byTaskType[taskType].total++;
+    const bucket = bucketFor(byTaskType, taskType, () => ({ positive: 0, negative: 0, neutral: 0, total: 0 }));
+    if (!bucket) return;
+    bucket[a.feedback.rating]++;
+    bucket.total++;
   });
 
   // Recent feedback (last 10 with comments)

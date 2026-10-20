@@ -10,6 +10,7 @@ import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
 import { getBloodTests } from './meatspaceHealth.js';
 import { join } from 'path';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { POLLUTING_KEYS } from '../lib/objects.js';
 
 const BLOOD_TESTS_FILE = join(PATHS.meatspace, 'blood-tests.json');
 
@@ -159,8 +160,11 @@ export function parseFhirLabResult(jsonStr) {
   const displayName = resource.code?.text || loincEntry?.display || '';
 
   // Map to key: LOINC lookup first, then fallback to snake_case of display name
-  const key = (loincCode && LOINC_TO_KEY[loincCode]) || toSnakeCase(displayName);
-  if (!key) return null;
+  // hasOwn: LOINC_TO_KEY inherits `constructor` & co., which would otherwise map an export's code to a function.
+  const mapped = loincCode && Object.hasOwn(LOINC_TO_KEY, loincCode) ? LOINC_TO_KEY[loincCode] : null;
+  const key = mapped || toSnakeCase(displayName);
+  // The key indexes byDate[date] and refRanges, so a polluting name would write through to Object.prototype.
+  if (!key || POLLUTING_KEYS.has(key)) return null;
 
   // Extract reference range if available
   const refRange = resource.referenceRange?.[0];

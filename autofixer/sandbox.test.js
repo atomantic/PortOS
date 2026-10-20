@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildCliArgs } from '../server/lib/cliProviderArgs.js';
 const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock('child_process', () => ({ spawn: spawnMock }));
+vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 import {
   execGit,
   sanitizeChildEnv,
   collectSecretEnvValues,
   buildFixPrompt,
   defuseSentinel,
-  restrictedToolArgs,
+  pickRepairProvider,
+  probeVerifyContainment,
+  repairWorkspaceHold,
+  runVerifyCommand,
   validateProposedDiff,
   scanDiffForSecrets,
   extractDiffPaths,
@@ -163,14 +170,138 @@ describe('buildFixPrompt — untrusted log fencing', () => {
   });
 });
 
-describe('restrictedToolArgs — shell/network denial for claude', () => {
-  it('denies Bash/WebFetch/WebSearch for claude-code', () => {
-    expect(restrictedToolArgs({ id: 'claude-code' })).toEqual(['--disallowedTools', 'Bash', 'WebFetch', 'WebSearch']);
-    expect(restrictedToolArgs({ command: '/usr/local/bin/claude' })).toContain('Bash');
+describe('pickRepairProvider — only an enforced restricted mode runs a repair', () => {
+  const claude = { id: 'claude-code', type: 'cli', command: 'claude', args: ['--print', '--dangerously-skip-permissions', '--allowedTools', 'Bash', '--add-dir', '/example/live'] };
+  const codex = { id: 'codex', type: 'cli', command: 'codex', ignoreUserConfig: true, args: ['--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'danger-full-access', '--add-dir', '/example/live', '-C', '/example/live'] };
+  const gemini = { id: 'gemini-cli', type: 'cli', command: 'gemini', args: ['--yolo'] };
+  const agy = { id: 'antigravity-cli', type: 'cli', command: 'agy', args: ['--print', '--dangerously-skip-permissions'] };
+  // The argv the runner actually spawns: buildCliArgs over the restricted clone.
+  const spawnedArgv = (picked) => buildCliArgs(picked.provider);
+
+  it('refuses when only non-restrictable CLIs are enabled instead of falling back to cli[0]', () => {
+    const picked = pickRepairProvider([gemini, agy], {});
+    expect(picked.provider).toBeUndefined();
+    expect(picked.error).toMatch(/No enabled Claude Code or Codex CLI provider/);
   });
-  it('returns no extra args for non-claude providers', () => {
-    expect(restrictedToolArgs({ id: 'codex' })).toEqual([]);
-    expect(restrictedToolArgs({ id: 'gemini-cli' })).toEqual([]);
+
+  it('refuses a configured non-restrictable provider rather than swapping it', () => {
+    const picked = pickRepairProvider([gemini, claude], { providerId: 'gemini-cli' });
+    expect(picked.error).toMatch(/gemini-cli has no enforced restricted mode/);
+  });
+
+  it('runs claude with shell/web tools denied, edits confined to the cwd, and saved bypasses stripped', () => {
+    const picked = pickRepairProvider([gemini, claude], {});
+    expect(picked).toMatchObject({ mode: 'claude-disallowed-tools', provider: { id: 'claude-code' } });
+    const argv = spawnedArgv(picked);
+    expect(argv).not.toContain('--dangerously-skip-permissions');
+    expect(argv).not.toContain('--allowedTools');
+    expect(argv).not.toContain('/example/live');
+    expect(argv.join(' ')).toContain('--permission-mode acceptEdits');
+    expect(argv).toContain('--restricted');
+    expect(argv).toContain('--safe-mode');
+    expect(argv.join(' ')).toContain('--disallowedTools Bash WebFetch WebSearch');
+    expect(argv.slice(-2)).toEqual(['-p', '-']);
+  });
+
+  it('runs codex in its network-denied workspace-write sandbox with the bypass stripped', () => {
+    const picked = pickRepairProvider({ gemini, codex }, { providerId: 'codex' });
+    expect(picked.mode).toBe('codex-workspace-write');
+    const argv = spawnedArgv(picked);
+    expect(argv[0]).toBe('exec');
+    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(argv).not.toContain('danger-full-access');
+    expect(argv).not.toContain('/example/live');
+    expect(argv.join(' ')).toContain([
+      '--sandbox workspace-write --ignore-user-config --ignore-rules',
+      '-c sandbox_workspace_write.network_access=false -c sandbox_workspace_write.writable_roots=[]',
+      '-c features.plugins=false -c features.apps=false',
+      '-c features.hooks=false',
+    ].join(' '));
+    expect(argv.filter((arg) => arg === '--ignore-user-config')).toHaveLength(1);
+    expect(argv.at(-1)).toBe('-');
+  });
+
+  it('cannot restore host tools through saved config or plugin options while preserving declared model pins', () => {
+    for (const provider of [
+      { ...codex, args: ['exec', '-c', 'mcp_servers.example.command="unsafe-tool"', '--enable', 'plugins'] },
+      { ...claude, args: ['--settings', '/example/hooks.json', '--plugin-dir', '/example/plugins', '--tools', 'Agent,Bash'] },
+    ]) {
+      const argv = spawnedArgv(pickRepairProvider([{ ...provider, defaultModel: 'example-model' }]));
+      expect(argv.join(' ')).not.toMatch(/unsafe-tool|mcp_servers|example\/hooks|example\/plugins|Agent,Bash|--enable/);
+      expect(argv).toContain('example-model');
+      if (provider.command === 'claude') expect(argv.join(' ')).toContain('--tools Read,Edit,Write,Grep,Glob');
+    }
+  });
+});
+
+describe('Codex project configuration repair boundary', () => {
+  it('refuses executable project configuration in either linked checkout, including dangling links', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'autofix-project-config-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    await Promise.all([source, worktree].map(path => mkdir(join(path, '.codex'), { recursive: true })));
+    try {
+      expect(await repairWorkspaceHold('codex-workspace-write', source, worktree)).toBeNull();
+      await writeFile(join(source, '.codex', 'config.toml'), '[mcp_servers.example]\ncommand="example"');
+      expect(await repairWorkspaceHold('codex-workspace-write', source, worktree)).toContain('project configuration');
+      await rm(join(source, '.codex', 'config.toml'));
+      await symlink(join(root, 'missing'), join(worktree, '.codex', 'hooks.json'));
+      expect(await repairWorkspaceHold('codex-workspace-write', source, worktree)).toContain('project configuration');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('runVerifyCommand — contained, credential-free verify', () => {
+  afterEach(() => spawnMock.mockReset());
+
+  it('refuses without spawning when no enforced containment exists', async () => {
+    const result = await runVerifyCommand('npm test', '/example/worktree', {
+      probe: async () => ({ id: null, supported: false, reason: 'No enforced worker containment is implemented for win32.' }),
+    });
+    expect(result).toMatchObject({ ok: false, contained: false });
+    expect(result.output).toContain('refused');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform !== 'darwin')('refuses macOS verification when detached descendants cannot be contained', async () => {
+    expect(await probeVerifyContainment()).toMatchObject({ supported: false, reason: expect.stringContaining('detached verifier descendants') });
+    expect(await runVerifyCommand('npm test', '/example/worktree')).toMatchObject({ ok: false, contained: false });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('launches under bubblewrap with an environment built from nothing', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'autofix-verify-test-'));
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-example-secret');
+    vi.stubEnv('PORTOS_API_TOKEN', 'example-portos-token');
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter();
+      Object.assign(child, { pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
+        stdio: [null, null, null, { on: vi.fn(), end: vi.fn() }] });
+      queueMicrotask(() => { child.stdout.emit('data', 'ok'); child.emit('close', 0); });
+      return child;
+    });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const result = await runVerifyCommand('npm test', worktree, {
+        dataDir: '/example/data', probe: async () => ({ id: 'linux-bubblewrap', supported: true, reason: null }),
+      });
+      expect(result).toMatchObject({ ok: true, contained: true, mechanism: 'linux-bubblewrap', output: 'ok' });
+      const [file, args, options] = spawnMock.mock.calls[0];
+      expect(file).toBe('/usr/bin/bwrap');
+      expect(args.slice(-3)).toEqual(['/bin/sh', '-c', 'npm test']);
+      expect(args).toContain('--unshare-all');
+      expect(args).toContain('--seccomp');
+      expect(options.detached).toBe(true);
+      expect(Object.keys(options.env).sort()).toEqual([
+        'CI', 'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'TEMP', 'TMP', 'TMPDIR', 'USER',
+        'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+      ]);
+      expect(options.env.HOME).not.toBe(process.env.HOME);
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGKILL');
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 });
 
@@ -210,6 +341,10 @@ index 111..222 100644
   it('rejects edits to VCS/CI internals (.git, .github)', () => {
     expect(validateProposedDiff(goodDiff.replace(/src\/index\.js/g, '.git/config')).ok).toBe(false);
     expect(validateProposedDiff(goodDiff.replace(/src\/index\.js/g, '.github/workflows/ci.yml')).ok).toBe(false);
+  });
+
+  it.each(['.codex/config.toml', '.agents/skills/example/SKILL.md', '.mcp.json'])('rejects promotion of agent/tool configuration %s', path => {
+    expect(validateProposedDiff(goodDiff.replace(/src\/index\.js/g, path)).ok).toBe(false);
   });
 
   it('rejects a path that escapes the repo (adversarial traversal)', () => {

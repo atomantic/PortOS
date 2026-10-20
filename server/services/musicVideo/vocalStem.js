@@ -28,10 +28,11 @@ import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { assertFileNotMediaManifest, PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { importUploadedTrack } from '../pipeline/musicLibrary.js';
 import { getProject, updateProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 
 // A same-session bounce differs from the master by encoder padding at most
 // (an MP3 frame is ~26ms); a tenth of a second admits that and nothing that
@@ -76,8 +77,9 @@ const audioSourceKey = (project) => `${project?.trackId ?? ''}\u0000${project?.u
  */
 export async function attachVocalStem(projectId, { tempPath, originalName }) {
   try {
-    const project = await getProject(projectId);
-    if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    const project = await requireProject(projectId);
+    // Before the probe: ffmpeg would follow a playlist posing as audio.
+    await assertFileNotMediaManifest(tempPath);
     // Lazy: render.js pulls the whole render pipeline.
     const { resolveMasterAudioPath } = await import('./render.js');
     const masterPath = await resolveMasterAudioPath(project);
@@ -104,7 +106,6 @@ export async function attachVocalStem(projectId, { tempPath, originalName }) {
  * audio, because the library is shared.
  */
 export async function detachVocalStem(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  await requireProject(projectId);
   return updateProject(projectId, { vocalStemFilename: null, performanceConditioningSource: 'master' });
 }

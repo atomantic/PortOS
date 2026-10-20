@@ -36,10 +36,10 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
-import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
+import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
 import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
@@ -110,7 +110,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -128,7 +128,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   if (!admission.admit) return { refused: admission.reason };
   const activeAgentIds = protectedAgentIds(agents);
 
-  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, agents, requestingAgentId: agentId, preferredPath, allowLiveClaim });
+  const holder = adopt && await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, agents, requestingAgentId: agentId, preferredPath, allowLiveClaim });
   if (!holder) {
     // Not adoptable, but a coordinator follow-up may still free the branch from an
     // idle `/do:next` sibling tree by detaching it in place — `createWorktree`
@@ -156,6 +156,31 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
 }
 
 /**
+ * The commit a task's branch attach is pinned to, '' when the task needs a pin
+ * but carries none, null when it is unpinned. A PR remediation agent runs the
+ * PR's own tests, so it may only attach at the head PortOS screened.
+ */
+function resolveTaskPinnedHead(metadata) {
+  if (!isTruthyMeta(metadata?.prRemediationFollowUp)) return null;
+  return typeof metadata.prRemediationHeadSha === 'string' ? metadata.prRemediationHeadSha.trim() : '';
+}
+
+/**
+ * Refuse a pinned attach for good: block the task and give the PR back to its
+ * opener. Not a timed pause — a new push needs a new review, which queues a
+ * new task pinned to that head.
+ */
+async function refusePinnedAttach(task, workspacePath, reason) {
+  emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
+  await blockTask(task, reason, 'pr-head-moved');
+  const { handBackPrRemediation } = await import('./prRemediationFollowUp.js');
+  await handBackPrRemediation({ task, workspacePath }).catch(err => {
+    emitLog('warn', `Could not hand back the PR for task ${task.id}: ${err.message}`, { taskId: task.id });
+  });
+  return { outcome: 'blocked', reason };
+}
+
+/**
  * Provision a worktree that the task explicitly needs, including a safe
  * adoption of a surviving branch holder. This is shared by read-only public
  * review stages and ordinary delivery agents: read-only describes what the
@@ -177,6 +202,10 @@ async function prepareRequestedWorktree({
     emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
     await blockTask(task, reason, 'worktree-failed');
     return { outcome: 'blocked', reason };
+  }
+  const pinnedHead = existingBranch ? resolveTaskPinnedHead(task.metadata) : null;
+  if (pinnedHead === '') {
+    return refusePinnedAttach(task, workspacePath, `Task ${task.id} must attach at a reviewed head commit but records none; refusing to check out ${existingBranch}`);
   }
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
   const baseCommit = isLegacyDeepAudit(task.metadata)
@@ -204,6 +233,10 @@ async function prepareRequestedWorktree({
       taskId: task.id,
       allowLiveClaim: isNonCommittingCoordinatorTask(task),
       deepResume: isLegacyDeepAudit(task.metadata),
+      // A pinned attach never adopts a surviving tree: neither its contents nor
+      // its remote tip are proven to be the reviewed commit; only a fresh attach
+      // can prove both. Releasing an idle sibling holder in place stays allowed.
+      adopt: !pinnedHead,
     })
     : Promise.resolve(null);
 
@@ -239,11 +272,11 @@ async function prepareRequestedWorktree({
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
-    existingBranch: existingBranch || undefined,
-    // Only consulted when `existingBranch` names a FORK PR's head, which has no
-    // `origin/<branch>` to attach to (#6064). Null for every other task, which
-    // is the behavior that predates it.
+    existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
+    ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
+    // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
+    expectedHeadSha: pinnedHead || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,
   }).catch(err => {
@@ -266,6 +299,10 @@ async function prepareRequestedWorktree({
       agentId, worktreePath: nextWorkspacePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
     });
     return { outcome: 'ready', workspacePath: nextWorkspacePath, worktreeInfo };
+  }
+
+  if (worktreeError?.code === PINNED_HEAD_MOVED) {
+    return refusePinnedAttach(task, workspacePath, `Branch ${existingBranch} moved after review (${worktreeError.message}); refusing to run unreviewed commits`);
   }
 
   if (allowSharedWorkspaceFallback) {
@@ -327,13 +364,13 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
  * @param {{ agentId: string, task: object }} params
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
-export async function prepareAgentWorkspace({ agentId, task }) {
+export async function prepareAgentWorkspace({ agentId, task, onPrepared = result => result }) {
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
     await ensureDir(workspacePath);
-    return { outcome: 'ready', workspacePath, resolvedApp: null, resolvedAppName: null, worktreeInfo: null,
-      jiraTicket: null, jiraBranchName: null, explicitWorktree: false };
+    return onPrepared({ outcome: 'ready', workspacePath, resolvedApp: null, resolvedAppName: null, worktreeInfo: null,
+      jiraTicket: null, jiraBranchName: null, explicitWorktree: false });
   }
 
   // Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables
@@ -355,7 +392,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     emitLog('info', `📂 Agent workspace: ${workspacePath} (creative-director scratch)`, {
       taskId: task.id, workspace: workspacePath,
     });
-    return {
+    return onPrepared({
       outcome: 'ready',
       workspacePath,
       resolvedApp: null,
@@ -364,7 +401,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       jiraTicket: null,
       jiraBranchName: null,
       explicitWorktree: false,
-    };
+    });
   }
 
   // Pre-change investigation tasks may already be persisted without delivery
@@ -406,7 +443,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       + `(The agent was not started, so it could not write into the PortOS directory by mistake.)`;
     emitLog('error', `❌ ${reason}`, { taskId: task.id });
     await blockTask(task, reason, 'app-unresolved');
-    return { outcome: 'blocked', reason };
+    return onPrepared({ outcome: 'blocked', reason });
   }
   // Same resolver the /runs spawn paths use, so a `~/Projects/App` repoPath
   // expands here too and a repoPath pointing at a FILE is rejected up front
@@ -425,7 +462,29 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     // unusable, which is a different problem than a mis-configured app record —
     // don't file it under the app category.
     await blockTask(task, reason, task.metadata?.app ? 'app-unresolved' : 'workspace-invalid');
-    return { outcome: 'blocked', reason };
+    return onPrepared({ outcome: 'blocked', reason });
+  }
+
+  const prepareAndRegister = async () => onPrepared(await prepareResolvedWorkspace({
+    agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly,
+  }));
+  // Resolve once, then admit the entire preparation → registration → spawn
+  // lifetime. A create/adopt helper's shorter permit cannot protect dependency
+  // changes or an owner which has not yet been durably registered.
+  const probe = await execGit(['rev-parse', '--is-inside-work-tree'], workspacePath, { ignoreExitCode: true });
+  if (probe.stdout.trim() !== 'true') {
+    if (probe.exitCode === 128 && /^fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point)/im.test(probe.stderr || '')) return prepareAndRegister();
+    throw new Error('Cannot establish workspace repository identity before dispatch');
+  }
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(workspacePath, prepareAndRegister);
+}
+
+async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly }) {
+  const remediationPin = resolveTaskPinnedHead(task.metadata);
+  if (remediationPin !== null && (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(remediationPin)
+    || !resolveTaskRemoteBranch(task.metadata))) {
+    return refusePinnedAttach(task, workspacePath, `Task ${task.id} has no valid reviewed head and branch; refusing an unpinned remediation workspace`);
   }
 
   let jiraTicket = null;
@@ -436,7 +495,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // break the claim prompt's own cleanup path. Use it where it sits, and skip
   // every later provisioner so a checked-out claim branch cannot fall through
   // to the shared checkout.
-  const claimWorkspace = claimContinuationWorkspace({
+  const claimWorkspace = remediationPin !== null ? null : claimContinuationWorkspace({
     metadata: task.metadata,
     pathExists: existsSync,
     worktreesRoot: PATHS.worktrees,
@@ -468,7 +527,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     });
   }
   const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
-  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR;
+  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR || remediationPin !== null;
   // A task pointed at an existing branch must run in a worktree whatever isolated
   // the ORIGINAL run, because that is the only way to reach the work: the branch
   // has to be checked out somewhere, and an adoptable tree has to be attached.

@@ -284,6 +284,31 @@ describe('projectsFile federation (#1770)', () => {
     expect(writeCounter).toEqual({ project: 0, baseHash: 0 });
   });
 
+  it('keeps paid-song recovery and history across an overlapping peer edit, retry, and tombstone (#12429)', async () => {
+    const p = await file.createProject({ name: 'Example local song' });
+    const songRevision = { id: 'mvsr-local', status: 'generating', submitted: true,
+      songIds: ['example-paid-song-a', 'example-paid-song-b'],
+      candidates: [{ songId: 'example-paid-song-a', filename: 'example-candidate.mp3' }], sequence: 4 };
+    const songRevisionHistory = [{ id: 'mvsr-previous', status: 'selected',
+      selectedSongId: 'example-previous-song', baseline: { audioSource: 'example-original.mp3' } }];
+    const remote = { ...p, name: 'Example peer edit', updatedAt: '2099-01-01T00:00:00Z',
+      songRevision: { id: 'mvsr-foreign', songIds: ['foreign-song'] }, songRevisionHistory: [] };
+    // The checkpoint and sync share the store queue: sync must merge against
+    // the checkpoint that just completed, not the older peer pre-image.
+    const checkpoint = file.mutateProjectRecord(p.id, (current) => ({ project: { ...current, songRevision, songRevisionHistory } }));
+    const sync = file.mergeProjectsFromSync([remote]);
+    await checkpoint;
+    expect(await sync).toEqual({ applied: true, count: 1 });
+    expect(await file.getProject(p.id)).toMatchObject({ name: remote.name, songRevision, songRevisionHistory });
+    writeCounter.project = 0;
+    expect(await file.mergeProjectsFromSync([remote])).toEqual({ applied: false, count: 0 });
+    expect(writeCounter.project).toBe(0);
+    const tombstone = { ...remote, deleted: true, deletedAt: '2099-01-02T00:00:00Z', updatedAt: '2099-01-02T00:00:00Z' };
+    await file.mergeProjectsFromSync([tombstone]);
+    expect(await file.getProject(p.id)).toBeNull();
+    expect(await file.getProject(p.id, { includeDeleted: true })).toMatchObject({ deleted: true, songRevision, songRevisionHistory });
+  });
+
   it('mergeProjectsFromSync applies a remote tombstone (delete federates)', async () => {
     const p = await file.createProject({ name: 'Doomed' });
     const tombstone = { ...p, deleted: true, deletedAt: '2099-01-01T00:00:00Z', updatedAt: '2099-01-01T00:00:00Z' };

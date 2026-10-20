@@ -38,7 +38,14 @@ export async function patchProjectRecord(id, patch) {
   return withTransaction(async client => {
     const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [id]);
     if (!rows[0]) throw missing();
-    const settings = { ...rows[0].data, ...patch };
+    const stored = rows[0].data;
+    // Nested objects merge field by field: a partial PATCH names only the fields it changes.
+    const settings = {
+      ...stored, ...patch,
+      budgets: { ...stored.budgets, ...patch.budgets },
+      localSettings: { ...stored.localSettings, ...patch.localSettings },
+      referenceIntent: { ...stored.referenceIntent, ...patch.referenceIntent },
+    };
     if (patch.budgets) {
       const used = await client.query("SELECT COALESCE(SUM((data->>'reservedBytes')::bigint), 0) AS bytes FROM code_animation_project_runs WHERE project_id = $1", [id]);
       if (Number(used.rows[0].bytes) > settings.budgets.diskBytes) {

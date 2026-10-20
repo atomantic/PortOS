@@ -570,6 +570,8 @@ async function bootDaemon(state) {
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
       if (await pendingMergeSweepBlocked()) return;
+      const { sweepRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+      await sweepRepoStateVerifications().catch(err => console.warn(`⚠️ Completion recovery sweep deferred: ${err.message}`));
       const prWatcher = await import('./prWatcher.js');
       const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
         console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);
@@ -578,6 +580,13 @@ async function bootDaemon(state) {
       if (sweep && (sweep.merged || sweep.escalated || sweep.timedOut)) {
         emitLog('info', `🤖 Pending merges: ${sweep.merged} merged, ${sweep.escalated} escalated, ${sweep.timedOut} timed out`);
       }
+      // Flagged merges (#12549) whose checks were still running when the run ended.
+      const { sweepMergeGateWatches } = await import('./mergeGateAudit.js');
+      const gate = await sweepMergeGateWatches().catch((err) => {
+        console.warn(`⚠️ sweepMergeGateWatches failed: ${err?.message || err}`);
+        return null;
+      });
+      if (gate?.recovered) emitLog('info', `🚦 Merge-gate watches: ${gate.recovered} recovery task(s) queued, ${gate.remaining} still watching`);
     },
     metadata: { description: 'CoS pending merge-only PR drain' }
   });
@@ -1538,6 +1547,10 @@ export async function init() {
     setImmediate(() => {
       Promise.resolve()
         .then(async () => {
+          if (agent?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+            const { settleRetirementReviewRun } = await import('./branchReconcileCompletion.js');
+            await settleRetirementReviewRun(agent);
+          }
           if (agentScheduledType(agent) !== 'branch-reconcile') return;
           const { settleBranchReconcileRun } = await import('./branchReconcileCompletion.js');
           await settleBranchReconcileRun(agent);

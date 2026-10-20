@@ -1,32 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFile, rename } from 'fs/promises';
+import { writeFile, rename } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
+  settings: {}, verify: vi.fn(), apply: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
   DATA_DIR: '/example/data', AUTOFIXER_DIR: '/example/autofixer', INDEX_FILE: '/example/index.json',
   loadApps: harness.apps, execPm2: harness.pm2, listProcessesStrict: harness.list,
 }));
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async file => file.endsWith('index.json') ? '[]' : '{}'),
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(async file => file.endsWith('index.json') ? '[]' : file.endsWith('settings.json') ? JSON.stringify(harness.settings) : '{}'),
   writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}), access: vi.fn(async () => {}),
   rename: vi.fn(async () => {}),
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
 vi.mock('../server/lib/cliProviderRun.js', () => ({
-  pickCliProvider: () => ({ provider: { id: 'example-cli' } }),
   runCliProviderPrompt: harness.provider,
 }));
 vi.mock('./sandbox.js', () => ({
   sanitizeChildEnv: () => ({}), collectSecretEnvValues: () => [],
   buildFixPrompt: ({ errorLogs, outputLogs }) => JSON.stringify({ errorLogs, outputLogs }),
-  restrictedToolArgs: () => [], isGitRepo: async () => true,
+  pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: async () => true,
+  repairWorkspaceHold: async () => null,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
   collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
   sweepStaleWorktrees: harness.sweep,
   validateProposedDiff: harness.validate,
-  applyDiffToLive: vi.fn(), revertDiffFromLive: vi.fn(), runVerifyCommand: vi.fn(),
+  applyDiffToLive: harness.apply, revertDiffFromLive: vi.fn(), runVerifyCommand: harness.verify,
 }));
 
 let errorLog;
@@ -43,6 +44,9 @@ beforeEach(() => {
   harness.sweep.mockReset().mockResolvedValue([]);
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
+  harness.settings = {};
+  harness.verify.mockReset();
+  harness.apply.mockReset();
 });
 afterEach(() => {
   vi.clearAllTimers();
@@ -107,8 +111,35 @@ describe('Autofixer daemon repair input boundary', () => {
     expect(rename).toHaveBeenCalledWith('/example/index.json.tmp', '/example/index.json');
   });
 
+  it('refuses partial edits from a repair process that exited unsuccessfully', async () => {
+    harness.provider.mockResolvedValue({ text: 'partially repaired', partial: true, exitCode: 1 });
+    await start();
+    expect(harness.validate).not.toHaveBeenCalled();
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    expect(JSON.parse(meta[1])).toMatchObject({ success: false, diffValid: false, promoted: false, staged: false });
+  });
+
+  it('validates edits only after a complete successful repair process', async () => {
+    harness.provider.mockResolvedValue({ text: 'repaired', partial: false, exitCode: 0 });
+    await start();
+    expect(harness.validate).toHaveBeenCalledOnce();
+  });
+
+  it('blocks staging and promotion when the configured verifier has no supported containment', async () => {
+    harness.settings = { autofixer: { autoPromote: true, verifyCommand: 'npm test' } };
+    harness.provider.mockResolvedValue({ text: 'repaired', partial: false, exitCode: 0 });
+    harness.validate.mockReturnValue({ ok: true, files: ['a.js'] });
+    harness.verify.mockResolvedValue({ ok: false, contained: false, code: -1, output: 'verification refused: no descendant containment' });
+    await start();
+    expect(harness.verify).toHaveBeenCalledOnce();
+    expect(harness.apply).not.toHaveBeenCalled();
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    expect(JSON.parse(meta[1])).toMatchObject({ success: false, promoted: false, staged: false,
+      verify: { ok: false, contained: false, exitCode: -1 } });
+  });
+
   it('still cools the process down when persisting the session fails', async () => {
-    harness.provider.mockResolvedValue({ exitCode: 0 });
+    harness.provider.mockResolvedValue({ exitCode: 0, partial: false });
     harness.validate.mockReturnValue({ ok: true, files: ['a.js'] });
     writeFile.mockImplementation(async (f) => { if (String(f).endsWith('prompt.txt')) throw new Error('disk full'); });
     await start();

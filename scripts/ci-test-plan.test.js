@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
@@ -420,9 +420,11 @@ it('requests DB verification for every suite in the real canonical inventory wit
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
-  for (const source of ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js']) {
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-    expect(buildCiTestPlan(inputs.changedFiles, inputs), source).toMatchObject({ full: false, db: true });
+  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
+  // One whole-repository collection; the union is a superset whose DB-dependency walk still covers each source.
+  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: sources, cwd });
+  for (const source of sources) {
+    expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
   }
 });
 
@@ -1904,9 +1906,13 @@ describe('dependency manifest Windows escalation', () => {
 
 describe('path-gated single-purpose jobs', () => {
   const repo = fileURLToPath(new URL('../', import.meta.url));
+  // The gates read only the two static input lists, which do not depend on the
+  // diff; walking the repository once per case exceeded the 5 s test timeout (#12461).
+  let staticInputs;
   const realPlan = (changedFiles) => {
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: repo });
-    return buildCiTestPlan(inputs.changedFiles, inputs);
+    staticInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
+    const { promptHistoryInputs, linuxContainmentInputs } = staticInputs;
+    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs });
   };
   const gates = (plan) => ({ promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment });
 
@@ -1973,7 +1979,7 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs['linux-containment']).toContain("if: needs.impact.outputs.linux_containment == 'true'");
     // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
     const run = jobs['linux-containment'].match(/run: npm test --prefix server -- --run (.*)/)[1];
-    expect(run.split(' ').map((path) => `server/${path}`)).toEqual(LINUX_CONTAINMENT_TESTS);
+    expect(run.split(' ').map((path) => posix.join('server', path))).toEqual(LINUX_CONTAINMENT_TESTS);
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
     expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');

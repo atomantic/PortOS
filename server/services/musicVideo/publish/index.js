@@ -13,7 +13,8 @@ import { join } from 'path';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
 import { safeUnder } from '../../../lib/ffmpeg.js';
-import { getProject, mutateProjectRecord } from '../projects.js';
+import { mutateProjectRecord } from '../projects.js';
+import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../../sunoShareLink.js';
 import { connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
@@ -222,8 +223,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   if (!adapter) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
   const platforms = deps.platforms || await getPublishPlatforms();
   assertPlatformEnabled(platforms, target);
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   // A platform already posted to gets a second draft only when the director says so:
   // otherwise one stray click is one duplicate post.
   const existing = project.publishKit?.posts?.[target];
@@ -272,8 +272,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
  */
 export async function previewPublishPost(projectId, target, options = {}, deps = {}) {
   if (!(deps.adapters || PUBLISH_ADAPTERS)[target]) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const platforms = deps.platforms || await getPublishPlatforms();
   return withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps)
     .then((resolved) => buildPublishPayload(target, project, resolved))
@@ -346,8 +345,7 @@ export async function setPublishCrossLinks(projectId, enabled) {
 export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
   const adapter = (deps.crossLinkAdapters || CROSS_LINK_ADAPTERS)[target];
   if (!adapter) throw new ServerError(`No cross-link edit for ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const row = crossLinkBackfill(project.publishKit).find((r) => r.target === target);
   if (!row) throw new ServerError(`Record the ${adapter.label} post's link first`, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
   if (!row.missing.length) throw new ServerError(`The ${adapter.label} post already links every other post`, { status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });

@@ -3,11 +3,12 @@
  * shared forge logins never authorize reconciliation. No parallel policy store.
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
+import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
   && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
@@ -124,22 +125,83 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
   return { release, obligation, policies, reason: handoff ? held : 'pr-completion-review-required' };
 }
 
-/** A new operator review may settle completed legacy review obligations only.
- * This is evidence for the scoped retirement caller, never unattended consent.
+/** A fresh exact-head forge review may distinguish incarnations of a reused
+ * branch. A timestamp alone never excludes an owner: its explicit private
+ * checkout must also differ, and a policy for this PR remains relevant.
+ */
+const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
+const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
+
+function reviewedIncarnation(input, policies) {
+  if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
+    || !input.prUrl || input.verifiedPrHead !== input.tip
+    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')) return null;
+  const owners = policies.filter(policy => policy.agent.status === 'completed' && policy.agent.result?.success === true
+    && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    && samePath(policy.agent.metadata?.workspacePath, input.checkoutPath)
+    && retirementPr(policy) === input.prUrl && (!policy.tip || policy.tip === input.tip)
+    && (!reviewTarget(policy) || (reviewTarget(policy).branch === input.branch && reviewTarget(policy).url === input.prUrl))
+    && Number.isFinite(Date.parse(policy.agent.startedAt))
+    && Date.parse(policy.agent.completedAt) >= Date.parse(policy.agent.startedAt));
+  if (!owners.length) return null;
+  const firstStarted = Math.min(...owners.map(policy => Date.parse(policy.agent.startedAt)));
+  const identity = input.checkoutIdentities?.[input.checkoutPath];
+  const prior = [];
+  const current = policies.filter(policy => {
+    const workspace = policy.agent.metadata?.workspacePath;
+    const target = reviewTarget(policy);
+    const unrelated = policy.agent.status === 'completed'
+      && policy.completion !== PR_COMPLETIONS.LEAVE_OPEN
+      && isAbsolute(workspace || '') && !samePath(workspace, input.repoPath) && !samePath(workspace, input.checkoutPath)
+      && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
+      && input.checkoutIdentities[input.repoPath] && input.checkoutIdentities[workspace] !== input.checkoutIdentities[input.repoPath]
+      && Number.isFinite(Date.parse(policy.agent.startedAt))
+      && Date.parse(policy.agent.completedAt) >= Date.parse(policy.agent.startedAt)
+      && Date.parse(policy.agent.completedAt) < firstStarted
+      && policy.prUrl !== input.prUrl && target?.url !== input.prUrl
+      && (!policy.prUrl || parsePullRequestUrl(policy.prUrl))
+      && (!target || (target.branch === input.branch && parsePullRequestUrl(target.url)
+        && (!policy.prUrl || policy.prUrl === target.url)));
+    if (unrelated) prior.push(policy);
+    return !unrelated;
+  });
+  return { current, prior };
+}
+
+/** Operator review settles successful completed review obligations. PR-bound
+ * obligations additionally need a fresh exact-head, exact-checkout incarnation.
+ * This is review evidence, never unattended consent or a saved policy rewrite.
  */
 export function reviewedRetirementPolicy(input) {
-  const decision = completionDecision(input);
-  if (decision.reason === unavailable || decision.reason === held) return { reason: decision.reason };
-  const policies = decision.policies || [];
+  // Keep mismatching known PRs until explicit incarnation checks establish
+  // unrelated history; a current checkout's handoff must never be filtered out.
+  const decision = completionDecision({ ...input, prUrl: undefined });
+  if (decision.reason === unavailable) return { reason: decision.reason };
+  const incarnation = reviewedIncarnation(input, decision.policies || []);
+  const policies = incarnation?.current || decision.policies || [];
+  if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
   if (policies.some(p => p.agent.status !== 'completed' || p.agent.result?.success !== true
-    || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || p.prUrl)) {
+    || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+    || (retirementPr(p) && (!incarnation || retirementPr(p) !== input.prUrl))
+    || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
+    || (incarnation && p.tip && p.tip !== input.tip))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
   return { reason: null, policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
     branch: p.branch, completion: p.completion,
-  })).sort((a, b) => String(a.id).localeCompare(String(b.id))) };
+    ...(incarnation && { prUrl: retirementPr(p) ?? null, tip: p.tip ?? null, workspacePath: p.agent.metadata?.workspacePath ?? null }),
+  })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+  ...(incarnation && {
+    reviewedPr: { prUrl: input.prUrl, tip: input.tip, checkoutPath: input.checkoutPath },
+    priorCheckouts: incarnation.prior.map(p => ({
+      id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt, completedAt: p.agent.completedAt,
+      status: p.agent.status, success: p.agent.result?.success ?? null, completion: p.completion ?? null,
+      workspacePath: p.agent.metadata.workspacePath, prUrl: retirementPr(p) ?? null,
+      checkoutIdentity: input.checkoutIdentities[p.agent.metadata.workspacePath],
+    })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+  }) };
 }
 
 /** A verified merged receipt may settle automatic completion obligations, but
@@ -169,7 +231,7 @@ export async function readBranchCompletionHold(input, deps = {}) {
   // fetched. Only a potential explicit release needs a fresh forge read; offline
   // cleanup preserves the handoff when that read cannot establish the same head.
   if (input.retirement === true && decision.obligation?.prUrl
-    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true }).catch(() => null) === tip) return null;
+    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return null;
   if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return null;
   return decision.reason;
 }
@@ -195,14 +257,14 @@ export async function recordBranchCompletionPolicy({ agentId, task, repoPath, br
   await updateAgent(agentId, { metadata: { branchCompletionPolicy: { branch, prUrl, completion, tip } } });
 }
 
-async function verifiedPolicyTip(repoPath, branch, prUrl, { requireMerged = false } = {}) {
+async function verifiedPolicyTip(repoPath, branch, prUrl, { requireMerged = false, expectedTip = null } = {}) {
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const { parsePullRequestUrl } = await import('../lib/gitForge.js');
   const origin = await getOriginInfo(repoPath);
   const pr = parsePullRequestUrl(prUrl);
   if (!pr || pr.host !== origin?.host || `${pr.owner}/${pr.repo}` !== origin.fullName) return null;
   const { execGit } = await import('../lib/execGit.js');
-  const tip = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath)).stdout?.trim();
+  const tip = expectedTip || (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath)).stdout?.trim();
   if (!/^[a-f0-9]{40,64}$/i.test(tip || '')) return null;
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
   const { execGh } = await import('./github.js');

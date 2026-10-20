@@ -12,6 +12,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 
@@ -58,8 +59,7 @@ async function assertSourceSelected(source) {
 }
 
 async function finalSource(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   if (!project.renderHistoryId) throw fail('Render the final video before preparing a sharing copy');
   const entry = await getHistoryItem(project.renderHistoryId);
   if (!entry?.filename) throw fail('The final render is missing');

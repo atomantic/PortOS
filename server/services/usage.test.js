@@ -261,6 +261,21 @@ describe('usage.js — summary', () => {
       expect(day.byProvider['claude-code'].byModel.opus.sessions).toBe(1);
     });
 
+    it('never bumps a counter through a prototype-named provider or model', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      await recordSession('example-provider', 'Example', '__proto__');
+      await recordSession('__proto__', undefined, 'constructor');
+      await recordMessages('example-provider', '__proto__', 1, 40, 10);
+
+      expect(Object.hasOwn(Object.prototype, 'sessions')).toBe(false);
+      expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
+      expect(Object.hasOwn(Object.prototype, 'tokensIn')).toBe(false);
+      const usage = getUsage();
+      expect(usage.byProvider.unknown.sessions).toBe(1);
+      expect(usage.byProvider['example-provider']).toMatchObject({ sessions: 1, messages: 1 });
+    });
+
     it('attributes missing provider ids to a named unknown bucket', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
@@ -1106,6 +1121,27 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
       byModel: { [model]: { sessions: 1, messages: 1, tokens: 50 } }
     }));
     await loadUsage();
+  });
+
+  it('skips a correction whose provider or model names a prototype key', async () => {
+    const correction = (overrides) => ({
+      runId: 'run-example-proto', day: dayKey, providerId, model,
+      estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
+      measured: [{ providerId, model, messages: 2, tokensIn: 100, tokensOut: 200, source: 'measured' }],
+      ...overrides,
+    });
+    const before = structuredClone(getUsage());
+    expect(await applyHistoricalUsageCorrections([
+      correction({ measured: [{ providerId, model: '__proto__', messages: 2, tokensOut: 200 }] }),
+      correction({ siblings: [{ providerId: '__proto__', model, messages: 1, tokensOut: 5 }], siblingScanned: true }),
+      correction({ model: 'constructor' }),
+    ])).toMatchObject({ corrected: 0 });
+    expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
+    expect(Object.hasOwn(Object.prototype, 'tokensOut')).toBe(false);
+    const after = getUsage();
+    for (const key of ['dailyActivity', 'byProvider', 'byModel', 'totalTokens', 'totalMessages']) {
+      expect(after[key]).toEqual(before[key]);
+    }
   });
 
   it('replaces the configured-provider estimate, rebuilds flat totals, and is idempotent', async () => {

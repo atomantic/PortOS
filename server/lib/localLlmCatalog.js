@@ -992,6 +992,22 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF'
   },
   {
+    key: 'nemotron-3.5-bolt',
+    name: 'Nemotron 3.5 Bolt 74B-A9B',
+    category: 'vision',
+    recommendedFor: ['vision', 'reasoning', 'coding'],
+    params: '74B / 9B active',
+    size: '24 GB',
+    family: 'nemotron',
+    description: "NVIDIA's hybrid Mamba-2/Transformer vision-language MoE — multimodal reasoning, coding, and tool calling with 9B active parameters, compressed into a 24GB footprint for local execution.",
+    repository: 'nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF',
+    capabilities: ['chat', 'reasoning', 'code', 'tools', 'vision'],
+    context: 262144,
+    ollama: 'nemotron-3.5-bolt',
+    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF',
+    lmstudioAliases: ['nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF']
+  },
+  {
     key: 'llama3.2-vision-11b',
     name: 'Llama 3.2 Vision 11B',
     category: 'vision',

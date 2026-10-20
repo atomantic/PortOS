@@ -99,6 +99,21 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
     expect(existsSync(dataPath('screenshots'))).toBe(true);
   });
 
+  it('preserves Mind files during bulk purge and refuses explicit deletion of their reserved entries', async () => {
+    const owned = ['mind-claimed-photo.png', 'mind-unindexed-photo.png', '.mind-pending-unindexed'];
+    for (const name of owned) writeFileSync(dataPath('screenshots', name), 'owned');
+    await purgeCategory('screenshots');
+    expect(existsSync(dataPath('screenshots', 'index.json'))).toBe(false);
+    for (const name of owned) {
+      expect(existsSync(dataPath('screenshots', name))).toBe(true);
+      await expect(purgeCategory('screenshots', { subPath: name }))
+        .rejects.toMatchObject({ status: 409, code: 'SCREENSHOT_OWNED_BY_MIND' });
+      await expect(purgeCategory('screenshots', { subPath: name.toUpperCase() }))
+        .rejects.toMatchObject({ status: 409, code: 'SCREENSHOT_OWNED_BY_MIND' });
+      expect(existsSync(dataPath('screenshots', name))).toBe(true);
+    }
+  });
+
   it('removes a named subdirectory recursively', async () => {
     writeFileSync(dataPath('screenshots', 'account', 'inbox.json'), '{}');
     await purgeCategory('screenshots', { subPath: 'account' });

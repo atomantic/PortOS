@@ -22,13 +22,16 @@ vi.mock('../lib/uuid.js', () => {
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn(async (path) => fileStore.has(path) ? fileStore.get(path) : null),
+  readJSONFileStrict: vi.fn(async (path, fallback) => {
+    if (!fileStore.has(path)) return { ok: true, value: fallback };
+    try { return { ok: true, value: JSON.parse(fileStore.get(path)) }; } catch { return { ok: false, value: fallback }; }
+  }),
+  unreadableStoreError: (path) => new Error(`Unreadable JSON file: ${path}`),
   atomicWrite: vi.fn(async (path, data) => {
     fileStore.set(path, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
   }),
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  PATHS: { agentPersonalities: '/mock/agents' },
-  safeJSONParse: (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }
+  PATHS: { agentPersonalities: '/mock/agents' }
 }));
 
 const { listDrafts, getDraft, createDraft, updateDraft, deleteDraft } = await import('./agentDrafts.js');

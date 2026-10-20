@@ -1167,6 +1167,152 @@ describe('the two wired rail controls', () => {
   });
 });
 
+// The composer and Send are bound to the conversation in the URL. Every write
+// that answers for the conversation it was issued from must therefore stay off
+// the thread once the user has opened another one; otherwise the header,
+// roster and messages name one contact while Send goes to another.
+describe('a conversation write that settles after a switch', () => {
+  const SAM = { sourceUserId: 'user-1', displayName: 'Sam Example', handle: '+15550100', tribePersonId: null, tribePersonName: null, observedVia: 'participant-list' };
+  const CONV_A_RECORD = conversation({ id: CONV_A, title: 'Example A', sourceChatId: 'chat-example-1', participants: [SAM] });
+  const CONV_B_RECORD = conversation({ id: CONV_B, title: 'Example B', sourceChatId: 'chat-example-2' });
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  const findThreadAction = (name) => waitFor(() => {
+    const controls = screen.getAllByRole('button', { name });
+    expect(controls.length).toBeGreaterThan(1);
+    return controls.at(-1);
+  });
+  const openA = async () => {
+    api.getBeeperConversations.mockResolvedValue({ conversations: [CONV_A_RECORD, CONV_B_RECORD], nextCursor: null });
+    api.getBeeperConversation.mockImplementation((id) => Promise.resolve(id === CONV_B ? CONV_B_RECORD : CONV_A_RECORD));
+    api.getBeeperMessages.mockImplementation((id) => Promise.resolve({
+      messages: [{
+        id: id === CONV_B ? 'm-b' : 'm-a', conversationId: id, senderId: 'user-1', body: id === CONV_B ? 'Placeholder B body' : 'Placeholder A body', sentAt: '2026-09-01T10:00:00.000Z', attachments: [],
+      }],
+      nextCursor: null,
+    }));
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await screen.findByText('Placeholder A body');
+  };
+  const switchToB = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Example B/ }));
+    await screen.findByText('Placeholder B body');
+  };
+  const expectBStillOpen = () => {
+    expect(screen.getByText('Placeholder B body')).toBeInTheDocument();
+    expect(screen.queryByText('Placeholder A body')).toBeNull();
+    expect(screen.getByPlaceholderText(/^Message Example B/)).toBeInTheDocument();
+  };
+
+  it('keeps an archive answer for the previous conversation off the one now open', async () => {
+    await openA();
+    const archive = deferred();
+    api.setBeeperConversationArchived.mockReturnValue(archive.promise);
+    act(() => { screen.getAllByRole('button', { name: 'Archive' }).at(-1).click(); });
+    await waitFor(() => expect(api.setBeeperConversationArchived).toHaveBeenCalledWith(CONV_A, true, { silent: true }));
+
+    await switchToB();
+    // The other conversation's own controls are not held by A's pending write.
+    expect(await findThreadAction('Archive')).toBeEnabled();
+    const listReads = api.getBeeperConversations.mock.calls.length;
+    await act(async () => { archive.resolve({ ...CONV_A_RECORD, isArchived: true }); });
+
+    // The list still refetches, because the archived row changed scope.
+    await waitFor(() => expect(api.getBeeperConversations.mock.calls.length).toBeGreaterThan(listReads));
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull();
+    expectBStillOpen();
+  });
+
+  it('keeps an earlier conversation\'s write pending when a later conversation\'s write settles first', async () => {
+    await openA();
+    const writes = { [CONV_A]: deferred(), [CONV_B]: deferred() };
+    api.setBeeperConversationArchived.mockImplementation((id) => writes[id].promise);
+    act(() => { screen.getAllByRole('button', { name: 'Archive' }).at(-1).click(); });
+    await switchToB();
+    act(() => { screen.getAllByRole('button', { name: 'Archive' }).at(-1).click(); });
+    await waitFor(() => expect(api.setBeeperConversationArchived).toHaveBeenCalledWith(CONV_B, true, { silent: true }));
+    await act(async () => { writes[CONV_B].resolve({ ...CONV_B_RECORD, isArchived: true }); });
+
+    fireEvent.click(screen.getByRole('button', { name: /Example A/ }));
+    await screen.findByText('Placeholder A body');
+    expect(await findThreadAction('Archive')).toBeDisabled();
+    await act(async () => { writes[CONV_A].resolve({ ...CONV_A_RECORD, isArchived: true }); });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Unarchive' }).at(-1)).toBeEnabled());
+    expect(api.setBeeperConversationArchived).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reload the previous conversation into the open one when a participant link settles', async () => {
+    api.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
+    await openA();
+    const link = deferred();
+    api.linkBeeperParticipant.mockReturnValue(link.promise);
+    act(() => { screen.getByRole('button', { name: 'People' }).click(); });
+    const picker = await screen.findByLabelText('Link Sam Example to a Tribe person');
+    act(() => { picker.focus(); });
+    act(() => { fireEvent.mouseDown(screen.getByRole('option', { name: 'Alex Example' })); });
+    await waitFor(() => expect(api.linkBeeperParticipant).toHaveBeenCalled());
+
+    await switchToB();
+    const detailReads = api.getBeeperConversation.mock.calls.length;
+    await act(async () => { link.resolve({ participant: {}, displacedPersonId: null }); });
+    await act(async () => {});
+
+    expect(api.getBeeperConversation.mock.calls.length).toBe(detailReads);
+    expectBStillOpen();
+  });
+
+  it('stays on the open conversation when a purge of the previous one settles', async () => {
+    await openA();
+    const purge = deferred();
+    api.purgeBeeperConversation.mockReturnValue(purge.promise);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /^Purge$/ }));
+    fireEvent.change(await screen.findByLabelText(/Type purge to confirm/i), { target: { value: 'purge' } });
+    fireEvent.click(screen.getByRole('button', { name: /Purge mirror/i }));
+    await waitFor(() => expect(api.purgeBeeperConversation).toHaveBeenCalledWith(CONV_A, { silent: true }));
+
+    await switchToB();
+    await act(async () => {
+      purge.resolve({ purged: true, conversationId: CONV_A, messagesRemoved: 1, filesRemoved: 0, bytesFreed: 0 });
+    });
+
+    // A's row is gone from the list, but B stays open.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Example A/ })).toBeNull());
+    expect(screen.queryByText('Pick a conversation')).toBeNull();
+    expectBStillOpen();
+  });
+
+  it('shows the load error, not the previous conversation, when the newly opened one fails to load', async () => {
+    await openA();
+    api.getBeeperConversation.mockImplementation((id) => (id === CONV_B
+      ? Promise.reject(Object.assign(new Error('Beeper mirror unavailable'), { status: 503 }))
+      : Promise.resolve(CONV_A_RECORD)));
+    fireEvent.click(screen.getByRole('button', { name: /Example B/ }));
+
+    expect(await screen.findByText('Could not open this conversation')).toBeInTheDocument();
+    expect(screen.queryByText('Placeholder A body')).toBeNull();
+    expect(screen.queryByPlaceholderText(/^Message /)).toBeNull();
+  });
+
+  it('shows the new conversation\'s load error, not the previous one\'s not-found state', async () => {
+    api.getBeeperConversations.mockResolvedValue({ conversations: [CONV_B_RECORD], nextCursor: null });
+    api.getBeeperConversation.mockImplementation((id) => Promise.reject(id === CONV_B
+      ? Object.assign(new Error('Beeper mirror unavailable'), { status: 503 })
+      : Object.assign(new Error('Conversation not found'), { status: 404 })));
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await screen.findByText('Conversation not found');
+
+    fireEvent.click(await screen.findByRole('button', { name: /Example B/ }));
+
+    expect(await screen.findByText('Could not open this conversation')).toBeInTheDocument();
+    expect(screen.queryByText('Conversation not found')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+});
+
 // The LOCAL "seen in PortOS" watermark (#83) — the fix for opening an unread
 // thread leaving its badge untouched. This NEVER reaches Beeper: no PATCH,
 // no read receipt — see `markBeeperConversationSeen` (`apiBeeper.js`) and its

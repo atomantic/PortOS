@@ -226,6 +226,7 @@ vi.mock('../memoryBackend.js', async () => ({
 }));
 vi.mock('../catalogDB.js', async () => ({
   getCatalogBundleForRef: vi.fn(),
+  getLocalIngredientRefOwnership: vi.fn(),
 }));
 vi.mock('../catalogSync.js', async () => ({
   applyRemoteChanges: vi.fn(),
@@ -316,7 +317,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
-import { getCatalogBundleForRef } from '../catalogDB.js';
+import { getCatalogBundleForRef, getLocalIngredientRefOwnership } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 import { contentHashForRecord, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
@@ -441,6 +442,7 @@ beforeEach(async () => {
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
+  vi.mocked(getLocalIngredientRefOwnership).mockReset().mockResolvedValue({ existing: new Set(), linked: new Set() });
   vi.mocked(getCatalogBundleForRef).mockReset().mockResolvedValue({ ingredients: [], refs: [] });
   vi.mocked(applyCatalogRemoteChanges).mockReset().mockResolvedValue({ errors: [] });
 
@@ -3268,7 +3270,7 @@ describe('peerSync', () => {
 
     it('routes a bundled linkedCollection through mergeMediaCollectionsFromSync', async () => {
       const linkedCollection = {
-        id: 'col-1', name: 'Universe: U', items: [
+        id: 'col-1', name: 'Universe: U', universeId: 'u1', items: [
           { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
         ],
       };
@@ -3518,6 +3520,172 @@ describe('peerSync', () => {
       }
     });
 
+    describe('bundled companion records are bound to the pushed record (#12427)', () => {
+      const live = { deleted: false, deletedAt: null };
+      const SOURCE = { source: { via: 'peer-push', peerId: 'peer-a' } };
+
+      it.each([
+        ['universe', 'universeId', 'u1'],
+        ['series', 'seriesId', 'ser-1'],
+      ])('merges a %s linkedCollection only when its %s is the pushed record', async (kind, field, id) => {
+        const bound = { id: 'col-bound', name: 'Bound', [field]: id, items: [] };
+        await applyIncomingPush({ kind, record: { id, ...live }, linkedCollection: bound, assetManifest: [], sourceInstanceId: 'peer-a' });
+        expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([bound], SOURCE);
+
+        vi.mocked(mergeMediaCollectionsFromSync).mockClear();
+        const foreign = { id: 'col-foreign', name: 'Other', [field]: 'someone-else', items: [] };
+        const unlinked = { id: 'col-unlinked', name: 'Loose', items: [] };
+        for (const linkedCollection of [foreign, unlinked]) {
+          await applyIncomingPush({ kind, record: { id, ...live }, linkedCollection, assetManifest: [], sourceInstanceId: 'peer-a' });
+        }
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('refuses a linkedCollection that would re-parent a local collection linked elsewhere', async () => {
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-victim', universeId: 'u-other', items: [] });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live },
+          linkedCollection: { id: 'col-victim', universeId: 'u1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-mine', universeId: 'u1', items: [] });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live },
+          linkedCollection: { id: 'col-mine', universeId: 'u1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses a linkedCollection whose local owner is another category or cannot be verified', async () => {
+        const incoming = { id: 'col-x', universeId: 'shared-id', items: [] };
+        const push = () => applyIncomingPush({
+          kind: 'universe', record: { id: 'shared-id', ...live }, linkedCollection: incoming, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        // Same id, different parent kind (a series parent named like this universe).
+        vi.mocked(getCollection).mockResolvedValue({ id: 'col-x', seriesId: 'shared-id', items: [] });
+        await push();
+        // A storage failure is not "no local collection".
+        vi.mocked(getCollection).mockRejectedValue(new Error('db unavailable'));
+        await push();
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('refuses a linkedCollection on a kind that has no collection parent', async () => {
+        await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-1', ...live },
+          linkedCollection: { id: 'col-1', universeId: 'mv-1', items: [] },
+          assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('upserts only catalog refs for the pushed record and the ingredients those refs name', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        const ref = (ingredientId, refId, refKind = 'universe') => ({ ingredientId, refKind, refId, role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' });
+        const ing = (id) => ({ id, type: 'character', name: id, updatedAt: '2026-01-02T00:00:00Z' });
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [],
+          catalogBundle: {
+            ingredients: [ing('cat-mine'), ing('cat-other'), ing('cat-unreferenced')],
+            refs: [ref('cat-mine', 'u1'), ref('cat-other', 'u-other'), ref('cat-mine', 'u1', 'series')],
+          },
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        expect(applyCatalogRemoteChanges).toHaveBeenCalledTimes(1);
+        const arg = vi.mocked(applyCatalogRemoteChanges).mock.calls[0][0];
+        expect(arg.refs).toEqual([ref('cat-mine', 'u1')]);
+        expect(arg.ingredients).toEqual([ing('cat-mine')]);
+      });
+
+      it('applies nothing when no catalog ref belongs to the pushed record', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        await applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [],
+          catalogBundle: {
+            ingredients: [{ id: 'cat-other', type: 'character', name: 'Other', updatedAt: '2026-01-02T00:00:00Z' }],
+            refs: [{ ingredientId: 'cat-other', refKind: 'universe', refId: 'u-other', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+          },
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+      });
+
+      describe('bundled catalog ingredients owned by another record (#12466)', () => {
+        const ing = (id) => ({ id, type: 'character', name: id, updatedAt: '2026-01-02T00:00:00Z' });
+        const ref = (ingredientId) => ({ ingredientId, refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' });
+        const pushBundle = (catalogBundle) => applyIncomingPush({
+          kind: 'universe', record: { id: 'u1', ...live }, assetManifest: [], catalogBundle,
+          sourceInstanceId: 'peer-a', portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        const ownership = (existing, linked = []) => ({ existing: new Set(existing), linked: new Set(linked) });
+
+        beforeEach(() => {
+          vi.mocked(getBackendName).mockReturnValue('postgres');
+        });
+
+        it('drops an existing ingredient another record owns, with its forged ref, and merges the rest', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockResolvedValue(ownership(['cat-victim', 'cat-mine'], ['cat-mine']));
+          await pushBundle({
+            ingredients: [ing('cat-victim'), ing('cat-mine'), ing('cat-new')],
+            refs: [ref('cat-victim'), ref('cat-mine'), ref('cat-new')],
+          });
+          expect(getLocalIngredientRefOwnership).toHaveBeenCalledWith(['cat-victim', 'cat-mine', 'cat-new'], 'universe', 'u1');
+          const arg = vi.mocked(applyCatalogRemoteChanges).mock.calls[0][0];
+          expect(arg.ingredients).toEqual([ing('cat-mine'), ing('cat-new')]);
+          expect(arg.refs).toEqual([ref('cat-mine'), ref('cat-new')]);
+        });
+
+        it('applies nothing when the only ingredient belongs to another record, even with no bundled row', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockResolvedValue(ownership(['cat-victim']));
+          await pushBundle({ ingredients: [], refs: [ref('cat-victim')] });
+          expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+        });
+
+        it('fails closed when the local ownership lookup throws', async () => {
+          vi.mocked(getLocalIngredientRefOwnership).mockRejectedValue(new Error('db unavailable'));
+          await pushBundle({ ingredients: [ing('cat-new')], refs: [ref('cat-new')] });
+          expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+        });
+      });
+
+      it('never lets a music-video push overwrite an existing local track, linked by the project or not (#12466)', async () => {
+        const linkedTrack = { id: 'track-victim', title: 'Hijacked', ...live };
+        const push = (record) => applyIncomingPush({
+          kind: 'musicVideoProject', record: { ...record, ...live }, linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        vi.mocked(getTrack).mockResolvedValue({ id: 'track-victim', title: 'Mine' });
+
+        // First push points the project at the victim track; the second finds
+        // that link already stored locally — neither may overwrite the track.
+        await push({ id: 'mv-new', trackId: 'track-victim' });
+        vi.mocked(getMusicVideoProject).mockResolvedValue({ id: 'mv-new', trackId: 'track-victim' });
+        await push({ id: 'mv-new', trackId: 'track-victim' });
+        expect(mergeTracksFromSync).not.toHaveBeenCalled();
+      });
+
+      it('merges a linkedTrack that does not exist locally yet', async () => {
+        const linkedTrack = { id: 'track-new', title: 'Fresh', ...live };
+        await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-fresh', trackId: 'track-new', ...live },
+          linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeTracksFromSync).toHaveBeenCalledWith([linkedTrack], SOURCE);
+      });
+
+      it('withholds the sender hash when the local track lookup fails, without failing the push', async () => {
+        vi.mocked(getTrack).mockRejectedValue(new Error('db unavailable'));
+        const result = await applyIncomingPush({
+          kind: 'musicVideoProject', record: { id: 'mv-err', trackId: 'track-new', ...live },
+          linkedTrack: { id: 'track-new', title: 'Fresh', ...live }, assetManifest: [], sourceInstanceId: 'peer-a',
+        });
+        expect(mergeTracksFromSync).not.toHaveBeenCalled();
+        expect(result.trackSyncPending).toBe(true);
+      });
+    });
+
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
       await applyIncomingPush({
         kind: 'series',
@@ -3586,7 +3754,7 @@ describe('peerSync', () => {
           { id: 'issue-2', seriesId: 'ser-1', ephemeral: true, imageRefs: ['private.png'] },
           { id: 'issue-3', seriesId: 'ser-1', deleted: true, imageRefs: ['deleted.png'] },
         ],
-        linkedCollection: { id: 'collection-1', items: [{ kind: 'video', ref: 'collection-clip' }] },
+        linkedCollection: { id: 'collection-1', seriesId: 'ser-1', items: [{ kind: 'video', ref: 'collection-clip' }] },
         assetManifest: manifest, sourceInstanceId: 'peer-a',
       });
       expect(result.missingAssets).toEqual(manifest.slice(0, 3));
@@ -4076,7 +4244,11 @@ describe('peerSync', () => {
         kind: 'universe',
         record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
         assetManifest: [],
-        catalogBundle: { ingredients: [], refs: [], relations: [{ fromIngredientId: 'cat-chr-1', toIngredientId: 'cat-chr-2', kind: 'ally-of', updatedAt: '2026-01-02T00:00:00Z' }] },
+        catalogBundle: {
+          ingredients: [],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+          relations: [{ fromIngredientId: 'cat-chr-1', toIngredientId: 'cat-chr-2', kind: 'ally-of', updatedAt: '2026-01-02T00:00:00Z' }],
+        },
         sourceInstanceId: 'peer-a',
         portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
       });
@@ -4094,6 +4266,7 @@ describe('peerSync', () => {
         assetManifest: [],
         catalogBundle: {
           ingredients: [{ id: 'cat-chr-1', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
           relations: [{ id: 'cat-rel-1', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
         },
         sourceInstanceId: 'peer-a',

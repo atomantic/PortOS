@@ -7,6 +7,7 @@ import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.j
 import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, isProviderReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
+import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/forkHead.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
@@ -750,6 +751,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
+  const forkNote = buildForkBranchInstructions(prBranch, metadata.forkHead);
   const prNumber = metadata.reviewLoopPRNumber ?? '';
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
@@ -775,7 +777,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // the whole job is CI-gate → fix → merge. Branch before any reviewer defaulting
   // below, which would otherwise resolve the empty list back to `[copilot]`.
   if (isMergeOnlyFollowUp(metadata)) {
-    return buildMergeFollowUpSection({
+    return forkNote + buildMergeFollowUpSection({
       prUrl, prBranch, prNumber, prOwner, prRepo, sourceTaskId, verbose, inlineExitStep,
       mergeGateForge: forge.mergeGateForge, inlineWorkflowStep, localReviewers: localPhaseReviewerList, localReviewRequired: localPhaseReviewRequired,
       selfReview: isSelfReviewFollowUp(metadata),
@@ -940,7 +942,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const opening = phase.opening(phaseCtx);
 
   if (verbose && phase.supportsVerbose) {
-    return `
+    return forkNote + `
 ${heading}
 ${opening}
 
@@ -976,7 +978,7 @@ ${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do
   const hardStopNote = optionalConfiguredReviewers.length
     ? `**Hard stop:** if a required reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}. An optional reviewer may end with an inconclusive result without blocking, but an unresolved accepted finding or rejection, failed build/test, or push failure still blocks.`
     : `**Hard stop:** if a reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}.`;
-  return [
+  return [forkNote,
     heading,
     phase.compactOpening(phaseCtx),
     `**Reviewers (in order)**: ${reviewerLabel}${equiv}.`,
@@ -1137,7 +1139,7 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
     gh ? PREGATE_ATTESTATION_STEP : null,
     `${startStep}. **Wait for CI to finish**: ${checksCmd}. "No checks reported" is AMBIGUOUS — a just-opened PR reports it while checks are still attaching, and merging on it races the CI this gate exists to wait for. Treat it as green ONLY when the repo genuinely has no CI (${gh ? '`gh workflow list` is empty / nothing in `.github/workflows` triggers on pull_request, and no external status check is configured' : 'no `.gitlab-ci.yml` and no pipeline is configured'}). If CI IS expected, wait 30s and re-check for up to 5 minutes — and if it still hasn't attached, **leave the PR open and say so**; never merge on checks that were expected but never appeared.`,
     `${startStep + 1}. **Clear whatever blocks the merge, then re-check.** A conflict-free branch may merge behind the base when required checks pass for its current head and configured reviews are satisfied. Base movement alone does not require rebasing or restarting CI. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk; after any resulting head change, rerun affected validation and required reviews/checks. If a check failed, read the failing job's log (${gh ? `\`gh run view --log-failed\`${glab ? ' on GitHub, `glab ci trace` on GitLab' : ''}` : '`glab ci trace`'}), fix the cause here, run the project's tests, commit (\`fix:\` prefix, no Co-Authored-By), push.${reviewRecheckAfterCodeFix} Then go back to the previous step — cap this at 5 rounds. If ${mergeableCmd}, \`git fetch origin\`, rebase onto the base branch, resolve the conflicts keeping BOTH sides' intent,${rebaseReviewSuffix} re-run the tests, \`git push --force-with-lease\`, and re-check.`,
-    `${startStep + 2}. **Merge** ${gh ? 'with these flags, replacing <verified-head> with the exact head whose required CI and configured reviews passed' : 'with exactly these flags, nothing else'} — a true merge commit keeps the branch tip in the base branch's history so automated worktree cleanup can prove the branch is merged, ${gh ? 'unless the verified GitHub auto-merge handoff above already completed this run' : 'and any merge-deferral flag leaves the PR open after you exit'}. If it is already merged${alreadyMergedHint}, skip to the next step:`,
+    `${startStep + 2}. **Merge** ${gh ? 'with these flags, replacing <verified-head> with the exact head whose required CI and configured reviews passed' : 'with exactly these flags, nothing else'} — a true merge commit keeps the branch tip in the base branch's history so automated worktree cleanup can prove the branch is merged, ${gh ? 'unless the exact-head durable PortOS successor above accepted responsibility for the remaining work' : 'and any merge-deferral flag leaves the PR open after you exit'}. If it is already merged${alreadyMergedHint}, skip to the next step:`,
     '   ```bash',
     gh ? `   ${both ? '# GitHub:  ' : ''}gh pr merge ${prRef} --merge --match-head-commit <verified-head>` : null,
     // `glab mr merge` takes an MR IID or source branch — a URL is not accepted.
@@ -1272,4 +1274,11 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     '**Hard stop:** if CI is still red after 5 fix rounds, or a conflict needs a product decision you can\'t make, post a PR comment summarising exactly what is blocking the merge and exit with the PR left open. Do not force a merge over red CI.',
     ...prDetails,
   ].join('\n');
+}
+
+/** Explicit pushes preserve fork destinations without changing repository-wide Git defaults. */
+export function buildForkBranchInstructions(branch, forkHead) {
+  const fork = normalizeForkHead(forkHead);
+  if (!fork || !branch) return '';
+  return `Fork checkout: local branch \`${forkLocalBranch(branch, fork)}\` tracks the contributor's \`${branch}\`. For every push use \`git push ${shellQuote(forkRemoteName(fork.ownerLogin))} ${shellQuote(`HEAD:refs/heads/${branch}`)}\` (add --force-with-lease only when the workflow authorizes a rebase). This destination applies to all push steps below. Keep this local branch checked out; never push it to origin or delete the contributor's remote branch.\n\n`;
 }

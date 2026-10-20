@@ -7,7 +7,7 @@ import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'luci
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { compositionDraft, RENDER_STYLES } from './compositionDraft.js';
-import { projectServicesSummary } from '../../lib/musicVideoStages.js';
+import { isFinalRenderCurrent, projectServicesSummary } from '../../lib/musicVideoStages.js';
 import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, videosButtonLabel } from '../../lib/musicVideoBatchPlan.js';
 
 /**
@@ -251,6 +251,7 @@ export function RenderStyleSelect({ project, onRenderStyle }) {
 export function RenderFinalButton({ project, renderJob, readiness }) {
   // A composed render reuses every shot already rendered and stitches.
   const { status: shotRenders } = useMusicVideoShotRenders(project);
+  const finalCurrent = isFinalRenderCurrent(project);
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   const mode = project.composition?.mode || 'concat';
@@ -315,10 +316,13 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       {isDisabled && blockerReason && (
         <p className="text-xs text-port-text-muted">{blockerReason}</p>
       )}
-      {shotRenders?.total > 0 && (
+      {finalCurrent && (
+        <p className="text-xs text-port-text-muted" data-testid="final-render-current">Final render is current.</p>
+      )}
+      {!finalCurrent && shotRenders?.total > 0 && (
         <p className="text-xs text-port-text-muted" data-testid="shot-renders-ready">
           {shotRenders.ready === shotRenders.total ? 'Every shot is ready: Render final only stitches them.'
-            : `${formatCount(shotRenders.ready)} of ${formatCount(shotRenders.total)} shots ready. Render final renders the rest, then stitches.`}
+            : `${formatCount(shotRenders.ready)} of ${formatCount(shotRenders.total)} ${shotRenders.outro ? 'shots and the outro card' : 'shots'} ready. Render final renders the rest, then stitches.`}
         </p>
       )}
     </div>

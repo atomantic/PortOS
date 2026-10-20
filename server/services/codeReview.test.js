@@ -1223,6 +1223,65 @@ describe('codeReview helpers', () => {
       expect(withoutPricing).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['published pricing'] })
     })
 
+    it('ships a local-catalog model entry whose added key field is present, but not one with no key', async () => {
+      const objective = 'Example Model 2 has just launched; add it to the local LLM catalog.'
+      const diff = [
+        'diff --git a/server/lib/localLlmCatalog.js b/server/lib/localLlmCatalog.js',
+        '+  {',
+        "+    key: 'example-model-2',",
+        "+    name: 'Example Model 2',",
+        "+    ollama: 'example-model-2',",
+        '+  },',
+      ].join('\n')
+      const noKeyDiff = diff.replace(/^\+    key:.*\n/m, '')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const recognizes = rubric.includes('the entry\'s identifier is its \`key\` field')
+          && rubric.includes('an entry with no \`key\`')
+        const hasKey = request.messages[1].content.includes('+    key:')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(recognizes && hasKey
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'entry carries its added key' }
+            : { verdict: 'fix-first', missing: ['key field'], unrequested: [], evidence: 'no key' }) } }],
+        })
+      })
+
+      const withKey = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff })
+      const withoutKey = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: noKeyDiff })
+
+      expect(withKey).toMatchObject({ ok: true, verdict: 'ship', missing: [] })
+      expect(withoutKey).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['key field'] })
+    })
+
+    it('does not demand agent resume behavior for a Resume agent-... objective', async () => {
+      const objective = 'Resume agent-cd760882'
+      const diff = [
+        'diff --git a/server/lib/localLlmCatalog.js b/server/lib/localLlmCatalog.js',
+        '+  {',
+        "+    key: 'nemotron-3.5-bolt',",
+        "+    name: 'Nemotron 3.5 Bolt 74B-A9B',",
+        "+    ollama: 'nemotron-3.5-bolt',",
+        '+  },',
+      ].join('\n')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const recognizes = rubric.includes("resuming is an execution step to continue the prior agent's work")
+          && rubric.includes('Do not report missing "agent resume behavior"')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(recognizes
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'catalog entry added' }
+            : { verdict: 'rethink', missing: ['agent resume behavior'], unrequested: [], evidence: 'no resume code' }) } }],
+        })
+      })
+
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff })
+      expect(result).toMatchObject({ ok: true, verdict: 'ship', missing: [] })
+    })
+
     it('ships a same-checksum retry scoped to a saved federated schema gap, not an unconditional retry', async () => {
       const objective = 'On our federated instances page, I see a schema version mismatch.'
       const scopedRetryDiff = [

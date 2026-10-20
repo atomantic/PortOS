@@ -24,6 +24,7 @@ import {
   resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
 import { useVideoGenValidation } from './useVideoGenValidation.js';
@@ -645,19 +646,28 @@ export function useVideoGenForm({
   // Hoisted above the reference-mode derivation below, which needs it: the grok
   // lane reads only prompt/dims/source-image/duration, so its image_to_video
   // always anchors and the promise has to collapse to the default there.
-  const isGrok = grokEnabled && backend === 'grok';
+  // Each hosted lane stays gated on its own *Enabled flag, so a persisted
+  // backend that is no longer configured resolves to null (the local lane).
+  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled })[backend]
+    ? backend : null;
+  const isGrok = hostedLane === 'grok';
   // fal.ai's queue REST API is usability-gated on a configured API key
   // (`falEnabled`, mirrored from the server's isVideoModeUsable check), not a
   // toggle — same short-circuit shape as grok: only prompt/dims/source-image
   // and a duration reach the provider.
-  const isFal = falEnabled && backend === 'fal';
+  const isFal = hostedLane === 'fal';
   // reactor.inc fast-h3 is likewise usability-gated on a configured API key
   // (`reactorEnabled`) — same short-circuit shape as fal, plus native
   // clip-to-clip chaining via continue_from_clip_id.
-  const isReactor = reactorEnabled && backend === 'reactor';
-  // Runway is usability-gated the same way, and renders image-to-video only.
-  const isRunway = runwayEnabled && backend === 'runway';
-  const referenceModeApplies = mode === 'image' && !isGrok && !isFal && !isReactor && !isRunway;
+  const isReactor = hostedLane === 'reactor';
+  // Runway is usability-gated the same way; text mode is offered for the models that render from a prompt alone.
+  const isRunway = hostedLane === 'runway';
+  // A model that needs a start frame cannot stay picked in Text mode: fall back to the catalog default (which renders from text).
+  const runwayTextBlocked = isRunway && mode === 'text' && !runwayModelTakesText(getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
+  useEffect(() => {
+    if (runwayTextBlocked) setRunwayModelId('');
+  }, [runwayTextBlocked, setRunwayModelId]);
+  const referenceModeApplies = mode === 'image' && !hostedLane;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
   // rather than the pipeline's 1.0, and the panel must say so.
@@ -941,9 +951,7 @@ export function useVideoGenForm({
   // clip survives the switch and reappears if the user flips back.
   const handleBackendChange = (id) => {
     setBackend(id);
-    if (id === 'runway' && mode !== 'image') {
-      handleModeChange('image');
-    } else if ((id === 'grok' || id === 'fal' || id === 'reactor') && mode !== 'text' && mode !== 'image') {
+    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1244,9 +1252,9 @@ export function useVideoGenForm({
       if (p.duration) setFalDuration(p.duration);
       if (p.modelId) setFalModelId(p.modelId);
     } else if (p.mode === 'runway') {
-      // Runway job: same discriminator shape as fal above; image-to-video only.
+      // Runway job: same discriminator shape as fal above.
       setBackend('runway');
-      setMode('image');
+      setMode(p.videoMode === 'text' ? 'text' : 'image');
       if (p.modelId) {
         runwayModelPickRef.current = p.modelId;
         setRunwayModelId(p.modelId);
@@ -1333,7 +1341,7 @@ export function useVideoGenForm({
   // Snapshot the current validated state into a wire payload. The submit flow
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
-    isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
+    hostedLane, isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
     isRunway, runwayModelId, runwayDuration, runwayResolution,
     displaySleepEnabled,
@@ -1352,7 +1360,7 @@ export function useVideoGenForm({
 
   return {
     // Backend + mode
-    backend, isGrok, isFal, isReactor, isRunway, handleBackendChange,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange,
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,

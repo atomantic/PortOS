@@ -379,7 +379,7 @@ describe('listPreviewSources', () => {
     expect(ids({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts })).toEqual(['excerpt:b', 'excerpt:a']);
     // Composing puts the live document ahead of an old final render, and a stale final says so.
     const stale = { renderHistoryId: 'r1', renderDependencyState: { status: 'stale' }, composition: { mode: 'document', document: { directory: 'd' } }, excerpts };
-    expect(ids(stale, { finalVideoSrc: '/data/videos/final.mp4', liveFirst: true })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
+    expect(ids(stale, { finalVideoSrc: '/data/videos/final.mp4', leadWith: 'storyboard' })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
     expect(listPreviewSources(stale, { finalVideoSrc: '/data/videos/final.mp4' })[0].label).toBe('Final render (out of date)');
     expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toEqual([]);
     expect(listPreviewSources({ excerpts })[0]).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
@@ -696,9 +696,9 @@ describe('preview source order on Storyboard', () => {
     const drafts = [{ id: 'aaaaaa', status: 'complete', filename: 'a.mp4', startSec: 72, endSec: 95 }];
     const board = { trackId: 't1', scenes: [scene()], excerpts: drafts };
     expect(listPreviewSources(board).map((s) => s.id)).toEqual(['excerpt:aaaaaa', 'animatic']);
-    expect(listPreviewSources(board, { storyboardFirst: true }).map((s) => s.id)).toEqual(['animatic', 'excerpt:aaaaaa']);
+    expect(listPreviewSources(board, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['animatic', 'excerpt:aaaaaa']);
     const doc = { ...board, composition: { mode: 'document', document: { directory: 'd' } } };
-    expect(listPreviewSources(doc, { storyboardFirst: true }).map((s) => s.id)).toEqual(['document', 'animatic', 'excerpt:aaaaaa']);
+    expect(listPreviewSources(doc, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['document', 'animatic', 'excerpt:aaaaaa']);
   });
 });
 
@@ -706,7 +706,7 @@ describe('preview source order on Final render', () => {
   it('puts the drafts ahead of the live composition until a final render exists', () => {
     const project = { composition: { mode: 'document', document: { directory: 'd' } }, excerpts: [{ id: 'aaaaaa', status: 'complete', filename: 'a.mp4', startSec: 0, endSec: 5 }] };
     expect(listPreviewSources(project).map((s) => s.id)).toEqual(['document', 'excerpt:aaaaaa']);
-    expect(listPreviewSources(project, { draftsFirst: true }).map((s) => s.id)).toEqual(['excerpt:aaaaaa', 'document']);
+    expect(listPreviewSources(project, { leadWith: 'drafts' }).map((s) => s.id)).toEqual(['excerpt:aaaaaa', 'document']);
   });
 });
 

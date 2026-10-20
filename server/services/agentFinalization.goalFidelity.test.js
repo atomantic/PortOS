@@ -224,6 +224,23 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(args.backend).toBe('ollama');
   });
 
+  it('resolves a Resume agent-... task objective from the prior agent record', async () => {
+    getAgentRecord.mockImplementation(async (id) => (id === 'agent-cd760882' ? {
+      id: 'agent-cd760882',
+      metadata: { taskDescription: 'Refresh the bundled local-LLM suggested-models catalog' },
+    } : null));
+    await finalize({
+      task: {
+        id: 'task-resume',
+        description: 'Resume agent-cd760882',
+        taskType: 'internal',
+        metadata: { resumedFromAgentId: 'agent-cd760882' },
+      },
+    });
+    const [args] = runLocalGoalFidelityReviewMock.mock.calls.at(-1);
+    expect(args.objective).toBe('Refresh the bundled local-LLM suggested-models catalog');
+  });
+
   it('passes task screenshots into the objective when a terse request depends on the pictured runtime error', async () => {
     const screenshots = ['/api/screenshots/superclass-error.png'];
     const task = {

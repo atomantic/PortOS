@@ -108,6 +108,7 @@ const VISION_RE = new RegExp([
   'smolvlm', 'internvl', 'cogvlm', 'glm-?4v', 'phi-?3\\.5?-vision',
   'phi-?4-multimodal', 'got-ocr', 'idefics', 'fuyu', 'paligemma',
   'kosmos', 'nanollava',
+  'nemotron-?3\\.5?-bolt',
 ].join('|'), 'i');
 
 // CLI providers whose underlying model is vision-capable and whose CLI accepts

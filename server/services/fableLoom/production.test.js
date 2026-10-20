@@ -330,6 +330,27 @@ describe('fableLoom production service', () => {
     expect(snapshots.every(snapshot => !('tail' in snapshot) && !('runtime' in snapshot))).toBe(true);
   });
 
+  it('queues the Runway text lane with the compiled prompt and no invented source frame', async () => {
+    const loom = structuredClone(sampleLoom);
+    loom.episodes[0].nodes.forEach(node => { node.image = 'example-frame.png'; });
+    records.getLoom.mockResolvedValue(loom);
+    settingsMocks.getSettings.mockResolvedValue({ videoGen: { runway: { apiKey: 'example-key' } } });
+    const prompt = 'A fox crosses the clearing at dawn.';
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({
+      prompt, sourceImagePath: null, visualConditioning: { compiledPrompt: prompt },
+    });
+    await startEpisodeProductionBatch('loom-1', 'ep-1', {
+      videoMode: 'runway', assetTypes: ['video_entry'], nodeIds: ['node-1'],
+    });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'video', params: expect.objectContaining({
+        mode: 'runway', videoMode: 'text', prompt, sourceImagePath: null,
+        visualConditioning: expect.objectContaining({ compiledPrompt: prompt }),
+      }),
+    }));
+  });
+
   it('queues Reactor with its compact compiled script and fails oversized scripts before queueing', async () => {
     const loom = structuredClone(sampleLoom);
     loom.episodes[0].nodes.forEach((node) => { node.image = 'example-frame.png'; });

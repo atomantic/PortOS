@@ -30,7 +30,7 @@ import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import {
@@ -631,6 +631,12 @@ async function resolvePreparedParams({
   // ServerError on copy failure (and cleans up every staged file + multipart
   // temp upload so a mid-flight failure doesn't leak under /tmp + data/uploads).
   const stageUploadDurable = async (file, kind) => {
+    // ffmpeg opens a staged file by its bytes, so a playlist posing as audio
+    // or an image never reaches the duration probe or the render.
+    await assertFileNotMediaManifest(file.path).catch(async (err) => {
+      await cleanupStaged();
+      throw err;
+    });
     const ext = extname(file.originalname || file.path) || '.bin';
     const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
     try {
@@ -1125,7 +1131,7 @@ async function resolvePreparedParams({
   // identically instead of storing a useless array of nulls.
   const normalizedChunkPrompts = effectiveChunks > 1 && Array.isArray(body.chunkPrompts)
     ? body.chunkPrompts.slice(0, effectiveChunks)
-      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p.trim() : null))
+      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p : null))
     : undefined;
   const effectiveChunkPrompts = normalizedChunkPrompts?.some(Boolean)
     ? normalizedChunkPrompts

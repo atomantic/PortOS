@@ -487,6 +487,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
+  // Whole-tree scanner: a module moved between directories leaves a stale cited
+  // path in some comment, with no import edge to this guard (#12408).
+  'server/sourceFileReferences.test.js',
   // Whole-tree scanner: a renamed export in any module leaves a dead key in some
   // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
   'server/mockContractConventions.test.js',
@@ -607,6 +610,7 @@ export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-his
 export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
+  'autofixer/sandbox.verify.test.js',
   'server/lib/codeAnimationContainment.test.js',
   'server/routes/codeAnimationExecution.test.js',
   'server/services/codeAnimation/containedWorker.test.js',

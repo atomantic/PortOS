@@ -140,6 +140,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
   // Resolve the URL independently of the current collection page. Track the
   // requested identity even for a missing record so pending and missing differ.
+  const [detailRetry, setDetailRetry] = useState(0);
   const listedRecord = activeType === selectedType
     ? records.find(r => r.id === recordId && !r.contentTruncated)
     : null;
@@ -148,29 +149,35 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let active = true;
     const fetchRecord = async () => {
       let full = null;
-      const options = { silent: true };
-      switch (selectedType) {
-        case 'people':
-          full = await api.getBrainPerson(recordId, options).catch(() => null);
-          break;
-        case 'projects':
-          full = await api.getBrainProject(recordId, options).catch(() => null);
-          break;
-        case 'ideas':
-          full = await api.getBrainIdea(recordId, options).catch(() => null);
-          break;
-        case 'admin':
-          full = await api.getBrainAdminItem(recordId, options).catch(() => null);
-          break;
-        case 'memories':
-        default:
-          full = await api.getBrainMemory(recordId, options).catch(() => null);
-          break;
+      let error = null;
+      try {
+        const options = { silent: true };
+        switch (selectedType) {
+          case 'people':
+            full = await api.getBrainPerson(recordId, options);
+            break;
+          case 'projects':
+            full = await api.getBrainProject(recordId, options);
+            break;
+          case 'ideas':
+            full = await api.getBrainIdea(recordId, options);
+            break;
+          case 'admin':
+            full = await api.getBrainAdminItem(recordId, options);
+            break;
+          case 'memories':
+          default:
+            full = await api.getBrainMemory(recordId, options);
+            break;
+        }
+      } catch (err) {
+        // A 404 is a genuinely missing record; anything else is a failed read worth retrying.
+        if (err?.status !== 404) error = err;
       }
       if (active) {
         const record = full?.id === recordId && !full.archived && !deletedIdsRef.current.has(full.id)
           ? full : null;
-        setDetailResult({ id: recordId, type: selectedType, record });
+        setDetailResult({ id: recordId, type: selectedType, record, error });
       }
     };
     // Clear a previous visit's result, including when Back revisits the same ID.
@@ -180,7 +187,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     // Deliberately not keyed on `records`: usePagedCollection hands out a new array on
     // every reset/page landing, and each one would reset a resolved detail back to loading
     // (dropping an open editor) even though the URL-selected record did not change.
-  }, [recordId, selectedType, listedRecord]);
+  }, [recordId, selectedType, listedRecord, detailRetry]);
 
   const detailResolved = detailResult?.id === recordId && detailResult?.type === selectedType;
   const viewerRecord = recordId ? ((detailResolved ? detailResult.record : null) || listedRecord) : null;
@@ -1026,6 +1033,21 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                 onEdit={startEdit}
                 onSendToCatalog={handleSendToCatalog}
               />
+            ) : detailResolved && detailResult.error ? (
+              <aside
+                aria-label="Preview failed to load"
+                className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col w-full shadow-lg lg:sticky lg:top-4"
+              >
+                <Banner tone="error" title="Couldn't load this entry">
+                  {detailResult.error.message || 'The read failed.'}
+                  <button onClick={() => setDetailRetry(n => n + 1)} className="block min-h-[44px] text-port-accent hover:underline">
+                    Retry
+                  </button>
+                  <button onClick={closeReader} className="block min-h-[44px] text-port-accent hover:underline">
+                    Back to entries
+                  </button>
+                </Banner>
+              </aside>
             ) : (
               <aside
                 aria-label="Preview not found"

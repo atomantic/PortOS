@@ -16,7 +16,8 @@ import { extname } from 'path';
 import { unlink } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import {
   addDevArtifactNote,
@@ -32,12 +33,6 @@ import {
   reviewDevArtifact,
 } from './devArtifacts.js';
 import { discardDevArtifactFile, resolveDevArtifactFile, writeDevArtifactFile } from './devArtifactStore.js';
-
-async function requireProject(id) {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
-}
 
 /** Artifact kinds that show rendered output rather than planning imagery. */
 export const DEV_ARTIFACT_EVIDENCE_KINDS = new Set(['storyboard', 'animatic']);

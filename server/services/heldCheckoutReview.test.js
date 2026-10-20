@@ -44,6 +44,17 @@ describe('retirement forge verification', () => {
     await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-pr-not-matching-merged');
   });
 
+  it('accepts a local repair alias only with exact merged head proof', async () => {
+    const evidence = await readRetirementForgeEvidence('/synthetic/repo', 'repair/42', prUrl, { exactAliasHead: pr.headRefOid });
+    expect(evidence).toMatchObject({ exactAliasHead: pr.headRefOid, publishedBranch: 'claim/42', publishedRemoteHead: null });
+    await expect(readRetirementForgeEvidence('/synthetic/repo', 'repair/42', prUrl, { exactAliasHead: 'e'.repeat(40) }))
+      .rejects.toThrow('retirement-pr-not-matching-merged');
+    mock.git.mockImplementation(async args => ({ exitCode: 0, stdout: args.at(-1) === 'refs/heads/claim/42'
+      ? `${'f'.repeat(40)}\trefs/heads/claim/42\n` : '' }));
+    await expect(readRetirementForgeEvidence('/synthetic/repo', 'repair/42', prUrl, { exactAliasHead: pr.headRefOid }))
+      .rejects.toThrow('retirement-remote-head-changed');
+  });
+
   it('includes renamed previous paths and complete paginated file scope literally', async () => {
     detail.changed_files = 2;
     files = [[{ filename: ':(exclude)*', previous_filename: 'old.txt', status: 'renamed' }], [{ filename: 'new.txt', status: 'added' }]];

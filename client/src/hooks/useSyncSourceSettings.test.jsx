@@ -36,16 +36,23 @@ describe('useSyncSourceSettings', () => {
     expect(getStatus).toHaveBeenCalledWith({ silent: true });
   });
 
-  it('fails open when either initial request fails', async () => {
-    getSettings.mockRejectedValue(new Error('offline'));
-    getStatus.mockRejectedValue(new Error('offline'));
+  it('reports a failed settings read instead of seeding defaults, refuses save, and recovers on retry', async () => {
+    getSettings.mockRejectedValueOnce(new Error('offline'));
+    getStatus.mockResolvedValue(null);
 
     const { result } = renderHook(() => useSyncSourceSettings(options));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.enabled).toBe(false);
-    expect(result.current.intervalMinutes).toBe(60);
-    expect(result.current.status).toBeNull();
+    expect(result.current.loadError).toBe(true);
+    await act(async () => expect(await result.current.save()).toBe(false));
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    getSettings.mockResolvedValue({ signal: { enabled: true, intervalMinutes: 90 } });
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loadError).toBe(false);
+    expect(result.current.enabled).toBe(true);
+    expect(result.current.intervalMinutes).toBe(90);
   });
 
   it('clamps and persists the changed source settings', async () => {

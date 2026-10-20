@@ -1,12 +1,14 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
+import { setHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
 // Isolate personal instructions so contributor config cannot decide assertions.
 // Tests of global-instruction loading override this with a fixture home (#3475).
@@ -485,7 +487,12 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toContain('agent-1');
     expect(prompt).toContain('--match-head-commit <sha>');
     expect(prompt).not.toContain('--delete-branch');
-    expect(prompt).toContain('Archive failure');
+    expect(prompt).toContain('Local teardown is API-only');
+    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
+    expect(prompt).toContain('Require ok:true, archiveDir and branchDeleted:true plus the matching persisted retirement receipt');
+    expect(prompt).not.toContain('git worktree remove');
+    expect(prompt).not.toContain('git branch -d');
     expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);
     // Read before the workflow whose TUI form ends on the sentinel write.
     expect(prompt.indexOf(ADMISSION)).toBeLessThan(prompt.search(/^## Completion/m));
@@ -1076,9 +1083,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/AMBIGUOUS/);
       expect(prompt).toMatch(/gh workflow list/);
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
-      expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
-      expect(prompt).toContain('autoMergeRequest.enabledAt');
-      expect(prompt).toContain('allow_auto_merge: true');
+      expect(prompt).not.toMatch(/gh pr merge[^`\n]*--auto --merge/);
+      expect(prompt).toContain('mergeHandoffMinQueuedRuns');
+      expect(prompt).toContain('explicit persisted PortOS pending-merge receipt');
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toContain('If it returns `MERGED`, publication succeeded even when the CLI failed during local cleanup');
       expect(prompt).toContain('Continue to the completion sentinel when this workflow requires one');
@@ -1732,21 +1739,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/READ THAT FILE/);
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
-      // The fixed review-blocked publication/merge contract and the sentinel
-      // write-permission note (#7405) both add prose to the prompt, but the
-      // 40KB recipe itself must still stay in the staged file — which is the
-      // only thing this ceiling is measuring, so it carries growth headroom
-      // rather than pinning today's byte count.
-      // #9837 adds remote-state-first recovery and managed-cleanup ownership.
-      // Keep bounded headroom for that safety prose while the explicit recipe
-      // omission above and this ceiling still reject inlining the 40KB recipe.
-      // #11435 adds the repository merge admission contract to own-PR runs.
-      // The verified auto-merge handoff adds ~1.7KB of required policy. Keep
-      // the staging ceiling below the 40KB recipe and retain its explicit
-      // absence assertion above; this allowance covers only the new contract.
-      // #12133 adds the managed-worktree preservation handoff to the merge gate;
-      // the ceiling stays well below the 40KB recipe.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(33_000);
+      // This ceiling detects accidentally inlining the staged 40KB recipe.
+      // Exclude the exact shared safety contracts, whose independently tested
+      // required prose is not recipe content; retain the original ceiling.
+      expect(prompt).toContain(MANAGED_WORKTREE_CLEANUP_CONTRACT);
+      const withoutFixedGuidance = prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '')
+        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '');
+      expect(withoutFixedGuidance.length).toBeLessThan(33_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -1950,9 +1949,9 @@ describe('buildLightContextPrompt', () => {
       // merge and verify — without these steps the PR sits open after the
       // agent exits (the original "agent abandoned the PR" bug).
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>/);
-      expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
-      expect(prompt).toContain('autoMergeRequest.enabledAt');
-      expect(prompt).toContain('allow_auto_merge: true');
+      expect(prompt).not.toMatch(/gh pr merge[^`\n]*--auto --merge/);
+      expect(prompt).toContain('mergeHandoffMinQueuedRuns');
+      expect(prompt).toContain('explicit persisted PortOS pending-merge receipt');
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
     });
@@ -2091,10 +2090,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('/api/cos/merge-admission');
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
-      // Pending CI may finish with a GitHub-confirmed auto-merge handoff.
-      expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
-      expect(prompt).toContain('autoMergeRequest.enabledAt');
-      expect(prompt).toContain('allow_auto_merge: true');
+      // Pending CI retains ownership unless a measured durable successor accepts the exact head.
+      expect(prompt).not.toMatch(/gh pr merge[^`\n]*--auto --merge/);
+      expect(prompt).toContain('mergeHandoffMinQueuedRuns');
+      expect(prompt).toContain('explicit persisted PortOS pending-merge receipt');
       // The immediate-merge fallback still verifies MERGED.
       expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
       expect(prompt).toMatch(/MERGED/);
@@ -2132,9 +2131,9 @@ describe('buildLightContextPrompt', () => {
       // CI is the gate, and the merge command matches the review-loop contract.
       expect(prompt).toMatch(/gh pr checks "https:\/\/github\.com\/o\/r\/pull\/9" --watch --fail-fast/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
-      expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
-      expect(prompt).toContain('autoMergeRequest.enabledAt');
-      expect(prompt).toContain('allow_auto_merge: true');
+      expect(prompt).not.toMatch(/gh pr merge[^`\n]*--auto --merge/);
+      expect(prompt).toContain('mergeHandoffMinQueuedRuns');
+      expect(prompt).toContain('explicit persisted PortOS pending-merge receipt');
       expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
       expect(prompt).toMatch(/MERGED/);
       // No reviewer defaulting may leak back in (normalizeReviewers would say copilot).
@@ -2920,7 +2919,7 @@ describe('buildAgentPrompt — provider type routing', () => {
     });
   });
 
-  it('full-context (api) review-loop follow-up offers verified auto-merge and immediate-merge fallback', async () => {
+  it('full-context (api) review-loop follow-up requires ownership through merge or an accepted durable successor', async () => {
     // Regression for Copilot feedback on PR #260: the merge-without-auto +
     // MERGED-state verification instructions live in BOTH the light and full
     // prompt paths, and we lock them in for the full path here so the two
@@ -2944,10 +2943,10 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).toMatch(/## Review-Loop Follow-up/);
     // Merge command must be present, exactly with --merge --match-head-commit <verified-head>.
     expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
-    // Pending CI may finish with a GitHub-confirmed auto-merge handoff.
-    expect(prompt).toMatch(/gh pr merge[^`\n]*--auto --merge --match-head-commit <published-head>/);
-    expect(prompt).toContain('autoMergeRequest.enabledAt');
-    expect(prompt).toContain('allow_auto_merge: true');
+    // Pending CI retains ownership unless a measured durable successor accepts the exact head.
+    expect(prompt).not.toMatch(/gh pr merge[^`\n]*--auto --merge/);
+    expect(prompt).toContain('mergeHandoffMinQueuedRuns');
+    expect(prompt).toContain('explicit persisted PortOS pending-merge receipt');
     // The immediate-merge fallback still verifies MERGED.
     expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state -q \.state/);
     expect(prompt).toMatch(/MERGED/);
@@ -3032,7 +3031,7 @@ describe('buildCompletionGuidelineBullet', () => {
     // ...unless the PR is a human's to land, where the bullet must not promise a merge.
     const jiraBullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, leavePrOpen: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, humanLandsPr: true,
     });
     expect(jiraBullet).toMatch(/left OPEN for a human/);
     expect(jiraBullet).not.toMatch(/merges the PR once CI is green/);
@@ -4755,4 +4754,51 @@ it.each(['api', 'cli', 'tui'])('requires a per-agent disposition checkpoint and 
   expect(prompt).toContain('.agent-audit-findings-audit-example.json');
   expect(prompt).toContain('AUDIT_FINDINGS_JSON');
   expect(prompt.indexOf('## Required finding disposition register')).toBeLessThan(prompt.indexOf('Stop after one fix'));
+});
+
+describe('{portosApiUrl} spawn-time expansion (#12405)', () => {
+  const task = makeTask({
+    description: 'Report back: curl -X POST {portosApiUrl}/api/example\nSecond use: GET {portosApiUrl}/api/other',
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('PORT', '5555');
+    vi.stubEnv('PORTOS_HTTP_PORT', '5553');
+  });
+
+  afterEach(() => {
+    setHttpsEnabledAtBoot(false);
+    vi.unstubAllEnvs();
+  });
+
+  // A plain-HTTP curl to a TLS-only :5555 fails at the transport layer, so on an
+  // HTTPS install every agent path must resolve to the loopback mirror.
+  it.each([
+    [true, 'http://127.0.0.1:5553'],
+    [false, 'http://127.0.0.1:5555'],
+  ])('expands every token on the api, light and split paths (https=%s)', async (https, origin) => {
+    setHttpsEnabledAtBoot(https);
+    const paths = {
+      api: await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'api' }),
+      light: await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'tui', providerCommand: 'claude' }),
+    };
+    for (const prompt of Object.values(paths)) {
+      expect(prompt).not.toContain('{portosApiUrl}');
+      expect(prompt).toContain(`curl -X POST ${origin}/api/example`);
+      expect(prompt).toContain(`GET ${origin}/api/other`);
+    }
+
+    const parts = await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'tui', providerCommand: 'claude', split: true });
+    expect(parts.userPrompt).toContain(`${origin}/api/example`);
+    expect(JSON.stringify(parts)).not.toContain('{portosApiUrl}');
+  });
+
+  it('expands a token that arrives through the queued metadata.prompt', async () => {
+    setHttpsEnabledAtBoot(true);
+    const prompt = await buildAgentPrompt(
+      makeTask({ description: 'Short title', metadata: { prompt: 'PATCH {portosApiUrl}/api/creative-director/cd-1/treatment' } }),
+      {}, '/repo', null, { providerType: 'api' },
+    );
+    expect(prompt).toContain('PATCH http://127.0.0.1:5553/api/creative-director/cd-1/treatment');
+  });
 });

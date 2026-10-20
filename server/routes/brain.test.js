@@ -131,6 +131,11 @@ vi.mock('../services/brainReconcile.js', () => ({
   getBrainSnapshot: vi.fn()
 }));
 
+// Route tests stay hermetic against host-local federation settings (#26e83f71)
+vi.mock('../services/sharing/peerPullAuthorization.js', () => ({
+  authorizePeerPull: vi.fn(async () => ({ allowed: true }))
+}));
+
 // Mock the brain journal service
 vi.mock('../services/brainJournal.js', () => ({
   listJournals: vi.fn(),

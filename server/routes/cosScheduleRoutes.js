@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -312,6 +312,82 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
     });
   }
   res.json(result);
+}));
+
+// Explicit operator capability; automatic cleanup retains its initialized-module guard.
+router.post('/schedule/branch-reconcile/initialized-checkouts/review', asyncHandler(async (req, res) => {
+  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.strict(), req.body);
+  const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckout({ appId, release, prUrl });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/retire', asyncHandler(async (req, res) => {
+  const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
+  const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await retireInitializedCheckout({ appId, release, review });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.get('/schedule/branch-reconcile/initialized-checkouts/status', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutTransactionSchema, req.query);
+  const { initializedCheckoutStatus } = await import('../services/initializedCheckoutRecovery.js');
+  res.json(await initializedCheckoutStatus(input));
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/restore', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { restoreInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await restoreInitializedCheckout(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutMetadataRestore } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutMetadataRestore(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/restore-metadata', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutMetadataRestoreSchema, req.body);
+  const { restoreInitializedCheckoutMetadata } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await restoreInitializedCheckoutMetadata(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-restored-finalization', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutRestoredFinalization } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutRestoredFinalization(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/finalize-restored', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutFinalizationSchema, req.body);
+  const { finalizeInitializedCheckoutRestored } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await finalizeInitializedCheckoutRestored(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/verify-archive', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { verifyInitializedCheckoutArchive } = await import('../services/initializedCheckoutRecovery.js');
+  res.json(await verifyInitializedCheckoutArchive(input));
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-branch', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutBranch(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/retire-branch', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutBranchRetireSchema, req.body);
+  const { retireInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await retireInitializedCheckoutBranch(input);
+  res.status(result.ok ? 200 : 409).json(result);
 }));
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see

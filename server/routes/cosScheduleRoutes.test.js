@@ -10,6 +10,9 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 
+const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn(), reviewInitializedCheckoutRestoredFinalization: vi.fn(), finalizeInitializedCheckoutRestored: vi.fn() }));
+vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
+
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
   getUpcomingTasks: vi.fn(),
@@ -59,6 +62,67 @@ describe('CoS Schedule Routes', () => {
     recovery.retireInventoriedCheckout.mockClear();
     expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, review: { ...review, digest: 'wrong' } })).status).toBe(400);
     expect(recovery.retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
+  it('requires exact review and journal proofs for explicit initialized checkout operations', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    initialized.reviewInitializedCheckout.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review`).send({ appId: 'app', ...tuple, prUrl })).status).toBe(200);
+    expect(initialized.reviewInitializedCheckout).toHaveBeenCalledWith({ appId: 'app', release: tuple, prUrl });
+    expect((await request(app).post(`${base}/retire`).send({ appId: 'app', ...tuple })).status).toBe(400);
+    expect(initialized.retireInitializedCheckout).not.toHaveBeenCalled();
+    const review = { prUrl, digest: 'b'.repeat(64), acceptSuperseded: false };
+    initialized.retireInitializedCheckout.mockResolvedValue({ ok: false, reason: 'active-owner' });
+    expect((await request(app).post(`${base}/retire`).send({ appId: 'app', ...tuple, review })).status).toBe(409);
+    expect(initialized.retireInitializedCheckout).toHaveBeenCalledWith({ appId: 'app', release: tuple, review });
+    const recoveryInput = { appId: 'app', transactionId: '2f800be9-6824-4726-813d-8d9ea0b2c1dc' };
+    initialized.initializedCheckoutStatus.mockResolvedValue({ ok: true, phase: 'quarantined' });
+    expect((await request(app).get(`${base}/status?appId=app&transactionId=${recoveryInput.transactionId}`)).status).toBe(200);
+    expect((await request(app).post(`${base}/restore`).send(recoveryInput)).status).toBe(400);
+    initialized.restoreInitializedCheckout.mockResolvedValue({ ok: true, restored: true });
+    const restore = { ...recoveryInput, journalDigest: 'c'.repeat(64) };
+    expect((await request(app).post(`${base}/restore`).send(restore)).status).toBe(200);
+    expect(initialized.restoreInitializedCheckout).toHaveBeenCalledWith(restore);
+    initialized.reviewInitializedCheckoutBranch.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-branch`).send(restore)).status).toBe(200);
+    expect((await request(app).post(`${base}/retire-branch`).send(restore)).status).toBe(400);
+    initialized.retireInitializedCheckoutBranch.mockResolvedValue({ ok: true, branchDeleted: true });
+    const branchInput = { ...restore, review };
+    expect((await request(app).post(`${base}/retire-branch`).send(branchInput)).status).toBe(200);
+    expect(initialized.retireInitializedCheckoutBranch).toHaveBeenCalledWith(branchInput);
+  });
+
+  it('separately requires a fresh digest for metadata restoration and rejects caller-supplied allowances', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const input = { appId: 'app', transactionId: '2f800be9-6824-4726-813d-8d9ea0b2c1dc', journalDigest: 'a'.repeat(64) };
+    initialized.reviewInitializedCheckoutMetadataRestore.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-metadata-restore`).send(input)).status).toBe(200);
+    expect(initialized.reviewInitializedCheckoutMetadataRestore).toHaveBeenCalledWith(input);
+    expect((await request(app).post(`${base}/restore-metadata`).send(input)).status).toBe(400);
+    const approved = { ...input, review: { digest: 'b'.repeat(64) } };
+    expect((await request(app).post(`${base}/restore-metadata`).send({ ...approved, ignoreXattrs: true })).status).toBe(400);
+    expect(initialized.restoreInitializedCheckoutMetadata).not.toHaveBeenCalled();
+    initialized.restoreInitializedCheckoutMetadata.mockResolvedValue({ ok: false, reason: 'metadata-recovery-review-changed' });
+    expect((await request(app).post(`${base}/restore-metadata`).send(approved)).status).toBe(409);
+    expect(initialized.restoreInitializedCheckoutMetadata).toHaveBeenCalledWith(approved);
+  });
+
+  it('requires a distinct finalization digest and never accepts caller-supplied metadata allowances', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
+    const input = { appId: 'app', transactionId: '2f800be9-682c-4726-813d-8d9ea0b2c1dc', journalDigest: 'a'.repeat(64) };
+    initialized.reviewInitializedCheckoutRestoredFinalization.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review-restored-finalization`).send(input)).status).toBe(200);
+    expect(initialized.reviewInitializedCheckoutRestoredFinalization).toHaveBeenCalledWith(input);
+    expect((await request(app).post(`${base}/finalize-restored`).send(input)).status).toBe(400);
+    const approved = { ...input, review: { digest: 'b'.repeat(64) } };
+    expect((await request(app).post(`${base}/finalize-restored`).send({ ...approved, ignoreMtime: true })).status).toBe(400);
+    expect((await request(app).post(`${base}/finalize-restored`).send({ ...approved, review: { ...approved.review, acceptChanges: true } })).status).toBe(400);
+    expect(initialized.finalizeInitializedCheckoutRestored).not.toHaveBeenCalled();
+    initialized.finalizeInitializedCheckoutRestored.mockResolvedValue({ ok: false, reason: 'restored-finalization-review-changed' });
+    expect((await request(app).post(`${base}/finalize-restored`).send(approved)).status).toBe(409);
+    expect(initialized.finalizeInitializedCheckoutRestored).toHaveBeenCalledWith(approved);
   });
 
   describe('GET /api/cos/schedule', () => {

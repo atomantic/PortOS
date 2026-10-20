@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // Agent → server pending-merge handoff (#12247), end to end through the real
 // admission service and the real pr-watcher coordinator over synthetic stores.
 const f = vi.hoisted(() => ({
-  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(),
+  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), reviewers: [], optionalReviewers: [], queueWriteFailure: false,
 }));
 vi.mock('./cosState.js', async () => {
   const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
@@ -17,6 +17,7 @@ vi.mock('./cosState.js', async () => {
     readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.state) }),
   };
 });
+vi.mock('./cos.js', () => ({ addTask: vi.fn(async () => ({ id: 'cleanup-recovery' })) }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async (id) => f.tasks[id] ?? null }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: async (path) => ({ host: 'github.com', fullName: f.foreign.has(path) ? 'example/other' : 'example/repo' }),
@@ -40,11 +41,11 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async (cwd) =
 vi.mock('./apps.js', () => ({
   getAppById: async (id) => f.apps.get(id) ?? null,
   getActiveApps: async () => [...f.apps.values()],
-  updateApp: async (id, patch) => { const next = { ...f.apps.get(id), ...patch }; f.apps.set(id, next); return next; },
+  updateApp: async (id, patch) => { if (f.queueWriteFailure) throw new Error('disk unavailable'); const next = { ...f.apps.get(id), ...patch }; f.apps.set(id, next); return next; },
 }));
 vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: async () => ({ ok: true, screening: { safe: true } }) }));
 vi.mock('./codeReview.js', () => ({
-  resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], usernames: [], optionalReviewers: [], reviewerMaxRounds: {} }),
+  resolveReviewLoopOptions: async () => ({ reviewers: f.reviewers, usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
@@ -60,8 +61,9 @@ const cleanupMock = vi.fn();
 vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...args) => cleanupMock(...args) }));
 
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
-import { processPendingMergePrs, readPendingMergePrs } from './prWatcher.js';
+import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
+import { addTask } from './cos.js';
 
 const HEAD = 'a'.repeat(40);
 const PR_URL = 'https://github.com/example/repo/pull/7';
@@ -86,37 +88,206 @@ beforeAll(async () => { workspace = await mkdtemp(join(tmpdir(), 'merge-handoff-
 afterAll(async () => { await rm(workspace, { recursive: true, force: true }); });
 
 beforeEach(async () => {
+  (await import('./prWatcher.js')).cancelHandoffFollowUps();
+  (await import('./prWatcher.js')).setHandoffFollowUpGate(async () => null);
   cleanupMock.mockReset().mockResolvedValue({ ok: true, branchDeleted: true, archiveDir: '/archives/example' });
   f.state = { agents: { 'agent-1': claimAgent('agent-1', 'claim/issue-1'), 'agent-2': claimAgent('agent-2', 'claim/issue-2') }, mergeAdmissions: {} };
   f.tasks = Object.fromEntries(['agent-1', 'agent-2'].map((id) => [`task-${id}`, {
     id: `task-${id}`, status: 'in_progress', taskType: 'user', priority: 'MEDIUM', description: 'Example change',
     metadata: { app: 'app1', prCompletion: 'review-then-merge' },
   }]));
-  f.apps = new Map([['app1', { id: 'app1', repoPath: '/repos/source', forgeAccount: null }]]);
+  f.apps = new Map([['app1', { id: 'app1', repoPath: '/repos/source', forgeAccount: null, mergeHandoffMinQueuedRuns: 3 }]]);
   f.checkouts = { [workspace]: { branch: 'claim/issue-1', head: HEAD } };
   f.foreign = new Set();
+  f.reviewers = ['codex'];
+  f.optionalReviewers = [];
+  f.queueWriteFailure = false;
   f.pr = {
     number: 7, title: 'Example change', body: 'Closes #101', author: { login: 'example-user' },
     commits: [{ messageHeadline: 'fix: example', messageBody: '' }], state: 'OPEN', isDraft: false,
     isCrossRepository: false, headRefName: 'claim/issue-1', headRefOid: HEAD,
-    mergeStateStatus: 'CLEAN', statusCheckRollup: [{ status: 'IN_PROGRESS' }],
+    mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', reviewDecision: 'APPROVED', statusCheckRollup: [{ status: 'QUEUED' }],
   };
   await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=clean\nREVIEW_HEAD=${HEAD}\n`);
   execGhMock.mockReset().mockImplementation(async (args) => {
     if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify(f.pr);
     if (args[0] === 'pr' && args[1] === 'diff') return 'diff --git a/example.js b/example.js\n+const ok = true;';
+    if (args[0] === 'api' && args.some(arg => arg.includes('/actions/runs?'))) return JSON.stringify({ total_count: 3, workflow_runs: [{ status: 'queued' }] });
     if (args[0] === 'api') return JSON.stringify({ number: 101, state: 'open', title: 'Example', body: 'Example need', assignees: [] });
     throw new Error('unexpected forge read');
   });
   mergePrMock.mockReset().mockResolvedValue({ success: true });
   notifyMock.mockClear();
   followUpMock.mockClear();
+  addTask.mockClear();
 });
 
 describe('pending-merge handoff', () => {
+  it('keeps original ownership by default and when backlog is unknown or below the configured threshold', async () => {
+    delete f.apps.get('app1').mergeHandoffMinQueuedRuns;
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'ci-backlog-policy-disabled' });
+    f.apps.get('app1').mergeHandoffMinQueuedRuns = 3;
+    const forge = execGhMock.getMockImplementation();
+    for (const [backlog, reason] of [[{}, 'ci-backlog-unreadable'], [{ total_count: 2, workflow_runs: [] }, 'ci-backlog-below-threshold']]) {
+      execGhMock.mockImplementation(async args => args.some(arg => arg.includes('/actions/runs?')) ? JSON.stringify(backlog) : forge(args));
+      expect(await handoff()).toMatchObject({ queued: false, reason });
+    }
+    expect(pending()).toEqual([]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] },
+    { statusCheckRollup: [] }, { mergeable: 'CONFLICTING' }, { reviewDecision: 'REVIEW_REQUIRED' },
+  ])('refuses an unhealthy or unverified current PR despite a repository backlog: %j', async change => {
+    Object.assign(f.pr, change);
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'pr-not-waiting-on-healthy-ci' });
+    expect(pending()).toEqual([]);
+  });
+
+  it('requires an available successor and a successfully persisted receipt', async () => {
+    const watcher = await import('./prWatcher.js');
+    watcher.cancelHandoffFollowUps();
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'merge-successor-unavailable' });
+    watcher.setHandoffFollowUpGate(async () => null);
+    f.queueWriteFailure = true;
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'queue-write-failed' });
+    expect(pending()).toEqual([]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('does not run the immediate receipt pass while paused', async () => {
+    const result = await handedOff();
+    greenChecks();
+    const watcher = await import('./prWatcher.js');
+    watcher.setHandoffFollowUpGate(async () => 'paused');
+    await watcher.followUpHandoffReceipt('app1', result.receipt.id);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(pending()).toHaveLength(1);
+  });
+
+  it('an on-demand local nudge recovers the existing conflicted receipt once and preserves remote-only/locked receipts', async () => {
+    await handedOff();
+    f.tasks['task-agent-1'].status = 'completed';
+    const original = pending()[0];
+    const untouched = ['remote-only', 'locked'].map((kind, i) => ({ ...structuredClone(original), prNumber: 80 + i,
+      prUrl: `https://github.com/example/repo/pull/${80 + i}`, prBranch: `claim/${kind}`,
+      handoff: { ...original.handoff, receiptId: kind }, ticks: 9 }));
+    f.apps.get('app1').pendingMergePrs.push(...untouched);
+    f.pr.mergeStateStatus = 'DIRTY';
+    const local = { getBranches: async () => [{ name: 'claim/issue-1' }, { name: 'claim/locked' }],
+      listWorktrees: async () => [{ branch: 'refs/heads/claim/locked', locked: true }] };
+    const results = await Promise.all([nudgeLocalPendingMergePrs('app1', local), nudgeLocalPendingMergePrs('app1', local)]);
+    expect(results[0]).toMatchObject({ escalated: 1, checked: 1 });
+    expect(followUpMock).toHaveBeenCalledTimes(1);
+    expect(pending()).toEqual(untouched);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(await nudgeLocalPendingMergePrs('app1', local)).toMatchObject({ checked: 0 });
+    expect(followUpMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an active original claim before dispatching CI failure recovery and transfers custody once', async () => {
+    await handedOff();
+    f.pr.statusCheckRollup = [{ conclusion: 'FAILURE' }];
+    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ waiting: 1, escalated: 0 });
+    expect(followUpMock).not.toHaveBeenCalled();
+    f.tasks['task-agent-1'].status = 'completed';
+    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ escalated: 1 });
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(followUpMock).toHaveBeenCalledTimes(1);
+    expect(pending()).toEqual([]);
+  });
+
+  it('retains a closed unmerged PR instead of dispatching recovery from its stale failed CI', async () => {
+    await handedOff();
+    f.tasks['task-agent-1'].status = 'completed';
+    f.pr.state = 'CLOSED';
+    f.pr.statusCheckRollup = [{ conclusion: 'CANCELLED' }];
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(pending()[0].recoveryBlocked).toBe('pr-closed-unmerged');
+    expect(followUpMock).not.toHaveBeenCalled();
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves custody through forge outages past the polling budget and recovers when it returns', async () => {
+    await handedOff();
+    const forge = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation(async args => args[0] === 'pr' && args[1] === 'view' ? null : forge(args));
+    pending()[0].ticks = 11;
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(pending()[0].attention).toBe('forge-unreadable');
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('retains its pending-merge receipt and continues checking'),
+    }));
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    execGhMock.mockImplementation(forge);
+    greenChecks();
+    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
+    expect(pending()).toEqual([]);
+  });
+
+  it('names a cleanup recovery owner for a retained merged checkout and confirms cleanup after it finishes', async () => {
+    await handedOff();
+    f.tasks['task-agent-1'].status = 'completed';
+    cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+    greenChecks();
+    await processPendingMergePrs(f.apps.get('app1'));
+    f.pr.state = 'MERGED';
+    pending()[0].cleanup.retryAt = 0;
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(pending()[0].cleanup.recoveryTaskId).toBe('cleanup-recovery');
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('Prepare retained checkout'),
+      context: expect.stringContaining('Do not delete the checkout or refs yourself.'),
+    }), 'user');
+    f.tasks['cleanup-recovery'] = { id: 'cleanup-recovery', status: 'completed' };
+    await processPendingMergePrs(f.apps.get('app1'));
+    cleanupMock.mockResolvedValue({ ok: true, branchDeleted: true });
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(pending()).toEqual([]);
+  });
+
+  it.each(['retirement-submodule-not-uninitialized', 'active-owner'])(
+    'holds an unresolved completed recovery after one final retirement attempt: %s', async reason => {
+      await handedOff();
+      f.tasks['task-agent-1'].status = 'completed';
+      f.pr.state = 'MERGED';
+      cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+      await processPendingMergePrs(f.apps.get('app1'));
+      pending()[0].cleanup.retryAt = 0;
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()[0].cleanup.recoveryTaskId).toBe('cleanup-recovery');
+
+      f.tasks['cleanup-recovery'] = { id: 'cleanup-recovery', status: 'completed' };
+      await processPendingMergePrs(f.apps.get('app1'));
+      cleanupMock.mockResolvedValue({ ok: false, reason });
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()[0].cleanup).toMatchObject({
+        status: 'held', reason, recoveryTaskId: 'cleanup-recovery', recoveryCompleted: true,
+      });
+
+      // Completion is not proof of preservation. Later sweeps keep the same
+      // owner and refusal, even when the final attempt found a transient reason.
+      for (let sweep = 0; sweep < 2; sweep += 1) {
+        pending()[0].cleanup.retryAt = 0;
+        await processPendingMergePrs(f.apps.get('app1'));
+      }
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0].cleanup.status).toBe('held');
+      expect(cleanupMock).toHaveBeenCalledTimes(2);
+      expect(addTask).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
+    },
+  );
+
   it('persists the verified binding and merges only that head once a concurrent lease releases, across a restart', async () => {
     const result = await handedOff();
     expect(result).toMatchObject({ queued: true, receipt: { appId: 'app1', prNumber: 7, headSha: HEAD, repository: 'github.com/example/repo' } });
+    // The merge-gate audit (#12549) exempts exactly this head from the run's own record.
+    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts).toEqual([
+      expect.objectContaining({ receiptId: result.receipt.id, prUrl: PR_URL, headSha: HEAD }),
+    ]);
     // The receipt's immediate sweep found CI pending and spent no tick budget.
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toEqual([expect.objectContaining({
@@ -140,6 +311,15 @@ describe('pending-merge handoff', () => {
     expect(await restarted.processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
     expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
     expect(pending()).toEqual([]);
+    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toEqual(expect.any(String));
+  });
+
+  it('marks a receipt coordinator-merged only for its own merge, never for a PR that turned up merged', async () => {
+    await handedOff();
+    f.pr.state = 'MERGED';
+    await processPendingMergePrs(f.apps.get('app1'));
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toBeUndefined();
   });
 
   it.each([
@@ -161,11 +341,65 @@ describe('pending-merge handoff', () => {
     expect(pending()).toEqual([]);
   });
 
-  it('merges at once when CI already settled before the receipt, without waiting for the timer', async () => {
-    greenChecks();
+  it('queues an all-optional roster on a clean status without a REVIEW_HEAD, but not blocked or a required reviewer', async () => {
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
     expect(await handoff()).toMatchObject({ queued: true });
-    await vi.waitFor(() => expect(pending()).toEqual([]));
+
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=review-blocked\n');
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+
+    f.optionalReviewers = [];
+    await writeFile(join(workspace, 'portos-review-status'), 'REVIEW_STATUS=clean\n');
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+  });
+
+  it.each(['\n', '\r\n'])('queues current-head optional quota/no-verdict evidence without inventing a clean verdict (line ending %j)', async (newline) => {
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive${newline}REVIEW_HEAD=${HEAD}${newline}`);
+    expect(await handedOff()).toMatchObject({ queued: true });
+    expect(pending()[0].handoff).toMatchObject({ reviewStatus: 'optional-inconclusive', headSha: HEAD });
+    greenChecks();
+    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
     expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
+  });
+
+  it.each([[[]], [['codex', 'claude']]])('refuses optional inconclusive evidence without an all-optional nonempty roster: %j', async (reviewers) => {
+    f.reviewers = reviewers;
+    f.optionalReviewers = ['codex'];
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`);
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+    expect(pending()).toEqual([]);
+  });
+
+  it.each([
+    ['a required reviewer', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\n`, false],
+    ['an earlier attempted head', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${'f'.repeat(40)}\n`],
+    ['no attempted head', 'REVIEW_STATUS=optional-inconclusive\n'],
+    ['a malformed head', 'REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=invalid\n'],
+    ['an empty duplicate status', `REVIEW_STATUS=optional-inconclusive\nREVIEW_STATUS=\nREVIEW_HEAD=${HEAD}\n`],
+    ['duplicate heads', `REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${HEAD}\nREVIEW_HEAD=${HEAD}\n`],
+    ['duplicate statuses', `REVIEW_STATUS=optional-inconclusive\nREVIEW_STATUS=clean\nREVIEW_HEAD=${HEAD}\n`],
+    ['pending review', `REVIEW_STATUS=pending\nREVIEW_HEAD=${HEAD}\n`],
+    ['unresolved findings', `REVIEW_STATUS=findings\nREVIEW_HEAD=${HEAD}\n`],
+    ['a required availability block', `REVIEW_STATUS=review-blocked\nREVIEW_HEAD=${HEAD}\n`],
+    ['an unspecified inconclusive result', `REVIEW_STATUS=inconclusive\nREVIEW_HEAD=${HEAD}\n`],
+    ['empty evidence', ''],
+    ['missing evidence', null],
+  ])('refuses optional handoff with %s', async (_name, evidence, optional = true) => {
+    f.optionalReviewers = optional ? ['codex'] : [];
+    if (evidence === null) await rm(join(workspace, 'portos-review-status'));
+    else await writeFile(join(workspace, 'portos-review-status'), evidence);
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'review-evidence-incomplete' });
+    expect(pending()).toEqual([]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps an already-green PR with its original owner for immediate merge', async () => {
+    greenChecks();
+    expect(await handoff()).toMatchObject({ queued: false, reason: 'pr-not-waiting-on-healthy-ci' });
+    expect(pending()).toEqual([]);
+    expect(mergePrMock).not.toHaveBeenCalled();
   });
 
   it.each(['leave-open', 'draft', 'readOnly', 'blocked'])('honors a live coordinator %s hold after CI turns green', async hold => {
@@ -222,8 +456,9 @@ describe('pending-merge handoff', () => {
       expect(Object.keys(f.state.mergeAdmissions)).toHaveLength(0);
       return { ok: false, reason: 'retirement-forge-unreadable' };
     });
-    greenChecks();
     await handedOff();
+    greenChecks();
+    await processPendingMergePrs(f.apps.get('app1'));
     expect(pending()[0]).toMatchObject({ cleanup: { status: 'pending', attempts: 1, reason: 'retirement-forge-unreadable' } });
     f.pr.state = 'MERGED';
     await processPendingMergePrs(f.apps.get('app1'));
@@ -241,8 +476,9 @@ describe('pending-merge handoff', () => {
 
   it.each(['pr-completion-human-handoff', 'retirement-submodule-not-uninitialized'])('holds merged cleanup requiring explicit recovery: %s', async reason => {
     cleanupMock.mockResolvedValue({ ok: false, reason });
-    greenChecks();
     await handedOff();
+    greenChecks();
+    await processPendingMergePrs(f.apps.get('app1'));
     expect(pending()[0].cleanup).toMatchObject({ status: 'held', reason });
     f.pr.state = 'MERGED';
     pending()[0].cleanup.retryAt = 0;
@@ -252,7 +488,6 @@ describe('pending-merge handoff', () => {
   });
 
   it('rechecks the queue after an overlapping sweep that read it before the receipt', async () => {
-    greenChecks();
     let releaseRead;
     const blocked = new Promise((resolve) => { releaseRead = resolve; });
     const other = { ...f.pr, number: 8, headRefName: 'cos/other', headRefOid: 'b'.repeat(40), statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
@@ -267,6 +502,7 @@ describe('pending-merge handoff', () => {
     // The live module instance, the one the handoff's receipt sweep joins.
     const timer = (await import('./prWatcher.js')).processPendingMergePrs(f.apps.get('app1'));
     expect(await handoff()).toMatchObject({ queued: true });
+    greenChecks();
     releaseRead();
     await timer;
     await vi.waitFor(() => expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD }));
@@ -291,6 +527,7 @@ describe('pending-merge handoff', () => {
 
   it('invalidates a binding whose head moved and dispatches the recorded review policy instead of merging', async () => {
     await handedOff();
+    f.tasks['task-agent-1'].status = 'completed';
     f.pr.headRefOid = 'd'.repeat(40);
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 0, escalated: 1, invalidated: 1 });
     expect(mergePrMock).not.toHaveBeenCalled();
@@ -326,7 +563,7 @@ describe('pending-merge handoff', () => {
     expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 0, invalidated: 1 });
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ link: PR_URL, priority: 'high' }));
-    expect(pending()).toEqual([]);
+    expect(pending()[0].recoveryBlocked).toBe('handoff-binding-unreadable');
   });
 });
 
@@ -387,7 +624,7 @@ describe('handoff follow-up poll', () => {
   it('never arms when the immediate pass already merged', async () => {
     greenChecks();
     await handOffPending();
-    expect(mergePrMock).toHaveBeenCalled();
+    expect(mergePrMock).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 

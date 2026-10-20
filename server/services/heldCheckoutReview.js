@@ -10,7 +10,7 @@ const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})
 const safePath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0') && !value.startsWith('/') && !value.split('/').some(part => part === '..' || part === '.');
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: 4 * 1024 * 1024 }).then(r => r.stdout);
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -23,7 +23,10 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const remote = await read(['pr', 'view', prUrl, '--json', 'url,state,headRefName,headRefOid,isCrossRepository,mergeCommit,baseRefName']);
   const repository = await api(`repos/${origin.fullName}`);
   const defaultBranch = repository.default_branch;
-  if (remote.url !== prUrl || remote.state !== 'MERGED' || remote.headRefName !== branch
+  // Explicit whole-checkout review may name a local repair alias, but only
+  // when its exact tip is the merged PR head. Similar names are never evidence.
+  const alias = remote.headRefName !== branch && oid(exactAliasHead) && exactAliasHead === remote.headRefOid;
+  if (remote.url !== prUrl || remote.state !== 'MERGED' || (remote.headRefName !== branch && !alias)
     || remote.isCrossRepository !== false || remote.baseRefName !== defaultBranch || !oid(remote.headRefOid) || !oid(remote.mergeCommit?.oid)) {
     throw new Error('retirement-pr-not-matching-merged');
   }
@@ -60,8 +63,12 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const remoteHead = (await git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], repoPath)
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim();
   if (remoteHead && remoteHead !== `${remote.headRefOid}\trefs/heads/${branch}`) throw new Error('retirement-remote-head-changed');
+  const publishedRemoteHead = alias ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${remote.headRefName}`], repoPath)
+    .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
+  if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
   return { repository: `${origin.host}/${origin.fullName}`, prUrl, prHead: remote.headRefOid,
-    mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha, remoteHead: remoteHead || null };
+    mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha, remoteHead: remoteHead || null,
+    ...(alias ? { exactAliasHead, publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
 }
 
 /** Returned differences are review material, not executable instructions or an

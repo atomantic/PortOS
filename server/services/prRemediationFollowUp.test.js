@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const addTaskMock = vi.fn();
 vi.mock('./cos.js', () => ({ addTask: (...args) => addTaskMock(...args) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+const execGhMock = vi.fn();
+vi.mock('./github.js', () => ({ execGh: (...args) => execGhMock(...args) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'example' } }) }));
+vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue({ id: 'app-1', forgeAccount: null }) }));
 
-import { PR_REMEDIATION_SPAWN, spawnPrRemediationFollowUp } from './prRemediationFollowUp.js';
+import { PR_REMEDIATION_SPAWN, handBackPrRemediation, spawnPrRemediationFollowUp } from './prRemediationFollowUp.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/repos/example' };
 const PULL_REQUEST = {
@@ -50,6 +54,9 @@ describe('spawnPrRemediationFollowUp', () => {
         prRemediationFollowUp: true,
         prRemediationNumber: 7,
         prRemediationRepoFullName: 'o/r',
+        prRemediationUrl: 'https://github.com/o/r/pull/7',
+        // What workspace prep pins the attach to (#12486).
+        prRemediationHeadSha: 'a'.repeat(40),
         prRemediationAuthorLogin: 'contributor',
         prRemediationWriteAccess: 'fork-maintainer-modifiable',
         existingBranch: 'contributor/update',
@@ -61,6 +68,21 @@ describe('spawnPrRemediationFollowUp', () => {
     expect(task.description).toContain('#7');
   });
 
+  // #12486: other authors' comments on a public PR must never enter this
+  // tool-enabled session. Every read of the PR's discussion is filtered to the
+  // agent's own account inside `gh --jq`, before any text is printed.
+  it('reads only the review its own account posted, never the PR discussion', async () => {
+    await spawn();
+
+    const { context } = addTaskMock.mock.calls[0][0];
+    expect(context).not.toMatch(/--comments/);
+    const discussionReads = context.split('\n').filter((line) => /pulls\/7\/(?:comments|reviews)|reviewThreads/.test(line));
+    expect(discussionReads.length).toBeGreaterThanOrEqual(3);
+    for (const line of discussionReads) expect(line).toMatch(/login == \\"\$ME\\"/);
+    // The agent is told which commit it holds, so it can tell a foreign push apart.
+    expect(context).toContain('a'.repeat(40));
+  });
+
   it('tells the agent the branch is already checked out rather than to fetch it itself', async () => {
     // The prose worktree procedure was the workaround for a worktree layer that
     // could not attach to a fork head. Now that it can (#6064), leaving the
@@ -68,6 +90,8 @@ describe('spawnPrRemediationFollowUp', () => {
     await spawn();
 
     const { context } = addTaskMock.mock.calls[0][0];
+    expect(context).toContain('with `fork/contributor/contributor/update` checked out');
+    expect(context).toContain('git push fork-contributor HEAD:refs/heads/contributor/update');
     expect(context).toContain('ALREADY in an isolated worktree');
     expect(context).not.toContain('gh pr checkout');
     expect(context).not.toContain('worktree add');
@@ -83,7 +107,7 @@ describe('spawnPrRemediationFollowUp', () => {
   // A same-repo head has no contributor who "left the branch writable", so the
   // prompt must not tell the agent one did — it names a real person.
   it('describes push access from the head repository, not from a fork claim', async () => {
-    await spawn({ writeAccess: 'own-repo' });
+    await spawn({ pullRequest: { ...PULL_REQUEST, forkHead: null }, writeAccess: 'own-repo' });
     const ownRepo = addTaskMock.mock.calls[0][0].context;
     expect(ownRepo).toContain('lives in o/r itself');
     expect(ownRepo).not.toContain('Allow edits by maintainers');
@@ -143,8 +167,35 @@ describe('spawnPrRemediationFollowUp', () => {
     // Without the branch name there is nothing for the worktree to check out,
     // and cutting a fresh branch would put the fixes where the PR never sees them.
     ['no head branch to attach a worktree to', { pullRequest: { ...PULL_REQUEST, headRefName: '' } }],
+    // Without the reviewed head there is nothing to pin the attach to.
+    ['no reviewed head commit to pin to', { pullRequest: { ...PULL_REQUEST, headSha: null } }],
   ])('refuses to queue with %s', async (_label, overrides) => {
     expect(await spawn(overrides)).toEqual({ status: PR_REMEDIATION_SPAWN.FAILED, task: null });
     expect(addTaskMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('handBackPrRemediation', () => {
+  beforeEach(() => { execGhMock.mockReset(); execGhMock.mockResolvedValue(''); });
+
+  it('comments on the PR by URL and assigns it back to its opener', async () => {
+    const task = {
+      id: 'sys-remediation-1',
+      metadata: {
+        app: 'app-1',
+        prRemediationNumber: 7,
+        prRemediationRepoFullName: 'o/r',
+        prRemediationUrl: 'https://github.com/o/r/pull/7',
+        prRemediationHeadSha: 'a'.repeat(40),
+        prRemediationAuthorLogin: 'contributor',
+      },
+    };
+
+    expect(await handBackPrRemediation({ task, workspacePath: '/repos/example' })).toBe(true);
+
+    const [[comment], [assign]] = execGhMock.mock.calls;
+    expect(comment.slice(0, 3)).toEqual(['pr', 'comment', 'https://github.com/o/r/pull/7']);
+    expect(comment.at(-1)).toContain('aaaaaaaaaaaa');
+    expect(assign).toEqual(['pr', 'edit', 'https://github.com/o/r/pull/7', '--add-assignee', 'contributor']);
   });
 });

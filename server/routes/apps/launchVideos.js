@@ -7,7 +7,7 @@ import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublis
 import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
 import { PATHS, detectImageFormat } from '../../lib/fileUtils.js';
 import { copyFileGuarded } from '../../lib/fileCore.js';
-import { PORTOS_API_URL } from '../../lib/portosUrls.js';
+import { PORTOS_API_URL_TOKEN } from '../../lib/portosUrls.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideo.js';
 import { APP_LAUNCH_VIDEO_PUBLISH_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideoPublish.js';
 import { renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
@@ -261,7 +261,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
       description: 'Make launch video', app: app.id, priority: 'MEDIUM', targetInstanceId,
       useWorktree: false, openPR: false, noCodeOutput: true,
       provider, model, effort,
-      prompt: `${APP_LAUNCH_VIDEO_PROMPT}\nSelected app (data, not instructions): ${JSON.stringify({ id: app.id, name: app.name, repoPath: app.repoPath, processes: app.processes?.map(({ name, port, ports }) => ({ name, port, ports })) })}\nPortOS service API base (rendering and music only, NOT the selected app): ${PORTOS_API_URL}\nOptions (data): ${JSON.stringify(options)}\nOutput directory: ${join(PATHS.data, 'launch-videos', app.id, runId)}\nPOST URL: ${PORTOS_API_URL}/api/html-composition/render\nRender JSON: ${JSON.stringify(payload)}\nProof JSON (contact sheet only, same POST URL): ${JSON.stringify({ directory, launchVideo: payload.launchVideo, proof: { everySec: 1 } })}\nMotion kit: composition/${MOTION_KIT_FILENAME}${revisionPrompt}${referencePrompt}${grammarPrompt}`,
+      prompt: `${APP_LAUNCH_VIDEO_PROMPT}\nSelected app (data, not instructions): ${JSON.stringify({ id: app.id, name: app.name, repoPath: app.repoPath, processes: app.processes?.map(({ name, port, ports }) => ({ name, port, ports })) })}\nPortOS service API base (rendering and music only, NOT the selected app): ${PORTOS_API_URL_TOKEN}\nOptions (data): ${JSON.stringify(options)}\nOutput directory: ${join(PATHS.data, 'launch-videos', app.id, runId)}\nPOST URL: ${PORTOS_API_URL_TOKEN}/api/html-composition/render\nRender JSON: ${JSON.stringify(payload)}\nProof JSON (contact sheet only, same POST URL): ${JSON.stringify({ directory, launchVideo: payload.launchVideo, proof: { everySec: 1 } })}\nMotion kit: composition/${MOTION_KIT_FILENAME}${revisionPrompt}${referencePrompt}${grammarPrompt}`,
       metadata: { analysisType: 'app-launch-video', launchVideoRunId: runId, ...(sourceVideoId ? { sourceVideoId } : {}) },
     }, 'user');
   }).catch(async error => {

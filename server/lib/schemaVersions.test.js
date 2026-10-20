@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -40,8 +41,15 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(14);
   });
 
-  it('declares mediaCollections layout version', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
+  it('gates mediaCollections at v2 so a v1 peer refuses collections carrying removal records (#12433)', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(2);
+    // A v1 receiver would strip `removedItems` and union the removed item back.
+    const v1Receiver = { ...PORTOS_SCHEMA_VERSIONS, mediaCollections: 1 };
+    const diff = scopeVersionDiff(
+      compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, v1Receiver),
+      RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection,
+    );
+    expect(diff.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
   });
 
   it('version-gates catalog object attachments and media generation provenance', () => {
@@ -55,22 +63,43 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(9);
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(10);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(4);
+    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(5);
+  });
+
+  it('moves the render-backend alphabets and their sync versions together', () => {
+    // Older receivers coerce an unknown imageMode/videoMode to auto/null, then
+    // LWW the lost pin back. Adding a backend means: update this snapshot AND
+    // bump creativeCommissions + fableLoom (and their pins above).
+    expect({
+      image: [...IMAGE_GEN_MODES],
+      video: [...VIDEO_GEN_MODES],
+      creativeCommissions: PORTOS_SCHEMA_VERSIONS.creativeCommissions,
+      fableLoom: PORTOS_SCHEMA_VERSIONS.fableLoom,
+    }).toEqual({
+      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal'],
+      video: ['local', 'grok', 'fal', 'reactor', 'runway'],
+      creativeCommissions: 5,
+      fableLoom: 10,
+    });
   });
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects repair, timing, narrative event and lyric warning metadata on older music-video peers', async () => {
+  it('rejects repair, timing, narrative event, lyric warning and title/ending/subject/tool metadata on older music-video peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(21);
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20]) {
+    expect(meta.schemaVersions.musicVideoProjects).toBe(22);
+    // v21 builds re-normalize the v22 fields away; the gate must stop that peer receiving them.
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 21, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 22, receiverV });
     }
+    const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 21 };
+    expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 22, receiverV: 21 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
@@ -250,11 +279,11 @@ describe('scopeVersionDiff', () => {
         universes: PORTOS_SCHEMA_VERSIONS.universes,
         pipelineSeries: 2,
         pipelineIssues: 3,
-        mediaCollections: 2,
+        mediaCollections: PORTOS_SCHEMA_VERSIONS.mediaCollections + 1,
       },
       PORTOS_SCHEMA_VERSIONS,
     );
-    expect(union.compatible).toBe(false); // mediaCollections 2 > 1
+    expect(union.compatible).toBe(false);
     expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.universe).compatible).toBe(true);
     expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection).compatible).toBe(false);
   });

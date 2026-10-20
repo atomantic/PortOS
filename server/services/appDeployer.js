@@ -4,6 +4,7 @@ import { join } from 'path';
 import { NON_PM2_TYPES } from './appProcessTypes.js';
 import { getAppById } from './apps.js';
 import { resolveBashBinary } from '../lib/bashResolver.js';
+import { withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { DEPLOY_FLAGS } from '../lib/appDeployFlags.js';
 
 export { DEPLOY_FLAGS };
@@ -70,7 +71,7 @@ export function deployApp(app, flags, emit) {
     const child = spawn(resolveBashBinary(), ['deploy.sh', ...safeFlags], {
       cwd: dir,
       shell: false,
-      env: { ...process.env, FORCE_COLOR: '0' }
+      env: { ...withoutServerSecretsEnv(process.env), FORCE_COLOR: '0' }
     });
 
     // Guard against a hung deploy.sh holding the lock forever.

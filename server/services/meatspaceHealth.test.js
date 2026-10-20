@@ -279,7 +279,47 @@ describe('eye exams by id', () => {
     expect(disk.exams.every(e => e.id)).toBe(true);
     expect(await resolveEyeExamId('0')).toBe(exams[0].id);
     expect(await resolveEyeExamId('9')).toBeNull();
-    await removeEyeExam(await resolveEyeExamId('0'));
+    const removedId = await resolveEyeExamId('0');
+    await removeEyeExam(removedId);
     expect(disk.exams.map(e => e.date)).toEqual(['2026-03-01']);
+    // The delete leaves a marker for peers; readers never see it.
+    expect(disk.rowTombstones.map(t => t.id)).toEqual([removedId]);
+    expect(await getEyeExams()).not.toHaveProperty('rowTombstones');
+  });
+
+  it('gives the same legacy exam the same id on every machine (#12432)', async () => {
+    const legacy = { date: '2025-01-01', leftSphere: -1.5 };
+    disk = { exams: [{ ...legacy }] };
+    const first = (await getEyeExams()).exams[0].id;
+    // A second machine stamping its own copy of the same row lands on the same id.
+    disk = { exams: [{ ...legacy }] };
+    const second = (await getEyeExams()).exams[0].id;
+    expect(first).toMatch(/^legacy-/);
+    expect(second).toBe(first);
+  });
+
+  it('tombstones a legacy exam under its content key too, so a peer copy with another id stays deleted', async () => {
+    disk = { exams: [{ id: 'random-stamp-a', date: '2025-01-01', leftSphere: -1 }] };
+    await removeEyeExam('random-stamp-a');
+    expect(disk.rowTombstones.map(t => t.id).sort()).toEqual(
+      ['random-stamp-a', expect.stringMatching(/^legacy-/)].sort(),
+    );
+  });
+
+  it('edits and deletes an exam addressed by an id a sync retired into aliasIds', async () => {
+    disk = { exams: [{ id: 'stamp-b', aliasIds: ['stamp-z'], createdAt: '2025-01-01T00:00:00.000Z', date: '2025-01-01', leftSphere: -1 }] };
+    expect((await updateEyeExam('stamp-z', { leftSphere: -2 })).id).toBe('stamp-b');
+    expect(disk.exams[0].leftSphere).toBe(-2);
+    expect((await removeEyeExam('stamp-z')).id).toBe('stamp-b');
+    expect(disk.exams).toEqual([]);
+  });
+
+  it('stamps createdAt on a new exam and updatedAt on an edit, so peers resolve copies by clock', async () => {
+    const exam = await addEyeExam({ date: '2025-01-01' });
+    expect(exam.createdAt).toEqual(expect.any(String));
+    // A minted exam keeps its id through the legacy re-keying read.
+    expect((await getEyeExams()).exams[0].id).toBe(exam.id);
+    const updated = await updateEyeExam(exam.id, { leftSphere: -2 });
+    expect(updated.updatedAt).toEqual(expect.any(String));
   });
 });

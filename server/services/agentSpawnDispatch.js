@@ -95,214 +95,236 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
   let publicReviewPromptData = null;
 
-  const prep = await prepareAgentWorkspace({ agentId, task });
-  if (prep.outcome === 'deferred') {
-    await context.cleanupOnError(prep.reason);
-    cosEvents.emit('agent:deferred', { taskId: task.id, reason: prep.deferReason, branch: prep.branch });
-    return null;
-  }
-  if (prep.outcome === 'blocked') {
-    await context.cleanupOnError(prep.reason);
-    cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
-    return null;
-  }
-  const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
-  if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
-    context.spawnWorktree = { branchName: worktreeInfo.branchName };
-  }
-
-  if (publicReview && !privateSecurity) {
-    const reviewInput = await loadPublicReviewSpawnInput({
-      scanKey: task.metadata?.pipeline?.reviewInputKey,
-      workspacePath,
-      actionsStage: publicReviewActions,
-      eligibleNumbers: task.metadata?.pipeline?.eligibility?.eligibleNumbers,
-      noToolReviewer: publicReviewNoTools,
-    });
-    if (reviewInput.block) return context.blockAndBail(reviewInput.block);
-    publicReviewPromptData = reviewInput.promptData;
-  }
-
-  await import('./workspaceContext.js')
-    .then((ws) => ws.snapshotOnRepoSwitch(task.metadata?.app || null))
-    .catch((err) => {
-      emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
-    });
-
-  const leanMode = isOllamaClaudeProvider(provider);
-  const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
-  const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
-  const privatePrompt = privateSecurity
-    ? await import('./privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
-    : null;
-  const promptTrace = {};
-  const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
-    promptTrace,
-    providerType: provider.type,
-    providerId: provider.id,
-    providerCommand: provider.command,
-    providerModel: selectedModel,
-    agentId,
-    leanMode,
-    split: splitSystemPrompt,
-  });
-  const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
-  const prompt = publicReview && !privateSecurity
-    ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
-    : basePrompt;
-  const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
-  const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
-  const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
-    requestedProvider,
-    selectedModel,
-    requestedProvider.effort || null,
-  );
-  const localEndpoint = localEndpointOfProvider(provider);
-  const localPromptBudget = localEndpoint
-    ? planLocalPromptBudget({
-      prompt,
-      endpoint: localEndpoint,
-      baseDurationMs: await import('./taskLearning.js')
-        .then((tl) => tl.getTaskDurationEstimate(task.description, {
-          providerId: provider.id,
-          model: selectedModel,
-          effort: taskEffort,
-        }))
-        .then((estimate) => estimate?.estimatedDurationMs ?? null)
-        .catch(() => null),
-    })
-    : null;
-  if (localPromptBudget?.longPrefill) {
-    emitLog('info', `🐢 Agent ${agentId} ${describeLocalPromptBudget(localPromptBudget)}`, {
-      agentId,
-      taskId: task.id,
-      promptTokens: localPromptBudget.promptTokens,
-    });
-  }
-
-  const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
-  const sourceWorkspace = worktreeInfo
-    ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
-    : null;
-  const prOpenedBy = promptOpensOwnPr(task, {
-    providerType: provider.type,
-    providerId: provider.id,
-    providerCommand: provider.command,
-    leanMode,
-    worktreeInfo,
-  });
-  const claimFlowTask = isClaimFlowTask(task);
-  const [forgeTarget, primaryCheckoutBaseline, auditSourceEvidence] = await Promise.all([
-    resolvedApp
-      ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
-      : resolveRepoForgeTarget(workspacePath),
-    sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
-    isAuditTaskType(resolveTaskHookType(task)) ? captureAuditSourceEvidence(workspacePath) : null,
-  ]);
-  const injectedMemories = promptTrace.injectedMemories || [];
-  let systemPromptFile = null;
-  const agentDir = join(AGENTS_DIR, agentId);
-  const { runId } = await withBackupAssetPublication(async () => {
-    if (!existsSync(agentDir)) {
-      await ensureDir(agentDir);
-    }
-    await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
-    if (systemPrompt) {
-      systemPromptFile = join(agentDir, 'system-prompt.md');
-      await writeFileGuarded(systemPromptFile, systemPrompt);
-    }
-    const { runId } = await createAgentRun({
-      agentId,
-      task,
-      model: selectedModel,
-      provider,
-      workspacePath,
-      appName: resolvedAppName,
-      injectedMemories,
-    });
-    await registerAgent(agentId, task.id, buildAgentRegistration({
-      task,
-      provider,
-      instanceId,
-      workspacePath,
-      sourceWorkspace,
-      repoIssueUrl: repoIssueUrlBase(forgeTarget),
-      primaryCheckoutBaseline,
-      auditSourceEvidence,
-      worktreeInfo,
-      explicitWorktree,
-      jiraBranchName,
-      providerEndpoint: providerBaseUrl(provider),
-      localPromptBudget,
-      leanMode,
-      prOpenedBy,
-      // Same decision that put merge admission in the prompt (#11435).
-      mergesOwnPr: promptTrace.mergesOwnPr === true,
-      claimFlowTask,
-      selectedModel,
-      effort: taskEffort,
-      modelSelection,
-      runId,
-      dispatchUseRunner,
-      executionMode,
-      publicReviewPosture,
-      resolvedAppName,
-      injectedMemories,
-    }));
-    return { runId };
-  });
-
-  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
-  const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
-  const updateResult = await updateTask(task.id, {
-    status: 'in_progress',
-    metadata: {
-      ...task.metadata,
-      totalSpawnCount: newSpawnCount,
-      lastSpawnedAt: new Date().toISOString(),
-      ...buildClaim(instanceId),
-    },
-  }, task.taskType || 'user')
-    .catch(err => {
-      console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
+  return prepareAgentWorkspace({ agentId, task, onPrepared: async prep => {
+    if (prep.outcome === 'deferred') {
+      await context.cleanupOnError(prep.reason);
+      cosEvents.emit('agent:deferred', { taskId: task.id, reason: prep.deferReason, branch: prep.branch });
       return null;
+    }
+    if (prep.outcome === 'blocked') {
+      await context.cleanupOnError(prep.reason);
+      cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
+      return null;
+    }
+    const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
+    if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
+      context.spawnWorktree = { branchName: worktreeInfo.branchName };
+    }
+
+    if (publicReview && !privateSecurity) {
+      const reviewInput = await loadPublicReviewSpawnInput({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+        workspacePath,
+        actionsStage: publicReviewActions,
+        eligibleNumbers: task.metadata?.pipeline?.eligibility?.eligibleNumbers,
+        noToolReviewer: publicReviewNoTools,
+      });
+      if (reviewInput.block) return context.blockAndBail(reviewInput.block);
+      publicReviewPromptData = reviewInput.promptData;
+    }
+
+    await import('./workspaceContext.js')
+      .then((ws) => ws.snapshotOnRepoSwitch(task.metadata?.app || null))
+      .catch((err) => {
+        emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+      });
+
+    const leanMode = isOllamaClaudeProvider(provider);
+    const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
+    const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
+    const privatePrompt = privateSecurity
+      ? await import('./privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
+      : null;
+    const promptTrace = {};
+    const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
+      promptTrace,
+      providerType: provider.type,
+      providerId: provider.id,
+      providerCommand: provider.command,
+      providerModel: selectedModel,
+      agentId,
+      leanMode,
+      split: splitSystemPrompt,
     });
-  if (updateResult?.error) {
-    emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
-  }
-  if (!updateResult) {
-    await context.cleanupOnError('Failed to update task status');
-    return null;
-  }
+    const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const prompt = publicReview && !privateSecurity
+      ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
+      : basePrompt;
+    const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
+    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+      requestedProvider,
+      selectedModel,
+      requestedProvider.effort || null,
+    );
+    const localEndpoint = localEndpointOfProvider(provider);
+    const localPromptBudget = localEndpoint
+      ? planLocalPromptBudget({
+        prompt,
+        endpoint: localEndpoint,
+        baseDurationMs: await import('./taskLearning.js')
+          .then((tl) => tl.getTaskDurationEstimate(task.description, {
+            providerId: provider.id,
+            model: selectedModel,
+            effort: taskEffort,
+          }))
+          .then((estimate) => estimate?.estimatedDurationMs ?? null)
+          .catch(() => null),
+      })
+      : null;
+    if (localPromptBudget?.longPrefill) {
+      emitLog('info', `🐢 Agent ${agentId} ${describeLocalPromptBudget(localPromptBudget)}`, {
+        agentId,
+        taskId: task.id,
+        promptTokens: localPromptBudget.promptTokens,
+      });
+    }
 
-  if (task.metadata?.autonomousJob && task.metadata?.jobId) {
-    cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
-  }
-  const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
-    ? await getClaudeSettingsEnv()
-    : {};
-  const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
-  const safetyProfile = publicReview ? executionProfile : null;
-  const cliConfig = !spawnHeadless
-    ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
-    : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
-  const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
-    ? securityScanGrantFromArgs(cliConfig.args)
-    : null;
-  if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
+    const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
+    const sourceWorkspace = worktreeInfo
+      ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
+      : null;
+    const prOpenedBy = promptOpensOwnPr(task, {
+      providerType: provider.type,
+      providerId: provider.id,
+      providerCommand: provider.command,
+      leanMode,
+      worktreeInfo,
+    });
+    const claimFlowTask = isClaimFlowTask(task);
+    const [forgeTarget, primaryCheckoutBaseline, auditSourceEvidence] = await Promise.all([
+      resolvedApp
+        ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
+        : resolveRepoForgeTarget(workspacePath),
+      sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
+      isAuditTaskType(resolveTaskHookType(task)) ? captureAuditSourceEvidence(workspacePath) : null,
+    ]);
+    const injectedMemories = promptTrace.injectedMemories || [];
+    let systemPromptFile = null;
+    const agentDir = join(AGENTS_DIR, agentId);
+    const { runId } = await withBackupAssetPublication(async () => {
+      if (!existsSync(agentDir)) {
+        await ensureDir(agentDir);
+      }
+      await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
+      if (systemPrompt) {
+        systemPromptFile = join(agentDir, 'system-prompt.md');
+        await writeFileGuarded(systemPromptFile, systemPrompt);
+      }
+      const { runId } = await createAgentRun({
+        agentId,
+        task,
+        model: selectedModel,
+        provider,
+        workspacePath,
+        appName: resolvedAppName,
+        injectedMemories,
+      });
+      await registerAgent(agentId, task.id, buildAgentRegistration({
+        task,
+        provider,
+        instanceId,
+        workspacePath,
+        sourceWorkspace,
+        repoIssueUrl: repoIssueUrlBase(forgeTarget),
+        primaryCheckoutBaseline,
+        auditSourceEvidence,
+        worktreeInfo,
+        explicitWorktree,
+        jiraBranchName,
+        providerEndpoint: providerBaseUrl(provider),
+        localPromptBudget,
+        leanMode,
+        prOpenedBy,
+        // Same decision that put merge admission in the prompt (#11435).
+        mergesOwnPr: promptTrace.mergesOwnPr === true,
+        claimFlowTask,
+        selectedModel,
+        effort: taskEffort,
+        modelSelection,
+        runId,
+        dispatchUseRunner,
+        executionMode,
+        publicReviewPosture,
+        resolvedAppName,
+        injectedMemories,
+      }));
+      return { runId };
+    });
 
-  emitLog('success', `Spawning agent for task ${task.id}`, {
-    agentId,
-    model: selectedModel,
-    mode: executionMode,
-    cli: cliConfig.command,
-    lane: laneName,
-    worktree: !!worktreeInfo,
-  });
+    emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
+    const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
+    const updateResult = await updateTask(task.id, {
+      status: 'in_progress',
+      metadata: {
+        ...task.metadata,
+        totalSpawnCount: newSpawnCount,
+        lastSpawnedAt: new Date().toISOString(),
+        ...buildClaim(instanceId),
+      },
+    }, task.taskType || 'user')
+      .catch(err => {
+        console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
+        return null;
+      });
+    if (updateResult?.error) {
+      emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+    }
+    if (!updateResult) {
+      await context.cleanupOnError('Failed to update task status');
+      return null;
+    }
 
-  context.handedOff = true;
-  if (!spawnHeadless) {
-    return await spawnTuiAgent({
+    if (task.metadata?.autonomousJob && task.metadata?.jobId) {
+      cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
+    }
+    const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
+      ? await getClaudeSettingsEnv()
+      : {};
+    const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
+    const safetyProfile = publicReview ? executionProfile : null;
+    const cliConfig = !spawnHeadless
+      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
+      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
+    const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
+      ? securityScanGrantFromArgs(cliConfig.args)
+      : null;
+    if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
+
+    emitLog('success', `Spawning agent for task ${task.id}`, {
+      agentId,
+      model: selectedModel,
+      mode: executionMode,
+      cli: cliConfig.command,
+      lane: laneName,
+      worktree: !!worktreeInfo,
+    });
+
+    context.handedOff = true;
+    if (!spawnHeadless) {
+      return await spawnTuiAgent({
+        agentId,
+        task,
+        prompt,
+        workspacePath,
+        model: selectedModel,
+        provider: runProvider,
+        runId,
+        tuiConfig: cliConfig,
+        agentDir,
+        executionId: toolExecution.id,
+        laneName,
+        leanMode,
+        prOpenedBy,
+        useDurableRunner: dispatchUseRunner,
+        safetyProfile,
+        securityScanGrant,
+      });
+    }
+    if (dispatchUseRunner) {
+      return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
+    }
+    return await spawnDirectly({
       agentId,
       task,
       prompt,
@@ -310,33 +332,12 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       model: selectedModel,
       provider: runProvider,
       runId,
-      tuiConfig: cliConfig,
+      cliConfig,
       agentDir,
       executionId: toolExecution.id,
       laneName,
-      leanMode,
       prOpenedBy,
-      useDurableRunner: dispatchUseRunner,
       safetyProfile,
-      securityScanGrant,
     });
-  }
-  if (dispatchUseRunner) {
-    return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
-  }
-  return await spawnDirectly({
-    agentId,
-    task,
-    prompt,
-    workspacePath,
-    model: selectedModel,
-    provider: runProvider,
-    runId,
-    cliConfig,
-    agentDir,
-    executionId: toolExecution.id,
-    laneName,
-    prOpenedBy,
-    safetyProfile,
-  });
+  } });
 }

@@ -1,6 +1,8 @@
 import { existsSync } from 'fs';
-import { join, resolve } from 'path';
-import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
+import { mkdtemp } from 'fs/promises';
+import { tmpdir } from 'os';
+import { delimiter, join, resolve } from 'path';
+import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -51,6 +53,7 @@ export async function getStatus(dir, { paths = [] } = {}) {
   const result = await execGit(
     ['status', '--porcelain', ...(paths.length ? ['--', ...paths] : [])],
     dir,
+    { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
   );
   // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
   const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
@@ -84,7 +87,8 @@ export async function getStatus(dir, { paths = [] } = {}) {
  * of `files[]` would just double the payload on every dirty tree.
  */
 export async function getStatusPorcelain(dir) {
-  return (await execGit(['status', '--porcelain'], dir)).stdout;
+  return (await execGit(['status', '--porcelain'], dir,
+    { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } })).stdout;
 }
 
 /**
@@ -134,6 +138,11 @@ export async function getDiffStats(dir) {
  * that exact file, and a crafted `*` can't expand to the whole tree.
  */
 export async function stageFiles(dir, files) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => stageFilesAdmitted(dir, files));
+}
+
+async function stageFilesAdmitted(dir, files) {
   const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['add', '--', ...safePaths], dir);
   return true;
@@ -143,6 +152,11 @@ export async function stageFiles(dir, files) {
  * Unstage files (same literal-pathspec handling as stageFiles).
  */
 export async function unstageFiles(dir, files) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => unstageFilesAdmitted(dir, files));
+}
+
+async function unstageFilesAdmitted(dir, files) {
   const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['reset', 'HEAD', '--', ...safePaths], dir);
   return true;
@@ -156,6 +170,11 @@ export async function unstageFiles(dir, files) {
  * Same `:(literal)` pathspec handling as stageFiles. Omitted = commit the index as-is.
  */
 export async function commit(dir, message, { paths = [] } = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => commitAdmitted(dir, message, { paths }));
+}
+
+async function commitAdmitted(dir, message, { paths = [] } = {}) {
   const pathspecs = paths.length ? ['--', ...validateFilePaths(paths).map(toLiteralPathspec)] : [];
   // Using spawn with -m argument passes message safely without shell interpretation
   const result = await execGit(['commit', '-m', message, ...pathspecs], dir);
@@ -257,7 +276,12 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
  * @param {{prune?: boolean}} [opts] - `prune` also drops remote-tracking refs whose
  *   remote branch is gone, for callers that go on to reason about what origin still has.
  */
-export function fetchOrigin(dir, { prune = false } = {}) {
+export async function fetchOrigin(dir, { prune = false } = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => fetchOriginAdmitted(dir, { prune }));
+}
+
+function fetchOriginAdmitted(dir, { prune = false } = {}) {
   return fetchOriginAttempt(dir, 1, prune);
 }
 
@@ -267,6 +291,11 @@ export function fetchOrigin(dir, { prune = false } = {}) {
  * would swap files on disk and trigger HMR/server restarts).
  */
 export async function updateBranches(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => updateBranchesAdmitted(dir));
+}
+
+async function updateBranchesAdmitted(dir) {
   await fetchOrigin(dir);
 
   const status = await getStatus(dir);
@@ -328,6 +357,11 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
  * Push to origin
  */
 export async function push(dir, branch = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pushAdmitted(dir, branch));
+}
+
+async function pushAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const args = branch ? ['push', 'origin', branch] : ['push'];
   const result = await execGit(args, dir);
@@ -339,6 +373,11 @@ export async function push(dir, branch = null) {
  * Never uses --force. Returns per-branch results.
  */
 export async function pushAll(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pushAllAdmitted(dir));
+}
+
+async function pushAllAdmitted(dir) {
   const allBranches = await getBranches(dir);
   const pushable = allBranches.filter(b => b.tracking && b.ahead > 0);
 
@@ -370,6 +409,11 @@ export async function pushAll(dir) {
  * Create and switch to a new branch
  */
 export async function createBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => createBranchAdmitted(dir, branchName));
+}
+
+async function createBranchAdmitted(dir, branchName) {
   await execGit(['checkout', '-b', branchName], dir);
   return { success: true, branch: branchName };
 }
@@ -378,6 +422,11 @@ export async function createBranch(dir, branchName) {
  * Switch to an existing branch
  */
 export async function checkout(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => checkoutAdmitted(dir, branchName));
+}
+
+async function checkoutAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   await execGit(['checkout', branchName], dir);
   return { success: true, branch: branchName };
@@ -804,6 +853,11 @@ export async function getBranches(dir, { strict = false } = {}) {
  * Pull changes from remote for current branch
  */
 export async function pull(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => pullAdmitted(dir));
+}
+
+async function pullAdmitted(dir) {
   const result = await execGit(['pull', '--rebase', '--autostash'], dir).catch((err) => {
     // A rebase killed mid-flight can leave the repo in a rebase-in-progress
     // state, so a lock found here is cleared but NOT retried — blindly
@@ -903,6 +957,11 @@ async function updatePinnedSubmodules(dir) {
  * @returns {Promise<{success: boolean, branch: string, output: string, conflict: boolean, rebased?: boolean, error?: string}>}
  */
 export async function updateDefaultBranch(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => updateDefaultBranchAdmitted(dir));
+}
+
+async function updateDefaultBranchAdmitted(dir) {
   // Git splits a failed pull across both streams — fetch progress and rebase
   // instructions on stderr, the `CONFLICT (content): …` lines naming the files
   // on stdout — so an `stderr || stdout` pick would drop exactly the part that
@@ -1036,6 +1095,11 @@ export async function updateDefaultBranch(dir) {
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => syncBranchAdmitted(dir, branch));
+}
+
+async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const currentBranch = branch || await getBranch(dir);
 
@@ -1094,7 +1158,20 @@ export function hasChangelogDir(dir) {
 // FIRST agent's in-flight rebase.
 const ensureLatestTails = new Map();
 
-export function ensureLatest(dir) {
+export async function ensureLatest(dir) {
+  const gitCheck = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true });
+  if (gitCheck.exitCode === 128
+    && /^fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point)/im.test(gitCheck.stderr || '')) {
+    return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
+  }
+  if (gitCheck.exitCode !== 0 || gitCheck.stdout.trim() !== 'true') {
+    throw new Error(gitCheck.stderr?.trim() || 'Could not verify Git working tree');
+  }
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => ensureLatestAdmitted(dir));
+}
+
+function ensureLatestAdmitted(dir) {
   const key = resolve(dir);
   const prev = ensureLatestTails.get(key) || Promise.resolve();
   const run = prev.catch(() => {}).then(() => ensureLatestUnserialized(dir));
@@ -1150,9 +1227,6 @@ function summarizeRebaseConflict({ stdout = '', stderr = '' } = {}) {
 }
 
 async function ensureLatestUnserialized(dir) {
-  const gitCheck = await isRepo(dir).catch(() => false);
-  if (!gitCheck) return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
-
   // A rebase left in progress is someone's (a person's, or an agent resolving a
   // conflict) — never start a second one on top of it, and never abort it.
   if (await rebaseInProgress(dir)) {
@@ -1271,22 +1345,25 @@ async function ensureLatestUnserialized(dir) {
 export async function getRemoteBranches(dir, { force = false } = {}) {
   // Fetch latest refs if forced or not fresh within window
   if (force || !isFetchFresh(dir)) {
-    if (activeFetches.has(dir)) {
-      await activeFetches.get(dir);
-    } else {
-      const fetchPromise = execGit(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true })
-        .then(res => {
-          if (res.exitCode === 0 || isBenignConcurrentFetchRefRace(res.stderr || res.stdout || '')) {
-            recordFetchSuccess(dir);
-          }
-          return res;
-        })
-        .finally(() => {
-          activeFetches.delete(dir);
-        });
-      activeFetches.set(dir, fetchPromise);
-      await fetchPromise;
-    }
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    await withCheckoutPublication(dir, async () => {
+      if (activeFetches.has(dir)) {
+        await activeFetches.get(dir);
+      } else {
+        const fetchPromise = execGit(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true })
+          .then(res => {
+            if (res.exitCode === 0 || isBenignConcurrentFetchRefRace(res.stderr || res.stdout || '')) {
+              recordFetchSuccess(dir);
+            }
+            return res;
+          })
+          .finally(() => {
+            activeFetches.delete(dir);
+          });
+        activeFetches.set(dir, fetchPromise);
+        await fetchPromise;
+      }
+    });
   }
 
   // Detect default branch
@@ -1360,7 +1437,12 @@ export async function getWorktreeBranches(dir) {
  * @param {boolean} options.remote - Delete remote branch
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  */
-export async function deleteBranch(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
+export async function deleteBranch(dir, branchName, options = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => deleteBranchAdmitted(dir, branchName, options));
+}
+
+async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
   const { baseBranch } = await getRepoBranches(dir);
   const protectedSet = new Set(PROTECTED_BRANCHES);
   if (baseBranch) protectedSet.add(baseBranch);
@@ -1418,6 +1500,11 @@ export async function deleteBranch(dir, branchName, { local = false, remote = fa
  * @returns {Promise<{success: boolean, output: string}>}
  */
 export async function mergeBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => mergeBranchAdmitted(dir, branchName));
+}
+
+async function mergeBranchAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   const result = await execGit(['merge', '--no-ff', branchName], dir);
   return { success: true, output: (result.stdout + result.stderr).trim() };
@@ -1449,9 +1536,16 @@ export async function mergeBranch(dir, branchName) {
  * @returns {Promise<boolean>}
  */
 export async function hasBranchMergeEvidence(dir, branch, target) {
-  if (!branch || !target || branch === target) return false;
+  // Equal immutable commits prove inclusion; equal symbolic branch names do
+  // not prove that a feature branch landed anywhere else.
+  if (!branch || !target || (branch === target && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(branch))) return false;
 
-  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true })
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' };
+  // An inherited writer's quarantine/object override must not redirect a
+  // repository inspection away from this checkout's own common object store.
+  delete env.GIT_OBJECT_DIRECTORY;
+  const readOptions = { ignoreExitCode: true, env };
+  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
 
@@ -1460,14 +1554,14 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
 
   // Fast path: branch tip already reachable from target (normal / ff / no-ff merge,
   // or the branch carries no unique commits).
-  const ancestor = await execGit(['merge-base', '--is-ancestor', branchSha, targetSha], dir, { ignoreExitCode: true })
+  const ancestor = await execGit(['merge-base', '--is-ancestor', branchSha, targetSha], dir, readOptions)
     .then(r => r.exitCode === 0)
     .catch(() => false);
   if (ancestor) return true;
 
   // Rebase/cherry-pick path: does target contain every branch commit as an
   // individual patch-equivalent commit?
-  const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, { ignoreExitCode: true })
+  const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, readOptions)
     .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (individualCherry === null) return false;
@@ -1476,32 +1570,47 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   }
 
   // Squash path: does target already contain the branch's combined patch?
-  const mergeBase = await execGit(['merge-base', targetSha, branchSha], dir, { ignoreExitCode: true })
+  const mergeBase = await execGit(['merge-base', targetSha, branchSha], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
   if (!mergeBase) return false;
   // No unique work beyond the merge base → nothing would be lost.
   if (mergeBase === branchSha) return true;
 
-  const branchTree = await execGit(['rev-parse', `${branchSha}^{tree}`], dir, { ignoreExitCode: true })
+  const branchTree = await execGit(['rev-parse', `${branchSha}^{tree}`], dir, readOptions)
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
   if (!branchTree) return false;
 
-  // Write a synthetic commit object with the branch's full tree atop the merge base.
-  // commit-tree uses the repo's configured identity; if that's unset it fails and
-  // no merge evidence is established (the worktree is preserved).
-  const synthesized = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, { ignoreExitCode: true })
-    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
-    .catch(() => null);
-  if (!synthesized) return false;
+  // Polling must not add dangling synthetic commits to the shared object store:
+  // that invalidates an otherwise stable preservation snapshot. Both commands
+  // use a private object directory with the original store as a read alternate.
+  return probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOptions).catch(() => false);
+}
 
-  const combinedCherry = await execGit(['cherry', targetSha, synthesized], dir, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
-    .catch(() => null);
-  if (combinedCherry === null) return false;
-  if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged
-  return combinedCherry.split('\n').every(line => line.startsWith('-'));
+async function probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOptions) {
+  const objects = await execGit(['rev-parse', '--path-format=absolute', '--git-path', 'objects'], dir, readOptions);
+  if (objects.exitCode !== 0 || !objects.stdout.trim()) return false;
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-merge-probe-'));
+  try {
+    const options = { ...readOptions, env: { ...readOptions.env,
+      GIT_OBJECT_DIRECTORY: scratch,
+      // Git accepts C-quoted entries, including paths containing the platform
+      // list separator, quotes or backslashes. Existing alternates remain valid.
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [JSON.stringify(objects.stdout.trim()),
+        readOptions.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter)
+    } };
+    // Preserve configured-identity behavior: an unavailable identity fails closed.
+    const synthetic = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, options);
+    if (synthetic.exitCode !== 0 || !synthetic.stdout.trim()) return false;
+    const result = await execGit(['cherry', targetSha, synthetic.stdout.trim()], dir, options);
+    if (result.exitCode !== 0) return false;
+    const lines = result.stdout.trim();
+    return lines === '' || lines.split('\n').every(line => line.startsWith('-'));
+  } finally {
+    // Only this invocation's exclusively created scratch directory is removed.
+    await rmGuarded(scratch, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 // Backward-compatible name for callers using the original evidence predicate.
@@ -1515,6 +1624,11 @@ export const isBranchMergedInto = hasBranchMergeEvidence;
  * @returns {Promise<{success: boolean, branch: string}>}
  */
 export async function checkoutRemoteBranch(dir, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => checkoutRemoteBranchAdmitted(dir, branchName));
+}
+
+async function checkoutRemoteBranchAdmitted(dir, branchName) {
   assertSafeRef(branchName);
   await execGit(['checkout', '-b', branchName, `origin/${branchName}`], dir);
   return { success: true, branch: branchName };
@@ -1637,6 +1751,11 @@ export async function findActiveAgentInWorkspace(dir, { includePaused = false, f
  *   fetched: boolean}>}
  */
 export async function resetToDefaultBranch(dir) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => resetToDefaultBranchAdmitted(dir));
+}
+
+async function resetToDefaultBranchAdmitted(dir) {
   // A linked worktree cannot check out the default branch — the main checkout
   // already holds it — and hard-resetting one would discard an agent's
   // in-flight work on a branch that is not the default anyway. Fail with a
@@ -1734,22 +1853,123 @@ const WORKTREE_HOLD_REASONS = {
   'worktree-human-claim': 'worktree is a claimed session',
   'remove-failed': 'worktree removal failed and the checkout is still present'
 };
-const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked out in a worktree';
+const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || reason || 'checked out in a worktree';
+
+async function prepareRemoteRetirement(dir, defaultBranch) {
+  // A remote name resolves differently for fetch and push (and can change
+  // while cleanup awaits). Require one identical endpoint and use its captured
+  // URL for every read/write. Equivalent-looking aliases need explicit review.
+  const [fetchUrls, pushUrls] = await Promise.all([
+    execGitSafe(['remote', 'get-url', '--all', 'origin'], dir),
+    execGitSafe(['remote', 'get-url', '--push', '--all', 'origin'], dir),
+  ]);
+  const fetchEndpoints = fetchUrls.stdout.trim().split(/\r?\n/).filter(Boolean);
+  const pushEndpoints = pushUrls.stdout.trim().split(/\r?\n/).filter(Boolean);
+  if (fetchUrls.exitCode !== 0 || pushUrls.exitCode !== 0
+      || fetchEndpoints.length !== 1 || pushEndpoints.length !== 1
+      || fetchEndpoints[0] !== pushEndpoints[0]) {
+    return { reason: 'fetch and push must identify one identical remote endpoint' };
+  }
+  const remoteUrl = fetchEndpoints[0];
+  // origin/HEAD and a caller's remembered default can outlive a forge default
+  // change. Establish the advertised default before any refresh or retirement.
+  const advertised = await execGitSafe(['ls-remote', '--symref', '--', remoteUrl, 'HEAD'], dir);
+  const symrefs = advertised.stdout.split(/\r?\n/).filter(line => line.startsWith('ref: '));
+  const defaultMatch = symrefs.length === 1 ? /^ref: (refs\/heads\/.+)\tHEAD$/.exec(symrefs[0]) : null;
+  if (advertised.exitCode !== 0 || !defaultMatch) return { reason: 'default-branch-unverified' };
+  if (defaultMatch[1] !== `refs/heads/${defaultBranch}`) return { reason: 'default-branch-changed' };
+  // A stale local default or an unsuccessful fetch never authorizes deletion.
+  const fetched = await execGitSafe(['fetch', '--prune', '--', remoteUrl, '+refs/heads/*:refs/remotes/origin/*'], dir, { ignoreExitCode: true });
+  if (fetched.exitCode !== 0) return { reason: 'remote default could not be refreshed' };
+  const targetRef = `refs/heads/${defaultBranch}`;
+  const targetHead = await execGitSafe(['ls-remote', '--heads', '--', remoteUrl, targetRef], dir);
+  const targetMatch = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)$/.exec(targetHead.stdout.trim());
+  const targetSha = targetMatch?.[1];
+  if (targetHead.exitCode !== 0 || targetMatch?.[2] !== targetRef
+      || (await execGitSafe(['rev-parse', '--verify', `${targetSha}^{commit}`], dir)).exitCode !== 0) {
+    return { reason: 'remote default head unavailable' };
+  }
+  return { remoteUrl, targetSha, defaultBranch };
+}
+
+// Fresh local refs, upstream aliases and actual holders all retain the remote
+// recovery ref. Re-read immediately before the leased push, inside the same
+// ownership fence used to register managed claims.
+async function remoteRetirementLocalHold(dir, name) {
+  const [refs, trees] = await Promise.all([
+    execGitSafe(['for-each-ref', '--format=%(refname:short)%09%(upstream:short)', 'refs/heads/'], dir),
+    listWorktrees(dir).catch(() => null),
+  ]);
+  if (refs.exitCode !== 0 || !Array.isArray(trees)) return 'local ownership unavailable';
+  if (refs.stdout.split(/\r?\n/).some(line => {
+    const [branch, upstream] = line.split('\t');
+    return branch === name || upstream === `origin/${name}`;
+  })) return 'local branch or upstream still exists';
+  if (trees.some(tree => tree.branch === `refs/heads/${name}` || tree.branch === name)) return 'checked out in a worktree';
+  return null;
+}
+
+async function retireMergedRemoteHead(dir, name, context, { excludeBranches } = {}) {
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  if (PROTECTED_BRANCHES.includes(name) || name === context.defaultBranch || name === 'HEAD') return { reason: 'protected branch' };
+  const ref = `refs/heads/${name}`;
+  if ((await execGitSafe(['check-ref-format', ref], dir)).exitCode !== 0) return { reason: 'invalid branch name' };
+  return withClaimOwnershipLock(async () => {
+    const hold = async tip => {
+      const exclusions = typeof excludeBranches === 'function' ? await excludeBranches() : excludeBranches;
+      if (exclusions?.has(name)) return 'used by an active agent';
+      const agents = await readClaimOwnershipAgents();
+      const owner = claimCheckoutOwnerReason({ branchName: name, holderPath: null, sourceWorkspace: dir, agents });
+      if (owner) return owner;
+      if (tip) {
+        const policy = await readBranchCompletionHold({ repoPath: dir, branch: name, tip, retirement: true });
+        if (policy) return policy;
+      }
+      return remoteRetirementLocalHold(dir, name);
+    };
+    const initialHold = await hold();
+    if (initialHold) return { reason: initialHold };
+    const head = await execGitSafe(['ls-remote', '--heads', '--', context.remoteUrl, ref], dir);
+    const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\t(.+)$/.exec(head.stdout.trim());
+    if (head.exitCode !== 0 || !match || match[2] !== ref) return { reason: 'head unavailable or already removed' };
+    if (!await hasBranchMergeEvidence(dir, match[1], context.targetSha)) return { reason: 'current head is not merged' };
+    const finalHold = await hold(match[1]);
+    if (finalHold) return { reason: finalHold };
+    const removed = await execGitSafe(['push', `--force-with-lease=${ref}:${match[1]}`, '--', context.remoteUrl, `:${ref}`], dir, { ignoreExitCode: true });
+    return removed.exitCode === 0 ? { deleted: true } : { reason: 'head changed or deletion failed', failed: true };
+  });
+}
+
+/** Retire only explicitly selected remote candidates, preserving any fresh local
+ * ownership. The candidate scan grants no deletion authority: endpoint, default,
+ * current head, merge proof and claim/completion gates are established here.
+ */
+export async function deleteMergedRemoteBranches(dir, names, { defaultBranch, excludeBranches } = {}) {
+  const selected = [...new Set(names)];
+  if (!selected.length) return { deleted: [], skipped: [] };
+  const base = defaultBranch || (await getRepoBranches(dir)).baseBranch || 'main';
+  const context = await prepareRemoteRetirement(dir, base);
+  if (context.reason) return { deleted: [], skipped: selected.map(branch => ({ branch, reason: context.reason })) };
+  const deleted = [];
+  const skipped = [];
+  for (const branch of selected) {
+    const result = await retireMergedRemoteHead(dir, branch, context, { excludeBranches });
+    if (result.deleted) deleted.push(branch);
+    else skipped.push({ branch, reason: result.reason });
+  }
+  return { deleted, skipped };
+}
 
 /**
  * Delete all merged branches (local and remote) in one operation.
  * Skips the `PROTECTED_BRANCHES` set (see `../lib/gitArgs.js`), the current branch,
  * and any explicitly excluded branches.
  *
- * A merged branch checked out in a WORKTREE is no longer reported-and-left: the
- * worktree is reaped first (`reapMergedWorktrees`, which removes the tree and the
- * branch together) so the "Clean N merged" affordance actually clears instead of
- * offering the same branch on every visit. That reap refuses anything it cannot
- * prove disposable — an uncommitted tree, a branch not fully in
- * `origin/<default>` (which is also what rules out losing unpushed work: every
- * commit on a reaped branch is already on the remote), a locked tree, a live
- * agent's tree, or a human `/claim` session. Those come back in `skipped` with
- * the reason, so the UI can say why one survived.
+ * Shares the reconciler's fresh ownership, merge, archival and retirement gates.
+ * Local and remote deletion are pinned to observed heads. Retained work is
+ * returned with its specific reason; the UI's merged flag is never authority.
  *
  * @param {string} dir - Working directory
  * @param {object} options
@@ -1759,104 +1979,47 @@ const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked
  * @returns {Promise<{deleted: Array<{name: string, local: string, remote: string, worktree?: string}>, skipped: string[], defaultBranch: string}>}
  */
 export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null } = {}) {
-  const [{ baseBranch }, currentBranch, worktreeBranches] = await Promise.all([
-    getRepoBranches(dir),
-    getBranch(dir),
-    getWorktreeBranches(dir)
-  ]);
+  const { cleanupMerged } = await import('./branchReconcile.js');
+  const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
-  const protectedSet = new Set(PROTECTED_BRANCHES);
-  if (baseBranch) protectedSet.add(baseBranch);
-
-  // Worktree and agent branches are only protected from local deletion. Read
-  // BEFORE the reap and corrected below, so nothing the reap freed stays behind
-  // a hold that no longer exists.
-  const localOnlyProtected = new Set([...worktreeBranches]);
-  if (excludeBranches) {
-    for (const b of excludeBranches) localOnlyProtected.add(b);
-  }
-
-  // Ahead of the merged-branch listing, so a reaped branch reads as an ordinary
-  // already-deleted local rather than as a worktree-held skip. `defaultBranch` is
-  // handed over because the reap's own lookup can fall back to a `remote set-head`
-  // probe, which is a 5s stall on this request path.
-  const reap = await reapMergedWorktrees(dir, {
-    activeAgentIds, excludeBranches, includeUnmanagedTrees: true, defaultBranch
-  }).catch(err => {
-    console.error(`❌ Worktree reap failed during merged-branch cleanup: ${err.message}`);
-    return null;
-  });
-  // Whatever the reap removed no longer has a worktree holding it, so drop the
-  // hold: a branch whose tree went but whose delete failed falls through to the
-  // ordinary `branch -d` pass below, which reports its own outcome.
-  for (const entry of reap?.reaped || []) localOnlyProtected.delete(entry.branch);
-  const reapedBranches = (reap?.reaped || []).filter(entry => entry.branch && entry.branchDeleted).map(entry => entry.branch);
-  const reapHolds = new Map((reap?.skipped || []).filter(entry => entry.branch).map(entry => [entry.branch, entry.reason]));
-
-  // The reap already fetched --prune; a second round-trip would change nothing.
-  if (!reap) await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
-
-  const [localMergedNames, remoteMerged] = await Promise.all([
-    getLocalMergedBranchNames(dir, defaultBranch),
-    execGit(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'], dir, { ignoreExitCode: true })
-  ]);
-
-  const mergedLocalCandidates = [...localMergedNames]
-    .filter(name => !protectedSet.has(name));
-  const mergedLocalNames = mergedLocalCandidates
-    .filter(name => !localOnlyProtected.has(name) && name !== currentBranch);
-
-  const mergedRemoteNames = remoteMerged.stdout.trim().split('\n').filter(Boolean)
-    .filter(ref => ref.startsWith('origin/'))
-    .map(ref => ref.replace(/^origin\//, ''))
-    .filter(name => !protectedSet.has(name) && name !== 'HEAD');
-
-  const allMerged = [...new Set([...mergedLocalNames, ...mergedRemoteNames])];
-  const localSet = new Set(mergedLocalNames);
-  const remoteSet = new Set(mergedRemoteNames);
-
-  // One record per branch, so a branch whose local half the reap already deleted
-  // and whose remote half is deleted below reports as a single row.
-  const records = new Map(reapedBranches.map(name => [name, { name, local: 'deleted', remote: null, worktree: 'removed' }]));
-  const skipped = mergedLocalCandidates
-    .filter(name => localOnlyProtected.has(name) || name === currentBranch)
-    .map(name => {
-      const reason = name === currentBranch
-        ? 'currently checked out'
-        : excludeBranches?.has(name)
-          ? 'used by an active agent'
-          : worktreeHoldReason(reapHolds.get(name));
-      return `${name} (local: ${reason})`;
-    });
-  const opts = { ignoreExitCode: true };
-
-  for (const name of allMerged) {
-    const hasLocal = localSet.has(name);
-    const hasRemote = remoteSet.has(name);
-    const result = records.get(name) || { name, local: null, remote: null };
-    records.set(name, result);
-
-    if (hasLocal) {
-      // `mergedLocalNames` was computed against the default branch above. Git's
-      // `branch -d` checks the current checkout (or the branch's upstream), which
-      // can differ when the app repo is currently on another branch; that would
-      // reject a branch this cleanup has already proved merged. Force-delete is
-      // safe here because worktree/current/agent-held names were filtered out.
-      const r = await execGitSafe(['branch', '-D', name], dir, opts);
-      result.local = r.exitCode === 0 ? 'deleted' : 'failed';
-      if (r.exitCode !== 0) skipped.push(`${name} (local: ${r.stderr?.trim()})`);
+  const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
+  const skipped = [];
+  const records = new Map();
+  const context = await prepareRemoteRetirement(dir, defaultBranch);
+  if (context.reason) return { deleted: [], skipped: [`cleanup (${context.reason})`], defaultBranch };
+  const { targetSha } = context;
+  const branches = await execGitSafe(['branch', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
+  if (branches.exitCode !== 0) return { deleted: [], skipped: ['cleanup (local branches unavailable)'], defaultBranch };
+  const local = new Set(branches.stdout.trim().split('\n').filter(Boolean));
+  const remote = await execGitSafe(['branch', '-r', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
+  if (remote.exitCode !== 0) return { deleted: [], skipped: ['cleanup (remote merge evidence unavailable)'], defaultBranch };
+  const remoteNames = remote.stdout.trim().split('\n').filter(ref => ref.startsWith('origin/')).map(ref => ref.slice(7));
+  const names = new Set([...local, ...remoteNames]);
+  for (const name of names) {
+    if (protectedSet.has(name) || name === 'HEAD') continue;
+    const exclusions = typeof excludeBranches === 'function' ? await excludeBranches() : excludeBranches;
+    if (exclusions?.has(name)) { skipped.push(`${name} (used by an active agent)`); continue; }
+    const record = { name, local: null, remote: null };
+    records.set(name, record);
+    if (local.has(name)) {
+      const retired = await cleanupMerged(dir, targetSha, [{ branch: name }], { activeAgentIds });
+      if (retired.cleaned.includes(name)) record.local = 'deleted';
+      else {
+        for (const hold of retired.skipped) skipped.push(`${name} (local: ${worktreeHoldReason(hold.reason)}${hold.detail ? `: ${hold.detail}` : ''})`);
+        // Retention is a whole-branch outcome. In particular, archive failure
+        // must leave both the checkout and its remote recovery ref intact.
+        continue;
+      }
     }
-
-    if (hasRemote) {
-      const r = await execGitSafe(['push', 'origin', '--delete', name], dir, opts);
-      result.remote = r.exitCode === 0 ? 'deleted' : 'failed';
-      if (r.exitCode !== 0) skipped.push(`${name} (remote: ${r.stderr?.trim()})`);
+    if (!remoteNames.includes(name)) continue;
+    const removed = await retireMergedRemoteHead(dir, name, context, { excludeBranches });
+    if (removed.deleted) record.remote = 'deleted';
+    else {
+      if (removed.failed) record.remote = 'failed';
+      skipped.push(`${name} (remote: ${removed.reason})`);
     }
   }
-
-  const deleted = [...records.values()].filter(r => r.local === 'deleted' || r.remote === 'deleted');
-
-  return { deleted, skipped, defaultBranch };
+  return { deleted: [...records.values()].filter(row => row.local === 'deleted' || row.remote === 'deleted'), skipped, defaultBranch };
 }
 
 /**

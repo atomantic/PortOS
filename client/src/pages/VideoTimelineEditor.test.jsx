@@ -39,13 +39,15 @@ const api = vi.hoisted(() => ({
   music: { tracks: [] },
   galleryThrows: false,
   updateTimelineProject: vi.fn(async () => ({ updatedAt: 'u2' })),
+  listHistory: vi.fn(),
+  listMusic: vi.fn(),
 }));
 
 vi.mock('../services/api', () => ({
   getTimelineProject: (...args) => api.getTimelineProject(...args),
-  listVideoHistory: async () => api.history,
+  listVideoHistory: (...args) => api.listHistory(...args),
   getGalleryImages: (...args) => api.getGalleryImages(...args),
-  listMusicLibrary: async () => api.music,
+  listMusicLibrary: (...args) => api.listMusic(...args),
   updateTimelineProject: (...args) => api.updateTimelineProject(...args),
   renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
@@ -82,6 +84,8 @@ beforeEach(() => {
   api.gallery = [{ filename: 'plate.png' }, { filename: 'logo.png' }];
   api.music = { tracks: [{ filename: 'bed.mp3', label: 'Bed' }] };
   api.galleryThrows = false;
+  api.listHistory.mockReset().mockImplementation(async () => api.history);
+  api.listMusic.mockReset().mockImplementation(async () => api.music);
   api.getTimelineProject.mockReset().mockImplementation(async () => api.project);
   api.getGalleryImages.mockReset().mockImplementation(async (filenames) => {
     if (api.galleryThrows) throw new Error('network');
@@ -525,10 +529,12 @@ describe('source-aware playback', () => {
     const bedBlock = () => screen.getAllByText('bed.mp3').map((node) => node.parentElement).find((node) => node.style.width);
     const reportBedLength = (el, seconds) => {
       Object.defineProperty(el, 'duration', { configurable: true, value: seconds });
+      // No act here: the early-metadata fixture calls this inside render's act; test-side callers use reportBedLengthInAct.
       // Real loadedmetadata leaves HAVE_METADATA available to a late listener.
       Object.defineProperty(el, 'readyState', { configurable: true, value: 1 });
-      act(() => { el.dispatchEvent(new Event('loadedmetadata')); });
+      el.dispatchEvent(new Event('loadedmetadata'));
     };
+    const reportBedLengthInAct = (el, seconds) => { act(() => reportBedLength(el, seconds)); };
 
     it('recovers metadata reported before the bed listener is installed', async () => {
       const onDuration = vi.fn();
@@ -552,7 +558,7 @@ describe('source-aware playback', () => {
       // Until the length is known the authored placement stands.
       expect(bedBlock().style.width).toBe('600px');
 
-      reportBedLength(el, 2);
+      reportBedLengthInAct(el, 2);
       // Metadata updates React state; wait for the measured span to render.
       await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
@@ -571,10 +577,10 @@ describe('source-aware playback', () => {
       await awaitPageLoaded('Loading timeline project');
       const el = container.querySelector('audio');
 
-      reportBedLength(el, Infinity);
+      reportBedLengthInAct(el, Infinity);
       expect(bedBlock().style.width).toBe('600px');
 
-      reportBedLength(el, 2);
+      reportBedLengthInAct(el, 2);
       unmount();
       // Nothing was edited, so nothing is saved; the measured span is a view.
       expect(api.updateTimelineProject).not.toHaveBeenCalled();
@@ -584,7 +590,7 @@ describe('source-aware playback', () => {
       api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });
       const { container } = renderEditorRoute();
       await awaitPageLoaded('Loading timeline project');
-      reportBedLength(container.querySelector('audio'), 2);
+      reportBedLengthInAct(container.querySelector('audio'), 2);
       // Metadata updates React state; wait for the measured span to render.
       await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
@@ -648,5 +654,49 @@ describe('timeline navigation after save failure', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(400); });
       expect(api.updateTimelineProject).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('clip and audio library load failures', () => {
+  it('shows a failed clip load with Retry instead of the empty copy, and recovers on retry', async () => {
+    // Two rejections: the initial load and the first Retry both fail, so the
+    // error must stay visible and actionable until a retry actually succeeds.
+    const failure = new Error('network');
+    api.listHistory.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+    await renderEditor();
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent("Couldn't load your clips.");
+    expect(screen.queryByText(/No clips/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled());
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Add to timeline' })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('tells a successful empty audio library apart from a failed one', async () => {
+    api.music = { tracks: [] };
+    await renderEditor();
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Clip library' })).getAllByRole('tab')[2]);
+    expect(screen.getByText('No audio in the shared music library.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('shows a failed audio load with Retry, then lists the tracks once the retry succeeds', async () => {
+    api.listMusic.mockRejectedValueOnce(new Error('network'));
+    await renderEditor();
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Clip library' })).getAllByRole('tab')[2]);
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent("Couldn't load the shared music library.");
+    expect(screen.queryByText('No audio in the shared music library.')).not.toBeInTheDocument();
+
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Bed')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

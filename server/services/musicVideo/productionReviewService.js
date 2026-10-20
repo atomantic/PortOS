@@ -1,18 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, clipLocked, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
-
-async function requireProject(id) {
-  const project = await getProject(id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return project;
-}
 
 const present = project => ({ project, readiness: productionReadiness(project) });
 function changed(project) {

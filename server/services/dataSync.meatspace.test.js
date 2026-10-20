@@ -25,6 +25,9 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 const dataSync = await import('./dataSync.js');
 const health = await import('./meatspaceHealth.js');
+const { rowIdentityKeys } = await import('../lib/meatspaceRowIdentity.js');
+// The content key every machine derives for a row without createdAt.
+const legacyRowId = (row) => rowIdentityKeys(row).at(-1);
 const { queueConfigWrite, queueHealthWrite } = await import('./meatspaceWriteQueues.js');
 
 const MEATSPACE_DIR = join(tempRoot, 'meatspace');
@@ -64,10 +67,10 @@ const FAMILIES = {
   'eyes.json': {
     arrayKey: 'exams',
     addLocal: (row) => health.addEyeExam(row),
-    sameDateA: { id: 'exam-a', date: '2026-03-01', leftSphere: -1.0 },
-    sameDateB: { id: 'exam-b', date: '2026-03-01', rightSphere: -1.25 },
-    sameDateRemote: { id: 'exam-c', date: '2026-03-01', rightSphere: -1.5 },
-    newDate: { id: 'exam-d', date: '2026-04-01', leftSphere: -1.0 },
+    sameDateA: { id: 'exam-a', createdAt: '2026-03-01T10:00:00.000Z', date: '2026-03-01', leftSphere: -1.0 },
+    sameDateB: { id: 'exam-b', createdAt: '2026-03-01T11:00:00.000Z', date: '2026-03-01', rightSphere: -1.25 },
+    sameDateRemote: { id: 'exam-c', createdAt: '2026-03-01T12:00:00.000Z', date: '2026-03-01', rightSphere: -1.5 },
+    newDate: { id: 'exam-d', createdAt: '2026-04-01T10:00:00.000Z', date: '2026-04-01', leftSphere: -1.0 },
   },
 };
 
@@ -94,21 +97,154 @@ describe.each(Object.entries(FAMILIES))('applyRemote meatspace %s', (filename, f
 });
 
 describe('applyRemote meatspace eyes.json identity', () => {
-  it('matches an id-less local exam to its stamped remote copy, but keeps distinct ids with identical values', async () => {
+  const minted = '2026-05-01T09:00:00.000Z';
+
+  it('matches an id-less local exam to its stamped remote copy, but keeps distinct minted ids with identical values', async () => {
     const values = { date: '2026-03-01', leftSphere: -2, rightSphere: -2 };
     await persist('eyes.json', { exams: [values] }); // legacy row, no id yet
 
     const result = await apply('eyes.json', {
       exams: [
-        { id: 'stamped-copy', ...values }, // the same exam after the peer stamped an id
-        { id: 'twin-1', date: '2026-05-01', leftSphere: -3 },
-        { id: 'twin-2', date: '2026-05-01', leftSphere: -3 }, // distinct record, identical values
+        { id: 'stamped-copy', ...values }, // the same exam after a pre-#12432 peer stamped a random id
+        { id: 'twin-1', createdAt: minted, date: '2026-05-01', leftSphere: -3 },
+        { id: 'twin-2', createdAt: minted, date: '2026-05-01', leftSphere: -3 }, // distinct record, identical values
       ],
     });
 
     expect(result.applied).toBe(true);
     const exams = (await readDoc('eyes.json')).exams;
-    expect(exams.map((e) => e.id ?? null)).toEqual([null, 'twin-1', 'twin-2']);
+    // The peer's stamp becomes the id; the content id this machine stamped stays an alias.
+    expect(exams.map((e) => e.id)).toEqual(['stamped-copy', 'twin-1', 'twin-2']);
+    expect(exams[0].aliasIds).toEqual([legacyRowId(values)]);
+  });
+
+  // #12432: each machine used to stamp a legacy row with its own random id, so the
+  // second sync (after both had stamped) appended the peer's copy on both sides.
+  it('does not duplicate a legacy exam when re-syncing after both machines stamped it', async () => {
+    const legacy = { date: '2025-02-01', leftSphere: -1.25, rightSphere: -1 };
+    await persist('eyes.json', { exams: [{ ...legacy }] });
+    await health.getEyeExams(); // this machine stamps its copy on first read
+
+    // The peer stamped the same row too — with a random id before upgrading, or
+    // the content id after.
+    await apply('eyes.json', { exams: [{ id: '0d9b4c1e-0000-4000-8000-000000000001', ...legacy }] });
+    await apply('eyes.json', { exams: [{ id: legacyRowId(legacy), ...legacy }] });
+
+    const exams = (await readDoc('eyes.json')).exams;
+    expect(exams).toHaveLength(1);
+    expect([exams[0].id, ...exams[0].aliasIds].sort())
+      .toEqual(['0d9b4c1e-0000-4000-8000-000000000001', legacyRowId(legacy)].sort());
+  });
+
+  // A machine that has not yet seen the convergence edits the copy under the id
+  // the merge retired; the alias still routes the edit to the one row.
+  it('applies an edit addressed by an id that convergence turned into an alias', async () => {
+    const legacy = { date: '2025-02-02', leftSphere: -1 };
+    const edited = { id: 'stamp-z', ...legacy, leftSphere: -1.75, updatedAt: '2026-07-01T00:00:00.000Z' };
+    await persist('eyes.json', { exams: [edited] });
+    await apply('eyes.json', { exams: [{ id: 'stamp-b', aliasIds: ['stamp-z'], ...legacy }] });
+    // The unedited copy's content key stays reachable too, for any other peer still holding it.
+    expect((await readDoc('eyes.json')).exams).toEqual([
+      { ...edited, id: 'stamp-b', aliasIds: [legacyRowId(legacy), 'stamp-z'] },
+    ]);
+  });
+
+  // An edit replaces a legacy exam's content, but a third peer's untouched copy,
+  // stamped with yet another id, still finds it through the retained content key.
+  it('matches a third peer copy to a legacy exam edited after its copies converged', async () => {
+    const legacy = { date: '2025-05-05', leftSphere: -1 };
+    await persist('eyes.json', { exams: [{ id: 'stamp-a', aliasIds: ['stamp-b'], ...legacy }] });
+    await health.updateEyeExam('stamp-a', { leftSphere: -1.5 });
+
+    await apply('eyes.json', { exams: [{ id: 'stamp-c', ...legacy }] });
+    const exams = (await readDoc('eyes.json')).exams;
+    expect(exams).toHaveLength(1);
+    expect(exams[0]).toMatchObject({ id: 'stamp-a', leftSphere: -1.5 });
+    expect(exams[0].aliasIds).toEqual(expect.arrayContaining(['stamp-b', 'stamp-c', legacyRowId(legacy)]));
+  });
+
+  // A row whose id matches one exam and whose content matches another joins all
+  // three, whichever machine runs the merge.
+  it('merges a row bridging two exams to the same result in both sync directions', async () => {
+    const a = { id: 'stamp-a', date: '2025-03-03', leftSphere: -1 };
+    const b = { id: 'stamp-b', date: '2025-03-03', leftSphere: -2 };
+    const bridge = { id: 'stamp-a', date: '2025-03-03', leftSphere: -2, updatedAt: '2026-07-01T00:00:00.000Z' };
+
+    await persist('eyes.json', { exams: [a, b] });
+    await apply('eyes.json', { exams: [bridge] });
+    const forward = (await readDoc('eyes.json')).exams;
+
+    await persist('eyes.json', { exams: [bridge] });
+    await apply('eyes.json', { exams: [a, b] });
+    const backward = (await readDoc('eyes.json')).exams;
+
+    expect(forward).toEqual([{ ...bridge, aliasIds: [legacyRowId(a), 'stamp-b'] }]);
+    expect(backward).toEqual(forward);
+  });
+
+  // An exam minted before #12432 has an id but no createdAt. Two machines that
+  // each edited it keep one row (its id), not one per edit.
+  it('keeps one row for a pre-#12432 exam edited differently on two machines', async () => {
+    const mintedBeforeFix = { id: 'exam-old', date: '2025-03-01', leftSphere: -1 };
+    const editedHere = { ...mintedBeforeFix, leftSphere: -1.25 };
+    const editedThere = { ...mintedBeforeFix, leftSphere: -1.5 };
+    await persist('eyes.json', { exams: [editedHere] });
+    await apply('eyes.json', { exams: [editedThere] });
+    const exams = (await readDoc('eyes.json')).exams;
+    expect(exams).toHaveLength(1);
+    expect(exams[0].id).toBe('exam-old');
+  });
+
+  it('keeps a legacy exam deleted before the copies converged, though the peer stamped it differently', async () => {
+    const legacy = { date: '2025-04-01', rightSphere: -2 };
+    await persist('eyes.json', { exams: [{ id: 'stamp-here', ...legacy }] });
+    await health.removeEyeExam('stamp-here');
+    expect((await apply('eyes.json', { exams: [{ id: 'stamp-there', ...legacy }] })).applied).toBe(false);
+    expect((await readDoc('eyes.json')).exams).toEqual([]);
+  });
+
+  it('resolves two copies of one exam to the newer edit on either side', async () => {
+    const original = { id: 'exam-x', createdAt: minted, date: '2026-05-01', leftSphere: -1 };
+    const edited = { ...original, leftSphere: -1.5, updatedAt: '2026-06-01T00:00:00.000Z' };
+
+    await persist('eyes.json', { exams: [original] });
+    expect((await apply('eyes.json', { exams: [edited] })).applied).toBe(true);
+    expect((await readDoc('eyes.json')).exams).toEqual([edited]);
+
+    // The stale copy from a peer that has not seen the edit changes nothing.
+    expect((await apply('eyes.json', { exams: [original] })).applied).toBe(false);
+    expect((await readDoc('eyes.json')).exams).toEqual([edited]);
+  });
+
+  it('keeps a deleted exam deleted when a peer that still holds it syncs, and carries the delete to that peer', async () => {
+    const kept = { id: 'exam-keep', createdAt: minted, date: '2026-05-01', leftSphere: -1 };
+    const gone = { id: 'exam-gone', createdAt: minted, date: '2026-05-02', leftSphere: -2 };
+    await persist('eyes.json', { exams: [kept, gone] });
+    await health.removeEyeExam('exam-gone');
+    const afterDelete = await readDoc('eyes.json');
+
+    // The peer still holds the row: applying its snapshot must not bring it back.
+    expect((await apply('eyes.json', { exams: [kept, gone] })).applied).toBe(false);
+    expect((await readDoc('eyes.json')).exams).toEqual([kept]);
+
+    // The other direction: a machine still holding the row drops it on receipt.
+    await persist('eyes.json', { exams: [kept, gone] });
+    expect((await apply('eyes.json', afterDelete)).applied).toBe(true);
+    const peer = await readDoc('eyes.json');
+    expect(peer.exams).toEqual([kept]);
+    expect(peer.rowTombstones).toEqual(afterDelete.rowTombstones);
+  });
+
+  it('keeps a row edited after its deletion and drops the outlived tombstone', async () => {
+    const row = { id: 'exam-back', createdAt: minted, date: '2026-05-01', leftSphere: -1 };
+    const tombstone = { id: 'exam-back', deletedAt: '2026-05-10T00:00:00.000Z' };
+    await persist('eyes.json', { exams: [], rowTombstones: [tombstone] });
+
+    const edited = { ...row, leftSphere: -3, updatedAt: '2026-05-11T00:00:00.000Z' };
+    expect((await apply('eyes.json', { exams: [edited] })).applied).toBe(true);
+    const doc = await readDoc('eyes.json');
+    expect(doc.exams).toEqual([edited]);
+    expect(doc).not.toHaveProperty('rowTombstones');
   });
 });
 

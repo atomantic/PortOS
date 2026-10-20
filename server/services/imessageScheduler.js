@@ -3,7 +3,7 @@
  *
  * Registers an interval job that periodically runs the incremental iMessage
  * ingestion (see imessageSync.js). Shape shared with the Signal/Spotify/YouTube
- * schedulers via `createSyncScheduler` (server/lib/createSettingsGatedSyncScheduler.js).
+ * schedulers via `createSyncScheduler` (server/services/createSettingsGatedSyncScheduler.js).
  *
  * OFF by default: the scheduler is only registered when the user has opted in via
  * the iMessage Settings drawer on Comms → Messages → iMessage

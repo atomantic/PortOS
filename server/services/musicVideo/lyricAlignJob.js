@@ -16,7 +16,7 @@ import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { alignProjectLyrics } from './lyricAlign.js';
-import { getProject } from './projects.js';
+import { requireProject } from './requireProject.js';
 
 const reviewableRevision = (project) => project.songRevision?.status === 'selected' && Boolean(project.songRevision.baseline);
 const retimeRevisedSongLazy = async (...args) => (await import('./songRevision.js')).retimeRevisedSong(...args);
@@ -51,8 +51,7 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
   const running = getActiveLyricAlignJobId(projectId);
   if (running) return { jobId: running, reused: true };
   // Fail with a real status before a job exists, as the blocking route did.
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   const cues = Array.isArray(project.lyricCues) ? project.lyricCues : [];
   // A revised song re-times as a whole: analysis, alignment and the board (songRevision.js).
   if (retimeSong && !reviewableRevision(project)) {

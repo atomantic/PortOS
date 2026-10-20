@@ -5,7 +5,7 @@
  *   The a cappella workbench was renamed from "Songs" to "Rounds" (its real
  *   subject is musical rounds — Hey Ho Nobody Home, the quodlibet trio, the
  *   500 Miles worked example). The full-stack rename moved the service from
- *   `server/services/songs.js` → `rounds.js` (STATE_PATH `data/songs.json` →
+ *   `songs.js` → `rounds.js` (STATE_PATH `data/songs.json` →
  *   `data/rounds.json`, top-level key `songs: []` → `rounds: []`) and the per-
  *   record `partnerSongIds` field → `partnerRoundIds`, plus the route
  *   `/api/songs` → `/api/rounds`. Existing installs already have their data in

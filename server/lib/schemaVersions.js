@@ -232,7 +232,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `generatedAt` means there's no per-field strip-then-LWW-back corruption to
   // gate against. The FIRST incompatible outline-doc shape change (reverseOutline.js
   // SCHEMA_VERSION 1→2) MUST introduce a gate then, same as the review above.
-  mediaCollections: 1,
+  // mediaCollections v2 = per-item `removedItems` removal records (#12433). A
+  // v1 peer's sanitizer strips them and its union merge re-adds the removed
+  // item, so a v2 sender is ahead and that peer refuses its collections until
+  // it upgrades. A v1 sender stays accepted: its copies keep their original
+  // `addedAt`, which the v2 receiver's removal records already supersede.
+  mediaCollections: 2,
   // v1 = card decks (PostgreSQL `decks` + `deck_cards`) federated via the
   // per-record peer-sync push pipeline (record kind `deck`, sync category
   // `decks`). A brand-NEW synced record type, so it gets its own per-category
@@ -478,7 +483,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // author brief. A <=v8 peer would strip it during an unrelated whole-record
   // edit, so newer transfers are gated and legacy omissions restore the local
   // value through `preserveLegacySeriesDesign`.
-  fableLoom: 9,
+  // v10 = `renderSettings.imageMode`/`videoMode` may name the fal image and
+  // fal/Runway video backends. A <=v9 peer's `sanitizeFableLoomRenderSettings`
+  // nulls an unknown mode on receive, and its next edit would LWW that lost pin
+  // back onto the newer peer. Backend values in `IMAGE_GEN_MODES` /
+  // `VIDEO_GEN_MODES` are pinned in schemaVersions.test.js to move with this.
+  fableLoom: 10,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -696,7 +706,23 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would collapse the mode to footage and discard the authored scene.
   // v21 adds compressed lyric timing warnings (`lyricCues[].suspect`). Older
   // normalizers drop the warning on edits. Absent remains legacy; no backfill.
-  musicVideoProjects: 21,
+  // v22 = stored shape added since v21 that a v21 build rebuilds as an explicit
+  // object (or copies by an explicit field list) and so drops on its next save;
+  // the whole-record LWW merge then returns that loss to the upgraded peer as
+  // the newer record. Covered: the title card's end-credits showing
+  // (`titleCard.outro`/`outroStartSec`/`outroEndSec`); `statsOutro`'s custom
+  // `title`/`subtitle`/`hidden` lines; catalog links on creative-setup subjects
+  // (`concept.subjects[].ingredientId`/`localOnly`, which a v21 strict subject
+  // schema also rejects with a 400); the `video:runway` automation tool id
+  // (`normalizeMusicVideoAutomation` filters unknown ids); and the per-shot
+  // fields a v21 re-plan (`replaceScenes`) or split (`splitScene`) discards:
+  // `endImageId`/`endFramePrompt` (style-break end frame, take kind `endImage`,
+  // which a v21 take selection files under a bogus slot), `frameFit`, `speedFps`,
+  // `offsetFrames`, `reverse`, `holdLastFrame`, `filmLook`, `transitionIn`/
+  // `transitionOut`, `glitches`, `cutEffect`, `imageEffect`/`imageEffectSec`,
+  // `stillMove` and `performanceStyle`. Optional fields on the same layout; no
+  // migration or backfill. A field added to these normalizers later needs v23.
+  musicVideoProjects: 22,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -734,7 +760,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would reconstruct the brief without it and could push that downgrade back
   // through the brief-scoped LWW merge. Per-run recipes remain local because
   // syncWire already strips `runs[]`.
-  creativeCommissions: 4,
+  // v5 = `generation.imageMode`/`videoMode` may pin the fal image and fal/Runway
+  // video backends. A <=v4 peer's `coerceGenerationValue` turns an unknown enum
+  // value into `auto`, and its next edit would LWW that un-pinned downgrade back
+  // onto the newer peer. Any new `IMAGE_GEN_MODES`/`VIDEO_GEN_MODES` value needs
+  // another bump (guarded in schemaVersions.test.js).
+  creativeCommissions: 5,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -922,9 +953,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   //    send a stale subset back, which a union ignores.
   // Rows without an `id` (logged before #8143) are still add-only: deleting
   // or moving one does not reach peers.
-  // The key exists so the NEXT incompatible daily-log change can bump to 2 and
-  // have v1 receivers reject it.
-  meatspace: 1,
+  //
+  // v2 (#12432): blood/epigenetic/eye rows merge by identity. A row without
+  // `createdAt` (an id-less legacy row, or one a pre-v2 reader stamped with a
+  // random id) also answers to a content-derived `legacy-` key every machine
+  // computes alike, copies of one row resolve by per-row `updatedAt`, and a
+  // delete rides a top-level `rowTombstones: [{ id, deletedAt }]` list in the
+  // row's file. A v1 receiver must refuse that: its union keys a stamped row by
+  // its id alone, so a `legacy-` id would append a second copy of a row it
+  // holds under its own stamp, and it cannot read tombstones or edits. v1 → v2
+  // stays accepted: a v2 receiver matches the v1 sender's random-stamped legacy
+  // rows by their content key, so they converge instead of duplicating.
+  // An edit made on a v1 peer still arrives as a second row, as it always did.
+  // Until a v1 peer upgrades it refuses the whole meatspace snapshot from a v2
+  // peer, daily log included; the gap shows on the Instances page.
+  meatspace: 2,
   // v1 = the paired-peer credential (#8356): `X-PortOS-Peer-Auth`, an HMAC of the
   // pair `syncSecret` bound to the sender's instance id, replacing the instance
   // password over HTTP Basic between paired peers. Not a record or snapshot

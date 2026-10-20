@@ -1,7 +1,7 @@
 /**
  * Shared TUI invocation + paste-handshake constants.
  *
- * Two execution paths need these: `server/lib/tuiPromptRunner.js` (one-shot
+ * Two execution paths need these: `server/services/tuiPromptRunner.js` (one-shot
  * prompts from the central handler) and `server/services/agentTuiSpawning.js`
  * (long-running CoS agents). Both shell into the same set of TUI binaries
  * (Claude Code, Codex, Antigravity) and use identical PTY-paste choreography to

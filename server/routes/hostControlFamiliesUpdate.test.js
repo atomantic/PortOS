@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { join } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
@@ -29,7 +31,10 @@ vi.mock('../services/brain.js', () => brainService);
 const repoCloner = vi.hoisted(() => ({
   pullRepo: vi.fn(),
 }));
-vi.mock('../services/repoCloner.js', () => repoCloner);
+vi.mock('../services/repoCloner.js', async () => ({
+  ...repoCloner,
+  isDerivedClonePath: (await vi.importActual('../services/repoCloner.js')).isDerivedClonePath,
+}));
 
 const askPromote = vi.hoisted(() => ({
   promoteTurnById: vi.fn(),
@@ -90,7 +95,8 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
   beforeEach(() => {
     vi.clearAllMocks();
     brainService.getLinkById.mockResolvedValue({
-      id: 'link-1', isRepo: true, localPath: '/tmp/example-link', cloneStatus: 'idle',
+      id: 'link-1', isRepo: true, url: 'https://github.com/example-owner/example-repo',
+      localPath: join(PATHS.repos, 'example-owner', 'example-repo'), cloneStatus: 'idle',
     });
     repoCloner.pullRepo.mockResolvedValue({ updated: true });
     askConversations.getConversation.mockResolvedValue({ id: 'conv-1' });

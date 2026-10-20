@@ -13,6 +13,14 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../l
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import { queueHealthWrite } from './meatspaceWriteQueues.js';
 import {
+  normalizeLegacyRows,
+  retainContentKey,
+  rowAnswersTo,
+  rowIdentityKeys,
+  ROW_TOMBSTONES_KEY,
+} from '../lib/meatspaceRowIdentity.js';
+import { recordTombstone } from '../lib/tombstones.js';
+import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
   mlPush,
@@ -148,27 +156,30 @@ const readLocalEyes = async () => {
 
 /**
  * Local eyes.json with every row id-stamped. MUST run inside `queueHealthWrite`:
- * legacy rows have no id, so stamping rewrites the file.
+ * an id-less legacy row gets its content-derived id (the one every peer computes
+ * for the same row) and the file is persisted once, so the ids the client reads
+ * back are the ones later edits/deletes resolve.
  */
 async function loadLocalEyeExamsQueued() {
   const { data, exams } = await readLocalEyes();
-  // Legacy eyes.json rows have no id. Stamp and persist them once so the ids
-  // the client reads back are the ones later edits/deletes resolve.
-  if (exams.some(e => !e.id)) {
-    for (const e of exams) e.id ||= randomUUID();
-    exams.sort(byDate);
-    await writeLocal(EYES_FILE, { ...data, exams });
-  }
-  return { ...data, exams };
+  const normalized = normalizeLegacyRows(exams);
+  if (!normalized.changed) return { ...data, exams };
+  normalized.rows.sort(byDate);
+  const next = { ...data, exams: normalized.rows };
+  await writeLocal(EYES_FILE, next);
+  return next;
 }
+
+// Deletion markers are sync metadata, not part of the exam list callers read.
+const withoutTombstones = ({ [ROW_TOMBSTONES_KEY]: _tombstones, ...rest }) => rest;
 
 export async function getEyeExams() {
   const ml = await mlArrayIfEnabled('eyeExams');
   if (ml) return { exams: [...ml].sort(byDate) };
   const { data, exams } = await readLocalEyes();
   // Only a legacy file needs the (queued) stamping write; the common read stays lock-free.
-  if (exams.some(e => !e.id)) return queueHealthWrite(loadLocalEyeExamsQueued);
-  return { ...data, exams };
+  if (normalizeLegacyRows(exams).changed) return withoutTombstones(await queueHealthWrite(loadLocalEyeExamsQueued));
+  return withoutTombstones({ ...data, exams });
 }
 
 /** Resolve an eye exam id, or a legacy numeric index into the date-sorted list, to an id. */
@@ -186,7 +197,8 @@ export async function addEyeExam(exam) {
     console.log(`👁️ Eye exam added for ${stored.date} (MortalLoom)`);
     return stored;
   }
-  const stored = { ...exam, id: exam.id || randomUUID() };
+  // `createdAt` marks a minted id: without it the row also matches peers by content.
+  const stored = { ...exam, id: exam.id || randomUUID(), createdAt: new Date().toISOString() };
   await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
     data.exams.push(stored);
@@ -212,9 +224,13 @@ export async function updateEyeExam(id, updates) {
 
   const exam = await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
-    const target = data.exams.find(e => e.id === id);
-    if (!target) return null;
-    Object.assign(target, patch);
+    // A sync may have retired the id the client holds into `aliasIds`.
+    const index = data.exams.findIndex(e => rowAnswersTo(e, id));
+    if (index === -1) return null;
+    const before = data.exams[index];
+    // `updatedAt` is the per-row clock the federation merge resolves copies by.
+    const target = retainContentKey(before, { ...before, ...patch, updatedAt: new Date().toISOString() });
+    data.exams[index] = target;
     data.exams.sort(byDate);
     await writeLocal(EYES_FILE, data);
     return target;
@@ -234,9 +250,15 @@ export async function removeEyeExam(id) {
 
   const target = await queueHealthWrite(async () => {
     const data = await loadLocalEyeExamsQueued();
-    const found = data.exams.find(e => e.id === id);
+    const found = data.exams.find(e => rowAnswersTo(e, id));
     if (!found) return null;
-    data.exams = data.exams.filter(e => e.id !== id);
+    data.exams = data.exams.filter(e => e !== found);
+    // The markers keep a peer that still holds the row from syncing it back —
+    // under its content key too, for a copy the peer stamped with another id.
+    const deletedAt = new Date().toISOString();
+    for (const key of rowIdentityKeys(found)) {
+      data[ROW_TOMBSTONES_KEY] = recordTombstone(data[ROW_TOMBSTONES_KEY], key, { keyField: 'id', deletedAt });
+    }
     await writeLocal(EYES_FILE, data);
     return found;
   });

@@ -16,7 +16,7 @@ import { totalVariationCount, countCanonWithContent } from '../../lib/universeBu
 export default function RenderTab({
   draft, setRenderPin, selectedId, bucketsByKind, renderOpts, setRenderOpts,
   availableBackends, defaultMode, imageModels, availableLoras = [],
-  handleRender, rendering, runs,
+  handleRender, rendering, runs, runsStatus = 'ready', onRetryRuns,
 }) {
   const currentModel = useMemo(
     () => imageModels.find((m) => m.id === renderOpts.modelId),
@@ -275,9 +275,31 @@ export default function RenderTab({
         </div>
       </section>
 
-      {selectedId && runs.length > 0 && (
+      {selectedId && (
         <section className="bg-port-card border border-port-border rounded p-4">
           <h2 className="text-sm font-semibold text-white mb-2">Recent runs</h2>
+          {runsStatus === 'error' && (
+            <div role="alert" className="flex items-center justify-between gap-2 text-sm text-port-error mb-2">
+              <span>
+                {runs.length > 0
+                  ? 'Could not refresh run history. Showing the last loaded runs.'
+                  : 'Could not load run history.'}
+              </span>
+              <button
+                type="button"
+                onClick={onRetryRuns}
+                className="px-2 py-1 text-xs border border-port-border rounded text-white hover:bg-port-border/40 whitespace-nowrap"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {runsStatus === 'loading' && runs.length === 0 && (
+            <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading runs…</p>
+          )}
+          {runsStatus === 'ready' && runs.length === 0 && (
+            <p className="text-sm text-gray-500">No renders yet.</p>
+          )}
           <ul className="flex flex-col gap-1">
             {runs.map((r) => (
               <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">

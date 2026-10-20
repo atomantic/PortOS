@@ -34,6 +34,7 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -248,8 +249,7 @@ export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fad
 }
 
 export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null, pilotSceneId = null, verifyCurrent = null } = {}) {
-  const stored = await getProject(projectId);
-  if (!stored) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const stored = await requireProject(projectId);
   await verifyCurrent?.(stored);
   const project = pilotSceneId ? productionPilotRenderProject(stored, pilotSceneId) : stored;
   const pilotEvidence = pilotSceneId ? pilotDependencies(stored, pilotSceneId) : null;

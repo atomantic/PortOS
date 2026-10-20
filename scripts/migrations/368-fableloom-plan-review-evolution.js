@@ -24,7 +24,13 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'fableloom-review-series-plan.md': ['1c1ab552f6f6a4d9d51f1d3bacd89122'],
+  'fableloom-review-series-plan.md': [
+    '1c1ab552f6f6a4d9d51f1d3bacd89122',
+    // Shipped in v2.53.0, before this migration existed. Without it an
+    // untouched upgrade from v2.53 was reported as customized here and again
+    // in 384, until 385 upgraded it.
+    'd7d3b306c82cea4d7f13a78512a46948',
+  ],
 };
 
 export const NEW_SHIPPED_MD5 = {

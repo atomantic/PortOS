@@ -27,13 +27,10 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
     expect(section).toContain('gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>');
-    expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
-    expect(section).toContain('allow_auto_merge: true');
-    expect(section).toContain('autoMergeRequest.enabledAt');
-    expect(section).toContain('If this run requires repository merge admission, do not enable GitHub auto-merge');
-    expect(section).toContain('every outstanding check');
-    expect(section).toContain('Missing/unknown required-check policy');
-    expect(section).toContain('all configured reviews pass');
+    expect(section).toContain('By default stay responsible');
+    expect(section).toContain('mergeHandoffMinQueuedRuns');
+    expect(section).toContain('Unknown backlog, refused handoff');
+    expect(section).not.toContain('--auto --merge');
     expect(section).toContain('8. Write a short markdown summary');
   });
 
@@ -62,8 +59,8 @@ describe('review-enabled completion merge gate', () => {
 
 describe('claim ownership binding instructions (#10089)', () => {
   it('binds every branch the run checks out before its worktree exists, whatever the completion policy', () => {
-    for (const leavePrOpen of [false, true]) {
-      const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen });
+    for (const prStaysOpen of [false, true]) {
+      const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen });
       expect(prompt).toContain('"agentId":"parent-example","action":"bind","branch":"BRANCH"');
       expect(prompt).toContain('a tracking epic');
       expect(prompt).toContain('do not create or enter that worktree');
@@ -98,7 +95,7 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).not.toMatch(/Keep admission through[^.]*CI/i);
     expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-admission');
   });
 });
 
@@ -110,7 +107,36 @@ describe('pending-merge handoff instructions (#12247)', () => {
     expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('Once required CI is green'));
     expect(prompt).toContain('NOT yet merged');
     expect(prompt).toContain('A refusal never permits merging without admission');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-handoff');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-handoff');
+  });
+
+  it.skipIf(process.platform === 'win32')('records optional inconclusive evidence only for the attempted head and preserves blocked evidence', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(prompt).toContain('before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)`');
+    expect(prompt).toContain('nonempty all-optional roster');
+    expect(prompt).toContain('accepted unresolved findings or rejection');
+    const command = prompt.split('\n').find((line) => line.includes('printf "REVIEW_STATUS=optional-inconclusive'));
+    const repo = mkdtempSync(join(tmpdir(), 'optional-review-head-'));
+    try {
+      const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+      git('init', '-q');
+      git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
+      const head = git('rev-parse', 'HEAD');
+      const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
+      const run = (attempted) => execFileSync('sh', ['-c', command], { cwd: repo, env: { ...process.env, REVIEW_ATTEMPTED_HEAD: attempted } });
+      for (const blocked of ['review-blocked', 'findings', 'pending']) {
+        writeFileSync(statusFile, `REVIEW_STATUS=${blocked}\n`);
+        expect(() => run(head)).toThrow();
+        expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=${blocked}\n`);
+      }
+      writeFileSync(statusFile, 'REVIEW_STATUS=clean\n');
+      expect(() => run('f'.repeat(40))).toThrow();
+      expect(readFileSync(statusFile, 'utf8')).toBe('REVIEW_STATUS=clean\n');
+      run(head);
+      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${head}\n`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS

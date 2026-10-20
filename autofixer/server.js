@@ -1,17 +1,18 @@
-import { readFile, writeFile, mkdir, access, rename } from 'fs/promises';
-import { join } from 'path';
+import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
+import { join } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
 // of hardcoding `claude -p`.
-import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
+import { runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
 import { signalDetachedGroups } from '../server/lib/credentialBootstrap.js';
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 import {
   sanitizeChildEnv,
   collectSecretEnvValues,
   buildFixPrompt,
-  restrictedToolArgs,
+  pickRepairProvider,
+  repairWorkspaceHold,
   validateProposedDiff,
   isGitRepo,
   createDisposableWorktree,
@@ -25,9 +26,8 @@ import {
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
-// fix agent runs in an isolated worktree with a sanitized env and (for claude)
-// no Bash tool, so it should never invoke pm2 at all — but the shim keeps a
-// `pm2 kill` from a non-claude provider from downing the shared daemon. Our own
+// fix agent runs restricted (claude without Bash, or codex's sandbox) in an
+// isolated worktree with a sanitized env, so it should never invoke pm2 at all. Our own
 // execPm2 calls use an absolute PM2_BIN, so they bypass the shim. sanitizeChildEnv
 // preserves this guarded PATH into the agent's env.
 Object.assign(process.env, agentGuardEnv());
@@ -218,10 +218,10 @@ function markAsFixed(processName) {
 // touch the live repository or inherit host credentials. The flow:
 //   1. Require a git checkout and cut a disposable, detached worktree at HEAD.
 //   2. Sanitize the child env down to system + AI-provider auth only.
-//   3. Run the agent against the worktree with a fenced, untrusted-log prompt
-//      and (for claude) the shell/network toolset denied.
+//   3. Run the agent against the worktree with a fenced, untrusted-log prompt,
+//      only on a provider with an enforced restricted mode (pickRepairProvider).
 //   4. Collect + validate the resulting diff (size/scope/forbidden paths).
-//   5. Optionally verify it against a user-configured test command.
+//   5. Optionally verify it against a user-configured test command, contained.
 //   6. Promotion gate: only when the user opted into `autoPromote` do we apply
 //      the diff to the live checkout and restart the process; otherwise the
 //      validated patch is staged beside the session for manual review.
@@ -237,14 +237,12 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const outputBuffer = [];
 
   // Resolve the configured CLI provider/model (settings.autofixer), falling
-  // back to claude-code — the historical default — when unset. The autofixer
-  // edits files, so it needs an agentic CLI provider; pickCliProvider restricts
-  // to type 'cli' (API chat providers can't do file edits). `autoPromote` and
-  // `verifyCommand` come from the same settings slice.
+  // back to claude-code when unset, restricted to CLIs with an enforced
+  // restricted mode. `autoPromote` and `verifyCommand` come from the same slice.
   const providers = await loadProviders();
   const settings = await loadSettings();
   const autofixerCfg = settings.autofixer || {};
-  const picked = pickCliProvider(providers, autofixerCfg);
+  const picked = pickRepairProvider(providers, autofixerCfg);
   const autoPromote = autofixerCfg.autoPromote === true; // default OFF — stage only
   const verifyCommand = typeof autofixerCfg.verifyCommand === 'string' ? autofixerCfg.verifyCommand.trim() : '';
 
@@ -273,6 +271,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       autoPromote,
       provider: picked.provider?.id || null,
       model: picked.model || null,
+      restriction: picked.mode || null,
       ...extra,
       ...(error ? { error } : {}),
     };
@@ -290,7 +289,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
 
   if (picked.error) {
     outputBuffer.push(`[ERROR] ${picked.error}`);
-    console.error(`❌ [Autofixer] ${picked.error}`);
+    console.warn(`🛑 [Autofixer] Not repairing ${processName}: ${picked.error}`);
     return finalize({ success: false, exitCode: -1, error: picked.error });
   }
 
@@ -309,11 +308,17 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   }
   const worktreePath = wt.path;
   activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
+  const workspaceHold = await repairWorkspaceHold(picked.mode, app.repoPath, worktreePath);
+  if (workspaceHold) {
+    console.warn(`🛑 [Autofixer] ${workspaceHold}`);
+    await removeWorktree(app.repoPath, worktreePath);
+    return finalize({ success: false, exitCode: -1, error: workspaceHold, extra: { isolated: true } });
+  }
   // Strip host credentials the agent has no business seeing — it keeps only
   // system + AI-provider auth. provider.envVars still overlays inside the runner.
   const childEnv = sanitizeChildEnv(process.env);
 
-  console.log(`🤖 [Autofixer] Repairing ${processName} in isolated worktree via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''}`);
+  console.log(`🤖 [Autofixer] Repairing ${processName} in isolated worktree via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''} [${picked.mode}]`);
 
   const result = await runCliProviderPrompt({
     provider: picked.provider,
@@ -321,7 +326,6 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     prompt,
     cwd: worktreePath,
     baseEnv: childEnv,
-    extraArgs: restrictedToolArgs(picked.provider),
     timeoutMs: 600000, // 10 min — a fix may need several read/edit cycles
     onData: (chunk, stream) => {
       if (stream === 'stderr') {
@@ -338,24 +342,25 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // spawn failure / timeout can leave a partial edit — don't promote or stage
   // work from an agent that didn't finish cleanly.
   const diff = await collectWorktreeDiff(worktreePath);
-  const agentOk = !result.error;
+  const agentOk = !result.error && result.partial === false && result.exitCode === 0;
   // The live env's provider-auth values (incl. runner-injected provider.envVars
   // keys) — reject any diff that tries to write one into the repo (agent
   // read-then-promote exfil backstop).
   const secretValues = collectSecretEnvValues(childEnv, picked.provider?.envVars);
   const validation = agentOk
     ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES, secretValues })
-    : { ok: false, reason: `agent did not complete: ${result.error}`, files: [] };
+    : { ok: false, reason: `agent did not complete: ${result.error || 'repair process returned incomplete output or an unsuccessful exit'}`, files: [] };
 
-  // Optional verification against the user-configured test command, run in the
-  // isolated worktree with the sanitized env — before anything reaches live.
+  // Optional verification against the user-configured test command, contained
+  // over the isolated worktree — before anything reaches live.
   let verify = null;
   if (validation.ok && verifyCommand) {
     console.log(`🧪 [Autofixer] Verifying ${processName} fix: ${verifyCommand}`);
-    verify = await runVerifyCommand(verifyCommand, worktreePath, childEnv);
+    verify = await runVerifyCommand(verifyCommand, worktreePath, { dataDir: DATA_DIR });
+    if (!verify.contained) console.warn(`🛑 [Autofixer] ${verify.output}`);
     outputBuffer.push(`\n[VERIFY exit ${verify.code}]\n${verify.output}`);
   }
-  const verifyOk = !verifyCommand || (verify && verify.ok);
+  const verifyOk = !verifyCommand || verify?.ok;
 
   // Promotion gate — only a validated (and, if configured, verified) diff may
   // touch the live checkout, and only when the user explicitly opted in.
@@ -408,7 +413,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       changedFiles: validation.files,
       diffValid: validation.ok,
       ...(validation.ok ? {} : { diffRejectedReason: validation.reason }),
-      ...(verify ? { verify: { ran: true, ok: verify.ok, exitCode: verify.code } } : { verify: { ran: false } }),
+      ...(verify ? { verify: { ran: true, ok: verify.ok, exitCode: verify.code, contained: verify.contained } } : { verify: { ran: false } }),
     },
   });
 }

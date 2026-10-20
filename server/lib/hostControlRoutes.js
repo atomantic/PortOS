@@ -8,6 +8,9 @@
  * remote LAN/tailnet caller on a password-free install is refused (#8226).
  * The socket twin is HOST_CONTROL_SOCKET_EVENTS in services/socket.js;
  * `/api/commands/*` mounts `requireHostControl` per route in routes/commands.js.
+ * Voice and palette tools (services/voice/tools.js) reach some of these
+ * operations without the route, so a tool whose route twin is listed here
+ * carries `hostControl: true`, checked at dispatch.
  *
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
@@ -115,8 +118,13 @@
  *     the path-based Gmail mbox import. Rename/notes/mode PATCHes, bucket
  *     export into an operator-chosen bucket, and the upload-based importers
  *     stay open: they name no host path.
- *   - browser: navigate uses the configured browser with its URL/IP guards;
- *     downloads DELETE removes data. Harness models/refresh re-reads the
+ *   - browser (#12488): the managed profile carries the operator's signed-in
+ *     sessions and saves downloads silently, so navigate, the page list and
+ *     the downloads list/file reads are gated (steering it or reading what it
+ *     saved is operator work; the URL/IP guards only stop private-network
+ *     targets). `GET /api/browser` stays open but omits page and download
+ *     listings for a caller without host control. Downloads DELETE only
+ *     removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
  *   - local-llm (#8798): install/delete/migrate and llama-server download-model
  *     (including cancel/remove), mtplx models/pull/remove and slotstream
@@ -408,6 +416,17 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire',
+  'GET /api/cos/schedule/branch-reconcile/initialized-checkouts/status',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore-metadata',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-restored-finalization',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/finalize-restored',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/verify-archive',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-branch',
+  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire-branch',
   'POST /api/cos/schedule/maintenance-runs',
   // Editing a pending stage changes the provider used by deferred host work.
   'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
@@ -622,6 +641,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/history/:id/trim-start',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',
+  // Music Video ffmpeg renders: final render, per-shot segments, shot preview
+  // concat with the song, excerpt encode, and platform encodes/thumbnails (#12514).
+  'POST /api/music-video/:id/render',
+  'POST /api/music-video/:id/shots/:sceneId/render',
+  'POST /api/music-video/:id/shot-renders/preview',
+  'POST /api/music-video/:id/excerpt',
+  'POST /api/music-video/:id/publish-kit/build',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
@@ -697,6 +723,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/browser/launch',
   'POST /api/browser/restart',
   'POST /api/browser/stop',
+  'POST /api/browser/navigate',
+  'GET /api/browser/pages',
+  'GET /api/browser/downloads',
+  'GET /api/browser/downloads/:name',
   'POST /api/harnesses/action',
   'POST /api/local-llm/laya-mlx/install',
   'POST /api/local-llm/security-guard/install',
@@ -833,6 +863,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/publish-kit/cover-art/design',
   'POST /api/music-video/:id/publish-kit/cover-art/generate',
   'POST /api/music-video/:id/publish/promotion-plan',
+  // Cover font upload copies the file into a host-wide font folder that every
+  // application loads (macOS Library/Fonts/PortOS), so it is host control, not
+  // a data upload. Listing, serving and deleting cover fonts stay open.
+  'POST /api/music-video/publish/cover-fonts',
   'POST /api/meatspace/post/score-llm',
   'POST /api/meatspace/post/rhetoric/evaluate',
   'POST /api/meatspace/post/drill-cache/fill',

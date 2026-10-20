@@ -4,11 +4,13 @@ import { existsSync } from 'fs';
 import { writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
+import { randomUUID } from 'crypto';
 import { homedir } from 'os';
-import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { PATHS } from '../lib/paths.js';
+import { serverSecretEnvKeys, withoutServerSecretsEnv } from '../lib/processEnv.js';
 // The leaf, not readinessNotify.js: its observer's lazy imports would join
 // pm2.js's ~280 suites to the CoS cluster's CI selection (#12285).
 import { noteReadinessChanged } from './readinessSignal.js';
@@ -253,6 +255,16 @@ export function buildEnv(pm2Home) {
   return env;
 }
 
+// Env for a CLI `pm2 start` of a managed app: buildEnv() minus server secrets.
+function buildStartEnv(pm2Home) {
+  return withoutServerSecretsEnv(buildEnv(pm2Home));
+}
+
+// The Node API merges process.env into the child; its `filter_env` option (an
+// array of names) is the only way to drop inherited keys. Explicit `env`
+// entries are applied after the filter, so configured variables still arrive.
+const serverSecretFilterEnv = () => serverSecretEnvKeys(process.env);
+
 /**
  * Spawn a PM2 CLI command with optional custom PM2_HOME
  * @param {string} action PM2 action (stop, restart, delete)
@@ -329,6 +341,7 @@ export async function startApp(name, options = {}) {
         args: options.args || 'run dev',
         cwd: options.cwd,
         env: options.env || {},
+        filter_env: serverSecretFilterEnv(),
         watch: false,
         autorestart: true,
         max_restarts: 10,
@@ -662,6 +675,7 @@ export async function startWithCommand(name, cwd, command, options = {}) {
         // also overrides the app's env file — they agree by construction, since
         // PortOS generates that file from the same port it records.
         ...(port ? { env: { PORT: String(port) } } : {}),
+        filter_env: serverSecretFilterEnv(),
         windowsHide: IS_WIN
       };
 
@@ -695,7 +709,7 @@ async function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxR
     cliArgs.push('--no-autorestart');
   }
   if (args.length > 0) cliArgs.push('--', ...args);
-  const env = buildEnv(pm2Home);
+  const env = buildStartEnv(pm2Home);
   if (port) env.PORT = String(port);
   await execPm2(cliArgs, { env });
   clearJlistCache(pm2Home);
@@ -712,7 +726,7 @@ async function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxR
 async function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
   const args = ['start', ecosystemFile];
   if (processNames.length > 0) args.push('--only', processNames.join(','));
-  const { stdout } = await execPm2(args, { cwd, env: buildEnv(pm2Home) });
+  const { stdout } = await execPm2(args, { cwd, env: buildStartEnv(pm2Home) });
   clearJlistCache(pm2Home);
   return { success: true, output: stdout };
 }
@@ -826,73 +840,29 @@ export async function startFromEcosystem(cwd, processNames = [], pm2Home = null)
 }
 
 /**
- * Windows-specific ecosystem start: loads config, patches non-JS scripts
- * with interpreter:'none' so PM2 spawns them instead of forking (which would
- * try to require() .cmd batch files as JavaScript).
+ * Evaluate the app's config inside the sanitized PM2 child, never in the
+ * server: a config can copy process.env into an app-specific key before the
+ * CLI's inheritance filter runs. Requiring the original file preserves its
+ * relative imports and __dirname while this wrapper patches Windows launchers.
  */
 async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Home) {
-  // Each file name is a module-level literal joined at its own require() so the
-  // test memo can key every tracked ecosystem file (scripts/lib/testMemo.js).
-  const configPath = ecosystemFile === ECOSYSTEM_FILE ? join(cwd, ECOSYSTEM_FILE) : join(cwd, LEGACY_ECOSYSTEM_FILE);
-
-  // Try to load and patch the config
-  let config;
-  try {
-    // Clear module cache to get fresh config on repeated starts
-    try { delete require.cache[require.resolve(configPath)]; } catch {}
-    config = ecosystemFile === ECOSYSTEM_FILE ? require(join(cwd, ECOSYSTEM_FILE)) : require(join(cwd, LEGACY_ECOSYSTEM_FILE));
-  } catch (err) {
-    // If we can't load the config (syntax error, missing deps, etc.),
-    // fall back to unpatched start — PM2 may still handle it
-    console.log(`⚠️ Could not load ${ecosystemFile} for Windows patching: ${err.message}`);
-    return spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home);
-  }
-
-  const apps = config.apps || [];
-  let needsPatch = false;
-
-  for (const app of apps) {
-    // Skip apps not in our target list
-    if (processNames.length > 0 && !processNames.includes(app.name)) continue;
-
-    // Patch non-JS scripts to use interpreter:'none' (spawn instead of fork)
-    if (app.script && !isJsScript(app.script) && app.interpreter !== 'none') {
-      app.interpreter = 'none';
-      needsPatch = true;
-    }
-
-    // Ensure windowsHide and restart safety on all apps
-    if (!app.windowsHide) {
-      app.windowsHide = true;
-      needsPatch = true;
-    }
-    if (app.autorestart !== false && !app.max_restarts) {
-      app.max_restarts = 10;
-      needsPatch = true;
-    }
-  }
-
-  if (!needsPatch) {
-    // No modifications needed — use original config as-is
-    return spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home);
-  }
-
-  // Write patched config to a temp file.
-  // JSON.stringify is safe here because require() already executed the CJS module,
-  // resolving all dynamic expressions (__dirname, path.join, process.env) to plain
-  // string/number/boolean values. The resulting apps array has no functions or symbols.
-  const tempFile = `_portos_pm2_${process.pid}_${Date.now()}.config.cjs`;
+  const tempFile = `_portos_pm2_${randomUUID()}.config.cjs`;
   const tempPath = join(cwd, tempFile);
-
+  const content = `const config = require(${JSON.stringify(`./${ecosystemFile}`)});
+const selected = ${JSON.stringify(processNames)};
+for (const app of config.apps || []) {
+  if (selected.length && !selected.includes(app.name)) continue;
+  if (app.script && !/\\.(?:js|mjs|cjs|ts)$/i.test(app.script) && app.interpreter !== 'none') app.interpreter = 'none';
+  if (!app.windowsHide) app.windowsHide = true;
+  if (app.autorestart !== false && !app.max_restarts) app.max_restarts = 10;
+}
+module.exports = config;
+`;
+  await writeFile(tempPath, content, { flag: 'wx', mode: 0o600 });
   try {
-    const content = `module.exports = ${JSON.stringify({ apps }, null, 2)};\n`;
-    await writeFile(tempPath, content);
-    console.log(`🔧 Patched ${ecosystemFile} for Windows → ${tempFile}`);
     return await spawnPm2StartEcosystem(cwd, tempFile, processNames, pm2Home);
   } finally {
-    // spawnPm2StartEcosystem resolves on child 'close' (PM2 CLI has exited, config already loaded).
-    // Small delay as extra safety before removing the temp file.
-    await sleep(500);
+    // The CLI has closed, so it has finished evaluating this invocation's file.
     await unlink(tempPath).catch(() => {});
   }
 }

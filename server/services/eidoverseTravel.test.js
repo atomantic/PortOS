@@ -2,12 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import express from 'express';
 import { once } from 'node:events';
 
-const mocks = vi.hoisted(() => ({ peers: [], feature: true, protocol: true, connections: [], admission: vi.fn() }));
+const mocks = vi.hoisted(() => ({ peers: [], feature: true, protocol: true, connections: [], admission: vi.fn(), revoke: vi.fn(async () => {}) }));
 vi.mock('./instances.js', () => ({ getPeers: async () => mocks.peers }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'origin-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./instanceFeatures.js', () => ({ getInstanceFeatures: async () => ({ features: [{ id: 'eidoverse', enabled: mocks.feature }] }) }));
 vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: async () => ({ protocol: 'http', port: 5563, running: true }) }));
-vi.mock('./eidoverseWorld.js', () => ({ ensureEidoverseWorldConfig: async () => ({ human: { name: 'Example Human' }, cos: { id: 'Example Mind' } }), supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args) }));
+vi.mock('./eidoverseWorld.js', () => ({ ensureEidoverseWorldConfig: async () => ({ human: { name: 'Example Human' }, cos: { id: 'Example Mind' } }), supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args), revokeEidoverseGuest: (...args) => mocks.revoke(...args) }));
 
 import router from '../routes/eidoverseTravelRoutes.js';
 import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
@@ -38,6 +38,7 @@ beforeEach(() => {
   mocks.protocol = true;
   destination = { id: 'destination-peer', instanceId: 'destination-instance', address: '127.0.0.1', port: server.address().port, name: 'Example destination', status: 'online', enabled: true };
   mocks.peers = [destination, { id: 'origin-peer', instanceId: 'origin-instance', status: 'offline', enabled: true }];
+  mocks.revoke.mockClear();
   mocks.admission.mockReset().mockImplementation(async ({ agent }) => {
     const messages = [];
     const identity = { world: 'example-world', name: 'guest-example', avatar: 'eidoverse/assets/vrms/claude.vrm' };
@@ -121,6 +122,20 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     expect((await post('/chat', { sessionId: admission.sessionId, text: 'x'.repeat(2001) })).status).toBe(400);
     await receiveEidoverseLeave('origin-instance', { sessionId: admission.sessionId });
     await receiveEidoverseLeave('origin-instance', { sessionId: ticket });
+    expect(mocks.revoke).toHaveBeenCalledTimes(2);
+    expect(mocks.revoke).toHaveBeenCalledWith({ world: 'example-world', name: 'guest-example', avatar: 'eidoverse/assets/vrms/claude.vrm' });
+  });
+
+  it('revokes the guest grant when an unreleased session expires', async () => {
+    vi.useFakeTimers();
+    try {
+      await post('/visit', { agent: true });
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 1);
+      expect(mocks.revoke).toHaveBeenCalledOnce();
+      expect(mocks.connections.at(-1).close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('omits the name for an older peer with strict admission validation', async () => {

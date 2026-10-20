@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _startTestChromeWithRetry, _testChromeCaptureArgs, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
@@ -65,16 +65,25 @@ let proc;
 let browser;
 let artifacts;
 let projectId;
-const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
+let startup;
+const detachedChromeProcessGroupId = (child = proc) => process.platform === 'win32' ? undefined : child?.pid;
 
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const root = lazyTempDataRoot('portos-code-animation-stages-');
-    const profile = join(root, 'chrome-test-profile');
-    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
-    channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child: proc });
     try {
-      const ws = await _waitForTestChrome(proc, 20000, { source: 'test-chrome', executable: chrome, profile });
+      const ws = await _startTestChromeWithRetry({
+        launch: attempt => {
+          const profile = join(root, `chrome-test-profile-${attempt}`);
+          const child = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+          channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child });
+          startup = { source: 'test-chrome', executable: chrome, profile };
+          return child;
+        },
+        onProc: child => { proc = child; },
+        wait: child => _waitForTestChrome(child, 20000, startup),
+        discard: child => _cleanupTestBrowser({ proc: child, cleanup: async () => {}, detachedProcessGroupId: detachedChromeProcessGroupId(child) }),
+      });
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
       artifacts = _createTestArtifactsRoot();
       browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
@@ -82,9 +91,9 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
       // Retain the owned handle for afterAll if termination itself fails.
       await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error, detachedProcessGroupId: detachedChromeProcessGroupId() });
     }
-    // Enclose startup (20s), version probe (up to 3s), disconnect (5s), direct
+    // Enclose two startup attempts (2 x 20s), a discard (~20s), version probe (up to 3s), disconnect (5s), direct
     // child termination (10s), and detached-group drain (5s) budgets.
-  }, 50000);
+  }, 90000);
 
   afterAll(async () => {
     if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);

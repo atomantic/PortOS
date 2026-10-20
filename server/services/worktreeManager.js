@@ -17,12 +17,14 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
+import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
-import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
+import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
+import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
@@ -120,7 +122,9 @@ const WORKTREE_ADD_RETRY_DELAY_MS = 250;
 // while the worktree and branch it just gave up on exist on disk, which then
 // defeats the orphan-branch cleanup ("Cannot delete branch … checked out at …").
 // Ten minutes is far above any healthy add and still bounded. Applies to
-// `worktree move` too — it routes through this same wrapper.
+// `worktree move` too — it routes through this same wrapper. Removal also
+// deletes the full checkout (including ignored output), so it uses this ceiling
+// to avoid leaving a partially deleted tree when the metadata timeout expires.
 //
 // EXPORTED because it is the ceiling `STALE_GIT_LOCK_MIN_AGE_MS` is sized
 // against: the longest a git command PortOS launches can legitimately still be
@@ -188,7 +192,12 @@ export function isBranchCheckedOutElsewhereError(message) {
  * exists`, and cleanup must NOT mistake that for "the branch pre-dated us"
  * (#2193) — the branch is exactly the orphan it needs to delete.
  */
-export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null) {
+export async function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(repo, () => addWorktreeAdmitted(args, repo, attempt, firstError));
+}
+
+function addWorktreeAdmitted(args, repo, attempt, firstError) {
   return execGit(args, repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch((err) => {
     const originalError = firstError || err;
     if (attempt >= WORKTREE_ADD_MAX_ATTEMPTS || !isGitLockError(err.message)) {
@@ -218,11 +227,45 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
 // realpath-resolved repo path so /var vs /private/var (macOS) don't split the
 // tail into two lanes that can still collide.
 const queueWorktreeCreateForKey = createKeyCachedQueue();
-function queueWorktreeCreate(repo, fn) {
-  let key = repo;
-  try { key = realpathSync(repo); } catch { /* repo may not resolve — fall back to the raw path */ }
+async function queueWorktreeCreate(repo, fn) {
+  // Linked checkouts share branch refs even when their working paths differ.
+  // Resolve that common identity before entering the mutation lane.
+  const common = await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repo)
+    .then(result => result.stdout.trim()).catch(() => null);
+  let key = common && isAbsolute(common) ? common : repo;
+  try { key = realpathSync(key); } catch { /* invalid repositories fail in the operation itself */ }
   if (!key) key = '__unknown__';
-  return queueWorktreeCreateForKey(key, fn);
+  return queueWorktreeCreateForKey(key, async () => {
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(repo, fn);
+  });
+}
+
+/** Delete one completed local ref through Git's receiver. Unlike update-ref,
+ * receive-pack checks all registered worktree holders; unlike branch -D, its
+ * transaction also compares the old object id. The local absolute destination
+ * cannot resolve through an origin push URL. Existing hooks and denyDeletes
+ * policy still apply. Share the creation lane so managed attachments cannot
+ * enter between the receiver's holder check and ref transaction.
+ */
+export function deleteCompletedLocalBranch(repoPath, branch, expectedHead) {
+  return queueWorktreeCreate(repoPath, async () => {
+    if (PROTECTED_BRANCHES.includes(branch)) return false;
+    const { getDefaultBranch } = await import('./git.js');
+    const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
+    if (!defaultBranch || branch === defaultBranch) return false;
+    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return false;
+    const ref = `refs/heads/${branch}`;
+    if ((await execGit(['check-ref-format', ref], repoPath, { ignoreExitCode: true })).exitCode !== 0) return false;
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
+    if (!isAbsolute(common)) return false;
+    const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
+    if (!await preservation.verify()) return false;
+    const result = await execGit(['push',
+      '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
+      `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
+    return result.exitCode === 0;
+  }).catch(() => false);
 }
 
 /**
@@ -368,14 +411,20 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
-export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
+export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(repo, () => forceRemoveWorktreeDirAdmitted(repo, worktreePath, opts))
+    .catch(error => ({ removed: false, reason: error.message, warning: 'Checkout retained: repository reservation unavailable' }));
+}
+
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
   const check = async () => {
     const entries = await listWorktrees(repo).catch(() => null);
     if (!entries) return 'worktree-ownership-unreadable';
-    const holder = entries.find(wt => pathsEqual(wt.path, worktreePath)) || null;
+    const holder = entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
     if (holder?.locked) return 'worktree-locked';
     if (!verifyRemoval) return null;
     const reason = await verifyRemoval(holder).catch(() => 'worktree-ownership-unreadable');
@@ -384,13 +433,13 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 
     // Git's own removal still honors locks acquired after this final read.
     const fresh = await listWorktrees(repo).catch(() => null);
     if (!fresh) return 'worktree-ownership-unreadable';
-    const current = fresh.find(wt => pathsEqual(wt.path, worktreePath)) || null;
+    const current = fresh.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
     if (current?.locked) return 'worktree-locked';
     if (current?.branch !== holder?.branch || current?.head !== holder?.head) return 'worktree-holder-changed';
     return null;
   };
   heldReason = await check();
-  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
+  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
     heldReason = await check();
@@ -424,8 +473,16 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 
  * `deleteBranch` is false on the attach paths — that branch pre-dates this add
  * and may hold real commits, the same distinction `cleanupOrphanBranch` makes.
  */
-async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch }) {
-  return enforceSafeBranchUpstream(sourceWorkspace, branchName).catch(async (err) => {
+async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch, remoteBranch = branchName, forkRemote = null }) {
+  const configure = async () => {
+    if (forkRemote) {
+      await execGit(['config', `branch.${branchName}.remote`, forkRemote], worktreePath);
+      await execGit(['config', `branch.${branchName}.merge`, `refs/heads/${remoteBranch}`], worktreePath);
+      await execGit(['config', `branch.${branchName}.pushRemote`, forkRemote], worktreePath);
+    }
+    return enforceSafeBranchUpstream(sourceWorkspace, branchName, { remoteBranch });
+  };
+  return configure().catch(async (err) => {
     const undone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
       label: `Undoing worktree add for ${branchName} after an unsafe upstream`,
       log: 'all',
@@ -521,7 +578,8 @@ export async function readWorktreeStatus(worktreePath) {
   if (present === null) return null;
   const top = await execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim()).catch(() => null);
   if (!top || !pathsEqual(top, worktreePath)) return null;
-  const status = await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], worktreePath, { ignoreExitCode: true }).catch(() => null);
+  const status = await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], worktreePath,
+    { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).catch(() => null);
   return status?.exitCode === 0 ? status.stdout : null;
 }
 
@@ -584,9 +642,27 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  * @param {string} sourceWorkspace - the parent git repository
  * @param {unknown} forkHead - `{ remoteUrl, ownerLogin }` from the PR read
  * @param {string} branchName - the PR's head branch, as named in the fork
+ * @param {{requireRef?: boolean}} options - existing local recovery needs only the remote configuration
  * @returns {Promise<string|null>} the fork remote's name, or null
  */
-async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
+async function ensureForkRemote(sourceWorkspace, forkHead, branchName, { requireRef = true } = {}) {
+  const remoteName = await pointForkRemote(sourceWorkspace, forkHead, branchName);
+  if (!remoteName) return null;
+
+  await execGit(['fetch', remoteName, branchName], sourceWorkspace).catch(err => {
+    console.log(`⚠️ Fork fetch of ${remoteName}/${branchName} failed: ${err.message}`);
+  });
+  // Verify rather than trust the fetch's exit code: a fetch that reported
+  // success but left no remote-tracking ref would otherwise send `worktree add`
+  // at a start point git resolves somewhere else entirely.
+  const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => r.exitCode === 0)
+    .catch(() => false);
+  return refExists || !requireRef ? remoteName : null;
+}
+
+/** Add or re-point the deterministic fork remote; its name, or null. */
+async function pointForkRemote(sourceWorkspace, forkHead, branchName) {
   const coordinates = normalizeForkHead(forkHead);
   if (!coordinates) return null;
   const remoteName = forkRemoteName(coordinates.ownerLogin);
@@ -608,17 +684,61 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
     });
     if (!pointed) return null;
   }
+  return remoteName;
+}
 
-  await execGit(['fetch', remoteName, branchName], sourceWorkspace).catch(err => {
-    console.log(`⚠️ Fork fetch of ${remoteName}/${branchName} failed: ${err.message}`);
-  });
-  // Verify rather than trust the fetch's exit code: a fetch that reported
-  // success but left no remote-tracking ref would otherwise send `worktree add`
-  // at a start point git resolves somewhere else entirely.
-  const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0)
-    .catch(() => false);
-  return refExists ? remoteName : null;
+/** `err.code` when a pinned attach finds the branch tip is not the reviewed commit. */
+export const PINNED_HEAD_MOVED = 'PINNED_HEAD_MOVED';
+
+function requirePinnedHeadSha(value) {
+  const sha = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha)) throw new Error('Invalid pinned head commit');
+  return sha;
+}
+
+function pinnedHeadMoved(branchName, pinnedHead, actual) {
+  const err = new Error(`Cannot attach worktree to ${branchName}: the branch is ${actual ? `at ${actual}` : 'gone'}, not the reviewed head ${pinnedHead}`);
+  err.code = PINNED_HEAD_MOVED;
+  err.actualHeadSha = actual || null;
+  return err;
+}
+
+/**
+ * Attach `branchName` from `remote` at exactly `pinnedHead`, the commit that was
+ * reviewed — the attached code is then executed, so nothing else may land.
+ *
+ * The tip comes from the remote itself (`ls-remote`), never a cached tracking
+ * ref, and a branch the remote no longer has is a moved head too. The fetch
+ * names its destination so the tracking ref cannot stay stale under a narrow
+ * refspec. The checkout uses the SHA, so a ref update after the check cannot
+ * swap code in; an existing local branch must already name that exact commit.
+ */
+async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remoteBranch, remote, pinnedHead, localExists) {
+  const listed = await execGit(['ls-remote', '--exit-code', remote, `refs/heads/${remoteBranch}`], sourceWorkspace, { ignoreExitCode: true });
+  // `--exit-code` answers 2 for "no such ref"; anything else non-zero is a
+  // transport failure, which proves nothing about the branch.
+  if (listed.exitCode === 2) throw pinnedHeadMoved(branchName, pinnedHead, null);
+  if (listed.exitCode !== 0) throw new Error(`Cannot attach worktree to ${branchName}: could not read ${remote}: ${(listed.stderr || '').trim()}`);
+  const remoteTip = (listed.stdout || '').trim().split(/\s+/)[0];
+  if (remoteTip !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, remoteTip);
+
+  const trackingRef = `refs/remotes/${remote}/${remoteBranch}`;
+  await execGit(['fetch', remote, `+refs/heads/${remoteBranch}:${trackingRef}`], sourceWorkspace);
+  const fetched = (await execGit(['rev-parse', '--verify', `${trackingRef}^{commit}`], sourceWorkspace)).stdout.trim();
+  if (fetched !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, fetched);
+
+  if (localExists) {
+    const localHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)).stdout.trim();
+    if (localHead !== pinnedHead) {
+      throw new Error(`Cannot attach worktree to ${branchName}: the local branch differs from the reviewed head; preserving it without reset`);
+    }
+    await addWorktreeWithRetry(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
+  } else {
+    await addWorktreeWithRetry(['worktree', 'add', '--no-track', '-b', branchName, worktreePath, pinnedHead], sourceWorkspace);
+  }
+  // A concurrent external ref write must not hand unreviewed code to the agent.
+  const attached = (await execGit(['rev-parse', '--verify', 'HEAD'], worktreePath)).stdout.trim();
+  if (attached !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, attached);
 }
 
 /**
@@ -634,10 +754,8 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * branch instead of creating a new one — used for the Copilot review-loop follow-up
  * agent that needs to address comments on a PR branch the previous agent just pushed.
  *
- * That branch is resolved local → `origin/<branch>` → `options.forkHead`. The third
- * step is what makes an EXTERNAL contribution reachable: a fork PR's head has no
- * `origin/<branch>` at all, so without it every "work on this PR's branch" path
- * failed at workspace prep for exactly the PRs external contributors open (#6064).
+ * Fork heads resolve only through their fork and use a namespaced local branch.
+ * Same-repository heads retain local → origin resolution.
  *
  * @param {string} agentId - The agent identifier (used for branch/directory naming)
  * @param {string} sourceWorkspace - The original git repository path
@@ -646,7 +764,9 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
  * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
- * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
+ * @param {string} options.resumeBranch - Exact preserved local branch from a retry, including pre-namespace fork branches
+ * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives for a fork PR; checked out as fork/<owner>/<branch>.
+ * @param {string} options.expectedHeadSha - Attach only at the reviewed remote tip; existing local work is never reset.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
  * @param {boolean} options.linkDependencies - Link source dependencies unless explicitly false
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
@@ -688,44 +808,32 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   // Existing-branch path: attach the worktree to a branch that already lives on
   // the remote (e.g. the PR branch from the previous agent in a review loop).
   if (options.existingBranch) {
-    const branchName = options.existingBranch;
+    const remoteBranch = options.existingBranch;
+    const pinnedHead = options.expectedHeadSha === undefined ? null : requirePinnedHeadSha(options.expectedHeadSha);
+    const forkHead = normalizeForkHead(options.forkHead);
+    if (options.forkHead && !forkHead) throw new Error('Invalid fork head coordinates');
+    const branchName = options.resumeBranch || forkLocalBranch(remoteBranch, forkHead);
     const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
-    if (localExists) {
+    if (options.resumeBranch && !localExists) throw new Error(`Cannot resume missing local branch ${branchName}`);
+    // A pin must be verified against the fork itself, never origin's same-named branch.
+    const forkRemote = forkHead ? await (pinnedHead ? pointForkRemote(sourceWorkspace, forkHead, remoteBranch)
+      : ensureForkRemote(sourceWorkspace, forkHead, remoteBranch, { requireRef: !localExists })) : null;
+    if (forkHead && !forkRemote) throw new Error(`Cannot attach worktree to fork branch ${remoteBranch}: fork ref unavailable`);
+    if (pinnedHead) {
+      await attachPinnedHead(sourceWorkspace, worktreePath, branchName, remoteBranch, forkRemote || 'origin', pinnedHead, !!localExists);
+    } else if (localExists) {
+      // Preserve unpublished local work. Never reset an existing checkout branch.
       await addWorktreeWithRetry(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
     } else {
-      // No local copy — we need a remote ref. If `git fetch` failed AND the
-      // remote ref isn't available, fail loudly rather than emit a confusing
-      // "couldn't find branch" git error.
-      const remoteExists = await execGit(['rev-parse', '--verify', `origin/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
-        .then((r) => r.exitCode === 0)
-        .catch(() => false);
-      // Third and last resolve step: a FORK PR's head lives in the contributor's
-      // repository, so `origin/<branch>` legitimately does not exist. Reached
-      // only when the caller supplied coordinates AND the two lookups above
-      // missed, so a caller that passes no `forkHead` still gets the exact
-      // error below rather than a new code path (#6064).
-      const forkRemote = remoteExists ? null : await ensureForkRemote(sourceWorkspace, options.forkHead, branchName);
-      if (!remoteExists && !forkRemote) {
-        throw new Error(`Cannot attach worktree to ${branchName}: branch missing locally and origin/${branchName} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
-      }
-      // The start point decides the branch's upstream, and on the fork path that
-      // is the whole point: tracking `<fork-remote>/<branch>` is what sends a
-      // later `git push` to the CONTRIBUTOR's fork. Tracking origin here would
-      // push their commits into the upstream repository instead — the #4172
-      // failure mode, one remote over.
-      const startPoint = forkRemote ? `${forkRemote}/${branchName}` : `origin/${branchName}`;
-      // Use -B (force-create) so we don't fail if a stale local ref exists.
-      // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
-      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, startPoint], sourceWorkspace);
-      if (forkRemote) console.log(`🍴 Attached ${branchName} from fork remote ${forkRemote} (no origin/${branchName})`);
+      const startPoint = forkRemote ? `${forkRemote}/${remoteBranch}` : `origin/${remoteBranch}`;
+      const remoteExists = forkRemote || await execGit(['rev-parse', '--verify', startPoint], sourceWorkspace, { ignoreExitCode: true })
+        .then(r => r.exitCode === 0).catch(() => false);
+      if (!remoteExists) throw new Error(`Cannot attach worktree to ${branchName}: branch missing locally and origin/${branchName} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
+      await addWorktreeWithRetry(['worktree', 'add', ...(forkRemote ? ['--no-track', '-b'] : ['-B']), branchName, worktreePath, startPoint], sourceWorkspace);
     }
-    // Re-attaching a branch a PREVIOUS run created — which, before #4172, may
-    // have been left tracking `refs/heads/main`. Repair it before the agent (and
-    // its `/do:pr`) touches it. The guard's invariant is on the `merge` REF, not
-    // on the remote, so `origin/<branchName>` and `<fork-remote>/<branchName>`
-    // both pass untouched — which is required: dropping the fork upstream would
-    // aim a config-derived push back at origin.
-    await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: false });
+    await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, {
+      deleteBranch: false, remoteBranch, forkRemote: forkRemote || (pinnedHead ? 'origin' : null),
+    });
     if (options.linkDependencies === false) {
       await unlinkWorktreeDependencies(sourceWorkspace, worktreePath);
     } else {
@@ -894,7 +1002,13 @@ export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
  * @param {{ activeWorkspacePaths?: string[], agents?: object[], requestingAgentId?: string, idleMs?: number, nowMs?: number, allowUntracked?: boolean }} [options]
  * @returns {Promise<{ path: string }|null>} the released holder, or null
  */
-export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, {
+export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, options = {}) {
+  if (!sourceWorkspace || !branchName?.startsWith('next/')) return null;
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName, options));
+}
+
+async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName, {
   activeWorkspacePaths = [],
   agents = null,
   requestingAgentId = null,
@@ -965,8 +1079,9 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
  *
  * Returns null (never throws) whenever adoption isn't possible — the source tree
  * is gone, the target path is occupied, or git refuses the move (a locked worktree,
- * or one with initialized submodules). Callers fall back to a fresh worktree, which
- * is the pre-existing behavior.
+ * or one with initialized submodules), or its status suggests a partial removal.
+ * The refused tree and branch stay intact for recovery: a fresh attachment to
+ * that same branch will remain blocked while this checkout holds it.
  *
  * @param {string} agentId - the RETRYING agent (names the destination directory)
  * @param {string} sourceWorkspace - the parent git repository
@@ -992,13 +1107,32 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
     existingBranch: true, adopted: true, instanceId
   };
 
-  // Already at the destination (a retry that re-entered prep) — nothing to move.
-  if (pathsEqual(existingWorktreePath, targetPath)) return adopted;
-
-  if (existsSync(targetPath)) {
+  if (!pathsEqual(existingWorktreePath, targetPath) && existsSync(targetPath)) {
     console.log(`🌳 Cannot adopt worktree for ${agentId} — ${targetPath} is already occupied`);
     return null;
   }
+
+  // A killed removal can leave thousands of unstaged deletions. The resume
+  // prompt attributes all surviving changes to the agent, so do not hand it a
+  // likely damaged checkout. Keep intentional small deletions and staged work;
+  // this conservative threshold requires operator recovery for ambiguous bulk
+  // deletions instead of silently restoring or detaching somebody's work.
+  const status = await execGit(['status', '--porcelain', '--untracked-files=no'], existingWorktreePath)
+    .then(r => r.stdout)
+    .catch(() => null);
+  if (status === null) {
+    console.warn(`⚠️ Cannot adopt worktree for ${agentId} — status unreadable; preserved for recovery`);
+    return null;
+  }
+  const trackedChanges = status.split(/\r?\n/).filter(Boolean);
+  const deletions = trackedChanges.filter(line => line.startsWith(' D ')).length;
+  if (deletions >= 100 && deletions > trackedChanges.length / 2) {
+    console.warn(`⚠️ Cannot adopt worktree for ${agentId} — ${deletions} unstaged tracked deletions suggest an interrupted removal; preserved for recovery`);
+    return null;
+  }
+
+  // Re-entered prep still needs the damage check before resuming in place.
+  if (pathsEqual(existingWorktreePath, targetPath)) return adopted;
 
   await ensureDir(WORKTREES_DIR);
 
@@ -1099,9 +1233,23 @@ async function resolveMergeTarget(sourceWorkspace, defaultBranch) {
 // arrive after the first removed the directory but preserved unpublished work;
 // every successful removal path must apply the same branch-retention policy.
 async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
-  preserveBranchWithCommits = false, hasUnmergedCommits = false, warnings,
+  hasUnmergedCommits = false, warnings, expectedHead,
 }) {
-  if (!hasUnmergedCommits && preserveBranchWithCommits) {
+  const present = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+  if (present?.exitCode === 1) return;
+  if (present?.exitCode !== 0) {
+    warnings.push(`Branch ${branchName} preserved — ref state unavailable`);
+    return;
+  }
+  // Pin even a branch whose checkout was already removed. Unknown or changed
+  // refs stay available for recovery instead of falling through to branch -D.
+  const currentHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
+  expectedHead ||= currentHead;
+  if (!expectedHead || currentHead !== expectedHead) {
+    warnings.push(`Branch ${branchName} preserved — current head unavailable or changed`);
+    return;
+  }
+  if (!hasUnmergedCommits) {
     // A prior cleanup may have already deleted a landed branch. Confirmed
     // absence is a clean no-op; an unreadable ref is still work to preserve.
     const localRef = await execGit(
@@ -1134,10 +1282,13 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
   if (hasUnmergedCommits) {
     console.warn(`⚠️ Preserving worktree branch ${branchName} for manual/automated recovery`);
   } else {
-    await execGit(['branch', '-D', branchName], sourceWorkspace)
-      .catch(err => {
-        console.warn(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
-      });
+    const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+    const policy = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true }).catch(() => 'pr-completion-policy-unavailable');
+    if (policy) { warnings.push(`Branch ${branchName} preserved — ${policy}`); return; }
+    const recoveryRef = await execGit(['update-ref', `refs/portos/completed/${expectedHead}`, expectedHead], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    if (recoveryRef?.exitCode !== 0 || !await deleteCompletedLocalBranch(sourceWorkspace, branchName, expectedHead)) {
+      warnings.push(`Branch ${branchName} preserved — head changed, new holder, or deletion refused`);
+    }
   }
 }
 
@@ -1152,10 +1303,8 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  * @param {string} branchName - The worktree branch to clean up
  * @param {object} options
  * @param {boolean} [options.merge] - attempt to merge the branch back first
- * @param {boolean} [options.preserveBranchWithCommits] - keep the branch (rather
- *   than deleting it) whenever it still holds commits the default branch doesn't,
- *   so a retry can resume the work instead of restarting. Used by the FAILED-agent
- *   cleanup path; the PR path leaves it off so its local branch is still tidied up.
+ * @param {boolean} [options.preserveBranchWithCommits] - legacy caller hint;
+ *   unmerged branches and checkouts are now always retained until merge proof.
  * @param {boolean} [options.discardDirt] - remove even when the tree is dirty.
  *   The dirty-abort exists to protect work that might still be wanted; the
  *   throwaway-worktree posture has already declared this tree's contents
@@ -1164,21 +1313,80 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  *   run, forever. ONLY the discard path may pass this.
  */
 export async function removeWorktree(agentId, sourceWorkspace, branchName, options = {}) {
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const ownershipHold = async () => claimCheckoutOwnerReason({
+    branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
+    agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
+  });
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withClaimOwnershipLock(() => withCheckoutPublication(sourceWorkspace,
+    () => removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold)));
+
+}
+
+async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold) {
   const worktreePath = join(WORKTREES_DIR, agentId);
   const warnings = [];
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+  const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
+    ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
+  if (protectedReason) return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
+    warnings: [`Worktree preserved — ${protectedReason}`] };
+  const owner = await ownershipHold();
+  if (owner) return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
+    warnings: [`Worktree preserved — ${owner}`] };
+  const completionHold = async (expectedHead) => {
+    const owner = await ownershipHold();
+    if (owner) return owner;
+    const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+    const policy = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
+    if (policy) return policy;
+    const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+    const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+    if (!base) return 'default-branch-unavailable';
+    if (PROTECTED_BRANCHES.includes(branchName) || branchName === base) return 'protected-branch';
+    const target = await resolveMergeTarget(sourceWorkspace, base);
+    const head = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
+    if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';
+    return await hasBranchMergeEvidence(sourceWorkspace, head, target).catch(() => false) ? null : 'merge-evidence-unavailable';
+  };
+  const preserve = async () => {
+    const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
+    if (!tree || tree.branch !== `refs/heads/${branchName}`) throw new Error('worktree-holder-changed');
+    const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+    const hold = await completionHold(tree.head);
+    if (hold) throw new Error(hold);
+    const archive = await preserveMergedCheckout(sourceWorkspace, tree, null);
+    return { ...archive, head: tree.head,
+      verify: async holder => await completionHold(tree.head) || await archive.verify(holder) };
+
+  };
+  const preserveOrHold = () => preserve().catch(error => {
+    warnings.push(`Worktree preserved — archive failed: ${error.message}`);
+    return null;
+  });
 
   if (!existsSync(worktreePath)) {
     // The directory is gone, but git may still register it (a stale entry pins the
     // branch). Verify rather than assume; prune when the registration survives.
     let gone = removalOutcome(worktreePath, await probeWorktreeRemoval(sourceWorkspace, worktreePath));
-    if (!gone.removed) gone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath);
+    let preservation = null;
+    if (!gone.removed) {
+      preservation = await preserveOrHold();
+      if (!preservation) return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
+      gone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, { verifyRemoval: preservation.verify });
+    }
     if (!gone.removed) {
       warnings.push(gone.warning);
       return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
     }
     console.log(`🌳 Worktree already removed for ${agentId}, cleaning up branch`);
+    const finalOwner = await ownershipHold();
+    if (finalOwner) return { merged: false, removed: true, uncommittedSaved: false,
+      warnings: [...warnings, `Branch ${branchName} preserved — ${finalOwner}`] };
     await cleanupWorktreeBranch(sourceWorkspace, branchName, {
-      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings,
+      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings, expectedHead: preservation?.head,
     });
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
   }
@@ -1229,6 +1437,9 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     // Discard auto-generated lockfile changes that agents don't intend to commit
     // (e.g., npm install resolving ^version to exact version in package-lock.json)
     if (dirt.lockfileOnly) {
+      // Preserve the original bytes before the intentional lockfile cleanup.
+      // A second snapshot below guards the post-cleanup removal boundary.
+      if (!await preserveOrHold()) return { merged: false, removed: false, uncommittedSaved: false, warnings };
       console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
       // Never throws past removeWorktree: an undiscardable lockfile keeps the tree.
       const discarded = await discardLockfileChanges(worktreePath, dirt).then(() => true, err => {
@@ -1303,7 +1514,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     }
   }
 
+  const preservation = await preserveOrHold();
+  if (!preservation) return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
   const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+    verifyRemoval: preservation.verify,
     label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
     log: 'all',
     subject: agentId,
@@ -1318,22 +1532,16 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
   }
 
-  // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
-  // OR (b) merge was refused because HEAD is on a non-default branch — the commits
-  // are still there and the user / a follow-up task may want to integrate manually.
+  // Merge evidence and completion policy were checked before removal; the
+  // branch helper checks them again before its leased local deletion.
   const hasUnmergedCommits = options.merge && !merged && (commitsAhead > 0 || mergeRefused);
-  // ...OR (c) the caller asked us to keep any branch that still holds commits
-  // (`preserveBranchWithCommits`). The no-merge path — which is what a FAILED
-  // agent's cleanup takes — otherwise deletes the branch unconditionally, taking
-  // the agent's committed work with it. That is what forces a retry to restart
-  // from scratch instead of resuming: measured on agent-d2ae0352 (2026-07-27),
-  // reaped 30s after its PR merged, whose branch was deleted and whose task was
-  // re-dispatched to a fresh agent. Opt-in rather than automatic so the PR flow
-  // (which deletes the LOCAL branch after pushing — the remote branch is what the
-  // PR points at) keeps cleaning up after itself.
+  const finalOwner = await ownershipHold();
+  if (finalOwner) {
+    warnings.push(`Branch ${branchName} preserved — ${finalOwner}`);
+    return { merged, removed: true, uncommittedSaved: false, warnings };
+  }
   await cleanupWorktreeBranch(sourceWorkspace, branchName, {
-    preserveBranchWithCommits: options.preserveBranchWithCommits && !merged,
-    hasUnmergedCommits, warnings,
+    hasUnmergedCommits, warnings, expectedHead: preservation.head,
   });
 
   console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
@@ -1425,6 +1633,11 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
  * Remove a persistent feature agent worktree
  */
 export async function removePersistentWorktree(featureAgentId, sourceWorkspace, branchName) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => removePersistentWorktreeAdmitted(featureAgentId, sourceWorkspace, branchName));
+}
+
+async function removePersistentWorktreeAdmitted(featureAgentId, sourceWorkspace, branchName) {
   const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
 
   if (!existsSync(worktreePath)) return { removed: false };
@@ -1564,7 +1777,8 @@ async function removeIfStillOrphaned({ isOwned, branchName, holderPath, sourceWo
     if (isOwned()) return null;
     const agents = await readOwners();
     if (claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace, agents })) return null;
-    return remove();
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(sourceWorkspace, remove);
   });
 }
 
@@ -1611,7 +1825,8 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
     // If merge fails, the branch is preserved for manual recovery.
     const result = await removeIfStillOrphaned(
       { isOwned: ownershipReason, branchName, holderPath: wt.path, sourceWorkspace, readOwners },
-      () => removeWorktree(agentId, sourceWorkspace, branchName, { merge: true }),
+      () => removeWorktreeNow(agentId, sourceWorkspace, branchName, { merge: true }, async () =>
+        ownershipReason() || claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents: await readOwners() })),
     ).catch(err => {
       console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
       return { removed: false };
@@ -1785,18 +2000,24 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         else reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false });
         return;
       }
+      const initialHold = await verifyRemoval(wt);
+      if (initialHold) { hold(initialHold); return; }
+      const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+      const preservation = await preserveMergedCheckout(sourceWorkspace, wt, target).catch(error => ({ error }));
+      if (preservation.error) { skipped.push({ path: wt.path, branch: branchName, reason: 'archive-failed', detail: preservation.error.message }); return; }
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-        label: `worktree remove failed for ${wt.path}`, verifyRemoval,
+        label: `worktree remove failed for ${wt.path}`,
+        verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
       });
       if (!removal.removed) {
         skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
         return;
       }
-      const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
-        console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
-        return false;
-      });
-      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted });
+      const holders = await listWorktrees(sourceWorkspace).catch(() => null);
+      const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
+        && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
+      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });
+      if (!branchDeleted) hold('branch-ref-changed-or-new-holder');
     });
   }
 
@@ -1865,21 +2086,28 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
 
     // Non-force removal is a final Git guard against newly dirty or locked
     // trees. A refusal must never fall through to recursive filesystem removal.
-    const removed = await removeIfStillOrphaned(
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    const removed = await withCheckoutPublication(parentRepo, () => removeIfStillOrphaned(
       { isOwned: () => ownership({ locked: wt.locked }), branchName, holderPath: worktreePath, sourceWorkspace: parentRepo, readOwners },
       async () => {
+        const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+        const preservation = await preserveMergedCheckout(parentRepo, wt, target);
+        const latest = (await listWorktrees(parentRepo)).find(holder => pathsEqual(holder.path, worktreePath));
+        if (ownership({ locked: latest?.locked }) || await preservation.verify(latest)
+          || claimCheckoutOwnerReason({ branchName, holderPath: worktreePath, sourceWorkspace: parentRepo, agents: await readOwners() })
+          || !await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return false;
+        const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+        if (await readBranchCompletionHold({ repoPath: parentRepo, branch: branchName, retirement: true })) return false;
         const ok = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
           console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
           return false;
         });
-        if (ok) {
-          await execGit(['branch', '-D', branchName], parentRepo).catch(err => {
-            console.warn(`⚠️ External branch cleanup failed for ${branchName}: ${err.message}`);
-          });
+        if (ok && !await deleteCompletedLocalBranch(parentRepo, branchName, wt.head)) {
+          console.warn(`⚠️ External branch ${branchName} retained: head changed, new holder, or deletion refused`);
         }
         return ok;
       },
-    ).catch(err => {
+    )).catch(err => {
       console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
       return false;
     });

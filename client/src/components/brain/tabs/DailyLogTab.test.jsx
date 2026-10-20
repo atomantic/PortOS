@@ -594,6 +594,24 @@ describe('DailyLogTab draft/append date guard', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Drafted with AI narrative');
   });
 
+  // The server refuses a provider that cannot run tool-free; the draft must
+  // say why no narrative appeared instead of reporting a plain success.
+  it('says why a Draft has no AI narrative when the provider cannot run tool-free', async () => {
+    api.draftActivityDigest.mockResolvedValue({
+      entry: entryFor(TODAY, 'drafted content'),
+      drafted: true,
+      usedLlm: false,
+      narrativeSkipped: 'provider-not-tool-free',
+    });
+    await renderTab();
+
+    fireEvent.click(screen.getByLabelText('Draft activity digest'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(mockToast).toHaveBeenCalledWith(expect.stringMatching(/^Drafted from your timeline without an AI narrative/), expect.anything());
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
   it('does not apply a Quick Append response to a day the user switched away from', async () => {
     let releaseAppend;
     api.appendDailyLog.mockImplementation(() => new Promise((resolve) => {

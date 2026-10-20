@@ -147,6 +147,40 @@ const renderSelectable = () => {
 };
 
 describe('useUniverseDraft', () => {
+  it('refuses saving an outgoing draft while the selected universe is loading or failed, then retries', async () => {
+    const { result, rerender } = renderSelectable();
+    await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+    let failRead;
+    apiMocks.getUniverse.mockImplementationOnce(() => new Promise((_resolve, reject) => { failRead = reject; }));
+    rerender({ selectedId: 'u2' });
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
+    await act(async () => failRead(new Error('World unavailable')));
+    expect(result.current.draftReadError).toBe('World unavailable');
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
+    apiMocks.getUniverse.mockResolvedValueOnce(universeTwo);
+    act(() => result.current.retryDraft());
+    await waitFor(() => expect(result.current.draftReady).toBe(true));
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse).toHaveBeenCalledWith('u2', expect.objectContaining({ name: 'Second Universe' }), { silent: true });
+  });
+
+  it('does not rebaseline the new universe when an earlier save completes', async () => {
+    const { result, rerender } = renderSelectable();
+    await waitFor(() => expect(result.current.draftReady).toBe(true));
+    let finishSave;
+    apiMocks.updateUniverse.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    let pendingSave;
+    act(() => { pendingSave = result.current.handleSave(); });
+    apiMocks.getUniverse.mockResolvedValueOnce(universeTwo);
+    rerender({ selectedId: 'u2' });
+    await waitFor(() => expect(result.current.draft.id).toBe('u2'));
+    await act(async () => { finishSave({ ...universe, updatedAt: tickServerClock() }); await pendingSave; });
+    expect(result.current.draft.name).toBe('Second Universe');
+    expect(result.current.isDraftDirty()).toBe(false);
+  });
+
   it('hydrates the selected universe and its run history', async () => {
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -155,6 +189,50 @@ describe('useUniverseDraft', () => {
     expect(result.current.draft.name).toBe('Example Universe');
     expect(result.current.runs).toEqual([{ id: 'run-1' }]);
     expect(result.current.isDraftDirty()).toBe(false);
+  });
+
+  describe('run history load state', () => {
+    it('reports a failed history read as an error, not an empty history, and retries without touching the draft', async () => {
+      apiMocks.listWorldRuns.mockRejectedValueOnce(new Error('boom'));
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+      expect(result.current.runs).toEqual([]);
+
+      act(() => result.current.updateDraft({ premise: 'Unsaved premise' }));
+      const getCalls = apiMocks.getUniverse.mock.calls.length;
+      await act(async () => { result.current.retryRuns(); });
+      await waitFor(() => expect(result.current.runsStatus).toBe('ready'));
+      expect(result.current.runs).toEqual([{ id: 'run-1' }]);
+      expect(result.current.draft.premise).toBe('Unsaved premise');
+      expect(apiMocks.getUniverse.mock.calls.length).toBe(getCalls);
+    });
+
+    it('keeps same-record rows when a refresh fails', async () => {
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.runsStatus).toBe('ready'));
+      apiMocks.listWorldRuns.mockRejectedValueOnce(new Error('boom'));
+      await act(async () => { result.current.retryRuns(); });
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      expect(result.current.runs).toEqual([{ id: 'run-1' }]);
+    });
+
+    it('drops a late history response for a universe that is no longer selected', async () => {
+      let resolveOld;
+      apiMocks.listWorldRuns.mockImplementation((id) => (id === 'u1'
+        ? new Promise((resolve) => { resolveOld = resolve; })
+        : Promise.reject(new Error('boom'))));
+      const goToWorld = vi.fn();
+      const { result, rerender } = renderHook(
+        ({ selectedId }) => useUniverseDraft({ selectedId, goToWorld }),
+        { initialProps: { selectedId: 'u1' } },
+      );
+      rerender({ selectedId: 'u2' });
+      await waitFor(() => expect(result.current.runsStatus).toBe('error'));
+      await act(async () => { resolveOld([{ id: 'stale-run' }]); });
+      expect(result.current.runs).toEqual([]);
+      expect(result.current.runsStatus).toBe('error');
+    });
   });
 
   // A failed fetch and an empty response must not land in the same state. The refresh()

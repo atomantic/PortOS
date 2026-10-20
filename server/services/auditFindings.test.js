@@ -96,13 +96,20 @@ describe('persisted audit disposition workflow', () => {
       results: [{ key: 'dispatch-authority', status: 'unchecked' }, { key: 'second-boundary', status: 'unchecked' }] });
   });
 
-  it.each(['unreachable', 'closed', 'pull-request', 'other-repository'])('retains actionable rows when issue verification is %s, then safely retries', async failure => {
+  it.each(['unreachable', 'closed', 'not-planned', 'pull-request', 'other-repository'])('retains actionable rows when issue verification is %s, then safely retries', async failure => {
     if (failure === 'unreachable') forge.execGh.mockRejectedValueOnce(new Error('offline'));
     else forge.execGh.mockResolvedValueOnce(JSON.stringify({ html_url: failure === 'other-repository' ? url.replace('/repo/', '/other/') : url,
-      state: failure === 'closed' ? 'closed' : 'open', ...(failure === 'pull-request' ? { pull_request: {} } : {}) }));
+      state: failure === 'closed' || failure === 'not-planned' ? 'closed' : 'open',
+      ...(failure === 'not-planned' ? { state_reason: 'not_planned' } : {}), ...(failure === 'pull-request' ? { pull_request: {} } : {}) }));
     await deliver('agent-one', [finding()]);
     expect(await settle()).toMatchObject({ status: 'incomplete', unresolved: 1 });
     expect((await readRecord('agent-one')).metadata.auditFindings.report.findings).toEqual([finding()]);
+    expect(await settle()).toMatchObject({ status: 'complete', unresolved: 0 });
+  });
+
+  it('accepts an issue a concurrent claim closed as completed before verification ran', async () => {
+    forge.execGh.mockResolvedValueOnce(JSON.stringify({ html_url: url, state: 'closed', state_reason: 'completed' }));
+    await deliver('agent-one', [finding()]);
     expect(await settle()).toMatchObject({ status: 'complete', unresolved: 0 });
   });
 

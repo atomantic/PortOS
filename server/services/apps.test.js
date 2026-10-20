@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('fs/promises', () => ({
@@ -419,12 +420,33 @@ describe('__PORTOS_ROOT__ placeholder expansion on load', () => {
     expect(JSON.stringify(persisted)).not.toContain('__PORTOS_ROOT__');
   });
 
-  it('preserves a concrete user-overridden repoPath', async () => {
+  it('resets a PortOS repoPath that is not an existing directory (restored from another checkout)', async () => {
     readJSONFile.mockResolvedValue({
       apps: {
         [PORTOS_APP_ID]: {
           name: 'PortOS',
-          repoPath: '/custom/portos/checkout',
+          repoPath: '/nonexistent/source/checkout',
+          type: 'express',
+          pm2ProcessNames: ['portos-server'],
+        },
+        'other-app': { name: 'Other', repoPath: '/nonexistent/other-app' },
+      },
+    });
+
+    const apps = await getAllApps();
+    expect(apps.find((app) => app.id === PORTOS_APP_ID).repoPath).toBe('/mock/root');
+    const persisted = atomicWrite.mock.calls.at(-1)[1];
+    expect(persisted.apps[PORTOS_APP_ID].repoPath).toBe('/mock/root');
+    expect(persisted.apps['other-app'].repoPath).toBe('/nonexistent/other-app');
+  });
+
+  it('preserves a concrete user-overridden repoPath that exists', async () => {
+    const override = tmpdir();
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          repoPath: override,
           type: 'express',
           pm2ProcessNames: ['portos-server'],
         },
@@ -433,7 +455,7 @@ describe('__PORTOS_ROOT__ placeholder expansion on load', () => {
 
     const apps = await getAllApps();
     const portos = apps.find((app) => app.id === PORTOS_APP_ID);
-    expect(portos.repoPath).toBe('/custom/portos/checkout');
+    expect(portos.repoPath).toBe(override);
   });
 
   it('expands placeholders on non-PortOS app records too', async () => {

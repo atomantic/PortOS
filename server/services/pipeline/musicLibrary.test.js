@@ -172,6 +172,29 @@ describe('importUploadedTrack', () => {
     const { filename } = await importUploadedTrack(tmp, 'a.wav');
     expect(existsSync(join(FAKE_MUSIC_DIR, filename))).toBe(true);
   });
+
+  // Track, pipeline and Suno imports all land here; the multipart filter only
+  // checked the name, so ffmpeg 4.4/5.1 would follow the playlist on probe.
+  it('refuses a playlist posing as audio, stores nothing and removes the temp upload', async () => {
+    const tmp = join(TEST_HOME, 'upload-tmp.mp3');
+    await writeFile(tmp, '#EXTM3U\n#EXTINF:2.0,\n../private/song.m4a\n#EXT-X-ENDLIST\n');
+    await expect(importUploadedTrack(tmp, 'song.mp3')).rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+    expect(await readdir(FAKE_MUSIC_DIR)).toEqual([]);
+    expect(existsSync(tmp)).toBe(false);
+  });
+
+  // The file check reads a second window when the tag outgrows the first.
+  it('refuses a playlist hidden behind an ID3v2 tag longer than the read window', async () => {
+    const tmp = join(TEST_HOME, 'upload-tmp.mp3');
+    const tagSize = 2 * 1024 * 1024;
+    const syncsafe = [21, 14, 7, 0].map((shift) => (tagSize >> shift) & 0x7f);
+    await writeFile(tmp, Buffer.concat([
+      Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, ...syncsafe]), Buffer.alloc(tagSize),
+      Buffer.from('#EXTM3U\n#EXTINF:2.0,\n../private/song.m4a\n'),
+    ]));
+    await expect(importUploadedTrack(tmp, 'song.mp3')).rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+    expect(await readdir(FAKE_MUSIC_DIR)).toEqual([]);
+  });
 });
 
 describe('statMusicTrack', () => {

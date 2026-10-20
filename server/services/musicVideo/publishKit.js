@@ -22,7 +22,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder, edgeFadeFilter } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { getProject, listProjects, mutateProjectRecord } from './projects.js';
+import { listProjects, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
@@ -56,12 +57,6 @@ export const getActivePublishKitBuild = (projectId) => {
   const jobId = projectBuilds.get(projectId);
   return jobId && jobs.get(jobId)?.status === 'running' ? { jobId, status: 'running' } : null;
 };
-
-async function requireProject(projectId) {
-  const project = await getProject(projectId);
-  if (!project) throw kitError(404, 'NOT_FOUND', 'Project not found');
-  return project;
-}
 
 /** The final render's file (the YouTube master), or a 409 naming what's missing. */
 async function finalRenderFile(project) {

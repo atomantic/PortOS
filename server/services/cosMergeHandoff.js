@@ -16,7 +16,7 @@ import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { githubRepoSpec } from '../lib/workTracker.js';
+import { githubApiHost, githubRepoSpec } from '../lib/workTracker.js';
 import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -63,20 +63,26 @@ async function readReviewEvidence(workspace) {
   if (!relative) return { status: 'unreadable', head: null };
   const content = await readFile(resolve(workspace, relative), 'utf-8').catch((err) => (err.code === 'ENOENT' ? null : undefined));
   if (content === null) return { status: null, head: null };
-  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1]);
-  const statuses = values(/^REVIEW_STATUS=(\S+)\s*$/gm);
-  const heads = values(/^REVIEW_HEAD=(\S+)\s*$/gm);
+  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1].trim());
+  const statuses = values(/^REVIEW_STATUS=(.*)$/gm);
+  const heads = values(/^REVIEW_HEAD=(.*)$/gm);
   return {
-    status: statuses.length === 0 ? 'unreadable' : statuses.find((status) => status !== 'clean') ?? 'clean',
+    status: statuses.length === 1 ? statuses[0] : 'unreadable',
     head: heads.length === 1 ? heads[0].toLowerCase() : null,
   };
 }
 
 // A clean verdict counts only for the head it reviewed; merge-on-green runs no
-// reviewers, so there only a recorded block or unreadable status refuses.
-function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy) {
+// reviewers, so there only a recorded block or unreadable status refuses. When
+// every local reviewer is optional the in-session merge treats them as
+// non-blocking, so a clean status needs no head: capped rounds that all returned
+// (fixed) findings never record one. Explicit optional-inconclusive evidence
+// instead names the attempted head; it never represents a clean reviewer verdict.
+function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy, { reviewers = [], optionalReviewers = [] } = {}) {
   if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return status === null || status === 'clean';
-  return status === 'clean' && reviewedHead === head;
+  const allOptional = reviewers.length > 0 && reviewers.every((reviewer) => optionalReviewers.includes(reviewer));
+  if (status === 'optional-inconclusive') return allOptional && reviewedHead === head;
+  return status === 'clean' && (allOptional || reviewedHead === head);
 }
 
 async function followUpRoster(task, policy) {
@@ -118,10 +124,15 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   const app = await resolveHandoffApp(task, agent, repository, repositoryKey);
   if (!app) return refuse('pending-merge-app-unresolved');
 
+  // Default ownership stays with the run. Operators opt in only after choosing
+  // a queued-run threshold appropriate for their CI runner capacity.
+  const threshold = app.mergeHandoffMinQueuedRuns;
+  if (!Number.isSafeInteger(threshold) || threshold < 1) return refuse('ci-backlog-policy-disabled');
+
   const forgeExec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
   const raw = await execGh([
     'pr', 'view', String(pr.number), '--repo', repoSpec,
-    '--json', 'number,state,isDraft,isCrossRepository,headRefName,headRefOid',
+    '--json', 'number,state,isDraft,isCrossRepository,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup',
   ], undefined, { cwd: forgeExec.cwd, env: forgeExec.env, backoffKey: repoSpec }).catch(() => null);
   const view = raw === null ? null : safeJSONParse(raw, null);
   if (!isPlainObject(view) || view.number !== pr.number) return refuse('pr-unreadable');
@@ -138,12 +149,41 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     return refuse('checkout-head-unverified');
   }
   const review = await readReviewEvidence(workspace);
-  if (!reviewEvidenceAccepted(review, head, policy)) return refuse('review-evidence-incomplete');
+  const roster = await followUpRoster(task, policy);
+  if (!reviewEvidenceAccepted(review, head, policy, roster)) return refuse('review-evidence-incomplete');
+
+  const checks = view.statusCheckRollup;
+  const pending = new Set(['QUEUED', 'WAITING', 'REQUESTED', 'PENDING', 'EXPECTED']);
+  const green = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+  const healthy = check => (!check?.conclusion || green.has(check.conclusion))
+    && (pending.has(check?.status || check?.state) || check?.status === 'IN_PROGRESS' || green.has(check?.conclusion || check?.state));
+  if (view.mergeable !== 'MERGEABLE' || !['', 'APPROVED'].includes(view.reviewDecision ?? '')
+    || !Array.isArray(checks) || !checks.length || !checks.every(healthy)
+    || !checks.some(check => pending.has(check?.status || check?.state))) return refuse('pr-not-waiting-on-healthy-ci');
+  const { mergeHandoffSuccessorBlocked } = await import('./prWatcher.js');
+  if (await mergeHandoffSuccessorBlocked()) return refuse('merge-successor-unavailable');
+
+  // Read server-side evidence, never a caller's assertion that CI is busy.
+  // Unknown/unsupported backlog keeps the original owner waiting.
+  const backlogRaw = await execGh(['api', '--hostname', githubApiHost(pr.host),
+    `repos/${pr.owner}/${pr.repo}/actions/runs?status=queued&per_page=1`], undefined,
+  { cwd: forgeExec.cwd, env: forgeExec.env, backoffKey: repoSpec }).catch(() => null);
+  const backlog = backlogRaw === null ? null : safeJSONParse(backlogRaw, null);
+  if (!Number.isSafeInteger(backlog?.total_count) || backlog.total_count < 0
+    || !Array.isArray(backlog.workflow_runs)) return refuse('ci-backlog-unreadable');
+  if (backlog.total_count < threshold) return refuse('ci-backlog-below-threshold');
+  const backlogEvidence = { queuedRuns: backlog.total_count, minimumQueuedRuns: threshold, observedAt: new Date().toISOString() };
 
   const receipt = {
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
     queuedAt: new Date().toISOString(),
   };
+  // The post-merge gate audit (#12549) must not flag the coordinator's own merge
+  // of this head, and the queue entry is gone once it merges. Record the receipt
+  // on the run first: a stale receipt for a head never queued is harmless.
+  const { recordMergeHandoffReceipt } = await import('./cosMergeAdmission.js');
+  const recorded = await recordMergeHandoffReceipt({ agentId, receipt: { receiptId: receipt.id, prUrl, headSha: head, acceptedAt: receipt.queuedAt } });
+  if (!recorded.recorded) return refuse('queue-write-failed');
   const { queuePendingMerge, followUpHandoffReceipt } = await import('./prWatcher.js');
   const queued = await queuePendingMerge(app.id, {
     prUrl, prNumber: pr.number, prBranch: view.headRefName, sourceAgentId: agentId,
@@ -159,9 +199,9 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     },
     handoff: {
       receiptId: receipt.id, agentId, startedAt: agent.startedAt, taskId: agent.taskId, repository,
-      headSha: head, worktreePath: workspace, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
+      headSha: head, worktreePath: workspace, backlog: backlogEvidence, prCompletion: policy, reviewStatus: review.status ?? 'not-configured', acceptedAt: receipt.queuedAt,
     },
-    followUp: await followUpRoster(task, policy),
+    followUp: roster,
   }).catch((err) => {
     console.error(`❌ Pending-merge handoff for PR #${pr.number} could not be persisted: ${err.message}`);
     return false;

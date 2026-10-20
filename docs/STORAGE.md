@@ -1033,3 +1033,44 @@ without a seed or creating missing caches; sync/refresh also reconcile lazily fo
 older cache writers. Ambiguous legacy matches are preserved rather than guessed.
 These fields do not add federation or a new store; older cache records remain
 readable and Gmail/API IDs retain their existing meaning.
+
+### Initialized checkout retirement evidence
+
+`data/cos/initialized-checkout-retirements/<transaction-id>/` is machine-local,
+file-primary operational recovery evidence, created only by explicit initialized
+checkout retirement. Version 1 immutable numbered JSON steps form a SHA-256
+linked journal; each step and containing directory is fsynced. The directory is
+0700 and journal/native manifests are 0600. `archive/` preserves original file
+bytes and metadata evidence, `restore/` holds a proven standalone checkout and
+Git stores, and `quarantine/` retains whole original directories. Native manifest
+version 3 records per-path hashes for OS-added or replaced `com.apple.provenance`
+on copies only. A replacement additionally stores the exact original attribute
+bytes as canonical base64, hash-checked against the source before copying; the
+source is checked again afterward. Each archive-to-restore replacement preserves
+its own prior value. These original bytes are retained evidence, not installed
+onto the standalone copy. Missing attributes and every other attribute change
+still refuse preservation. Copied attributes must keep their recorded hashes;
+source/quarantine metadata and the final standalone manifest remain exact. The
+preservation proof journals the SHA-256 of the exact manifest bytes; later native
+reads verify that binding, including when an edited manifest claims an older
+version. Version 1 remains strict and version 2 permits only recorded additions. `execution.lock` and
+`backend.lock` serialize service executors and surviving native commands. These
+are private archives, excluded from federation and never seeded, migrated into
+PostgreSQL, expired or automatically purged. No existing-record migration is
+needed for the new versioned store. See
+[branch reconciliation](./features/branch-reconciliation.md#explicit-initialized-checkout-preservation).
+
+`<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
+cross-process safety fence shared by linked checkouts and server/runner processes.
+It contains nonce-owned publication directories and at most one retirement cut.
+Unknown, interrupted and uncertain records block rather than age out. The native
+archive excludes this control subtree; it never excludes repository payload
+because it is ignored or untracked. Admission metadata is not part of the
+portable repository or peer synchronization.
+
+Initialized-checkout finalization receipts keep a compact, uncapped
+`branchReconcileOutcome.retirementReceiptIdentities` map alongside the bounded
+recent-retirements display list. Its keys hash the exact archive path and release
+identity; values preserve the original receipt timestamp. This operational
+recovery evidence prevents an interrupted journal replay from becoming fresh
+retirement evidence after the display row has aged out. It has no TTL purge.

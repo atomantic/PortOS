@@ -9,7 +9,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { access, mkdtemp, readdir, rename, rm } from 'fs/promises';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { MAX_REPO_PATH_DEPTH, REPO_HOSTS, parseRepoUrl, repoCloneUrl } from '../lib/repoUrl.js';
 
@@ -39,6 +39,18 @@ export function repoSubPath({ host, owner, repo }) {
  */
 export function getCloneDir(customDir) {
   return customDir || DEFAULT_CLONE_DIR;
+}
+
+/**
+ * True when `localPath` is exactly where cloneRepo puts `url`. Every action
+ * that reads or pulls a recorded clone checks this first: the recorded path is
+ * stored data, so it is only trusted when it equals the path derived from the
+ * link's own URL under the clone directory.
+ */
+export function isDerivedClonePath(url, localPath, customDir) {
+  const parsed = parseRepoUrl(url);
+  if (!parsed || typeof localPath !== 'string' || !localPath) return false;
+  return resolve(localPath) === resolve(join(getCloneDir(customDir), repoSubPath(parsed)));
 }
 
 /**

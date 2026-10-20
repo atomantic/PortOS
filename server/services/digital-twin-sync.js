@@ -15,7 +15,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  *   - identity.json        — LWW on updatedAt
  *   - chronotype.json      — deep union (derived markers, derivedAt tiebreak)
  *   - longevity.json       — deep union (derived markers, derivedAt tiebreak)
- *   - feedback.json        — LWW on updatedAt
+ *   - feedback.json        — union of entries by id (stats/weights LWW)
  *   - taste-profile.json   — per-section union of responses (never lose answers)
  *   - meta.json            — union of documents/histories/personas, deep-union
  *                            enrichment, fill-missing settings, and the analyzed
@@ -245,6 +245,53 @@ export function mergeChronotypeObserved(local, remote) {
 const TASTE_STATUS_RANK = { pending: 0, in_progress: 1, completed: 2 };
 function pickStatus(a, b) {
   return (TASTE_STATUS_RANK[b] ?? -1) > (TASTE_STATUS_RANK[a] ?? -1) ? b : a;
+}
+
+/**
+ * Merge behavioral feedback. Entries are immutable records, so union by id
+ * (newest createdAt wins a duplicate id; local wins ties) and keep the latest
+ * 500 like the local cap. Feedback recorded on both machines between syncs
+ * survives on both. Counters never drop below what either side recorded; the
+ * weight adjustments follow whichever side recalculated last.
+ */
+function mergeFeedback(local, remote) {
+  if (!isPlainObject(remote) || !Array.isArray(remote.entries)) return { merged: local, changed: false };
+  if (!isPlainObject(local)) return { merged: remote, changed: true };
+
+  const localEntries = Array.isArray(local.entries) ? local.entries : [];
+  const byId = new Map();
+  for (const e of localEntries) if (isPlainObject(e) && e.id) byId.set(e.id, e);
+  let changed = false;
+  for (const e of remote.entries) {
+    if (!isPlainObject(e) || !e.id) continue;
+    const cur = byId.get(e.id);
+    if (!cur || (e.createdAt || '') > (cur.createdAt || '')) {
+      byId.set(e.id, e);
+      changed = true;
+    }
+  }
+  if (!changed) return { merged: local, changed: false };
+
+  const entries = [...byId.values()]
+    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
+    .slice(-500);
+  const count = (v) => entries.filter((e) => e.validation === v).length;
+  const stat = (k, n) => Math.max(local.stats?.[k] || 0, remote.stats?.[k] || 0, n);
+  const remoteRecalcNewer = (remote.lastCalculatedAt || '') > (local.lastCalculatedAt || '');
+  const weightSource = remoteRecalcNewer ? remote : local;
+  const merged = {
+    ...local,
+    entries,
+    stats: {
+      totalFeedback: stat('totalFeedback', entries.length),
+      soundsLikeMe: stat('soundsLikeMe', count('sounds_like_me')),
+      doesntSoundLikeMe: stat('doesntSoundLikeMe', count('doesnt_sound_like_me')),
+    },
+    documentWeightAdjustments: weightSource.documentWeightAdjustments ?? {},
+    lastCalculatedAt: weightSource.lastCalculatedAt ?? null,
+    updatedAt: [local.updatedAt, remote.updatedAt].filter(Boolean).sort().pop() ?? null,
+  };
+  return { merged, changed: true };
 }
 
 /**
@@ -887,6 +934,14 @@ async function applyTaste(remoteTaste) {
   return (await applyTasteProfileMerge((local) => mergeTaste(local, remoteTaste))) ? 1 : 0;
 }
 
+// feedbackLoop keeps a never-invalidated cache and a write queue; merging through
+// it keeps a later local submit from overwriting synced entries.
+async function applyFeedback(remoteFeedback) {
+  if (!isPlainObject(remoteFeedback)) return 0;
+  const { applyFeedbackMerge } = await import('./feedbackLoop.js');
+  return (await applyFeedbackMerge((local) => mergeFeedback(local, remoteFeedback))) ? 1 : 0;
+}
+
 async function applyMeta(remoteMeta) {
   if (!isPlainObject(remoteMeta)) return 0;
   const { loadMeta, saveMeta } = await import('./digital-twin-meta.js');
@@ -919,7 +974,7 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyMerge(IDENTITY_FILE, remoteData.identity, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
   count += await applyMerge(CHRONOTYPE_FILE, remoteData.chronotype, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
   count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
-  count += await applyMerge(FEEDBACK_FILE, remoteData.feedback, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
+  count += await applyFeedback(remoteData.feedback);
   count += await applyTaste(remoteData.taste);
   // Observed evidence (Phase 7): regenerated derived records — body is LWW on
   // derivedAt; taste also preserves the newest user-triggered AI interpretation.

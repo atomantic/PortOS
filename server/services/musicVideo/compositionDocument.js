@@ -34,7 +34,8 @@ import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { readZipArchive, unsafeZipEntryName } from '../../lib/zipArchive.js';
 import { createZip } from '../../lib/zipWriter.js';
 import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideoValidation.js';
-import { getProject, listProjects, mutateProjectRecord } from './projects.js';
+import { listProjects, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
@@ -232,9 +233,8 @@ async function storeVersionNow(projectId, inputFiles, source, { draft = false, v
   if (files.length > DOCUMENT_MAX_FILES || totalBytes > DOCUMENT_MAX_BYTES) {
     throw refuse('Shared document assets exceed the document file or byte limit', 'COMPOSITION_DOCUMENT_TOO_LARGE', 413);
   }
-  const initial = await getProject(projectId);
+  const initial = await requireProject(projectId);
   await assertDocumentMediaPolicy(initial, files);
-  if (!initial) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const versionId = `doc-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const root = projectDocumentRoot(projectId);
   const staging = join(root, `.${versionId}.partial`);
@@ -463,13 +463,12 @@ const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8')
 export function upgradeDocumentEngine(projectId, directory) {
   assertProjectId(projectId);
   return serializeProject(projectId, async () => {
-    const project = await getProject(projectId);
+    const project = await requireProject(projectId);
     const verifyCurrent = current => {
       if (current.composition?.mode !== 'document' || current.composition?.document?.directory !== directory || current.composition?.documentDraft) {
         throw refuse('The selected document changed or has a pending candidate — finish it before upgrading', 'COMPOSITION_DRAFT_STALE', 409);
       }
     };
-    if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
     verifyCurrent(project);
     const dir = await requireDocument(project);
     const { files } = await collectTree(dir);

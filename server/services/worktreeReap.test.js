@@ -10,9 +10,10 @@
  * Repos are copied from the shared `gitTestRepo.js` template. The whole file
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, chmod, lstat, readlink, utimes, rename } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
@@ -22,8 +23,13 @@ import {
   resetGitWorktreeSandbox,
   SKIP_HEAVY_INTEGRATION,
 } from '../lib/gitTestRepo.js';
-import { hasBranchMergeEvidence } from './git.js';
-import { reapMergedWorktrees } from './worktreeManager.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
+afterAll(cleanupTempDataRoots);
+import { PATHS } from '../lib/paths.js';
+import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
+import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
+import { reapMergedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
@@ -41,6 +47,22 @@ async function commitFile(dir, name, content, message) {
   await writeFile(join(dir, name), content);
   await execGit(['add', '.'], dir);
   await execGit(['commit', '-m', message], dir);
+}
+
+// Reading metadata excludes atime, which a filesystem may update on reads.
+async function snapshotTree(root) {
+  const rows = [];
+  const walk = async (path, relative) => {
+    const info = await lstat(path, { bigint: true });
+    rows.push({ path: relative, mode: info.mode, ino: info.ino, mtime: info.mtimeNs, ctime: info.ctimeNs,
+      content: info.isFile() ? createHash('sha256').update(await readFile(path)).digest('hex')
+        : info.isSymbolicLink() ? await readlink(path) : null });
+    if (info.isDirectory()) {
+      for (const child of (await readdir(path)).sort()) await walk(join(path, child), `${relative}/${child}`);
+    }
+  };
+  await walk(root, '');
+  return rows;
 }
 
 /**
@@ -67,6 +89,133 @@ async function initRepo() {
   const dir = (await execGit(['rev-parse', '--show-toplevel'], safePath)).stdout.trim() || safePath;
   return { dir, safePath };
 }
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => {
+  let dir;
+  beforeEach(async () => { ({ dir } = await initRepo()); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+
+  it('uses an exact-head lease and native holder refusal for a late attachment', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const path = join(dir, 'late-holder');
+    await execGit(['worktree', 'add', path, 'done'], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    await execGit(['worktree', 'remove', path], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
+  });
+
+  it('retains a branch that advanced after the merge proof', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    await commitFile(dir, 'new.txt', 'new work', 'new work');
+    const advanced = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['update-ref', 'refs/heads/done', advanced, head], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(advanced);
+  });
+
+  it('retains protected and custom default refs even without holders', async () => {
+    await execGit(['branch', 'release'], dir);
+    await execGit(['branch', 'trunk'], dir);
+    const head = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['update-ref', 'refs/remotes/origin/trunk', head], dir);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], dir);
+    for (const branch of ['release', 'trunk']) {
+      expect(await deleteCompletedLocalBranch(dir, branch, head)).toBe(false);
+      expect((await execGit(['rev-parse', branch], dir)).stdout.trim()).toBe(head);
+    }
+  });
+
+  it('retains a ref when the repository default cannot be established', async () => {
+    await execGit(['branch', '-m', 'main', 'trunk'], dir);
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it('preserves the full shared branch reflog and orphaned historical commit objects without a checkout', async () => {
+    await execGit(['checkout', '-b', 'done'], dir);
+    await commitFile(dir, 'history.txt', 'original evidence', 'original commit');
+    const original = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await writeFile(join(dir, 'history.txt'), 'amended evidence');
+    await execGit(['add', 'history.txt'], dir);
+    await execGit(['commit', '--amend', '-m', 'amended commit'], dir);
+    const head = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    await execGit(['checkout', 'main'], dir);
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const reflog = join(common, 'logs', 'refs', 'heads', 'done');
+    const evidence = await readFile(reflog);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
+    expect(existsSync(reflog)).toBe(false);
+    const archiveRoot = join(PATHS.cos, 'branch-retirement-archives');
+    const archives = await Promise.all((await readdir(archiveRoot)).map(async id => ({
+      path: join(archiveRoot, id), manifest: JSON.parse(await readFile(join(archiveRoot, id, 'manifest.json'), 'utf8')),
+    })));
+    const archive = archives.find(entry => entry.manifest.repoPath === dir && entry.manifest.expectedHead === head);
+    expect(archive).toBeDefined();
+    expect(await readFile(join(archive.path, 'reflog'))).toEqual(evidence);
+    expect(archive.manifest.recoveryHeads).toEqual(expect.arrayContaining([original, head]));
+    const restored = join(dir, 'restored.git');
+    await execGit(['init', '--bare', restored], dir);
+    await execGit(['--git-dir', restored, 'fetch', join(archive.path, 'commits.bundle'), '+refs/*:refs/*'], dir);
+    expect((await execGit(['--git-dir', restored, 'show', `${original}:history.txt`], dir)).stdout).toBe('original evidence');
+    expect((await execGit(['--git-dir', restored, 'show', `${head}:history.txt`], dir)).stdout).toBe('amended evidence');
+  });
+
+  it('retains the branch when a reflog recovery object is missing', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const log = join(common, 'logs', 'refs', 'heads', 'done');
+    await writeFile(log, `${'b'.repeat(40)} ${head} Test <test@example.com> 1 +0000\tmissing historical object\n`);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect(await readFile(log, 'utf8')).toContain('missing historical object');
+  });
+
+  it('refuses a changed shared reflog even when the branch tip is unchanged', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
+    expect(await preserved.verify()).toBe(true);
+    const log = join(common, 'logs', 'refs', 'heads', 'done');
+    await writeFile(log, `${await readFile(log, 'utf8')}${head} ${head} Test <test@example.com> 1 +0000\tnew recovery evidence\n`);
+    expect(await preserved.verify()).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it.each(['reflog', 'commits.bundle', 'manifest.json'])('refuses an archive whose %s changes before retirement', async name => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
+    await writeFile(join(preserved.archiveDir, name), 'changed after archival');
+    expect(await preserved.verify()).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it('holds the branch on archive storage failure', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const blocked = join(dir, 'not-a-directory');
+    await writeFile(blocked, 'keep');
+    await expect(preserveBranchRetirement(dir, common, 'done', head, { cosDir: blocked })).rejects.toThrow();
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+
+  it('preserves the repository receiver deletion policy', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    await execGit(['config', 'receive.denyDeletes', 'true'], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+  });
+});
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
   let dir;
@@ -104,7 +253,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
     const ancestor = await execGit(['merge-base', '--is-ancestor', 'squashed', 'main'], dir, { ignoreExitCode: true });
     expect(ancestor.exitCode).not.toBe(0);
 
-    expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(true);
+    const before = await snapshotTree(dir);
+    const ownedScratch = await mkdtemp(join(tmpdir(), 'portos-probe-observe-'));
+    const useTemp = path => {
+      for (const key of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(key, path);
+    };
+    try {
+      useTemp(ownedScratch);
+      expect(await Promise.all(Array.from({ length: 3 }, () => hasBranchMergeEvidence(dir, 'squashed', 'main'))))
+        .toEqual([true, true, true]);
+      expect(await snapshotTree(dir)).toEqual(before);
+      expect((await readdir(ownedScratch)).filter(name => name.startsWith('portos-merge-probe-'))).toEqual([]);
+
+      // Allocation and post-allocation Git failures must not establish evidence,
+      // leak scratch, or fall back to writing synthetic objects in the real repo.
+      useTemp(join(dir, 'missing-temp-root'));
+      expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(false);
+      useTemp(ownedScratch);
+      vi.stubEnv('GIT_AUTHOR_NAME', '');
+      expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(false);
+      expect(await snapshotTree(dir)).toEqual(before);
+      expect((await readdir(ownedScratch)).filter(name => name.startsWith('portos-merge-probe-'))).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(ownedScratch, { recursive: true, force: true });
+    }
   });
 
   it('detects a multi-commit rebase merge after the target branch advanced', async () => {
@@ -138,6 +311,77 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
     expect(await hasBranchMergeEvidence(dir, 'nope', 'main')).toBe(false);
     expect(await hasBranchMergeEvidence(dir, 'main', 'nope')).toBe(false);
     expect(await hasBranchMergeEvidence(dir, 'main', 'main')).toBe(false);
+  });
+});
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('read-only inspection of initialized linked checkouts', () => {
+  let root;
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    root = null;
+  });
+
+  it('keeps private indexes and directories unchanged while reporting fresh parent/submodule dirt', async () => {
+    root = await mkdtemp(join(tmpdir(), 'portos-status-readonly-'));
+    const repo = join(root, process.platform === 'win32' ? 'repo space;name' : 'repo space:quoted"name');
+    const moduleRepo = join(root, 'module');
+    const checkout = join(root, 'linked');
+    await materializeGitRepo(repo);
+    await materializeGitRepo(moduleRepo);
+    await execGit(['-c', 'protocol.file.allow=always', 'submodule', 'add', moduleRepo, 'lib/module'], repo);
+    await execGit(['commit', '-am', 'add fixture module'], repo);
+    await execGit(['checkout', '-b', 'squashed'], repo);
+    await commitFile(repo, 'first.txt', 'one\n', 'first');
+    await commitFile(repo, 'second.txt', 'two\n', 'second');
+    await execGit(['checkout', 'main'], repo);
+    await execGit(['merge', '--squash', 'squashed'], repo);
+    await execGit(['commit', '-m', 'combined'], repo);
+    await execGit(['worktree', 'add', '--detach', checkout, 'squashed'], repo);
+    await execGit(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'], checkout);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim();
+    const moduleAdmin = (await execGit(['rev-parse', '--absolute-git-dir'], join(checkout, 'lib/module'))).stdout.trim();
+    const sharedObjects = join(root, 'shared objects');
+    const alternate = join(root, 'alternate objects');
+    await rename(join(repo, '.git/objects'), sharedObjects);
+    await mkdir(join(repo, '.git/objects/info'), { recursive: true });
+    await mkdir(join(alternate, 'info'), { recursive: true });
+    await writeFile(join(repo, '.git/objects/info/alternates'), `${alternate}\n`);
+    await writeFile(join(alternate, 'info/alternates'), `${sharedObjects}\n`);
+    const files = [join(checkout, 'initial.txt'), join(checkout, 'lib/module/initial.txt')];
+
+    // Reproduce why an apparently read-only status can change preservation
+    // evidence: stale stat caches are refreshed through index.lock by default.
+    for (const file of files) await utimes(file, new Date('2001-01-01'), new Date('2001-01-01'));
+    const indexesBefore = await Promise.all([admin, moduleAdmin].map(path => readFile(join(path, 'index'))));
+    await execGit(['status', '--porcelain', '--ignore-submodules=none'], checkout,
+      { env: { ...process.env, GIT_OPTIONAL_LOCKS: '1' } });
+    const indexesAfter = await Promise.all([admin, moduleAdmin].map(path => readFile(join(path, 'index'))));
+    for (let i = 0; i < indexesBefore.length; i++) expect(indexesAfter[i]).not.toEqual(indexesBefore[i]);
+
+    for (const file of files) await utimes(file, new Date('2002-01-01'), new Date('2002-01-01'));
+    const before = await snapshotTree(root);
+    expect((await getStatus(checkout)).clean).toBe(true);
+    expect(await getStatusPorcelain(checkout)).toBe('');
+    expect(await readWorktreeStatus(checkout)).toBe('');
+    try {
+      vi.stubEnv('GIT_OBJECT_DIRECTORY', join(moduleAdmin, 'objects'));
+      expect(await hasBranchMergeEvidence(checkout, 'squashed', 'main')).toBe(true);
+    } finally { vi.unstubAllEnvs(); }
+    expect(await snapshotTree(root)).toEqual(before);
+
+    await writeFile(files[0], 'changed parent\n');
+    await writeFile(files[1], 'changed module\n');
+    await writeFile(join(checkout, 'untracked.txt'), 'preserve me\n');
+    const dirtyBefore = await snapshotTree(root);
+    const status = await getStatus(checkout);
+    expect(status.clean).toBe(false);
+    expect(status.files.map(file => file.path)).toEqual(expect.arrayContaining(['initial.txt', 'lib/module', 'untracked.txt']));
+    for (const result of [await getStatusPorcelain(checkout), await readWorktreeStatus(checkout)]) {
+      expect(result).toContain(' M initial.txt');
+      expect(result).toContain(' M lib/module');
+      expect(result).toContain('?? untracked.txt');
+    }
+    expect(await snapshotTree(root)).toEqual(dirtyBefore);
   });
 });
 

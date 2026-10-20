@@ -1,3 +1,5 @@
+// Synthetic command fixtures; git.publication.test.js exercises the real repository fence.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_dir, work) => work() }));
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 const execGitMock = vi.hoisted(() => vi.fn());
@@ -89,18 +91,23 @@ describe('getRemoteBranches fetch freshness window & deduplication', () => {
 
   it('deduplicates concurrent calls to getRemoteBranches for the same repo', async () => {
     let resolveFetch;
+    let markFetchStarted;
+    const fetchStarted = new Promise(resolve => { markFetchStarted = resolve; });
     const fetchPromise = new Promise(r => { resolveFetch = r; });
 
     execGitMock.mockImplementation((args) => {
       if (args[0] === 'fetch') {
+        markFetchStarted();
         return fetchPromise.then(() => ({ stdout: '', stderr: '', exitCode: 0 }));
       }
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
 
-    // Launch two calls concurrently
+    // Keep the first fetch pending while the second call passes its async admission.
     const p1 = getRemoteBranches('/repo-concurrent');
+    await fetchStarted;
     const p2 = getRemoteBranches('/repo-concurrent');
+    await vi.dynamicImportSettled();
 
     resolveFetch();
     await Promise.all([p1, p2]);

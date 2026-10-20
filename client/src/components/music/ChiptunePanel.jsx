@@ -21,7 +21,7 @@ import { buildChiptuneSchedule, createChiptunePlayer } from '../../lib/chiptuneP
 import { formatTimecode } from '../../utils/formatters';
 import {
   generateTrackChiptune, renderTrackChiptune, publishTrackChiptune,
-  getApps, getSettings, updateSettings,
+  getApps, getSettings, patchSettingsSlice,
 } from '../../services/api';
 
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
@@ -50,7 +50,6 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
   // hook auto-selects a default when its list arrives, so applying the pin
   // immediately would race that load and be nondeterministically overwritten.
   const [savedPin, setSavedPin] = useState(null);
-  const musicSettingsRef = useRef({});
   // StrictMode-safe (re-armed on remount) — a plain `useRef(true)` + cleanup
   // would stay false after StrictMode's dev double-mount and wedge every
   // post-await state update.
@@ -100,9 +99,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
   useEffect(() => {
     getSettings({ silent: true }).then((settings) => {
       if (!mountedRef.current) return;
-      const music = settings?.music || {};
-      musicSettingsRef.current = music;
-      const saved = music.chiptune || {};
+      const saved = settings?.music?.chiptune || {};
       if (saved.providerId) setSavedPin({ providerId: saved.providerId, model: saved.model || '' });
       if (saved.publishAppId) setPublishAppId(saved.publishAppId);
       if (saved.publishSubdir) setPublishSubdir(saved.publishSubdir);
@@ -174,11 +171,10 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
     return () => cancelAnimationFrame(raf);
   }, [playing, idleTotalSec]);
 
+  // The server merges into the stored `music.chiptune`, so neither a failed
+  // prefs load nor the Music Designer's own saves can be overwritten from here.
   const persistChiptunePrefs = (patch) => {
-    const music = musicSettingsRef.current;
-    const next = { ...music, chiptune: { ...(music.chiptune || {}), ...patch } };
-    musicSettingsRef.current = next;
-    updateSettings({ music: next }, { silent: true }).catch(() => {});
+    patchSettingsSlice('music.chiptune', patch, { silent: true }).catch(() => {});
   };
 
   const handleGenerate = async () => {

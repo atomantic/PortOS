@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
-import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testBrowserCleanupSettled, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _startTestChromeWithRetry, _testBrowserCleanupSettled, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 async function waitForFile(path, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
@@ -894,5 +894,29 @@ describe('fixture-owned CDP artifacts root', () => {
     const files = listed.stdout.split('\n').filter(file => file && file !== 'services/htmlComposition/testBrowserCleanup.test.js');
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter(file => unowned(readFileSync(join(server, file), 'utf8')))).toEqual([]);
+  });
+});
+
+describe('test Chrome startup retry', () => {
+  const timeout = () => new Error('Test Chrome did not start within 20000ms; no stderr');
+
+  it('retries a startup timeout once on a fresh child and discards the abandoned one', async () => {
+    const procs = [];
+    const discard = vi.fn(async () => {});
+    const wait = vi.fn(async proc => { if (proc.attempt === 0) throw timeout(); return 'ws://127.0.0.1:1/devtools/browser/example'; });
+    const ws = await _startTestChromeWithRetry({ launch: attempt => ({ attempt }), onProc: proc => procs.push(proc), wait, discard });
+    expect(ws).toBe('ws://127.0.0.1:1/devtools/browser/example');
+    expect(procs).toEqual([{ attempt: 0 }, { attempt: 1 }]);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(procs[0]);
+  });
+
+  it('gives up after the attempt budget and does not retry deterministic failures', async () => {
+    const discard = vi.fn(async () => {});
+    await expect(_startTestChromeWithRetry({ launch: () => ({}), wait: async () => { throw timeout(); }, discard })).rejects.toThrow(/did not start/);
+    expect(discard).toHaveBeenCalledTimes(1);
+    const exited = vi.fn(async () => { throw new Error('Test Chrome exited before startup (code 1)'); });
+    await expect(_startTestChromeWithRetry({ launch: () => ({}), wait: exited, discard })).rejects.toThrow(/exited/);
+    expect(exited).toHaveBeenCalledTimes(1);
+    expect(discard).toHaveBeenCalledTimes(1);
   });
 });

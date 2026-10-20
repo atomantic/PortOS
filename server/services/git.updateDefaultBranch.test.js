@@ -1,3 +1,5 @@
+// Synthetic command fixtures; git.publication.test.js exercises the real repository fence.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_dir, work) => work() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const execGitMock = vi.hoisted(() => vi.fn());

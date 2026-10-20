@@ -1,7 +1,20 @@
-import { afterAll, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { rmSync, watch } from 'node:fs';
 
-const gate = vi.hoisted(() => ({ root: null, admission: null }));
+const gate = vi.hoisted(() => ({ root: null, admission: null, notify: null }));
+// The contract is the service's response to journal invalidations, not native
+// filesystem delivery timing. Keep the real journal and inject only its watcher.
+vi.mock('node:fs', async original => {
+  const actual = await original();
+  const { EventEmitter } = await import('node:events');
+  return { ...actual, watch: vi.fn((_path, notify) => {
+    gate.notify = notify;
+    const watcher = new EventEmitter();
+    watcher.close = vi.fn();
+    watcher.unref = vi.fn();
+    return watcher;
+  }) };
+});
 vi.mock('../lib/maintenanceAdmission.js', async () => {
   const actual = await vi.importActual('../lib/maintenanceAdmission.js');
   const { mkdtempSync: mk } = await import('node:fs');
@@ -13,39 +26,58 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
 });
 import { bindMaintenanceIo, _getMaintenanceWatcher } from './maintenanceControl.js';
 
-afterAll(() => rmSync(gate.root, { recursive: true, force: true }));
+afterAll(() => {
+  _getMaintenanceWatcher()?.close();
+  rmSync(gate.root, { recursive: true, force: true });
+});
 
 const sent = [];
 const io = { emit: (name, payload) => sent.push({ name, payload }) };
 const count = name => sent.filter(e => e.name === name).length;
+afterEach(() => vi.useRealTimers());
+const notifyJournalChange = async () => {
+  const previousCount = sent.length;
+  gate.notify('rename', 'state.json');
+  await vi.advanceTimersByTimeAsync(99);
+  expect(sent).toHaveLength(previousCount);
+  await vi.advanceTimersByTimeAsync(1);
+};
 
 describe('maintenance notifications', () => {
   it('keeps detailed invalidations but only pushes the coarse readiness projection when it changes', async () => {
+    vi.useFakeTimers();
     bindMaintenanceIo(io);
     const maintenance = gate.admission;
+    expect(watch).toHaveBeenCalledWith(maintenance.directory, expect.any(Function));
 
     // Normal admit/settle churn rewrites the journal but not the banner projection.
     const op = maintenance.admit('agent', 'resource-that-must-not-leak');
-    await vi.waitFor(() => expect(count('maintenance:changed')).toBeGreaterThanOrEqual(1));
-    op.finish();
-    await vi.waitFor(() => expect(count('maintenance:changed')).toBeGreaterThanOrEqual(2));
+    await notifyJournalChange();
+    expect(count('maintenance:changed')).toBeGreaterThanOrEqual(1);
+    expect(await op.finish()).toBe(true);
+    expect(maintenance.status().blockers).toEqual([]);
+    await notifyJournalChange();
+    expect(count('maintenance:changed')).toBeGreaterThanOrEqual(2);
     expect(count('maintenance:readiness')).toBe(0);
 
     // Hold with a running operation: draining with a blocker count.
     const running = maintenance.admit('agent', 'resource-that-must-not-leak');
     maintenance.begin({ reason: 'Service work', owner: 'Operator' });
-    await vi.waitFor(() => expect(count('maintenance:readiness')).toBe(1));
+    await notifyJournalChange();
+    expect(count('maintenance:readiness')).toBe(1);
     expect(sent.find(e => e.name === 'maintenance:readiness').payload).toEqual({ state: 'draining', blockerCount: 1 });
 
     // Settling the blocker moves to ready (count no longer displayed).
-    running.finish();
-    await vi.waitFor(() => expect(count('maintenance:readiness')).toBe(2));
+    expect(await running.finish()).toBe(true);
+    await notifyJournalChange();
+    expect(count('maintenance:readiness')).toBe(2);
     expect(sent.filter(e => e.name === 'maintenance:readiness')[1].payload).toEqual({ state: 'ready', blockerCount: 0 });
 
     // Leaving the hold returns to normal.
     const { hold } = maintenance.status();
     maintenance.resume({ id: hold.id, revision: hold.revision });
-    await vi.waitFor(() => expect(count('maintenance:readiness')).toBe(3));
+    await notifyJournalChange();
+    expect(count('maintenance:readiness')).toBe(3);
 
     // Nothing private is broadcast.
     expect(JSON.stringify(sent)).not.toMatch(/resource-that-must-not-leak|pid|owner|hold/i);
@@ -62,6 +94,7 @@ describe('maintenance notifications', () => {
     }).not.toThrow();
 
     expect(_getMaintenanceWatcher()).toBeNull();
+    expect(watcher.close).toHaveBeenCalledOnce();
 
     // Re-arming through bindMaintenanceIo or emitChanges restores the watcher
     bindMaintenanceIo(io);

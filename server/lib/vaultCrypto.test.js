@@ -5,17 +5,25 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
+  encryptValue, decryptValue, ensureVaultKey as ensureVaultKeyImpl, isVaultKeyConfigured, maskValue,
   __setVaultEnvPathForTests,
 } from './vaultCrypto.js';
 
 // Fixed 32-byte test key (hex). Never a real key.
 const HEX_KEY = 'a'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
+const vaultRoots = new Set();
+let pendingKeyWrites = 0;
+let removedVaultRoots = 0;
+async function ensureVaultKey(options) {
+  pendingKeyWrites += 1;
+  try { return await ensureVaultKeyImpl(options); }
+  finally { pendingKeyWrites -= 1; }
+}
 
 // Point the module's .env fallback at a nonexistent file so "key not
 // configured" tests can't be satisfied by (or write into) the real install's
@@ -24,6 +32,9 @@ const NO_ENV = join(tmpdir(), 'vault-crypto-no-such-dir', '.env');
 beforeAll(() => __setVaultEnvPathForTests(NO_ENV));
 
 afterAll(() => {
+  const remaining = [...vaultRoots].filter(root => existsSync(root)).length;
+  const log = remaining || pendingKeyWrites ? console.error : console.log;
+  log(`🧭 Vault cleanup allocated=${vaultRoots.size},removed=${removedVaultRoots},remaining=${remaining},pendingKeyWrites=${pendingKeyWrites}`);
   __setVaultEnvPathForTests(null);
   if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
   else process.env.PRIVACY_VAULT_KEY = originalKey;
@@ -131,6 +142,7 @@ describe('ensureVaultKey', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'vault-crypto-'));
+    vaultRoots.add(dir);
     envPath = join(dir, '.env');
     delete process.env.PRIVACY_VAULT_KEY;
   });
@@ -214,7 +226,25 @@ describe('ensureVaultKey', () => {
     expect(process.env.PRIVACY_VAULT_KEY).toBe(adopted);
   });
 
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  // An unreadable .env is not proof that no key exists: generating here used to
+  // strip the live key line and orphan every row encrypted under it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to generate a key when .env exists but cannot be read', async () => {
+    const original = `OTHER_VAR=1\nPRIVACY_VAULT_KEY=${HEX_KEY}\n`;
+    writeFileSync(envPath, original);
+    chmodSync(envPath, 0o000);
+    try {
+      await expect(ensureVaultKey({ envPath })).rejects.toThrow(/could not be read/);
+    } finally {
+      chmodSync(envPath, 0o600);
+    }
+    expect(readFileSync(envPath, 'utf8')).toBe(original);
+    expect(process.env.PRIVACY_VAULT_KEY).toBeUndefined();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    removedVaultRoots += 1;
+  });
 });
 
 describe('maskValue', () => {

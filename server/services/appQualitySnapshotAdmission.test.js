@@ -6,6 +6,8 @@ import { claimMergeAdmission } from './cosMergeAdmission.js';
 // The publisher's immediate merge shares the claim flow's REAL admission logic
 // over a synthetic runtime store: only the store and the git remote are doubled.
 const admissionState = vi.hoisted(() => ({ state: { agents: {}, mergeAdmissions: {} }, saveFails: false }));
+// Workspace Git is synthetic here; keep the merge-admission boundary real.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 vi.mock('./cosState.js', async () => {
   const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
   return {

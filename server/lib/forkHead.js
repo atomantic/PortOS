@@ -110,3 +110,10 @@ export function forkHeadFromGithubPr(pr) {
   if (!ownerLogin || !nameWithOwner || !origin) return null;
   return normalizeForkHead({ remoteUrl: `${origin}/${nameWithOwner}.git`, ownerLogin });
 }
+
+/** Keep a fork's checkout separate from same-named branches in the base repo. */
+export function forkLocalBranch(branch, forkHead) {
+  const coordinates = normalizeForkHead(forkHead);
+  const remote = coordinates && forkRemoteName(coordinates.ownerLogin);
+  return remote && branch ? `fork/${remote.slice(5)}/${branch}` : branch;
+}

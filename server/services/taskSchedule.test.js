@@ -143,6 +143,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   recordBranchReconcileOutcome,
+  recordHeldCheckoutRetirement,
   applyOnDemandRunResets,
   queuePerpetualRefill,
   isRefillRequest,
@@ -355,7 +356,7 @@ describe('taskSchedule', () => {
       expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
       expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
       expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
-      expect(PROMPT_VERSIONS['user-action-review']).toBe(2);
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(3);
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDetectors}');
       // The prompt proposes; it must never instruct the agent to enact.
@@ -923,13 +924,13 @@ describe('taskSchedule', () => {
       expect(PROMPT_VERSIONS['reference-watch']).toBe(REFERENCE_WATCH_AUDITED_VERSION)
     })
 
-    it('reference-watch v4 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
-      // The coupling the audit anchor protects: at the audited version (v4), the prompt
+    it('reference-watch v5 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
+      // The coupling the audit anchor protects: at the audited version (v5), the prompt
       // writes to the resolved tracker (PLAN.md commit, or `gh`/`glab issue create`), so the
       // raw default must be writable. If a future re-audit flips
       // REFERENCE_WATCH_AUDITED_VERSION to a propose-only version, update this expectation
       // alongside the default and the anchor.
-      if (REFERENCE_WATCH_AUDITED_VERSION === 4) {
+      if (REFERENCE_WATCH_AUDITED_VERSION === 5) {
         expect(DEFAULT_TASK_INTERVALS['reference-watch'].taskMetadata.readOnly).toBe(false)
       }
     })
@@ -3192,6 +3193,38 @@ describe('taskSchedule', () => {
           .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
         expect((await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'])
           .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
+      });
+
+      it('never loses exact retirement obligations across empty scans, restart reads or unrelated receipts', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: true } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const release = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40), reason: 'retirement-review-pending' };
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        const unrelated = { branch: 'fix/other', reason: 'worktree-locked' };
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [unrelated] });
+        await recordBranchReconcileOutcome('app-1', { status: 'running', retirementObligations: [release] });
+        const createdAt = outcome().retirementObligations[0].createdAt;
+        expect(Number.isFinite(Date.parse(createdAt))).toBe(true);
+        expect(outcome().remaining).toEqual([unrelated, { ...release, createdAt, reason: 'retirement-receipt-unverified' }]);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+        await recordHeldCheckoutRetirement('app-1', { ...release, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '/example/other' });
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
+        expect(outcome()).toMatchObject({ status: 'incomplete', retirementObligations: [{ ...release, createdAt, reason: 'retirement-receipt-unverified' }], remaining: [{ ...release, createdAt, reason: 'retirement-receipt-unverified' }] });
+        await recordHeldCheckoutRetirement('app-1', { ...release, branchDeleted: true, archiveDir: '/example/archive' });
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
+        expect(outcome()).toMatchObject({ status: 'drained', retirementObligations: [], remaining: [] });
+        // A new checkout with identical branch/path/head cannot reuse that receipt.
+        const retiredAt = outcome().retired[0].retiredAt;
+        await recordBranchReconcileOutcome('app-1', { status: 'running', retirementObligations: [release] });
+        const recreatedAt = outcome().retirementObligations[0].createdAt;
+        expect(Date.parse(recreatedAt)).toBeGreaterThan(Date.parse(retiredAt));
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
+        expect(outcome()).toMatchObject({ status: 'incomplete', retirementObligations: [{ ...release, createdAt: recreatedAt, reason: 'retirement-receipt-unverified' }] });
+
       });
 
       it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {

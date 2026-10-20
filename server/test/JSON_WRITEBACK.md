@@ -12,6 +12,20 @@ Every exception records why a fallback cannot overwrite durable records. Review
 that reason against the caller whenever the lifecycle changes. This is a review
 inventory guard, not a proof that all exceptional control flow remains safe.
 
+## Raw reads feeding `safeJSONParse` (#12440)
+
+`tryReadFile` and `readFile` collapse "unreadable" into "absent" (or throw), and
+`safeJSONParse` turns malformed text into the caller's default. A raw read whose
+bytes reach `safeJSONParse`, through a variable in the same lexical scope (or an enclosing
+one; parameters and inner declarations shadow) or inline in its first argument, therefore counts as a non-strict
+read of that read's path and pairs with a same-path `atomicWrite` exactly like
+`readJSONFile`. `tryReadFileStrict` is strict and never counted. A raw read that
+never reaches a parse (a text file, a hash) is not a candidate. Convert a hit to
+`tryReadFileStrict` / `readJSONFileStrict` (ENOENT initializes; anything else
+refuses the write), or classify it in `jsonWritebackExceptions.js` with the reason
+the fallback cannot destroy durable data, or an `issue` that tracks the conversion.
+Worked examples: `digital-twin-meta.js`, `genome.js` and `cosAgentIndex.js`.
+
 ## Syntax and limits
 
 Babel parses real call expressions, including nested arguments, options and

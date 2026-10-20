@@ -115,8 +115,8 @@ function falVideoSubmission({
   };
 }
 
-// Runway renders image-to-video only: a start frame is required (the form
-// offers Image mode alone). The negative prompt is sent; the server passes it
+// Runway renders from a start frame (Image mode) or, on a model with a
+// text-to-video rule, from the prompt alone (Text mode). The negative prompt is sent; the server passes it
 // natively or as an "Avoid:" line, listed as a chip in the sent-prompt view.
 function runwayVideoSubmission({
   composed, runwayModelId, runwayDuration, runwayResolution,
@@ -322,9 +322,17 @@ const liveBeats = (chainingActive, chunkPrompts, chunks, withEnvelope) => (
     : []
 );
 
+// Keyed by the form's resolved `hostedLane` (null = local or federated).
+const HOSTED_VIDEO_SUBMISSIONS = {
+  grok: grokVideoSubmission,
+  fal: falVideoSubmission,
+  reactor: reactorVideoSubmission,
+  runway: runwayVideoSubmission,
+};
+
 export function buildVideoGenSubmission(args) {
   const {
-    isGrok, isFal, isReactor, isRunway, remoteSubmissionFields,
+    hostedLane, remoteSubmissionFields,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     currentModel, disableAudio, noMusic, chainingActive, chunks, chunkPrompts,
   } = args;
@@ -334,12 +342,9 @@ export function buildVideoGenSubmission(args) {
   });
   const shared = { ...args, composed };
 
-  const isLocal = !isGrok && !isFal && !isReactor && !isRunway && !remoteSubmissionFields;
+  const isLocal = !hostedLane && !remoteSubmissionFields;
   const additions = videoPromptAdditions({ ...args, isLocal });
-  const payload = isGrok ? grokVideoSubmission(shared)
-    : isFal ? falVideoSubmission(shared)
-    : isReactor ? reactorVideoSubmission(shared)
-    : isRunway ? runwayVideoSubmission(shared)
+  const payload = hostedLane ? HOSTED_VIDEO_SUBMISSIONS[hostedLane](shared)
     : remoteSubmissionFields ? remoteVideoSubmission(shared)
     : localVideoSubmission(args, {
       composed,

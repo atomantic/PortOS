@@ -45,6 +45,25 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
 // minted), plus optional bounded composition snapshots. The decoder reaches
 // only Node builtins and the existing owner writer, never a service graph.
 const OWNERS_FILE = '.leak-owners';
+const DOTNET_REGISTRATION_CACHE = 'system-commandline-sentinel-files';
+
+function isDotnetRegistrationCache(root, name) {
+  // System.CommandLine (also used by Git Credential Manager) writes these
+  // registration receipts under TEMP, not under a fixture's own directory:
+  // https://github.com/git-ecosystem/git-credential-manager/issues/505
+  if (name !== DOTNET_REGISTRATION_CACHE) return false;
+  const path = join(root, name);
+  try {
+    if (!lstatSync(path).isDirectory()) return false;
+    const entries = readdirSync(path);
+    return entries.every(entry =>
+      entry.startsWith('dotnet-suggest-registration-')
+      && entry.length > 'dotnet-suggest-registration-'.length
+      && lstatSync(join(path, entry)).isFile());
+  } catch {
+    return false;
+  }
+}
 
 export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
@@ -94,7 +113,10 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT) {
     .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
-    .filter((name) => !isEffectivelyEmpty(join(root, name)));
+    .filter((name) => !isDotnetRegistrationCache(root, name))
+    // A rejected registration cache stays a leak even if the generic empty
+    // scan cannot read it; unknown cache contents must fail closed.
+    .filter((name) => name === DOTNET_REGISTRATION_CACHE || !isEffectivelyEmpty(join(root, name)));
 
   const { owners, observations, state } = readOwnedBrowserObservations(root);
   const byPrefix = new Map();

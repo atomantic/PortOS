@@ -42,6 +42,7 @@ import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
+import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
@@ -1168,8 +1169,7 @@ export async function renderMusicVideo(projectId, options = {}) {
 }
 
 async function renderAdmittedMusicVideo(projectId, options, permit) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = await requireProject(projectId);
   assertProductionApproval(project, 'storyboard');
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
     throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });

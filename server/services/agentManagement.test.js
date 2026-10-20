@@ -1240,6 +1240,30 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
   });
 
+  it('falls back to agent metadata when the original task is missing', async () => {
+    getAgentRecord.mockResolvedValue({
+      ...PAUSED_AGENT,
+      metadata: {
+        ...PAUSED_AGENT.metadata,
+        configClaimFlow: false,
+        taskDescription: 'Original autonomous task',
+        prompt: 'Do original thing',
+        taskApp: 'portos-default',
+      },
+    });
+    getTaskById.mockResolvedValue(null);
+    await resumeAgent('agent-paused-1');
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'Original autonomous task',
+      prompt: 'Do original thing',
+      app: 'portos-default',
+      metadata: expect.objectContaining({
+        resumedFromAgentId: 'agent-paused-1',
+        taskDescription: 'Original autonomous task',
+      }),
+    }), 'user');
+  });
+
   // The requeue only makes the task ELIGIBLE, and the automatic dequeue admits
   // system tasks only under CoS auto-run — so without an explicit dispatch a
   // resumed task sits `pending` until the user opens the task list and presses

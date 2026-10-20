@@ -16,6 +16,9 @@ export const MEDIA_INTENT_RE = /\b(?:generate|render|create|draw|sketch|paint|il
 export const MEDIA_TOOLS = [
   {
     name: 'image_generate',
+    // Same authority as POST /api/image-gen/generate (#9667): Codex, Grok and
+    // Agy keep host tools, and "auto" can resolve to one of them.
+    hostControl: true,
     description:
       'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend. Pass `provider` to override per-call: "local", "external", "codex", "grok", "agy", or the metered (paid per image) "fal". Cloud providers must be enabled in Settings. Returns the saved file path.',
     parameters: {

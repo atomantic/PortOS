@@ -148,6 +148,29 @@ export async function getCatalogBundleForRef(refKind, refId) {
   return { ingredients, refs };
 }
 
+/**
+ * Which of `ingredientIds` already have a local row (live or tombstoned), and
+ * which of those already carry a local ref (live or tombstoned) to
+ * `refKind`/`refId`. A peer-push receiver uses it to refuse a bundled
+ * ingredient that belongs to another record (#12466).
+ */
+export async function getLocalIngredientRefOwnership(ingredientIds, refKind, refId) {
+  const ids = [...new Set(ingredientIds)];
+  if (ids.length === 0) return { existing: new Set(), linked: new Set() };
+  const [ingResult, refResult] = await Promise.all([
+    query(`SELECT id FROM catalog_ingredients WHERE id = ANY($1)`, [ids]),
+    query(
+      `SELECT DISTINCT ingredient_id FROM catalog_ingredient_refs
+        WHERE ingredient_id = ANY($1) AND ref_kind = $2 AND ref_id = $3`,
+      [ids, refKind, refId],
+    ),
+  ]);
+  return {
+    existing: new Set(ingResult.rows.map((row) => row.id)),
+    linked: new Set(refResult.rows.map((row) => row.ingredient_id)),
+  };
+}
+
 export async function getCatalogStats() {
   const [byTypeResult, scrapResult, withEmb] = await Promise.all([
     query(`SELECT type, COUNT(*) AS count FROM catalog_ingredients WHERE deleted = false AND id = catalog_canonical_ingredient_id(id) GROUP BY type`),

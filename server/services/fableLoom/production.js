@@ -481,6 +481,9 @@ function resolveVideoBackend(settings, render, recordedConditioning = null) {
   if (requested === VIDEO_GEN_MODE.REACTOR && mode !== VIDEO_GEN_MODE.REACTOR) {
     throw new ServerError('Reactor video is not configured — set an API key in Settings → Video Gen.', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
   }
+  if (requested === VIDEO_GEN_MODE.RUNWAY && mode !== VIDEO_GEN_MODE.RUNWAY) {
+    throw new ServerError('No Runway API key configured — set it in Settings → Video Gen first', { status: 400, code: 'RUNWAY_NOT_CONFIGURED' });
+  }
   return mode;
 }
 
@@ -624,7 +627,9 @@ async function prepareVideoJob(run, asset) {
         ? { id: 'fal-video', supportedModes: ['text', 'image'] }
         : backend === VIDEO_GEN_MODE.REACTOR
           ? { id: 'reactor-video', supportedModes: ['text', 'image'] }
-          : { id: 'grok-video', supportedModes: ['image'] },
+          : backend === VIDEO_GEN_MODE.RUNWAY
+            ? { id: 'runway-video', supportedModes: ['text', 'image'] }
+            : { id: 'grok-video', supportedModes: ['image'] },
   });
   const requestedSourceImagePath = imageInputForNode(run, asset);
   const conditioned = await conditionRequest(run, asset, 'video', capability, requestedSourceImagePath);
@@ -706,6 +711,30 @@ async function prepareVideoJob(run, asset) {
         prompt: conditioned?.prompt || asset.prompt,
         ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
         negativePrompt: conditioned?.negativePrompt || '',
+        ...replayParameters,
+        sourceImagePath,
+        visualConditioning: conditioned?.visualConditioning || null,
+        fableLoom: productionTag(run, asset),
+      },
+    };
+  }
+
+  if (backend === VIDEO_GEN_MODE.RUNWAY) {
+    // As with fal, the model is the lane's catalog default: a cloud video backend carries no model pick here.
+    return {
+      kind: 'video',
+      provider: backend,
+      modelId: null,
+      modelRevision: capability.modelRevision || null,
+      params: {
+        mode: VIDEO_GEN_MODE.RUNWAY,
+        videoMode: sourceImagePath ? 'image' : 'text',
+        prompt: conditioned?.prompt || asset.prompt,
+        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+        negativePrompt: conditioned?.negativePrompt || '',
+        width: geometry.width,
+        height: geometry.height,
+        aspectRatio: geometry.aspectRatio,
         ...replayParameters,
         sourceImagePath,
         visualConditioning: conditioned?.visualConditioning || null,

@@ -77,6 +77,21 @@ describe('buildPlanPrompt — locked render settings', () => {
   });
 });
 
+// The agent's PATCH target must stay a token: buildAgentPrompt expands it at
+// spawn time to the loopback origin that actually speaks HTTP on this install
+// (the mirror when :5555 is TLS-only), which a load-time URL cannot know (#12405).
+describe('Creative Director stage prompts — API origin', () => {
+  it.each([
+    ['treatment', () => buildTreatmentPrompt(baseProject), '/api/creative-director/cd-1/treatment'],
+    ['plan', () => buildPlanPrompt(baseProject, { toolSpecs: [] }), '/api/creative-director/cd-1/plan'],
+    ['evaluate', () => buildEvaluatePrompt(baseProject, baseScene), '/api/creative-director/cd-1/scene/scene-2'],
+  ])('%s sends its write-back to the {portosApiUrl} token, not a hardcoded origin', async (_stage, render, path) => {
+    const out = await render();
+    expect(out).toContain(`PATCH {portosApiUrl}${path}`);
+    expect(out).not.toMatch(/https?:\/\/localhost:5555/);
+  });
+});
+
 describe('buildTreatmentPrompt — template-rendered output', () => {
   it('passes resolved Video source descriptions and the matching revision in the treatment output contract', async () => {
     const revision = 'a'.repeat(32);

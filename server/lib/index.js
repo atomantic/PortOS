@@ -22,6 +22,7 @@ export * from './apiContractSchemas.js';
 export * from './codeAnimationPackage.js';
 export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
+export * from './autofixVerifyContainment.js';
 export * from './generatedPreviewSandbox.js';
 export * from './generatedPreviewPlaybackSchema.js';
 export * from './autonomousJobTask.js';
@@ -227,6 +228,7 @@ export * from './mediaModelBuckets.js';
 export * from './mediaModels.js';
 export * from './modelInput.js';
 export * from './modelInventory.js';
+export * from './meatspaceRowIdentity.js';
 export * from './meetingUrl.js';
 export * from './minimaxH3Memory.js';
 export * from './videoContinuity.js';
@@ -706,6 +708,7 @@ export * from './openapiSpec.js';
 export * from './openapiDowngrade.js';
 export * from './orchestrationProfile.js';
 export * from './apiToolResource.js';
+export * from './mergeGateAudit.js';
 export * from './mergeGateContract.js';
 export * from './preflightPlan.js';
 export * from './prDisposition.js';
@@ -910,3 +913,12 @@ export * from './musicDesignerValidation.js';
 
 export * from './mediaJobPreparation.js';
 export * from './eventLoopLagProbe.js';
+export * from './persistentMindAttachmentOwnership.js';
+
+export * from './credentialEnvVars.js';
+export * from './brainLinkLocalFields.js';
+
+export * from './branchRetirementArchive.js';
+export * from './reconcileRetirementEvidence.js';
+
+export * from './checkoutRetirementAdmission.js';

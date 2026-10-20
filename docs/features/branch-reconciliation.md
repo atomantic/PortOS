@@ -43,3 +43,189 @@ after a second fresh match, and ownership, HEAD and content are rechecked
 immediately before removal; if that recheck refuses, the original lock is
 restored. A retired row leaves the inventory and appears under *Recently
 retired* with its archive path; only the next sweep can report convergence.
+
+## Explicit initialized-checkout preservation
+
+Automatic cleanup continues to retain initialized submodules. The separate
+`/api/cos/schedule/branch-reconcile/initialized-checkouts` capability supports
+operator-reviewed private-module checkouts on macOS. Other platforms and unknown
+Git layouts fail closed. It never deinitializes a module, force-removes a checkout,
+or purges an archive.
+
+1. `POST /review` accepts the exact inventory tuple (`appId`, `path`, `head`,
+   `branch`, `locked`, `lockReason`) and `prUrl`. The response binds the merged PR,
+   current default head, ownership, completion policy, parent/module content and
+   Git administration to a review digest. A repair branch alias is accepted only
+   when its exact tip equals the merged PR head. Superseded work needs an explicit
+   `acceptSuperseded` decision after reviewing the full comparison.
+2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
+   acceptSuperseded}`. It establishes a durable repository reservation and native
+   executor lock, repeats the review, archives the entire checkout and private
+   administration plus the parent common object store, and proves a standalone
+   restore before moving either original directory. Kernel no-replace renames
+   quarantine originals without unlinking them. Each intent/result is fsynced.
+3. The successful phase is **quarantined**, not fully retired. The branch remains
+   with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts
+   `appId`, `transactionId` and the fresh status `journalDigest`; it verifies the
+   quarantined originals and archive, exact current branch, fresh merge/default
+   head, ownership and full supersession comparison. `POST /retire-branch` accepts
+   those identifiers plus the newly accepted `review`. It uses exact-head native
+   deletion with holder protection and preserves the branch reflog archive,
+   then records the original checkout retirement receipt. No UI merged flag
+   authorizes either operation.
+4. `GET /status?appId=…&transactionId=…` returns the journal phase, placements and
+   current `journalDigest`. `POST /restore` requires those two identifiers plus
+   that digest. It restores original inodes only to vacant original locations,
+   with unchanged ownership, branch and required object proof. Unrelated shared
+   refs may advance; shared config, dependency changes, missing indexed objects,
+   a new holder or a changed/deleted branch hold in-place rollback.
+5. `POST /verify-archive` accepts the same identifiers and journal digest. It
+   independently verifies the archive and prebuilt standalone checkout, returning
+   `standaloneCheckoutPath`. This recovery remains usable after the original
+   branch is deleted or the live parent/module object stores are unavailable.
+   Parent and module staged blobs and private recovery refs are explicitly
+   checked; `git fsck` alone does not prove every staged blob exists.
+6. If branch deletion was conclusively journaled as `branch-retired`, but writing
+   its receipt failed, or `retired` was journaled before reservation release,
+   repeat `POST /retire-branch` with the latest `journalDigest`. This verifies
+   archive integrity, quarantined originals, ownership, no new holder and the
+   still-absent ref; it only finishes the receipt and reservation release. It
+   never deletes or recreates a ref on replay. A `branch-retirement-intent`
+   without a recorded receiver result remains an explicit uncertainty hold,
+   even when the ref is absent. Status reports that evidence; standalone recovery
+   stays available, but no automatic retry clears the uncertain reservation.
+
+The native backend preserves file bytes, permissions, ownership, timestamps,
+ACLs, xattrs, supported flags, empty directories, hard links and symlink targets
+without following symlink dependencies. It retains original identity evidence;
+only the standalone copy's Git pointers are rewritten to its isolated stores.
+OS-added `com.apple.provenance` on a copy is retained with its exact hash. When
+the OS replaces an existing provenance value, version 3 also preserves the exact
+original bytes in the bound manifest as canonical base64 and checks their hash
+against the captured source. Archive and restore copies record separate values
+when the OS replaces it twice. These retained original bytes are recovery
+evidence; the backend never installs them onto the copy. Missing attributes,
+changes to any other attribute, and unrecorded additions still refuse preservation.
+No provenance or quarantine attribute is removed or rewritten by this backend.
+Normal retirement and rollback require exact original and quarantined metadata. Every later
+archive verification or move is bound to the exact manifest hash journaled after
+preservation. If that journal write is interrupted before any move, status
+exposes an unverified-archive hold and a digest for source-verified cancellation;
+it does not infer a preservation proof from the retained manifest.
+Shared/external/nested module stores, alternates, promisor dependencies, active
+Git operations, insufficient space and unsupported metadata hold the operation.
+A full parent store copy and a second standalone restore require bounded free
+space; there is no cache deletion fallback.
+
+### Reviewed recovery after a move changes metadata
+
+On Darwin, an exclusive directory rename can remove residual
+`com.apple.decmpfs` attributes even when `UF_COMPRESSED` was unset. The normal
+transaction refuses further moves when this changes its captured original
+manifest. A source content change is never treated as that metadata transition.
+
+While the interrupted transaction still owns its exact repository reservation:
+
+1. `POST /review-metadata-restore` accepts `appId`, `transactionId` and the current
+   `journalDigest`. It holds the native executor lock and existing reservation,
+   checks current ownership and the unchanged branch, verifies the standalone
+   archive, and creates immutable private evidence for the full observed delta.
+2. Independently inspect that evidence before accepting the returned review
+   digest. Only removed residual compression attributes on regular files whose
+   compressed flag was unset, and a provenance addition on an original root
+   directory, are eligible. Original raw compression bytes must still match the
+   captured hashes in the verified archive. All content, inode identities,
+   timestamps, permissions, ownership, ACLs, flags, other attributes and paths
+   remain exact. Nothing rewrites the original manifest or installs attributes.
+3. `POST /restore-metadata` takes the same identifiers and `review: {digest}`.
+   It repeats the review under both locks, journals the accepted evidence, and
+   restores original inodes with exclusive renames. Post-move observations are
+   retained. A changed review, unknown metadata transition, new holder, changed
+   branch or uncertain reservation refuses further work.
+4. Success is `restored-with-metadata-transitions`, with archives and the
+   metadata evidence retained. The exact reservation is released only after
+   final proof. This restores a checkout; it never deletes or recreates a ref,
+   proves a PR merged, or authorizes another retirement. Obtain a fresh
+   retirement review after restoration.
+
+If the installed server predates this recovery capability, run the supported
+`scripts/recover-initialized-checkout.js` from an independently reviewed checkout
+of this version. It uses the same service, native lock and existing reservation;
+it does not patch the running server or clear a reservation manually:
+
+```sh
+node scripts/recover-initialized-checkout.js review /absolute/request.json \
+  --install-root /absolute/PortOS --output /absolute/new-review.jsonl
+node scripts/recover-initialized-checkout.js restore /absolute/approved-request.json \
+  --install-root /absolute/PortOS --output /absolute/new-restore.jsonl
+```
+
+The request file contains only the API fields above. Each output must be new;
+it records a durable pending intent before execution and then a response. A
+pending-only record means inspect the transaction before any retry. The CLI
+requires an existing self-install registry and trusted owner state, and refuses
+an absent or uncertain reservation. It never initializes a different data tree.
+Journal rows are fully written and synced to private staging files before
+exclusive hardlink publication to their numbered names. Staging files remain
+as evidence, including partial writes; recovery reads only committed numbered
+rows. Existing malformed numbered rows are never silently ignored or replaced.
+After an interrupted recovery, read status again and obtain a new review for
+the new journal digest rather than replaying an old approval.
+
+### Finalizing originals that have already been restored
+
+Metadata can change after the post-move proof succeeds. In an observed case,
+directory modification times changed and some residual compression attributes
+returned with exactly their archived original bytes. The writer was not
+established. The restore's final verification correctly retained its reservation.
+
+When both original directories are already back at their exact original inode
+identities, a separate completion path can record this narrow delta without
+moving or repairing anything:
+
+1. `POST /review-restored-finalization` accepts the transaction identifiers and
+   fresh journal digest. It binds the previous accepted restore review and its
+   immutable post-move observations, verifies the archive, and captures a new
+   immutable full source snapshot under the existing reservation and executor.
+2. Independently review the new digest and complete evidence. Only directory
+   modification-time changes and reappearance of original residual
+   `com.apple.decmpfs` bytes are eligible. Reappeared attributes must match both
+   their prior raw preimages and the verified archive; the file must remain
+   uncompressed. Administration, file contents and modification times, paths,
+   identities, permissions, ownership, ACLs, flags, and all other attributes
+   remain exact. Unknown drift stays held.
+3. `POST /finalize-restored` accepts that separately reviewed digest. It repeats
+   the review, verifies the exact snapshot again, and rechecks the branch,
+   ownership, policy and reservation before recording completion and releasing
+   the exact reservation. It performs no directory moves, metadata writes,
+   branch changes or cleanup. Original manifests, raw values, observations,
+   archives and journal evidence remain retained.
+
+The bootstrap CLI exposes the same separate operations:
+
+```sh
+node scripts/recover-initialized-checkout.js review-finalization /absolute/request.json \
+  --install-root /absolute/PortOS --output /absolute/new-finalization-review.jsonl
+node scripts/recover-initialized-checkout.js finalize /absolute/approved-request.json \
+  --install-root /absolute/PortOS --output /absolute/new-finalization.jsonl
+```
+
+These operations do not relax normal retirement or restore-move checks, and
+finalization does not authorize branch deletion. Any subsequent retirement
+requires a fresh review and preservation proof for the current checkout.
+
+Managed checkout creation/adoption/removal, claim binding, the full workspace
+preparation through agent registration/spawn, and supported Git API writers
+share admission under the canonical common Git directory. Synthetic read-only
+merge proofs use a private temporary object store. Concurrent Git writes conservatively invalidate
+an exact archive snapshot rather than authorize removing changed evidence. A pending
+reservation survives restart. Normal writers release their permits only after
+settlement; timeout, overflow or signal termination retain an uncertain permit
+because direct-child exit cannot establish that every helper stopped. No PID,
+age, timer or automatic retry clears this evidence. Reservation release atomically
+moves the intact owner into a durable private release record, preserving evidence
+across a crash without leaving an ownerless cut. Receipt replay keeps the original
+archive identity and timestamp so a newer checkout obligation cannot be satisfied
+by replaying an older retirement. An interrupted transaction
+requires explicit status and recovery; ambiguous identities remain held. The
+private journal and all copies remain available after success or recovery.

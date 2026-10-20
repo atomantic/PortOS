@@ -1159,7 +1159,7 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: PORTOS_SCHEMA_VERSIONS.mediaCollections + 1 } } });
     expect(result.blockedBySchema).toBeUndefined();
     expect(result.applied).toBe(true);
   });
