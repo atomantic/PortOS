@@ -420,6 +420,10 @@ export const privacyRecheckConfigSchema = z.object({
   cronExpression: cronExpressionSchema.optional(),
   autoApproveOptOutEmails: z.boolean().optional(),
   autoSubmitWebForms: z.boolean().optional(),
+  // Server-stamped: the last completed recheck, and when the schedule was last
+  // switched on (the floor for missed-slot catch-up when no run has happened yet).
+  lastRunAt: z.string().datetime().optional(),
+  enabledAt: z.string().datetime().optional(),
 }).strict();
 
 // The `privacy` settings slice (only `recheck` for now — room to grow).

@@ -99,13 +99,16 @@ vi.mock('./prReviewerPipeline.js', async (importActual) => ({
   ...(await importActual()),
   runPrReviewerSecurityPreflight: async (_type, _app, _metadata, target, _schedule, options) => {
     mocks.preflightInputs.push({ target, progress: options.progress });
-    return { skipped: mocks.noWork };
+    return { skipped: false };
   },
 }));
 vi.mock('./taskPromptService.js', () => ({ getTaskPrompt: async () => 'Review Example App', getStagePrompt: async () => 'Review Example App' }));
 vi.mock('./taskTypeHooks.js', async (importActual) => ({
   ...(await importActual()),
-  getTaskInputHook: async () => async (args) => { mocks.hookInputs.push(args); return { prompt: 'Review Example App' }; },
+  getTaskInputHook: async () => async (args) => {
+    mocks.hookInputs.push(args);
+    return mocks.noWork ? { skip: { reason: 'no-work' } } : { prompt: 'Review Example App' };
+  },
 }));
 vi.mock('./taskLearning.js', async (importActual) => ({
   ...(await importActual()),
@@ -227,7 +230,9 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
     await run();
     expect(readyTasks()).toEqual([]);
     expect(mocks.activity['example-app']).toEqual({ cooldown: true });
+    expect(mocks.executions).toEqual([{ type: 'code-quality', appId: 'example-app' }]);
     await run();
+    expect(mocks.hookInputs).toHaveLength(1);
     expect(mocks.executions).toHaveLength(1);
   });
 

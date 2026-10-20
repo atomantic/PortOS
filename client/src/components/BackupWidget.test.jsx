@@ -237,6 +237,64 @@ describe('BackupWidget snapshots', () => {
     expect(mockToast.success).toHaveBeenCalledWith('File restore complete — 1 file(s) restored');
   });
 
+  it('keeps the live federation identity unless the operator adopts the snapshot identity (#12596)', async () => {
+    const ids = { liveInstanceId: 'live-instance', snapshotInstanceId: 'other-instance' };
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'], identityPreserved: ids })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ instances.json'], identityAdopted: ids })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ instances.json'], identityAdopted: ids });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText(/This machine keeps its own instances.json/)).toBeInTheDocument();
+    const adopt = screen.getByRole('checkbox', { name: /Adopt the snapshot.s identity/ });
+    expect(adopt).not.toBeChecked();
+
+    // Adopting changes what execution does, so the old preview cannot authorize it.
+    fireEvent.click(adopt);
+    expect(screen.queryByRole('button', { name: /^Restore \d/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/will replace this machine.s/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText('>f+++++++++ instances.json')).toBeInTheDocument();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      adoptIdentity: true,
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(3, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      adoptIdentity: true,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
+  it('drops a hidden adoption when a fresh preview shows no identity mismatch (#12596)', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'], identityPreserved: { liveInstanceId: 'a', snapshotInstanceId: 'b' } })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'] });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Adopt the snapshot.s identity/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore 1 file(s)' }));
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(3, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
   it('describes restore as files-only and never claims all data is up to date', async () => {
     mockRestoreBackup.mockResolvedValueOnce({ changedFiles: [] });
     renderWidget();
@@ -285,6 +343,28 @@ describe('BackupWidget snapshots', () => {
     );
     // A warning, not a refusal: a folder no migration touched restores legitimately.
     expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+  });
+
+  it('announces a pre-split store conversion and names where the replaced store was kept', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'pending', parkedAs: null }],
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'converted', parkedAs: 'brain/people.pre-restore-example' }],
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/keeps brain\/people in an older single-file format.*pre-restore/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'File restore complete — 1 file(s) restored. Converted older-format data; the replaced stores were kept as brain/people.pre-restore-example',
+    ));
   });
 
   it('shows no migration warning for a gap that is empty or unknown', async () => {

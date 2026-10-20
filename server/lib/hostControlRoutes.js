@@ -199,6 +199,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // handoff; both the decision and execution require operator authority.
   'POST /api/stacker-news/actions/:id/review',
   'POST /api/stacker-news/actions/:id/execute',
+  // Signed-in browser reads, including caller-selected verification transport.
+  'POST /api/stacker-news/accounts/:id/sync',
+  'POST /api/stacker-news/accounts/:id/browser-identity',
+  'POST /api/stacker-news/accounts/:id/verify',
 
   // X (Twitter) draft review authorizes a later browser compose handoff, and
   // opening approved drafts, opening account destinations or syncing accounts
@@ -837,6 +841,17 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // direct writes and the stores that arm or steer later scheduled writes.
   // Accounts/schedules are shared with Moltworld. Reads, private drafts and
   // deletions stay open; dedicated toggles gate only re-enabling in-handler.
+  'POST /api/agents/tools/moltworld/join',
+  'POST /api/agents/tools/moltworld/build',
+  'POST /api/agents/tools/moltworld/explore',
+  'POST /api/agents/tools/moltworld/think',
+  'POST /api/agents/tools/moltworld/say',
+  'POST /api/agents/tools/moltworld/queue',
+  'POST /api/agents/tools/moltworld/ws/connect',
+  'POST /api/agents/tools/moltworld/ws/move',
+  'POST /api/agents/tools/moltworld/ws/think',
+  'POST /api/agents/tools/moltworld/ws/nearby',
+  'POST /api/agents/tools/moltworld/ws/interact',
   'POST /api/agents/tools/publish-post',
   'POST /api/agents/tools/publish-comment',
   'POST /api/agents/tools/engage',
@@ -1032,6 +1047,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // neighbours stay open.
   'POST /api/sharing/buckets',
   'POST /api/sprites/import',
+  'POST /api/music-video/:id/composition/document/directory',
   'POST /api/timeline/import/gmail',
 
   // Persistent Mind lifecycle (#8742): starting/waking/resuming the mind arms

@@ -425,7 +425,10 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     cosEvents.removeAllListeners('agent:completed');
   });
 
-  it('records the autonomous action usage BEFORE emitting agent:completed', async () => {
+  it.each([
+    ['scheduled', { taskType: 'scheduled' }],
+    ['on-demand', { taskType: 'internal', onDemand: true }],
+  ])('records %s action usage BEFORE emitting agent:completed', async (_kind, metadata) => {
     // The agent:completed handler schedules dequeueNextTask(), whose daily
     // action-budget gate reads the usage ledger. If the emit beats the ledger
     // write, the gate counts stale usage and can admit one spawn past the cap.
@@ -437,7 +440,7 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     mockCosState.state.agents[agentId] = {
       id: agentId,
       status: 'running',
-      metadata: { taskType: 'scheduled' }
+      metadata
     };
 
     await completeAgent(agentId, { success: true, duration: 1200 });

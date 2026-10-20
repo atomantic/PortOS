@@ -368,8 +368,25 @@ describe('backup routes', () => {
       expect(backup.restoreSnapshot).toHaveBeenCalledWith(
         '/dest',
         'snap-1',
-        { dryRun: false, subdirFilter: 'data' }
+        { dryRun: false, subdirFilter: 'data', adoptIdentity: false }
       );
+    });
+
+    it('forwards an explicit identity adoption and refuses a non-boolean one (#12596)', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restoreSnapshot.mockResolvedValue({ changedFiles: [] });
+      const adopted = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', dryRun: false, adoptIdentity: true });
+      expect(adopted.status).toBe(200);
+      expect(backup.restoreSnapshot).toHaveBeenCalledWith('/dest', 'snap-1', expect.objectContaining({ adoptIdentity: true }));
+
+      backup.restoreSnapshot.mockClear();
+      const refused = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', dryRun: false, adoptIdentity: 'yes' });
+      expect(refused.status).toBe(400);
+      expect(backup.restoreSnapshot).not.toHaveBeenCalled();
     });
 
     it('refuses a restore of a snapshot whose deletion is in progress with a structured conflict (#10898)', async () => {
@@ -398,6 +415,7 @@ describe('backup routes', () => {
       expect(backup.restoreSnapshot).toHaveBeenCalledWith('/dest', 'snap-1', {
         dryRun: true,
         subdirFilter: null,
+        adoptIdentity: false,
         source: '@legacy',
       });
     });

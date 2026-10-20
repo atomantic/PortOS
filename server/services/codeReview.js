@@ -58,10 +58,10 @@ import {
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
 import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
-import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
+import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
-const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429|402|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
+const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|too many requests|\b(?:HTTP(?:\/[\d.]+)?|status[_ ]?code|status|code|error)\W{0,3}(?:429|402)\b|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|credit balance (?:is )?too low|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
 
 function isReviewerQuotaFailure(error) {
   if (!error) return false
@@ -73,8 +73,9 @@ function isReviewerQuotaFailure(error) {
       if (isReviewerQuotaFailure(error.error)) return true
     }
   }
+  // Model-authored text/output cannot establish the provider's quota state.
   const message = typeof error === 'object'
-    ? `${error.error || ''} ${error.message || ''} ${error.code || ''} ${error.stderr || ''} ${error.text || ''} ${error.output || ''}`
+    ? `${error.error || ''} ${error.message || ''} ${error.code || ''} ${error.stderr || ''}`
     : String(error)
   return QUOTA_FAILURE.test(message)
 }
@@ -98,7 +99,7 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const explicitReason = typeof result.reason === 'string' ? result.reason : null
   const isConfigFault = explicitReason === 'configuration' || isReviewerConfigFault(code)
   const isMalformed = explicitReason === 'malformed' || code === 'MALFORMED_REVIEW'
-  const isQuota = explicitReason === 'quota' || isReviewerQuotaFailure(result)
+  const isQuota = explicitReason === 'quota' || (!isTimeoutFailure(message) && isReviewerQuotaFailure(result))
   const isExplicitUnavailable = explicitReason === 'unavailable'
 
   const isProvider = isProviderReviewer(reviewer)
@@ -429,18 +430,20 @@ export function pickCodeReviewDefaults(settings) {
  * Cached so the per-agent-completion fallback (`finalizeAgent`) doesn't pay
  * a `readFile + JSON.parse + stripStoreKeys` round-trip on every sweep —
  * during a busy CoS evaluation that's dozens of redundant disk reads. The
- * cache invalidates on any `settings:updated` event so the panel's save
- * takes effect immediately without a restart.
+ * cache invalidates on `settings:updated`; the metadata check also observes
+ * reviewer health written by the local review bridge in another process.
  */
 let cachedSettings = null
 let cachedDefaults = null
 let cachedDefaultsExpiresAt = Infinity
 settingsEvents.on('settings:updated', () => { cachedSettings = null; cachedDefaults = null })
+settingsEvents.on('settings:invalidated', () => { cachedSettings = null; cachedDefaults = null })
 
 /** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
 export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cachedDefaults = null }
 
 export async function getCodeReviewDefaults() {
+  await refreshSettingsIfChangedOnDisk()
   const now = Date.now()
   if (cachedDefaults && now < cachedDefaultsExpiresAt) return cachedDefaults
   if (!cachedSettings) cachedSettings = await getSettings()

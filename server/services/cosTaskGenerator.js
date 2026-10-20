@@ -505,9 +505,11 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  * many autonomous admissions the autonomous tiers may add this cycle.
  *
  * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
- * tasks, feature-agent, idle-review); user and on-demand tasks are
- * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
- * pure dry-run never accrues; user/on-demand spawns are already past this gate.
+ * tasks, feature-agent, idle-review). User and on-demand tasks bypass this mode
+ * gate; on-demand tasks also bypass the global pause. All non-user runs,
+ * including on-demand work, count toward the daily actions/minutes ledger in
+ * completeAgent and the in-flight action allowance here. A pure dry-run never
+ * accrues usage.
  *
  * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
  */
@@ -706,11 +708,12 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
 }
 
 /**
- * Priority 0: On-demand task requests (highest priority — user explicitly
- * requested these). Reads the live schedule's `onDemandRequests`, clears each
+ * Priority 0: On-demand task requests, including user, refill and quota-burn
+ * origins. Reads the live schedule's `onDemandRequests`, clears each
  * as it is processed, and admits any produced task (deduped) through the
- * cycle's shared `spawnAdapter`. Runs against the global slot cap — on-demand
- * work never counts against the autonomous action budget.
+ * cycle's shared `spawnAdapter`. On-demand work bypasses the auto-run mode gate
+ * and global pause, but uses global slots and counts toward the daily budget
+ * like other non-user runs.
  *
  * Returns the schedule the drain loaded so `evaluateTasks` can hand it to
  * Priority 2 explicitly (its disabled-analysis-type gate) instead of a second
@@ -1006,11 +1009,12 @@ export async function evaluateTasks(options) {
     // Priority 1 spends against the global slot cap.
     await spawnPriority1UserTasks(ctx);
 
-    // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
-    // are already in `tasksToSpawn` and never count against the CoS action budget,
-    // so the autonomous sections below may add at most `autonomousActionsRemaining`
-    // more. With no action cap this equals `availableSlots`, so the default path is
-    // unchanged. The autonomous tiers use this in place of `availableSlots`.
+    // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
+    // tasks already bypassed the mode gate; on-demand also bypasses pause. The
+    // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
+    // On-demand runs still count as non-user work in the completion ledger and
+    // subsequent in-flight allowance; only user tasks are exempt. With no action
+    // cap this equals `availableSlots`.
     const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
     // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
@@ -1114,7 +1118,6 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
         await saveState(s);
       });
 
-      emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
       const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
@@ -1773,7 +1776,6 @@ export function applyAppWorktreeDefault(metadata, app) {
 }
 
 async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null } = {}) {
-  const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
   // First, check for any on-demand task requests for this app
@@ -1834,24 +1836,14 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     selectionReason = nextTypeResult.reason;
   }
 
-  // Record execution in the schedule service
-  await taskSchedule.recordExecution(`task:${nextType}`, app.id);
-
-  // Update app activity with new type
-  await updateAppActivity(app.id, {
-    lastImprovementType: nextType
-  });
-
-  emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
-
   // Delegate the actual task build to the per-type generator so the dynamic
   // blocks run on the idle-review path too: pr-watcher's PR poll +
   // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
   // {referenceData} injection. Without delegation this path replaced only the
   // generic placeholders, so a watcher type selected here would spawn a prompt
   // with the literal {prData}/{referenceData} markers and never poll. The
-  // recordExecution + activity bump above already accounted for the idle
-  // spawn; the per-type generator does not record execution itself.
+  // preparer owns skip cadence and success activity/logging; this caller
+  // records execution only when preparation produces a task.
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
     targetPullRequest,
@@ -1864,6 +1856,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     preflightCardId: stolenCardId
   });
   const { task, pendingPerpetualDispatch } = prepared;
+  if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (stolenRequest) {

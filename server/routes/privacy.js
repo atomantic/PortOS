@@ -399,14 +399,19 @@ router.get('/optout/schedule', asyncHandler(async (_req, res) => {
 // scheduler so the change takes effect immediately (the cron expression is
 // locked in at registration). Enabling creates the cron; disabling removes it.
 router.put('/optout/schedule', asyncHandler(async (req, res) => {
-  const patch = validateRequest(privacyRecheckConfigSchema, req.body ?? {});
-  await updateSettingsWith((current) => ({
-    ...current,
-    privacy: {
-      ...(current.privacy || {}),
-      recheck: { ...(current.privacy?.recheck || {}), ...patch },
-    },
-  }));
+  // lastRunAt/enabledAt are server-stamped; a client can't set them here.
+  const { lastRunAt: _lastRunAt, enabledAt: _enabledAt, ...patch } = validateRequest(privacyRecheckConfigSchema, req.body ?? {});
+  await updateSettingsWith((current) => {
+    const existing = current.privacy?.recheck || {};
+    const turningOn = patch.enabled === true && existing.enabled !== true;
+    return {
+      ...current,
+      privacy: {
+        ...(current.privacy || {}),
+        recheck: { ...existing, ...patch, ...(turningOn && { enabledAt: new Date().toISOString() }) },
+      },
+    };
+  });
   await restartPrivacyRecheckScheduler();
   res.json(await getPrivacyRecheckStatus());
 }));

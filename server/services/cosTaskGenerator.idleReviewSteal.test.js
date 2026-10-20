@@ -129,10 +129,14 @@ describe('idle review stealing a queued on-demand request', () => {
       task: null, pendingPerpetualDispatch: null, preflightCardId: null,
     });
     expect(applyOnDemandRunResets).toHaveBeenCalledTimes(1);
-    expect(recordExecution).toHaveBeenCalledTimes(1);
+    expect(recordExecution).not.toHaveBeenCalled();
     expect(pipeline.securityPreflight).toHaveBeenCalledTimes(1);
     preflightRelease.resolve();
-    expect((await drains[winner]).preflightCardId).toBe('preflight-demand-1');
+    const result = await drains[winner];
+    expect(result.preflightCardId).toBe('preflight-demand-1');
+    expect(result.task).toBeNull();
+    // The security preflight found no reviewable PR; no task was executed.
+    expect(recordExecution).not.toHaveBeenCalled();
     expect(progressOf()).toEqual({ boundTo: 'preflight-demand-1' });
   });
 

@@ -380,6 +380,16 @@ async function readEnabledStore() {
  * cycle, never truncates the user's data. Strict callers are the ones that turn
  * `ok: false` into an explicit `unavailable`.
  */
+// Reads of an evicted store arrive several times a second; one warning per window.
+const EVICTED_WARN_INTERVAL_MS = 60_000;
+let lastEvictedWarnAt = 0;
+function warnEvictedOnce(detail) {
+  const now = Date.now();
+  if (now - lastEvictedWarnAt < EVICTED_WARN_INTERVAL_MS) return;
+  lastEvictedWarnAt = now;
+  console.warn(`⚠️ MortalLoom store evicted from local storage; ${detail}`);
+}
+
 async function readStoreAtPathResult(path) {
   // Attempt the read directly and classify from the error code rather than gating
   // on `existsSync` first (codex #2742 review): `existsSync` swallows its errno —
@@ -401,7 +411,7 @@ async function readStoreAtPathResult(path) {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
       // Present but evicted — never a trustworthy empty, so a strict read reports
       // `unavailable` and updateStore's guard refuses to seed over real data.
-      console.warn(`⚠️ MortalLoom store evicted from local storage; skipping read until iCloud materializes it: ${path}`);
+      warnEvictedOnce(`skipping read until iCloud materializes it: ${path}`);
       unreadable = true;
       return null;
     }
@@ -748,7 +758,7 @@ export async function getStatus() {
   // the Settings page isn't waiting on some unrelated code path to trigger it.
   const evicted = isEvictedStats(path, st);
   if (evicted) {
-    console.warn(`⚠️ MortalLoom store evicted from local storage; status summary unavailable: ${path}`);
+    warnEvictedOnce(`status summary unavailable: ${path}`);
     requestMaterialization(path, { label: 'MortalLoom store' });
   }
   const raw = st && !evicted ? await withTransientRetry(() => readIfMaterialized(path, { label: 'MortalLoom store' })).catch((err) => {

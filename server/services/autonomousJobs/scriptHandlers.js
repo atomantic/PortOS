@@ -31,14 +31,18 @@ async function eidoverseProjection(options = {}) {
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
  */
-function runMoltworldExploration() {
+async function runMoltworldExploration() {
   const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'moltworld-explore.mjs')
   const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
+
+  // Lazy: agentApiAuth pulls in the session/auth stack, which this registry must not load at import time.
+  const { resolveAgentApiEnv } = await import('../agentApiAuth.js');
+  const apiEnv = await resolveAgentApiEnv();
 
   return new Promise((resolve, reject) => {
     const child = spawn('node', [scriptPath, durationMinutes], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, ...apiEnv },
     })
 
     const output = []
