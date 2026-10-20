@@ -320,7 +320,6 @@ describe('configured provider reviewers', () => {
   it.each([
     { kind: 'claim-review' },
     { toolFree: true },
-    { isolateFromCheckout: true },
   ])('isolates a review with %j even when a repository was supplied', async isolation => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'claude' });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });

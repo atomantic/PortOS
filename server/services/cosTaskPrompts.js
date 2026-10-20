@@ -135,7 +135,6 @@ export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, r
     .join(' ');
   const ingressJqObject = [
     ...Object.keys(ingressPinned).map((key) => `${key}: $${key}`),
-    ...(isProviderReviewer(ingressReviewer) ? ['inheritDefaults: false'] : []),
   ].join(', ');
   const claimCommentGateBlock = claimCommentGate && ingressReviewer ? `
 
