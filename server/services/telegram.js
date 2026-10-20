@@ -79,11 +79,18 @@ function cleanExpiredCheckins() {
 /**
  * Initialize the Telegram bot
  * @param {boolean} sendTestMessage - Send a test message after connecting
+ * @param {{ fromReconnect?: boolean }} [opts] - Internal: set by the reconnect timer so a failed
+ *   getMe() keeps the backoff going instead of leaving the connector down.
  */
-export async function init(sendTestMessage = false) {
+export async function init(sendTestMessage = false, { fromReconnect = false } = {}) {
   await cleanup();
 
   const settings = await getSettings();
+  // The MCP bridge owns the token while selected; a stray timer must not start a second poller.
+  if (settings.telegram?.method === 'mcp-bridge') {
+    console.log('📱 Telegram: method is mcp-bridge — manual bot not started');
+    return;
+  }
   const token = settings.secrets?.telegram?.token;
   const chatId = settings.telegram?.chatId;
   authorizedChatId = chatId || null;
@@ -98,7 +105,6 @@ export async function init(sendTestMessage = false) {
   await ensureDir(CHECKINS_DIR);
 
   bot = createTelegramBot(token, { polling: true });
-  reconnectionAttempts = 0;
 
   // Validate token
   const me = await bot.getMe().catch(async err => {
@@ -108,7 +114,11 @@ export async function init(sendTestMessage = false) {
     return null;
   });
 
-  if (!me) return;
+  if (!me) {
+    if (fromReconnect) await reconnect();
+    return;
+  }
+  reconnectionAttempts = 0;
 
   botUsername = me.username;
   isConnected = true;
@@ -237,6 +247,8 @@ export async function cleanup() {
  * Reconnect with exponential backoff
  */
 async function reconnect() {
+  // One outage arms one timer; cleanup() can only cancel the timer it can see.
+  if (reconnectionTimeout) return;
   if (reconnectionAttempts >= 10) {
     console.error('📱 Telegram: max reconnection attempts reached');
     return;
@@ -246,7 +258,8 @@ async function reconnect() {
   console.log(`📱 Telegram: reconnecting in ${delay / 1000}s (attempt ${reconnectionAttempts}/10)`);
 
   reconnectionTimeout = setTimeout(async () => {
-    await init(false).catch(err => {
+    reconnectionTimeout = null;
+    await init(false, { fromReconnect: true }).catch(err => {
       console.error(`📱 Telegram: reconnection failed — ${err.message}`);
     });
   }, delay);
@@ -260,8 +273,10 @@ async function healthCheck() {
   // Piggyback expired-checkin cleanup on the existing health-check cadence
   // rather than adding a separate timer.
   cleanExpiredCheckins();
+  const checkedBot = bot;
   await bot.getMe().catch(async (err) => {
     console.error(`📱 Telegram: health check failed — ${err.message}`);
+    if (bot !== checkedBot) return; // cleaned up or replaced mid-flight: don't arm a timer for a dead bot
     isConnected = false;
     noteReadinessChanged();
     await reconnect();
@@ -279,8 +294,10 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
     return { success: false, error: 'Rate limit exceeded' };
   }
 
+  const sendingBot = bot;
   const result = await bot.sendMessage(authorizedChatId, text, opts).catch(async (err) => {
     console.error(`📱 Telegram: send failed — ${err.message}`);
+    if (bot !== sendingBot) return null; // cleaned up or replaced mid-flight: don't arm a timer for a dead bot
     isConnected = false;
     noteReadinessChanged();
     await reconnect();
