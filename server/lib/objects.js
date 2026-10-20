@@ -54,6 +54,17 @@ export const isEmptyScalar = (v) => v === null || v === undefined || (typeof v =
 // it (drift risk on security-relevant constants).
 export const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
+// Get-or-create a bucket in a map keyed by an externally supplied string (request
+// body, upload, peer payload, model output). Returns null for POLLUTING_KEYS so the
+// caller skips the record; a bare `map[key] ||= …` would return Object.prototype for
+// `__proto__` and bump a counter on every object in the process. `hasOwn` keeps
+// inherited names such as `toString` from being mistaken for an existing bucket.
+export const bucketFor = (map, key, init) => {
+  if (POLLUTING_KEYS.has(key)) return null;
+  if (!Object.hasOwn(map, key)) map[key] = init();
+  return map[key];
+};
+
 export const deepMerge = (base, patch) => {
   if (!isPlainObject(patch)) return patch === undefined ? base : patch;
   const out = { ...(isPlainObject(base) ? base : {}) };

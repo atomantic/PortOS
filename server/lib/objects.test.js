@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { deepMerge, isEmptyScalar, isPlainObject, canonicalStringify } from './objects.js';
+import { deepMerge, isEmptyScalar, isPlainObject, canonicalStringify, bucketFor } from './objects.js';
+
+describe('bucketFor', () => {
+  // Guard for request/peer-keyed maps: a polluting key must never reach the
+  // assignment, and an inherited name like `toString` must still get its own bucket.
+  it('refuses prototype-polluting keys and leaves Object.prototype untouched', () => {
+    const map = {};
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(bucketFor(map, key, () => ({ count: 0 }))).toBeNull();
+    }
+    expect(Object.keys(map)).toEqual([]);
+    expect(Object.getPrototypeOf(map)).toBe(Object.prototype);
+    expect(Object.prototype).not.toHaveProperty('count');
+  });
+
+  it('creates an own bucket for inherited Object.prototype names', () => {
+    const map = {};
+    const bucket = bucketFor(map, 'toString', () => ({ count: 0 }));
+    bucket.count++;
+    expect(Object.hasOwn(map, 'toString')).toBe(true);
+    expect(bucketFor(map, 'toString', () => ({ count: 0 })).count).toBe(1);
+  });
+});
 
 describe('isPlainObject', () => {
   it('returns true for plain `{}`-shaped values', () => {

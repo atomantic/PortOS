@@ -307,6 +307,18 @@ describe('usage sync manifest (#5759)', () => {
 });
 
 describe('untrusted digest handling', () => {
+  it('skips a peer-chosen __proto__ instance key instead of re-parenting the instance map', async () => {
+    // Computed key: a literal `__proto__:` would set the prototype and never reach Object.entries.
+    // instanceId must match the key, or sanitizeEntry drops the entry before the store is touched.
+    const payload = { instances: { ['__proto__']: peerEntry({ instanceId: '__proto__' }), 'inst-peer': peerEntry() } };
+    expect(Object.hasOwn(payload.instances, '__proto__')).toBe(true);
+    expect(await applyUsageRemote(payload)).toEqual({ applied: true, count: 1 });
+    const stored = await readStoreFile();
+    expect(Object.getPrototypeOf(stored.instances)).toBe(Object.prototype);
+    expect(Object.keys(stored.instances)).toEqual(['inst-peer']);
+    expect(({}).capturedAt).toBeUndefined();
+  });
+
   // canonicalStringify (this category's checksum) recurses in JS, with a far
   // smaller depth budget than native JSON.stringify — so a digest that survives
   // atomicWrite but blows that recursion would 500 the snapshot endpoint for

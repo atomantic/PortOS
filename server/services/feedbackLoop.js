@@ -10,6 +10,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { bucketFor } from '../lib/objects.js';
 import { digitalTwinEvents } from './digital-twin.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -197,11 +198,10 @@ export async function getFeedbackStats() {
   const byProvider = {};
   for (const e of entries) {
     const key = e.model || e.providerId || 'unknown';
-    if (!byProvider[key]) {
-      byProvider[key] = { total: 0, sounds_like_me: 0, not_quite: 0, doesnt_sound_like_me: 0 };
-    }
-    byProvider[key].total++;
-    byProvider[key][e.validation]++;
+    const bucket = bucketFor(byProvider, key, () => ({ total: 0, sounds_like_me: 0, not_quite: 0, doesnt_sound_like_me: 0 }));
+    if (!bucket) continue;
+    bucket.total++;
+    bucket[e.validation]++;
   }
 
   return {
@@ -239,11 +239,13 @@ async function recalculateWeightsLocked() {
   const docScores = {};
   for (const e of entries) {
     for (const doc of e.documentsUsed) {
-      if (!docScores[doc]) docScores[doc] = { positive: 0, neutral: 0, negative: 0, total: 0 };
-      docScores[doc].total++;
-      if (e.validation === 'sounds_like_me') docScores[doc].positive++;
-      else if (e.validation === 'not_quite') docScores[doc].neutral++;
-      else docScores[doc].negative++;
+      // `doc` comes from stored feedback, which can carry any string.
+      const scores = bucketFor(docScores, doc, () => ({ positive: 0, neutral: 0, negative: 0, total: 0 }));
+      if (!scores) continue;
+      scores.total++;
+      if (e.validation === 'sounds_like_me') scores.positive++;
+      else if (e.validation === 'not_quite') scores.neutral++;
+      else scores.negative++;
     }
   }
 
