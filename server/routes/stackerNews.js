@@ -110,7 +110,8 @@ router.patch('/accounts/:id', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
   const data = validateRequest(accountUpdateSchema, req.body);
   if (data.monitoringEnabled === true) assertHostControl(req);
-  // Re-enabling an account also re-arms saved territory monitoring.
+  // Re-enabling an account also re-arms saved territory monitoring. The
+  // scheduler never arms an account without an effectively monitored territory.
   if (data.enabled === true && data.monitoringEnabled !== true) {
     const current = await stackerNews.getAccount(req.params.id);
     if (current && !current.enabled) {

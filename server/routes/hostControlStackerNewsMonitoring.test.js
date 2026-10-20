@@ -28,7 +28,7 @@ const effects = vi.hoisted(() => ({
 }));
 vi.mock('../services/stackerNews.js', () => ({
   ...effects, getAccount: async () => state.account, getTerritory: async () => state.territory,
-  listTerritories: async () => [state.territory],
+  listTerritories: async () => state.territory ? [state.territory] : [],
 }));
 vi.mock('../services/stackerNewsScheduler.js', () => effects);
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
@@ -131,6 +131,15 @@ describe('Stacker News browser and monitoring authority', () => {
       expect([res.status, res.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
+  });
+
+  it('keeps account re-enabling open when no territory would be monitored', async () => {
+    state.account.enabled = false;
+    state.account.monitoringEnabled = true;
+    for (const territory of [state.territory, null]) {
+      state.territory = territory;
+      expect((await call(appFor(), ['patch', `/accounts/${accountId}`, { enabled: true }])).status).toBe(200);
+    }
   });
 
   it('allows dormant inheritance and re-enabling with all monitoring disabled', async () => {

@@ -26,6 +26,17 @@ describe('Stacker News scheduler', () => {
     stopStackerNewsSchedulers();
   });
 
+  it('never arms account-only monitoring without an effectively monitored territory', async () => {
+    listAccounts.mockResolvedValue([{ id: 'dormant', enabled: true, monitoringEnabled: true, monitoringIntervalMinutes: 15 }]);
+    for (const territories of [[], [{ monitoringEnabled: false }]]) {
+      listTerritories.mockResolvedValue(territories);
+      await expect(reconcileStackerNewsSchedulers()).resolves.toBe(0);
+    }
+    expect(schedule).not.toHaveBeenCalled();
+    expect(syncAccount).not.toHaveBeenCalled();
+    stopStackerNewsSchedulers();
+  });
+
   it('arms a territory-level opt-in and rechecks the effective setting before syncing', async () => {
     const account = { id: 'territory-opt-in', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 30 };
     listAccounts.mockResolvedValue([account]);
