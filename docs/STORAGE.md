@@ -1033,3 +1033,26 @@ without a seed or creating missing caches; sync/refresh also reconcile lazily fo
 older cache writers. Ambiguous legacy matches are preserved rather than guessed.
 These fields do not add federation or a new store; older cache records remain
 readable and Gmail/API IDs retain their existing meaning.
+
+### Initialized checkout retirement evidence
+
+`data/cos/initialized-checkout-retirements/<transaction-id>/` is machine-local,
+file-primary operational recovery evidence, created only by explicit initialized
+checkout retirement. Version 1 immutable numbered JSON steps form a SHA-256
+linked journal; each step and containing directory is fsynced. The directory is
+0700 and journal/native manifests are 0600. `archive/` preserves original bytes
+and metadata, `restore/` holds a proven standalone checkout and Git stores, and
+`quarantine/` retains whole original directories. `execution.lock` and
+`backend.lock` serialize service executors and surviving native commands. These
+are private archives, excluded from federation and never seeded, migrated into
+PostgreSQL, expired or automatically purged. No existing-record migration is
+needed for the new versioned store. See
+[branch reconciliation](./features/branch-reconciliation.md#explicit-initialized-checkout-preservation).
+
+`<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
+cross-process safety fence shared by linked checkouts and server/runner processes.
+It contains nonce-owned publication directories and at most one retirement cut.
+Unknown, interrupted and uncertain records block rather than age out. The native
+archive excludes this control subtree; it never excludes repository payload
+because it is ignored or untracked. Admission metadata is not part of the
+portable repository or peer synchronization.

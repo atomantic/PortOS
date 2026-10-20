@@ -1,4 +1,6 @@
 /** An agent's worktree exists before anything records its owner (#11775): the id
+// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
  * must read as active for the whole dispatch and be released on every exit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';

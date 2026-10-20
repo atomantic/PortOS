@@ -1360,7 +1360,12 @@ export async function getWorktreeBranches(dir) {
  * @param {boolean} options.remote - Delete remote branch
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  */
-export async function deleteBranch(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
+export async function deleteBranch(dir, branchName, options = {}) {
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(dir, () => deleteBranchAdmitted(dir, branchName, options));
+}
+
+async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
   const { baseBranch } = await getRepoBranches(dir);
   const protectedSet = new Set(PROTECTED_BRANCHES);
   if (baseBranch) protectedSet.add(baseBranch);

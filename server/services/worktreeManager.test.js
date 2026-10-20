@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without

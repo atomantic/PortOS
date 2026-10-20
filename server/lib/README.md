@@ -25,6 +25,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `checkoutRetirementAdmission.js` | Durable common-repository publication/cut admission for explicit initialized-checkout quarantine; pending reservations survive restart and block managed checkout mutations until verified recovery. |
 | `branchRetirementArchive.js` | `preserveBranchRetirement` preserves the shared branch reflog verbatim, records its filesystem metadata, and verifies a standalone bundle containing the current tip and every old/new reflog commit before local branch retirement. Its final verifier holds changed refs or reflogs; unsupported storage, missing objects and archive failures retain the branch. |
 | `reconcileRetirementEvidence.js` | Matches exact checkout retirement receipts and retains unresolved cleanup obligations. Server-created generation timestamps prevent an old archive receipt from completing a recreated checkout at the same branch, path and head. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |

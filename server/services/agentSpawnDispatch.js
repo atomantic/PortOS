@@ -47,6 +47,11 @@ const AGENTS_DIR = PATHS.cosAgents;
 export async function dispatchAgentRun(context, opts) {
   markAgentDispatching(context.agentId);
   try {
+    if ([true, 'true'].includes(context.task.metadata?.claimResumeInPlace)) {
+      const repo = context.task.metadata?.app ? await getAppWorkspace(context.task.metadata.app) : ROOT_DIR;
+      const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+      return await withCheckoutPublication(repo, () => runAgentDispatch(context, opts));
+    }
     return await runAgentDispatch(context, opts);
   } finally {
     clearAgentDispatching(context.agentId);

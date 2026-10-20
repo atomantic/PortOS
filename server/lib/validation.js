@@ -2871,6 +2871,13 @@ export const heldCheckoutRetireBodySchema = z.object({
   }).optional(),
 });
 export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url() });
+export const initializedCheckoutRetireBodySchema = heldCheckoutRetireBodySchema.extend({
+  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
+}).strict();
+export const initializedCheckoutTransactionSchema = z.object({ appId: nonEmptyString, transactionId: z.string().uuid() }).strict();
+export const initializedCheckoutRestoreSchema = initializedCheckoutTransactionSchema.extend({
+  journalDigest: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

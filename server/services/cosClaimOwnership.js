@@ -104,12 +104,20 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
   return ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
-    const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
-    if (patch.refused) return { [done]: false, reason: patch.refused };
-    state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
-    await save();
-    cosEvents.emit('agent:updated', state.agents[agentId]);
-    return { [done]: true, branch };
+    const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
+    if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(repoPath, async () => {
+      const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
+      if (patch.refused) return { [done]: false, reason: patch.refused };
+      state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
+      await save();
+      cosEvents.emit('agent:updated', state.agents[agentId]);
+      return { [done]: true, branch };
+    }).catch(error => {
+      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
+      throw error;
+    });
   });
 }
 
@@ -159,12 +167,14 @@ export async function checkReconcileOwnership(input, deps = {}) {
     }) || claimCheckoutOwnerReason({ branchName: branch, holderPath: holder?.path || null, sourceWorkspace: repoPath, agents: others });
     return reason ? { admitted: false, reason } : { admitted: true };
   };
-  if (!agentId) return admit();
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  if (!agentId) return withCheckoutPublication(repoPath, admit)
+    .catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' }));
 
   const { cosEvents } = await import('./cosEvents.js');
   // Decided inside the lock a bind takes, so no bind can land between
   // "admitted" and "reserved".
-  return ownershipTransaction('reserve', 'admitted', async (state, save) => {
+  return ownershipTransaction('reserve', 'admitted', async (state, save) => withCheckoutPublication(repoPath, async () => {
     const admission = await admit();
     if (!admission.admitted) return admission;
     const agent = state.agents?.[agentId];
@@ -176,7 +186,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     await save();
     cosEvents.emit('agent:updated', state.agents[agentId]);
     return admission;
-  });
+  }).catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' })));
 }
 
 /** Read-only snapshot publication gate. Registered review work remains owned

@@ -112,6 +112,7 @@ describe('execGit', () => {
     spawn.mockReturnValue(child);
     const promise = execGit(['fetch'], '/repo', { timeout: 500 });
     vi.advanceTimersByTime(500);
+    child.emit('close', null, 'SIGTERM');
     await expect(promise).rejects.toThrow(/timed out after 0\.5s/);
     expect(child.kill).toHaveBeenCalled();
   });
@@ -121,6 +122,7 @@ describe('execGit', () => {
     spawn.mockReturnValue(child);
     const promise = execGitSafe(['fetch'], '/repo', { timeout: 500, ignoreExitCode: true });
     vi.advanceTimersByTime(500);
+    child.emit('close', null, 'SIGTERM');
     await expect(promise).resolves.toEqual({
       exitCode: 1,
       stdout: '',
@@ -133,6 +135,7 @@ describe('execGit', () => {
     spawn.mockReturnValue(child);
     const promise = execGit(['log'], '/repo', { maxBuffer: 8 });
     child.stdout.emit('data', Buffer.from('a'.repeat(9)));
+    child.emit('close', null, 'SIGTERM');
     await expect(promise).rejects.toThrow(/maxBuffer/);
     expect(child.kill).toHaveBeenCalled();
   });

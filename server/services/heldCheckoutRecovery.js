@@ -412,6 +412,20 @@ async function matchRelease(repoPath, release) {
   return { tree };
 }
 
+/** Shared live policy/owner check for the explicit whole-checkout transaction.
+ * It does not archive, unlock or infer integration.
+ */
+export async function inspectCheckoutRetirementOwnership({ repoPath, release, registration = true }, opts = {}) {
+  if (!release.branch || PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
+  const matched = registration ? await matchRelease(repoPath, release) : { tree: release };
+  if (!matched.tree) return { ok: false, reason: matched.reason };
+  const reason = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
+    readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
+  if (reason) return { ok: false, reason };
+  const policy = await retirementPolicy(repoPath, release.branch, opts);
+  return policy.reason ? { ok: false, reason: policy.reason } : { ok: true, tree: matched.tree, policy };
+}
+
 /**
  * Archive and retire one held checkout under an operator's scoped release.
  *
