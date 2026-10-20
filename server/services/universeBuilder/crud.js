@@ -376,7 +376,7 @@ function canonEntryContentEqual(a, b) {
 // the bible sanitizer otherwise preserves the prior timestamp and the
 // canon→catalog projection would skip a genuine change. Untouched entries keep
 // their old timestamp so this never manufactures projection churn.
-function stampChangedCanonEntries(prev, next) {
+function stampChangedCanonEntries(prev, next, canonProjectionGuard) {
   const nowMs = Date.now();
   for (const key of BIBLE_KEYS) {
     const nextList = Array.isArray(next[key]) ? next[key] : null;
@@ -385,7 +385,8 @@ function stampChangedCanonEntries(prev, next) {
       (Array.isArray(prev?.[key]) ? prev[key] : []).map((e) => [e?.id, e]),
     );
     next[key] = nextList.map((entry) => {
-      if (!entry?.id) return entry;
+      // A mirrored catalog revision keeps its source clock; it is not a new edit.
+      if (!entry?.id || (canonProjectionGuard && entry.ingredientId === canonProjectionGuard)) return entry;
       const before = prevById.get(entry.id);
       if (before && canonEntryContentEqual(before, entry)) return entry;
       // Monotonic bump: a content change MUST advance the LWW clock past the
@@ -425,6 +426,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // ORIGINATED from a catalog→canon projection. Threaded into projectToCatalog
   // below so the originating catalog row isn't written back a second time
   // (breaks the projectToCanon → updateUniverse → projectToCatalog loop).
+  // `canonProjectionIdentityIds` carries aliases scoped to that same operation.
   // `options.replaceCategories: true` replaces the whole `categories` map with
   // the patch's instead of unioning it per-key. Used by the conflict-journal
   // "restore mine" path so a faithful restore of the archived snapshot drops a
@@ -444,7 +446,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // the share-bucket importer's remote LWW apply passes it, so the winning
   // source revision's clock survives and the next one can still win (#10761).
   const {
-    silent = false, canonProjectionGuard = null, replaceCategories = false,
+    silent = false, canonProjectionGuard = null, canonProjectionIdentityIds = [], replaceCategories = false,
     touchesCanon = true, updatedAt: incomingUpdatedAt = null,
   } = options;
   const s = store();
@@ -644,7 +646,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // on genuine content changes makes the embedded entry's timestamp truthful
     // so projectToCatalog correctly carries the edit across. Unchanged entries
     // keep their old timestamp (no spurious revisions / no projection churn).
-    stampChangedCanonEntries(cur, mergedRecord);
+    stampChangedCanonEntries(cur, mergedRecord, canonProjectionGuard);
     // Persist the stale-reference-sheet null at write time so the on-disk
     // record catches up with what the GET-route pruner shows. Otherwise a
     // PATCH that omits `characters` (e.g. rename) merges from `cur` and
@@ -666,7 +668,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     if (touchesCanon && (isMutator || 'characters' in patch || 'places' in patch || 'objects' in patch)) {
       try {
         const { projectToCatalog } = await import('../catalogCanonProjection.js');
-        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard });
+        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard, guardIdentityIds: canonProjectionIdentityIds });
       } catch (err) {
         console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
       }

@@ -1626,7 +1626,7 @@ export function createTuiSessionController({
     if (isTerminal()) return;
     // Flush any debounced raw-PTY chunks first so the captured tail includes
     // the CLI's most recent output (e.g. claude's final error before exiting),
-    // not just whatever happened to be on disk before the last 250ms window.
+    // not just whatever happened to be on disk before the pending raw batch.
     await flushRaw().catch(() => {});
     const raw = await readFile(rawFile, 'utf8').catch(() => '');
     const tail = raw

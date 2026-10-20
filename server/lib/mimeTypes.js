@@ -1,4 +1,4 @@
-/** MIME tables, extension policy, and lightweight image format detection. */
+/** MIME tables, extension policy, and lightweight media format detection. */
 import { basename, extname } from 'path';
 
 /**
@@ -179,6 +179,50 @@ export function detectVideoFormat(buf) {
   if (!Buffer.isBuffer(buf) || buf.length <= 16) return null;
   if (buf.subarray(0, 64).includes('ftyp')) {
     return { format: 'mp4', ext: '.mp4', mime: 'video/mp4' };
+  }
+  return null;
+}
+
+// ffmpeg's PROBE_BUF_MAX: no demuxer probe sees past the first MiB.
+export const MEDIA_MANIFEST_PROBE_BYTES = 1 << 20;
+
+// Length of a leading ID3v2 tag, which ffmpeg strips before probing.
+export function id3v2TagLength(buf) {
+  if (buf.length < 10 || buf.toString('latin1', 0, 3) !== 'ID3' || buf[3] === 0xff || buf[4] === 0xff) return 0;
+  if ((buf[6] | buf[7] | buf[8] | buf[9]) & 0x80) return 0;
+  const length = 10 + ((buf[6] << 21) | (buf[7] << 14) | (buf[8] << 7) | buf[9]);
+  return buf[5] & 0x10 ? length + 10 : length;
+}
+
+/**
+ * Name the reference-following format ffmpeg would open these bytes as, or
+ * null. ffmpeg picks a demuxer by content, not extension, so a `.mp3`/`.mp4`
+ * whose bytes are an HLS playlist, DASH manifest, IMF composition, concat
+ * script or SDP session makes a later probe or render read the local media
+ * files (or network endpoints) it names; ffmpeg before 6.1 opens an HLS
+ * playlist under any extension. Mirrors the demuxer probes: a probe window
+ * at the start and one after an optional ID3v2 tag, with substring probes
+ * stopping at the first NUL. The post-tag window is checked even past
+ * ffmpeg's own 1 MiB limit, so a larger probe size cannot reopen the gap.
+ *
+ * @param {Buffer} buf - The file's bytes, or at least its leading window
+ * @returns {'hls'|'concat'|'dash'|'imf'|'sdp'|null}
+ */
+export function detectMediaManifest(buf) {
+  if (!Buffer.isBuffer(buf)) return null;
+  const tagLength = id3v2TagLength(buf);
+  const views = [buf.subarray(0, MEDIA_MANIFEST_PROBE_BYTES)];
+  if (tagLength > 0 && tagLength < buf.length) views.push(buf.subarray(tagLength, tagLength + MEDIA_MANIFEST_PROBE_BYTES));
+  for (const view of views) {
+    const nul = view.indexOf(0);
+    const text = view.toString('latin1', 0, nul === -1 ? view.length : nul);
+    const lead = text.replace(/^\xef\xbb\xbf/, '').trimStart();
+    if (lead.startsWith('#EXTM3U')) return 'hls';
+    if (lead.startsWith('ffconcat version')) return 'concat';
+    const lower = text.toLowerCase();
+    if (lower.includes('<mpd') && (lower.includes('dash:profile') || lower.includes('3gpp:pss:profile:dash1'))) return 'dash';
+    if (lower.includes('<compositionplaylist')) return 'imf';
+    if (/(?:^|[\r\n])c=IN IP/.test(text)) return 'sdp';
   }
   return null;
 }

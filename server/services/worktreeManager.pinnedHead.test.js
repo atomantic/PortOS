@@ -77,6 +77,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree pinned to a reviewed hea
     expect(existsSync(join(PATHS.worktrees, 'agent-stale'))).toBe(false);
   });
 
+
+  it('preserves a different local branch instead of resetting it to the reviewed head', async () => {
+    const reviewed = await publish(sandbox.repo, 'origin', BRANCH, 'reviewed.txt');
+    await execGit(['branch', BRANCH, 'main'], sandbox.repo);
+    const original = await git(['rev-parse', BRANCH], sandbox.repo);
+    await expect(createWorktree('agent-local', sandbox.repo, 'task-local', {
+      existingBranch: BRANCH, expectedHeadSha: reviewed,
+    })).rejects.toThrow('preserving it without reset');
+    expect(await git(['rev-parse', BRANCH], sandbox.repo)).toBe(original);
+    expect(existsSync(join(PATHS.worktrees, 'agent-local'))).toBe(false);
+  });
+
   it('resolves a pinned fork head through the fork even when origin has a same-named branch', async () => {
     // A fork PR opened from a branch whose name origin also uses: the unpinned
     // resolve order would pick origin's, a different branch entirely.
@@ -93,6 +105,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree pinned to a reviewed hea
 
     expect(await git(['rev-parse', 'HEAD'], info.worktreePath)).toBe(reviewed);
     // `git push` must go to the contributor's fork, never to origin.
-    expect(await git(['rev-parse', '--abbrev-ref', `${BRANCH}@{upstream}`], sandbox.repo)).toBe(`fork-contributor/${BRANCH}`);
+    expect(await git(['rev-parse', '--abbrev-ref', `fork/contributor/${BRANCH}@{upstream}`], sandbox.repo)).toBe(`fork-contributor/${BRANCH}`);
   });
 });

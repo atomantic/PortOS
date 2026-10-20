@@ -572,7 +572,8 @@ getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed
 registerShutdownHandlers({ io, httpServer, localHttpServer });
 if (isSmokeBoot() && process.send) {
   httpServer.once('listening', () => {
-    process.send({ type: 'portos:smoke-ready' });
+    // The smoke binds port 0 (#12543); report the port the kernel assigned.
+    process.send({ type: 'portos:smoke-ready', port: httpServer.address()?.port });
   });
 }
 

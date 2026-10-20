@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { createManagedVisitorBroker, managedVisitorContract } from '../services/managedVisitorBroker.js';
 import { request } from '../lib/testHelper.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 const shared = vi.hoisted(() => ({ enabled: false, broker: null }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => shared.enabled, extractToken: req => req.headers.authorization?.slice(7),
   verifySession: async token => token === 'owner-session',
@@ -100,6 +101,11 @@ it('denies cross-origin provisioning and nonloopback broker callers even without
   expect((await request(app).post(`/api/managed-visitor-admin/${appId}/credential`).set('Origin', 'https://unrelated.invalid').send(credentialInput)).status).toBe(403);
   const { authenticateManagedVisitorRequest } = await vi.importActual('../services/managedVisitors.js');
   await expect(authenticateManagedVisitorRequest({ socket: { remoteAddress: '192.0.2.1' }, headers: { authorization: authHeader() } }, shared.broker)).rejects.toThrow(/local/);
+  // A remote browser relayed by the Vite dev proxy arrives on a loopback socket.
+  const proxied = { socket: { remoteAddress: '127.0.0.1' }, headers: { authorization: authHeader(), [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.1' } };
+  await expect(authenticateManagedVisitorRequest(proxied, shared.broker)).rejects.toThrow(/local/);
+  const localProxied = { socket: { remoteAddress: '127.0.0.1' }, headers: { authorization: authHeader(), [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::1' } };
+  expect((await authenticateManagedVisitorRequest(localProxied, shared.broker)).appId).toBe(appId);
 });
 it('revokes malformed/private host outputs instead of forwarding or retrying uncertain operations', async () => {
   const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);

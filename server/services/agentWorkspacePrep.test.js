@@ -447,6 +447,18 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     findAdoptableWorktreeForBranch.mockResolvedValue(null);
   });
 
+  it('recovers the namespaced fork holder without adopting the base repository main checkout', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: 'fork/contributor/main', adopted: true });
+    const task = resumeTask({ existingBranch: 'fork/contributor/main',
+      forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(result.outcome).toBe('ready');
+    expect(findAdoptableWorktreeForBranch).toHaveBeenCalledWith(expect.any(String), 'fork/contributor/main', expect.any(Object));
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'fork/contributor/main');
+    expect(createWorktree).not.toHaveBeenCalled();
+  });
+
   it('adopts the interrupted run’s worktree instead of creating a new one', async () => {
     findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
     adoptWorktree.mockResolvedValue({
@@ -772,6 +784,13 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
       expect(handBackPrRemediationMock).not.toHaveBeenCalled();
     });
 
+    it('never falls back to the shared checkout when persisted isolation flags are missing', async () => {
+      createWorktree.mockRejectedValueOnce(new Error('transport unavailable'));
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask({ useWorktree: false }) });
+      expect(r.outcome).toBe('blocked');
+      expect(ensureLatest).not.toHaveBeenCalled();
+    });
+
     it('blocks the task for good and hands the PR back when the head moved', async () => {
       createWorktree.mockRejectedValueOnce(Object.assign(new Error('origin/contributor/fix-thing is at bbbb'), { code: PINNED_HEAD_MOVED }));
       const task = remediationTask();
@@ -786,8 +805,12 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
       expect(handBackPrRemediationMock).toHaveBeenCalledWith(expect.objectContaining({ task }));
     });
 
-    it('refuses a remediation task that records no reviewed head without touching git', async () => {
-      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask({ prRemediationHeadSha: null }) });
+    it.each([
+      { prRemediationHeadSha: null },
+      { prRemediationHeadSha: 'not-a-commit' },
+      { existingBranch: null },
+    ])('refuses incomplete remediation coordinates without touching git (%j)', async (missing) => {
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: remediationTask(missing) });
 
       expect(r.outcome).toBe('blocked');
       expect(createWorktree).not.toHaveBeenCalled();

@@ -22,6 +22,14 @@ import * as brainParity from '../services/brainParity.js';
 
 const router = Router();
 
+// Peers pull these (PEER_API_SURFACE). Gate them on the per-peer `brain`
+// category like the /api/sync snapshot reads (#5663); a checksum or manifest
+// fingerprints the same records, so it must not become the weaker door.
+const authorizeBrainPull = async (req, route) => {
+  const { authorizePeerPull } = await import('../services/sharing/peerPullAuthorization.js');
+  return authorizePeerPull(req, { syncCategory: 'brain', route });
+};
+
 /**
  * POST /api/brain/bridge-sync
  * Sync all brain data to CoS memory system (generates embeddings).
@@ -54,6 +62,7 @@ router.get('/embeddings/status', asyncHandler(async (_req, res) => {
  */
 router.get('/sync', asyncHandler(async (req, res) => {
   const { since, limit } = validateRequest(brainSyncQuerySchema, req.query);
+  await authorizeBrainPull(req, 'brain sync');
   const result = await brainSyncLog.getChangesSince(since, limit);
   res.json(result);
 }));
@@ -75,6 +84,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
  * full snapshot below. Lightweight (one hash) so it's cheap to poll each cycle.
  */
 router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
+  await authorizeBrainPull(req, 'brain checksum');
   const checksum = await brainReconcile.getBrainChecksum();
   res.json({ checksum });
 }));
@@ -86,6 +96,7 @@ router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
  * the receiver applies it idempotently via applyRemoteRecord.
  */
 router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
+  await authorizeBrainPull(req, 'brain snapshot');
   const snapshot = await brainReconcile.getBrainSnapshot();
   res.json(snapshot);
 }));
@@ -98,7 +109,8 @@ router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
  * pulls brain content it wouldn't otherwise receive. Far cheaper than
  * /reconcile/snapshot, which older peers fall back to.
  */
-router.get('/reconcile/manifest', asyncHandler(async (_req, res) => {
+router.get('/reconcile/manifest', asyncHandler(async (req, res) => {
+  await authorizeBrainPull(req, 'brain manifest');
   res.json(await brainParity.buildBrainManifest());
 }));
 

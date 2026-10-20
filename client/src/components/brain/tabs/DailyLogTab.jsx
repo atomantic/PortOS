@@ -15,6 +15,7 @@ import useMounted from '../../../hooks/useMounted';
 import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent';
 import { formatDateFull, localDateKey, shiftISODate } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
+import { strictToolFreeOneShotSelectionPolicy, supportsStrictToolFreeOneShot } from '../../../utils/providerSelection';
 
 // Autosave cadence. The debounce keeps us from PUTting on every keystroke;
 // the max-wait ceiling exists because a pure debounce never fires at all
@@ -609,7 +610,10 @@ export default function DailyLogTab() {
     }
     const applied = res.entry ? applyEntry(res.entry, requestDate) : true;
     if (res.drafted) {
-      if (applied) {
+      if (res.narrativeSkipped === 'provider-not-tool-free') {
+        const saved = applied ? 'Drafted from your timeline' : `Draft saved to ${formatDateFull(requestDate) || requestDate}`;
+        toast(`${saved} without an AI narrative: the selected provider cannot run tool-free. Pick an API provider.`, { icon: '🗓️' });
+      } else if (applied) {
         toast.success(res.usedLlm ? 'Drafted with AI narrative' : 'Drafted from your timeline');
       } else {
         toast.success(`Draft saved to ${formatDateFull(requestDate) || requestDate}`);
@@ -753,6 +757,7 @@ export default function DailyLogTab() {
                 providers={providers}
                 selectedProviderId={digestSettings?.provider || ''}
                 onProviderChange={(id) => saveDigestSettings({ provider: id || null })}
+                selectionPolicy={strictToolFreeOneShotSelectionPolicy}
                 emptyProviderOption="None — structured summary only (no AI)"
               />
               {digestProvider && (
@@ -779,7 +784,9 @@ export default function DailyLogTab() {
                 />
               </FormField>
               <p className="text-[10px] text-gray-600">
-                {digestProvider
+                {digestProvider && !supportsStrictToolFreeOneShot(digestProvider)
+                  ? `${digestProvider.name || digestProvider.id} cannot run tool-free, so drafts stay a structured summary with no AI narrative. The digest quotes other people's calendar and message text, so only API or tool-free providers draft it.`
+                  : digestProvider
                   ? `Scheduled drafts will call ${digestProvider.name || digestProvider.id}. Use the Draft action in the toolbar to run it now.`
                   : 'No AI provider selected — drafts are a deterministic structured summary with zero AI calls.'}
               </p>

@@ -39,7 +39,7 @@ import { detectConflicts } from './taskConflict.js';
 import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
-import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
+import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
 import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
@@ -272,10 +272,9 @@ async function prepareRequestedWorktree({
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
-    existingBranch: existingBranch || undefined,
-    // Only consulted when `existingBranch` names a FORK PR's head, which has no
-    // `origin/<branch>` to attach to (#6064). Null for every other task, which
-    // is the behavior that predates it.
+    existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
+    ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
+    // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
     expectedHeadSha: pinnedHead || undefined,
     planId: task.metadata?.planId || undefined,
@@ -466,6 +465,12 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     return { outcome: 'blocked', reason };
   }
 
+  const remediationPin = resolveTaskPinnedHead(task.metadata);
+  if (remediationPin !== null && (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(remediationPin)
+    || !resolveTaskRemoteBranch(task.metadata))) {
+    return refusePinnedAttach(task, workspacePath, `Task ${task.id} has no valid reviewed head and branch; refusing an unpinned remediation workspace`);
+  }
+
   let jiraTicket = null;
   let jiraBranchName = null;
   let worktreeInfo = null;
@@ -474,7 +479,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // break the claim prompt's own cleanup path. Use it where it sits, and skip
   // every later provisioner so a checked-out claim branch cannot fall through
   // to the shared checkout.
-  const claimWorkspace = claimContinuationWorkspace({
+  const claimWorkspace = remediationPin !== null ? null : claimContinuationWorkspace({
     metadata: task.metadata,
     pathExists: existsSync,
     worktreesRoot: PATHS.worktrees,
@@ -506,7 +511,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     });
   }
   const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
-  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR;
+  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR || remediationPin !== null;
   // A task pointed at an existing branch must run in a worktree whatever isolated
   // the ORIGINAL run, because that is the only way to reach the work: the branch
   // has to be checked out somewhere, and an adoptable tree has to be attached.

@@ -183,6 +183,7 @@ describe('Catalog parsed write bodies', () => {
   it('creates, edits, and restores a linked character through Catalog and universe canon', async () => {
     let ingredient;
     let canon = { characters: [] };
+    let projectionDone = Promise.withResolvers();
     const revisions = [];
     const snapshot = (source, actor = null) => revisions.push({
       id: `rev-${revisions.length + 1}`,
@@ -215,9 +216,10 @@ describe('Catalog parsed write bodies', () => {
     });
     mocks.getIngredientRevision.mockImplementation(async (id) => revisions.find((r) => r.id === id));
     mocks.updateUniverse.mockImplementation(async (_id, mutator) => {
-      const patch = mutator(canon);
+      const patch = await mutator(canon);
       if (!patch) return null;
       canon = { ...canon, ...patch };
+      projectionDone.resolve();
       return canon;
     });
 
@@ -234,13 +236,14 @@ describe('Catalog parsed write bodies', () => {
       name: 'Newer Name', payload: { schemaVersion: 1, description: 'Newer description', staleField: 'remove' },
     });
     expect(edited.status).toBe(200);
-    await new Promise((resolve) => setImmediate(resolve));
+    await projectionDone.promise;
     expect(canon.characters[0]).toMatchObject({ name: 'Newer Name', staleField: 'remove' });
 
+    projectionDone = Promise.withResolvers();
     const restored = await request(makeApp())
       .post('/api/catalog/ingredients/ing-1/revisions/rev-1/restore')
       .send({ source: 'user', actor: ' editor ' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await projectionDone.promise;
 
     expect(restored.status).toBe(200);
     expect(restored.body.payload).toEqual({ schemaVersion: 0, description: 'Earlier description' });

@@ -29,9 +29,10 @@ vi.mock('./local.js', () => ({
   DEFAULT_NUM_FRAMES: 121,
 }));
 
-const { unlinkMock, copyFileMock } = vi.hoisted(() => ({
+const { unlinkMock, copyFileMock, assertManifestMock } = vi.hoisted(() => ({
   unlinkMock: vi.fn(async () => {}),
   copyFileMock: vi.fn(async () => {}),
+  assertManifestMock: vi.fn(async () => {}),
 }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
@@ -52,6 +53,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   }),
   unlinkGuarded: unlinkMock,
   copyFileGuarded: copyFileMock,
+  assertFileNotMediaManifest: assertManifestMock,
 }));
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
@@ -211,6 +213,24 @@ describe('prepareVideoGenParams', () => {
       expect(prepared.effectiveNumFrames).toBe(985);
       expect(posix(prepared.sourceImagePath)).toMatch(/^\/mock\/uploads\/video-source-.*\.png$/);
       expect(posix(prepared.audioFilePath)).toMatch(/^\/mock\/uploads\/video-audio-.*\.wav$/);
+    });
+
+    // The a2v duration probe would otherwise open a playlist posing as audio.
+    it('refuses a staged upload whose bytes are a media playlist before copying or probing it', async () => {
+      const ltx25 = {
+        id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', runtime: 'ltx25',
+        supportedModes: ['a2v'], audioDurationDriven: true, frameStride: 8, maxNumFrames: 1017,
+      };
+      listVideoModels.mockReturnValue([ltx25]);
+      assertManifestMock.mockRejectedValueOnce(Object.assign(new Error('File content is a hls playlist'), { status: 400, code: 'INVALID_FILE_TYPE' }));
+
+      await expect(prepare(
+        { modelId: ltx25.id, mode: 'a2v', fps: 24, numFrames: 121 },
+        { audioFile: upload('audioFile', 'song.wav') },
+      )).rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+      expect(assertManifestMock).toHaveBeenCalledWith('/tmp/multipart-audioFile-song.wav');
+      expect(copyFileMock).not.toHaveBeenCalledWith('/tmp/multipart-audioFile-song.wav', expect.anything());
+      expect(probeVideoDuration).not.toHaveBeenCalled();
     });
 
     it('rejects and cleans up LTX-2.5 audio beyond the single-pass boundary', async () => {

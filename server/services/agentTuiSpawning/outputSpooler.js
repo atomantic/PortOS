@@ -9,21 +9,21 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  *  2. Raw PTY bytes → the append-only `raw.txt` disk spool (no ANSI strip, no
  *     line semantics) that `analyzeAgentFailure` reads on failure.
  *
- * Both pipelines debounce writes on a 250ms window (see AGENTS.md "High-
- * frequency state writes must batch") — a chatty TUI emits hundreds of chunks
- * /sec, and per-chunk state writes would thrash the filesystem and slow the PTY
- * event loop. Extracted from spawnTuiAgent so the buffering/spooling concern is
- * self-contained and independently testable; the spawner keeps only the
- * orchestration.
+ * Parsed status uses a 250ms window; raw recovery output uses a 1s window.
+ * Each publication durably registers and releases admission journals, whose
+ * synchronous flushes block the server loop even though the append is async.
+ * Raw output is not the live shell stream; batching it more coarsely reduces
+ * that overhead, while finalization still drains immediately.
  */
 
 import { appendFile, writeFile } from 'fs/promises';
 import { appendAgentOutputLines, updateAgent } from '../cosAgentLifecycle.js';
 import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '../../lib/tuiHandshake.js';
 
-// Debounce window for batching parsed output AND raw chunks to disk + state.
-// 250ms is invisible to the live tail but cuts I/O by 1-2 orders of magnitude.
+// Status updates stay responsive; raw recovery output can tolerate a longer
+// batching window. Neither timer delays an explicit final drain.
 const OUTPUT_FLUSH_INTERVAL_MS = 250;
+const RAW_FLUSH_INTERVAL_MS = 1000;
 
 /**
  * Create a per-run transcript write failure reporter. Logs the first failure
@@ -128,7 +128,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   // (node-pty's internal StringDecoder handles multi-byte boundaries before
   // we see chunks), so queueing strings here is sufficient — no Buffer
   // bookkeeping needed. pendingRawChunks holds whatever arrives during the
-  // 250ms debounce window AND while an appendFile is in-flight (the next
+  // 1s debounce window AND while an appendFile is in-flight (the next
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
   // window of TUI output (typically hundreds of KB on a chatty agent).
@@ -202,7 +202,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
         // finalize if the producer goes quiet immediately after.
         if (pendingRawChunks.length > 0) scheduleRawFlush();
       });
-    }, OUTPUT_FLUSH_INTERVAL_MS);
+    }, RAW_FLUSH_INTERVAL_MS);
   };
 
   // TUI agents only emit a handful of internal status lines (session-started,

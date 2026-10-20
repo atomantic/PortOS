@@ -84,6 +84,40 @@ describe('createOutputSpooler', () => {
     expect(appendFile).toHaveBeenCalledWith(RAW_FILE, 'abc');
   });
 
+  it('batches a sustained raw stream once per second while status stays responsive', async () => {
+    const s = makeSpooler();
+    for (let tick = 0; tick < 8; tick++) {
+      s.pushRaw(`${tick}`);
+      if (tick === 0) s.appendLine('running');
+      await vi.advanceTimersByTimeAsync(250);
+      if (tick === 0) {
+        expect(appendAgentOutputLines).toHaveBeenCalledWith('agent-1', ['running']);
+        expect(appendFile).not.toHaveBeenCalledWith(RAW_FILE, expect.anything());
+      }
+    }
+    expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE))
+      .toEqual([[RAW_FILE, '0123'], [RAW_FILE, '4567']]);
+  });
+
+  it('drains raw output immediately and includes chunks arriving during an in-flight append', async () => {
+    const s = makeSpooler();
+    let finishAppend;
+    vi.mocked(appendFile).mockImplementationOnce(() => new Promise(resolve => { finishAppend = resolve; }));
+    s.pushRaw('first');
+    await vi.advanceTimersByTimeAsync(1000);
+    s.pushRaw('tail');
+    let drained = false;
+    const drain = s.drainRaw().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    finishAppend();
+    await drain;
+    expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE))
+      .toEqual([[RAW_FILE, 'first'], [RAW_FILE, 'tail']]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE)).toHaveLength(2);
+  });
+
   it('truncates the raw spool (writeFile) once it crosses the cap, warning + flagging once', async () => {
     const s = makeSpooler();
     s.pushRaw('a'.repeat(80)); // under cap (100) → appendFile

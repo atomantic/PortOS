@@ -90,6 +90,8 @@ describe('spawnPrRemediationFollowUp', () => {
     await spawn();
 
     const { context } = addTaskMock.mock.calls[0][0];
+    expect(context).toContain('with `fork/contributor/contributor/update` checked out');
+    expect(context).toContain('git push fork-contributor HEAD:refs/heads/contributor/update');
     expect(context).toContain('ALREADY in an isolated worktree');
     expect(context).not.toContain('gh pr checkout');
     expect(context).not.toContain('worktree add');
@@ -105,7 +107,7 @@ describe('spawnPrRemediationFollowUp', () => {
   // A same-repo head has no contributor who "left the branch writable", so the
   // prompt must not tell the agent one did — it names a real person.
   it('describes push access from the head repository, not from a fork claim', async () => {
-    await spawn({ writeAccess: 'own-repo' });
+    await spawn({ pullRequest: { ...PULL_REQUEST, forkHead: null }, writeAccess: 'own-repo' });
     const ownRepo = addTaskMock.mock.calls[0][0].context;
     expect(ownRepo).toContain('lives in o/r itself');
     expect(ownRepo).not.toContain('Allow edits by maintainers');

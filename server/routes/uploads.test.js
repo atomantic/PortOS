@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, rmSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -196,12 +196,13 @@ describe('uploads routes (#4101)', () => {
 
 
 describe('streamed uploads', () => {
+  const multipart = (filename, bytes) => Buffer.concat([
+    Buffer.from(`--upload-test\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`),
+    bytes, Buffer.from('\r\n--upload-test--\r\n'),
+  ]);
+
   it('accepts media beyond the JSON ceiling, persists the bytes, and rejects unsupported extensions', async () => {
     const payload = Buffer.alloc(56 * 1024 * 1024, 7);
-    const multipart = (filename, bytes) => Buffer.concat([
-      Buffer.from(`--upload-test\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`),
-      bytes, Buffer.from('\r\n--upload-test--\r\n'),
-    ]);
     const res = await request(buildApp()).post('/api/uploads')
       .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('large.mp4', payload));
     expect(res.status).toBe(200);
@@ -212,5 +213,57 @@ describe('streamed uploads', () => {
       .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('bad.exe', Buffer.from('bad')));
     expect(bad.status).toBe(400);
     expect(bad.body.code).toBe('INVALID_FILE_TYPE');
+  });
+
+  // ffmpeg 4.4/5.1 open these bytes as HLS whatever the extension and read the
+  // local file the playlist names into a probe, thumbnail or render.
+  it('refuses media whose bytes are a playlist ffmpeg would follow, in both transports', async () => {
+    const playlist = '#EXTM3U\n#EXTINF:2.0,\n../private/clip.mp4\n#EXT-X-ENDLIST\n';
+    const stored = () => (existsSync(PATHS.uploads) ? readdirSync(PATHS.uploads) : []).filter((name) => /-(song\.mp3|clip\.mp4)$/.test(name));
+    const before = stored();
+
+    const json = await post(buildApp(), 'song.mp3', playlist);
+    expect(json.status).toBe(400);
+    expect(json.body.code).toBe('INVALID_FILE_TYPE');
+    const streamed = await request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('clip.mp4', Buffer.from(playlist)));
+    expect(streamed.status).toBe(400);
+    expect(streamed.body.code).toBe('INVALID_FILE_TYPE');
+    expect(stored()).toEqual(before);
+
+    // The same text under a non-media extension never reaches ffmpeg.
+    expect((await post(buildApp(), 'playlist-notes.txt', playlist)).status).toBe(200);
+  });
+
+  // ffmpeg strips a leading ID3v2 tag before probing, so a playlist behind a tag
+  // is read as HLS; the disk window after the tag must be complete wherever the
+  // tag ends relative to the first 1 MiB read.
+  it('refuses a playlist behind an ID3v2 tag on either side of the first probe window and accepts binary audio there', async () => {
+    const MiB = 1 << 20;
+    const withTag = (tagLength, payload) => {
+      const header = Buffer.alloc(10);
+      header.write('ID3');
+      header[3] = 3;
+      const size = tagLength - 10;
+      header[6] = (size >> 21) & 0x7f;
+      header[7] = (size >> 14) & 0x7f;
+      header[8] = (size >> 7) & 0x7f;
+      header[9] = size & 0x7f;
+      return Buffer.concat([header, Buffer.alloc(tagLength - 10), payload]);
+    };
+    const playlist = Buffer.from('#EXTM3U\n#EXTINF:2.0,\n../private/clip.mp4\n#EXT-X-ENDLIST\n');
+    const audio = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00, 0x00]), Buffer.alloc(4096, 0x41)]);
+    const upload = (bytes) => request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('tagged.mp3', bytes));
+
+    // One byte short of the boundary leaves only '#' of the playlist inside the first read.
+    for (const tagLength of [MiB - 1, MiB, MiB + 4096]) {
+      const res = await upload(withTag(tagLength, playlist));
+      expect(res.status, `tag length ${tagLength}`).toBe(400);
+      expect(res.body.code).toBe('INVALID_FILE_TYPE');
+    }
+    for (const tagLength of [MiB - 1, MiB + 4096]) {
+      expect((await upload(withTag(tagLength, audio))).status, `tag length ${tagLength}`).toBe(200);
+    }
   });
 });
