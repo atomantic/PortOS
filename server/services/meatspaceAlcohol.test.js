@@ -91,6 +91,19 @@ describe('computeRollingAverages', () => {
     expect(result.weeklyTotal).toBe(14);
   });
 
+  it('excludes the day 7 days ago from the 7-day window', () => {
+    // 2 drinks on each of the last 8 calendar days: the 7-day window is today-6..today,
+    // so the 8th day (today-7) must not count. 14 drinks / 7 days, not 16 / 7.
+    const entries = [];
+    for (let i = 0; i < 8; i++) {
+      entries.push({ date: daysAgo(i), alcohol: { standardDrinks: 2, drinks: [{}] } });
+    }
+    const result = computeRollingAverages(entries, 'male');
+    expect(result.avg7day).toBe(2);
+    expect(result.weeklyTotal).toBe(14);
+    expect(result.riskLevel).toBe('moderate');
+  });
+
   it('uses female NIAAA thresholds', () => {
     const entries = [];
     for (let i = 0; i < 7; i++) {
