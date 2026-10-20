@@ -681,8 +681,7 @@ def preserve(request):
             'administrationFingerprint': before['administrationFingerprint'], 'restoreProof': proof}
 
 
-def verify_unmoved_preservation(request):
-    """Cancel an unbound copy while shared Git evolves; never move any data."""
+def unbound_originals(request):
     root = transaction(request['transactionDir'])
     if os.path.lexists(root / 'manifest.json'):
         fail('preservation-already-bound')
@@ -690,6 +689,10 @@ def verify_unmoved_preservation(request):
     if os.path.lexists(quarantine) and (not safe_path(str(quarantine)).is_dir()
                                        or any(quarantine.iterdir())):
         fail('preservation-originals-may-have-moved')
+    return root
+
+
+def reviewed_source(request, root):
     path = root / 'source.json'
     limit = 256 * 1024 ** 2
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
@@ -707,6 +710,58 @@ def verify_unmoved_preservation(request):
     unsigned = {k: v for k, v in compact.items() if k != 'fingerprint'}
     if digest({'facts': unsigned, 'sources': before['sources']}) != before['fingerprint']:
         fail('preservation-source-proof-changed')
+    return before, hashlib.sha256(encoded).hexdigest()
+
+
+def verify_original_placement(request):
+    """Release only an unstarted cut; never scan, restore or certify file bytes."""
+    root = unbound_originals(request)
+    if os.path.lexists(root / 'source.json'):
+        before, source_sha = reviewed_source(request, root)
+    else:
+        # The executor can stop before capture writes source.json. The service's
+        # accepted journal snapshot still binds the original root identities.
+        before = {k: v for k, v in request['expected'].items() if k != 'ok'}
+        source_sha = None
+    work, admin, common = scan(request)
+    observed = {'identity': {'working': identity(work), 'administration': identity(admin),
+                             'common': identity(common)}, 'modules': []}
+    if observed['identity'] != before['identity'] or str(admin) != before['privateGitDir']:
+        fail('preservation-original-identity-or-git-changed')
+    checked_config(admin)
+    checked_config(common)
+    head = git(admin, work, 'rev-parse', '--verify', 'HEAD^{commit}')
+    branch = git(admin, work, 'symbolic-ref', '--short', 'HEAD')
+    release = request['release']
+    if release != before['release'] or head != release['head'] or branch != release['branch']:
+        fail('release-head-or-branch-changed')
+    lock = admin / 'locked'
+    if lock.exists() != release['locked'] or (release['locked']
+            and lock.read_text().strip() != (release.get('lockReason') or '')):
+        fail('release-lock-changed')
+    observed.update(head=head, branch=branch, locked=release['locked'])
+    for module in before['modules']:
+        module_work = safe_path(str(work / module['path']))
+        module_admin = read_pointer(module_work / '.git', 'gitdir:')
+        module_identity = {'working': identity(module_work), 'administration': identity(module_admin)}
+        if (str(module_admin) != module['gitDir'] or not module_admin.is_relative_to(admin / 'modules')
+                or module_identity != module['identity']):
+            fail('preservation-original-identity-or-git-changed')
+        checked_config(module_admin)
+        if git(module_admin, module_work, 'rev-parse', '--verify', 'HEAD^{commit}') != module['head']:
+            fail('preservation-original-identity-or-git-changed')
+        observed['modules'].append({'path': module['path'], 'identity': module_identity,
+                                    'gitDir': str(module_admin), 'head': module['head']})
+    return {'verified': True, 'originalsUnmoved': True, 'archiveVerified': False,
+            'contentAndMetadataUnverified': True, 'partialArchivesRetained': True,
+            'sourceSha256': source_sha, 'sourceCaptureRecorded': source_sha is not None,
+            'reviewedFingerprint': before['fingerprint'], 'structuralObservation': observed}
+
+
+def verify_unmoved_preservation(request):
+    """Cancel an unbound copy while shared Git evolves; never move any data."""
+    root = unbound_originals(request)
+    before, source_sha = reviewed_source(request, root)
     after = inspect(request, full=True)
     def stable_facts(value):
         facts = {k: v for k, v in value.items() if k not in ('sources', 'fingerprint')}
@@ -725,7 +780,7 @@ def verify_unmoved_preservation(request):
     return {'verified': True, 'originalsUnmoved': True, 'archiveVerified': False,
             'sharedBeforeSha256': digest(before['sources']['common']),
             'sharedAfterSha256': digest(after['sources']['common']),
-            'sourceSha256': hashlib.sha256(encoded).hexdigest(),
+            'sourceSha256': source_sha,
             'reviewedFingerprint': before['fingerprint'], 'observedFingerprint': after['fingerprint']}
 
 
@@ -1530,7 +1585,7 @@ def main():
                     'review-restored-finalization', 'verify-restored-finalization',
                     'review-quarantine-resumption', 'verify-quarantine-resumption', 'resume-quarantine',
                     'verify-completed-quarantine', 'verify-retired-quarantine', 'verify-deleted-branch',
-                    'verify-unmoved-preservation'):
+                    'verify-unmoved-preservation', 'verify-original-placement'):
         fd = lock_file(transaction(request['transactionDir']), 'backend.lock')
         try:
             result = {'preserve': preserve, 'verify': verify, 'move': move,
@@ -1543,7 +1598,8 @@ def main():
                       'verify-completed-quarantine': verify_completed_quarantine,
                       'verify-retired-quarantine': verify_retired_quarantine,
                       'verify-deleted-branch': verify_deleted_branch,
-                      'verify-unmoved-preservation': verify_unmoved_preservation}[action](request)
+                      'verify-unmoved-preservation': verify_unmoved_preservation,
+                      'verify-original-placement': verify_original_placement}[action](request)
         finally:
             os.close(fd)
     else:

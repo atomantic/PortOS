@@ -86,7 +86,15 @@ beforeEach(async () => {
   };
   const native = vi.fn(async input => {
     if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
-    if (input.command === 'inspect') return { ...fixture.snapshot };
+    if (input.command === 'inspect') {
+      if (fixture.inspectRefusal) throw new Error(fixture.inspectRefusal);
+      return { ...fixture.snapshot };
+    }
+    if (input.command === 'verify-original-placement') {
+      if (fixture.cancelRefusal) throw new Error(fixture.cancelRefusal);
+      return { verified: true, originalsUnmoved: true, archiveVerified: false,
+        contentAndMetadataUnverified: true, partialArchivesRetained: true };
+    }
     if (input.command === 'verify-unmoved-preservation') {
       if (fixture.cancelRefusal) throw new Error(fixture.cancelRefusal);
       if ((await readdir(input.transactionDir)).includes('manifest.json')) throw new Error('preservation-already-bound');
@@ -244,12 +252,15 @@ describe('initialized checkout transaction', () => {
     expect(await fixture.service.restore({ appId: 'app', transactionId: result.transactionId, journalDigest: status.journalDigest })).toMatchObject({ ok: true });
     expect((await readdir(join(root, result.transactionId))).length).toBeGreaterThan(0);
   });
-  it('releases an unmoved failed copy after shared Git drift and replays cancellation after restart', async () => {
+  it('cancels by original placement without hydration and replays interrupted release after restart', async () => {
     fixture.failPreserve = true;
     const result = await fixture.service.retire(await reviewed());
     fixture.snapshot.fingerprint = '9'.repeat(64);
     const input = { appId: 'app', transactionId: result.transactionId };
     const status = await fixture.service.status(input);
+    // A full source scan itself may hydrate compressed files and change mtime.
+    // Cancellation must not depend on that scan or certify its data as archived.
+    fixture.inspectRefusal = 'source-changed-during-scan';
     fixture.deps.admission.releaseCheckoutReservation.mockRejectedValueOnce(new Error('release-interrupted'));
     expect(await fixture.service.cancelPreservation({ ...input, journalDigest: status.journalDigest }))
       .toMatchObject({ ok: false, reason: 'release-interrupted' });
@@ -257,10 +268,12 @@ describe('initialized checkout transaction', () => {
     const rows = (await readdir(join(root, result.transactionId))).filter(name => /^\d{6}\.json$/.test(name)).sort();
     const saved = JSON.parse(await readFile(join(root, result.transactionId, rows.at(-1)), 'utf8'));
     expect(saved).toMatchObject({ phase: 'restored', cancelledUnboundPreservation: true,
-      cancellationProof: { verified: true, originalsUnmoved: true, archiveVerified: false } });
+      cancellationProof: { verified: true, originalsUnmoved: true, archiveVerified: false,
+        contentAndMetadataUnverified: true, partialArchivesRetained: true } });
     const restarted = _createInitializedCheckoutRecovery(fixture.deps);
     const fresh = await restarted.status(input);
-    expect(await restarted.cancelPreservation({ ...input, journalDigest: fresh.journalDigest })).toMatchObject({ ok: true });
+    expect(await restarted.cancelPreservation({ ...input, journalDigest: fresh.journalDigest }))
+      .toMatchObject({ ok: true, cancelled: true, archiveVerified: false, contentAndMetadataUnverified: true });
     expect(fixture.cut).toBeNull();
   });
   it.each(['preservation-original-content-changed', 'preservation-originals-may-have-moved'])(
