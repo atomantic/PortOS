@@ -131,6 +131,7 @@ import {
   getAllTasks,
   getTaskView,
   getPendingTaskIds,
+  getCosApprovalView,
   getTaskDiagnostics,
   getTasks,
   getTaskById,
@@ -386,6 +387,29 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     expect(await getPendingTaskIds()).toEqual([]);
     mock.files.delete(USER_FILE);
     expect(await getPendingTaskIds()).toEqual([]);
+  });
+
+  it('projects approval state without cloning the queue and refreshes after writes', async () => {
+    expect(await getCosApprovalView()).toEqual({ awaitingApproval: [], autoApprovedCount: 0 });
+    await addTask({ description: 'auto sys', approvalRequired: false }, 'internal');
+    await addTask({ description: 'needs approval', approvalRequired: true }, 'internal');
+    await addTask({ description: 'also needs approval', approvalRequired: true }, 'internal');
+
+    const expectedFirst = (await getCosTasks()).awaitingApproval[0].id;
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    let view;
+    let clonedPayload;
+    try { view = await getCosApprovalView({ limit: 1 }); clonedPayload = clone.mock.calls[0]?.[0]; } finally { clone.mockRestore(); }
+    expect(view.autoApprovedCount).toBe(1);
+    expect(view.awaitingApproval.map(t => t.id)).toEqual([expectedFirst]);
+    // Only the returned page is cloned, never the whole queue.
+    expect(clonedPayload).toHaveLength(1);
+
+    view.awaitingApproval[0].description = 'caller edit';
+    expect((await getCosApprovalView()).awaitingApproval[0].description).toBe('needs approval');
+
+    await addTask({ description: 'third approval', approvalRequired: true }, 'internal');
+    expect((await getCosApprovalView({ limit: 10 })).awaitingApproval).toHaveLength(3);
   });
 
   it('serves a cached parse while the file is unchanged', async () => {
