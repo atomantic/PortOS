@@ -259,6 +259,26 @@ describe('post-merge gate audit', () => {
     expect(f.apps.get('app1').mergeGateWatches).toEqual([expect.objectContaining({ kind: 'audit', agentId: 'agent-1' })]);
   });
 
+  it('queues one recovery for two merged PRs backed by the same head', async () => {
+    f.checks = [check({ conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' })];
+    await run();
+    f.prs = [{ ...f.prs[0], number: 8, url: 'https://github.com/example/repo/pull/8' }];
+    f.agent.metadata.mergeGateAudits = [];
+    await run();
+    expect(f.agent.metadata.mergeGateViolations).toHaveLength(2);
+    expect(f.tasks).toHaveLength(1);
+  });
+
+  it('sweeps each app on its own, so one app\'s in-flight sweep never answers for another', async () => {
+    f.apps.set('app2', { id: 'app2', name: 'Other App', repoPath: '/repos/other', forgeAccount: null });
+    f.apps.get('app1').mergeGateWatches = [];
+    f.apps.get('app2').mergeGateWatches = [{ key: 'github.com/example/repo#b', kind: 'audit', agentId: 'agent-1', flaggedAt: new Date().toISOString() }];
+    f.statuses = null; // app2's audit retry cannot read the forge, so it stays watched
+    const [first, second] = [sweepMergeGateWatches({ appId: 'app1' }), sweepMergeGateWatches({ appId: 'app2' })];
+    expect(await first).toMatchObject({ checked: 0, remaining: 0 });
+    expect(await second).toMatchObject({ checked: 1, remaining: 1 });
+  });
+
   it('keeps an audit the forge could not answer and completes it from the durable sweep', async () => {
     f.statuses = null;
     expect(await run()).toMatchObject({ audited: 0, violations: 0, unresolved: true });

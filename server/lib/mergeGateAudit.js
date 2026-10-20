@@ -40,7 +40,8 @@ const isGreen = (check, mergedMs) => check.status === 'completed' && GREEN_CONCL
  * re-posted in place, so the newest record can postdate the merge. Each check's
  * attempts are dated by when they existed: a run's first attempt by its suite's
  * creation (a run queued before the merge may not start until well after it), a
- * rerun by its start, a status by its post time. A check none of whose attempts
+ * rerun by its start (the check-runs API exposes no creation time, so a rerun
+ * queued before the merge but started after it is not seen), a status by its post time. A check none of whose attempts
  * existed at `mergedAt` was never something the merge could wait for. Of the rest,
  * an attempt that was green before the merge stands for the check; otherwise the
  * newest attempt does, so a head still red (or fixed only after the merge) is

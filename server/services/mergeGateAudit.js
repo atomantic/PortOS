@@ -123,7 +123,8 @@ function recoveryContext(watch, failing, appName) {
 async function fileRecoveryTask(watch, failing, app) {
   const { addTask } = await import('./cosTaskStore.js');
   const created = await addTask({
-    description: `${RECOVERY_TASK_PREFIX} Default branch ${watch.baseBranch} is red after PR #${watch.prNumber} merged past the merge gate (${watch.headSha.slice(0, SHORT_SHA)}) in ${app.name || watch.repository}`,
+    // First line is the queue's dedupe identity (base branch + head + app): no PR number, so two PRs backed by one head share a recovery.
+    description: `${RECOVERY_TASK_PREFIX} Default branch ${watch.baseBranch} is red after a PR merged past the merge gate (${watch.headSha.slice(0, SHORT_SHA)}) in ${app.name || watch.repository}`,
     priority: 'HIGH',
     app: app.id,
     isRecovery: true,
@@ -317,7 +318,8 @@ export function __cancelMergeGatePolls() {
   pollers.clear();
 }
 
-let sweepInFlight = null;
+// One sweep per scope: a poll for one app must not borrow another app's result.
+const sweepsInFlight = new Map();
 
 // True once the audit ran to a verdict. A run whose record is gone cannot be
 // audited again; the entry waits out its TTL like any other unreadable evidence.
@@ -374,9 +376,10 @@ async function sweepApp(app) {
  * @returns {Promise<{ checked: number, recovered: number, remaining: number }>}
  */
 export function sweepMergeGateWatches({ appId = null } = {}) {
-  // A concurrent sweep joins the one in flight; recovery dedupe rides on the task queue.
-  if (sweepInFlight) return sweepInFlight;
-  sweepInFlight = (async () => {
+  // A concurrent sweep of the same scope joins the one in flight; recovery dedupe rides on the task queue.
+  const scope = appId || '*';
+  if (sweepsInFlight.has(scope)) return sweepsInFlight.get(scope);
+  const sweep = (async () => {
     const totals = { checked: 0, recovered: 0, remaining: 0 };
     const apps = appId ? [await getAppById(appId).catch(() => null)].filter(Boolean) : await getActiveApps().catch(() => []);
     for (const app of apps.filter((candidate) => readWatches(candidate).length > 0)) {
@@ -389,6 +392,7 @@ export function sweepMergeGateWatches({ appId = null } = {}) {
       totals.remaining += result.remaining;
     }
     return totals;
-  })().finally(() => { sweepInFlight = null; });
-  return sweepInFlight;
+  })().finally(() => { sweepsInFlight.delete(scope); });
+  sweepsInFlight.set(scope, sweep);
+  return sweep;
 }
