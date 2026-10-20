@@ -242,6 +242,9 @@ describe('pruneMalformedLabels', () => {
         { name: 'good first issue' },
         { name: 'help wanted' },
         { name: 'needs decade' },
+        { name: 'sprint 202401' },
+        { name: 'ticket 123456' },
+        { name: 'release 20251a' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
         { name: 'security 0366D6 Proposed from a security audit' }

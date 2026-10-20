@@ -203,7 +203,7 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
   }
 }
 
-const MALFORMED_LABEL = /^\S+ (?:(--color )?#?([0-9A-Fa-f]{6}))(?: .*)?$/
+const MALFORMED_LABEL = /^(?:model:[^ ]+|effort:[^ ]+|planner:[^ ]+|plan|tests|bug|data-safety|upgrade-rehearsal|security|needs-decision) (?:(--color )?#?([0-9A-Fa-f]{6}))(?: .*)?$/
 
 /**
  * Remove labels accidentally created by passing a whole "name color description"
@@ -227,9 +227,9 @@ export async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } =
   let skipped = 0
   for (const { name } of labels) {
     const malformed = name.match(MALFORMED_LABEL)
-    // A bare six-letter word such as "decade" also consists of hex digits.
-    // Keep it unless the label has the explicit --color flag or a digit makes
-    // the token look like an actual color value.
+    // Keep unrelated labels with number-like values (e.g. "ticket 123456").
+    // Only the label prefixes known to have been produced by the broken shell
+    // loops are candidates; a bare six-letter word such as "decade" is hex too.
     if (!malformed || (!malformed[1] && !/[0-9]/.test(malformed[2]))) continue
     // gh's --label filters split commas into multiple labels, so those names
     // cannot be checked safely through the issue/pr list commands.
