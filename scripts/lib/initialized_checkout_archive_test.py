@@ -172,6 +172,58 @@ class NativeArchive(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'release-head-or-branch-changed'):
             archive.verify_unmoved_preservation(self.request)
 
+    def test_cancel_original_placement_never_hydrates_or_certifies_changed_file_data(self):
+        before = archive.inspect(self.request, full=True)
+        self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}
+        # An interrupted executor may not have begun its copy.
+        self.assertFalse(archive.verify_original_placement(self.request)['sourceCaptureRecorded'])
+        archive.private_json(self.txn / 'source.json', before)
+        (self.txn / 'quarantine').mkdir(mode=0o700)
+        partial = self.txn / 'partial-copy'
+        partial.write_bytes(b'unverified partial evidence')
+        original = self.work / 'base.txt'
+        original.write_bytes(b'new local work must remain here\n')
+        info = original.stat()
+        os.utime(original, ns=(info.st_atime_ns, info.st_mtime_ns + 108))
+        # Model the observed read-time metadata race. Cancellation must never
+        # enter the byte/metadata scanner; preservation and restore still do.
+        with patch.object(archive, 'manifest', side_effect=RuntimeError('source-changed-during-scan')):
+            proof = archive.verify_original_placement(self.request)
+        self.assertTrue(proof['originalsUnmoved'])
+        self.assertTrue(proof['contentAndMetadataUnverified'])
+        self.assertTrue(proof['partialArchivesRetained'])
+        self.assertFalse(proof['archiveVerified'])
+        self.assertNotIn('observedFingerprint', proof)
+        self.assertEqual(original.read_bytes(), b'new local work must remain here\n')
+        self.assertEqual(partial.read_bytes(), b'unverified partial evidence')
+        with self.assertRaisesRegex(RuntimeError, 'preservation-original-content-changed'):
+            archive.verify_unmoved_preservation(self.request)
+        for target, refusal in (
+            (self.txn / 'quarantine' / 'working', 'preservation-originals-may-have-moved'),
+            (self.txn / 'manifest.json', 'preservation-already-bound'),
+        ):
+            target.write_bytes(b'evidence')
+            with self.assertRaisesRegex(RuntimeError, refusal):
+                archive.verify_original_placement(self.request)
+            target.unlink()
+        saved = (self.txn / 'source.json').read_bytes()
+        tampered = copy.deepcopy(before)
+        tampered['sources']['working'][0]['mode'] ^= 1
+        (self.txn / 'source.json').write_text(json.dumps(tampered))
+        with self.assertRaisesRegex(RuntimeError, 'preservation-source-proof-changed'):
+            archive.verify_original_placement(self.request)
+        (self.txn / 'source.json').write_bytes(saved)
+        moved = self.scratch / 'original-work-retained'
+        self.work.rename(moved)
+        shutil.copytree(moved, self.work, symlinks=True)
+        with self.assertRaisesRegex(RuntimeError, 'preservation-original-identity-or-git-changed'):
+            archive.verify_original_placement(self.request)
+        shutil.rmtree(self.work)
+        moved.rename(self.work)
+        self.git(self.repo, 'update-ref', 'refs/heads/feature/fixture', 'HEAD^')
+        with self.assertRaisesRegex(RuntimeError, 'release-head-or-branch-changed'):
+            archive.verify_original_placement(self.request)
+
     def test_common_runtime_sockets_are_outside_capture_but_private_and_captured_sockets_hold(self):
         facts = archive.inspect(self.request)
         common = Path(facts['commonGitDir'])
