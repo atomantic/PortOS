@@ -834,11 +834,12 @@ export async function getRelatedMemories(id, limit = 10) {
     });
   }
 
-  // Get similar by embedding
+  // Get similar by embedding. Explicit links can already fill or exceed the
+  // limit; Postgres rejects a negative LIMIT, so skip the similarity query then.
   const embedding = existing.rows[0].embedding;
-  if (embedding) {
+  const remaining = limit - related.length;
+  if (embedding && remaining > 0) {
     const seenIds = new Set([id, ...related.map(r => r.id)]);
-    const remaining = limit - related.length;
 
     const similar = await query(`
       SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
