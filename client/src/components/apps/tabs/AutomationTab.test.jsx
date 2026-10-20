@@ -156,6 +156,7 @@ describe('AutomationTab per-app options', () => {
     api.updateAppTaskTypeOverride.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectSave = reject; }));
     fireEvent.click(within(row).getByRole('switch', { name: 'security enabled for this app: off' }));
     expect(api.updateAppTaskTypeOverride).toHaveBeenCalledWith('app-1', 'security', { enabled: true }, { silent: true });
+    // In-flight save gates Run Now.
     expect(within(row).getByRole('button', { name: 'Run Now' })).toBeDisabled();
     await act(async () => rejectSave(new Error('Save failed')));
     expect(within(row).getByRole('switch', { name: 'security enabled for this app: off' })).toHaveAttribute('aria-checked', 'false');
@@ -165,6 +166,19 @@ describe('AutomationTab per-app options', () => {
     api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
     fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
     await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith('security', 'app-1', { silent: true }));
+  });
+
+  it('Run Now sends the app id while the per-app switch stays off', async () => {
+    await renderTab();
+    const row = rowFor('security');
+    expect(within(row).getByRole('switch', { name: 'security enabled for this app: off' })).toBeInTheDocument();
+    api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
+    const run = within(row).getByRole('button', { name: 'Run Now' });
+    expect(run).toBeEnabled();
+    fireEvent.click(run);
+    await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith('security', 'app-1', { silent: true }));
+    expect(api.updateAppTaskTypeOverride).not.toHaveBeenCalled();
+    expect(within(row).getByRole('switch', { name: 'security enabled for this app: off' })).toBeInTheDocument();
   });
 
   it('Configure toggle expands the provider override panel', async () => {

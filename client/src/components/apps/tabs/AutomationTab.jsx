@@ -214,7 +214,7 @@ export default function AutomationTab({ appId, appName }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-port-warning">Scheduled automation is globally paused</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              Scheduled and autonomous tasks won&apos;t run until resumed. You can still trigger an enabled task manually with <span className="text-gray-300">Run</span>.
+              Scheduled and autonomous tasks won&apos;t run until resumed. Any task can still be run once with <span className="text-gray-300">Run Now</span>.
             </p>
           </div>
           <button
